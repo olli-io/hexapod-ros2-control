@@ -1,0 +1,187 @@
+<?xml version="1.0"?>
+<!--
+  Hexapod robot description (xacro).
+
+  Coordinates follow REP-103 (the ROS standard for axes & units):
+  looking down from above,
+    +x = forward (nose of the robot)
+    +y = left
+    +z = up
+
+  Each leg has 3 joints, named like the bug anatomy they imitate:
+    coxa  — hip joint, rotates the whole leg left/right (around +z, "yaw")
+    femur — shoulder joint, lifts the leg up/down (around +y, "pitch")
+    tibia — knee joint, bends the lower leg up/down (around +y, "pitch")
+
+  Each leg has its own (x, y) mount point on the body and its own
+  "mount yaw" — the angle the leg points outward, measured
+  counter-clockwise from forward (+x), looking down from above.
+-->
+<robot name="hexapod" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- =====================================================================
+       Dimensions (metres / radians). Tune these to match the real robot.
+       ===================================================================== -->
+
+  <!-- Body: a flat hexagonal-ish plate, modelled as a simple box. -->
+  <xacro:property name="body_length" value="0.20"/>  <!-- nose-to-tail   -->
+  <xacro:property name="body_width"  value="0.16"/>  <!-- side-to-side   -->
+  <xacro:property name="body_height" value="0.04"/>  <!-- top-to-bottom  -->
+
+  <!-- Leg coordinates. Define where each leg attaches to the main body.
+       Symmetry is assumed about both the x-axis (left/right) and the
+       y-axis (front/rear), so only the front-left quadrant is specified;
+       the other five legs mirror from it. -->
+  <xacro:property name="leg_x"  value="0.08"/>  <!-- front/rear |x| from centre  -->
+  <xacro:property name="side_y" value="0.07"/>  <!-- front/rear |y| sideways     -->
+  <xacro:property name="mid_y"  value="0.09"/>  <!-- middle pair sticks out more -->
+
+  <!-- Direction the front-left leg points outward (radians), measured
+       counter-clockwise from forward (+x). The middle pair points
+       straight sideways; the rear pair mirrors the front about y. -->
+  <xacro:property name="side_yaw" value="${pi/4}"/>  <!-- +45° -->
+
+  <!-- Leg segment lengths, from hip outward to the foot tip. -->
+  <xacro:property name="coxa_length"  value="0.04"/> <!-- hip → knee-top -->
+  <xacro:property name="femur_length" value="0.07"/> <!-- knee-top → knee -->
+  <xacro:property name="tibia_length" value="0.10"/> <!-- knee → foot tip -->
+
+  <!-- Visual thickness for the cylindrical segments. -->
+  <xacro:property name="seg_radius"   value="0.012"/>
+
+  <!-- How far each joint can travel (symmetric around zero). -->
+  <xacro:property name="joint_limit"  value="1.57"/>  <!-- ~90 degrees   -->
+
+  <!-- =====================================================================
+       Materials (just for colour in RViz / Gazebo).
+       ===================================================================== -->
+  <material name="body_grey"><color rgba="0.3 0.3 0.3 1.0"/></material>
+  <material name="leg_blue"> <color rgba="0.2 0.4 0.8 1.0"/></material>
+
+  <!-- =====================================================================
+       Body link — the central chassis everything else hangs off of.
+       ===================================================================== -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+      <material name="body_grey"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="1.0"/>
+      <!-- Rough box inertia; refine once real mass is known. -->
+      <inertia ixx="0.005" ixy="0" ixz="0"
+               iyy="0.008" iyz="0"
+               izz="0.012"/>
+    </inertial>
+  </link>
+
+  <!-- =====================================================================
+       Leg macro.
+
+       Parameters:
+         side       — "l" (left) or "r" (right), used only for naming.
+         name       — leg identifier, e.g. "front", "middle", "rear".
+         mount_x,
+         mount_y    — hip position on the body (metres from centre).
+         mount_yaw  — direction the leg points outward (radians),
+                      measured counter-clockwise from +x (forward).
+                      A leg "pointing straight left" has mount_yaw = +pi/2.
+       ===================================================================== -->
+  <xacro:macro name="leg" params="side name mount_x mount_y mount_yaw">
+
+    <!-- ---- Coxa: short horizontal segment attached to the body. -------- -->
+    <joint name="${side}_${name}_coxa_joint" type="revolute">
+      <parent link="base_link"/>
+      <child  link="${side}_${name}_coxa"/>
+      <!-- Mount point on the body, rotated so the leg "points outward". -->
+      <origin xyz="${mount_x} ${mount_y} 0" rpy="0 0 ${mount_yaw}"/>
+      <!-- Rotates around +z = swings the leg forward/backward. -->
+      <axis xyz="0 0 1"/>
+      <limit lower="${-joint_limit}" upper="${joint_limit}"
+             effort="5.0" velocity="5.0"/>
+    </joint>
+
+    <link name="${side}_${name}_coxa">
+      <visual>
+        <!-- Cylinder lies along the leg's local +x (outward from body). -->
+        <origin xyz="${coxa_length/2} 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder radius="${seg_radius}" length="${coxa_length}"/>
+        </geometry>
+        <material name="leg_blue"/>
+      </visual>
+    </link>
+
+    <!-- ---- Femur: upper leg, lifts the knee up/down. ------------------- -->
+    <joint name="${side}_${name}_femur_joint" type="revolute">
+      <parent link="${side}_${name}_coxa"/>
+      <child  link="${side}_${name}_femur"/>
+      <!-- Attached at the far end of the coxa. -->
+      <origin xyz="${coxa_length} 0 0" rpy="0 0 0"/>
+      <!-- Rotates around the leg's local +y = lifts/lowers the femur. -->
+      <axis xyz="0 1 0"/>
+      <limit lower="${-joint_limit}" upper="${joint_limit}"
+             effort="5.0" velocity="5.0"/>
+    </joint>
+
+    <link name="${side}_${name}_femur">
+      <visual>
+        <origin xyz="${femur_length/2} 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder radius="${seg_radius}" length="${femur_length}"/>
+        </geometry>
+        <material name="leg_blue"/>
+      </visual>
+    </link>
+
+    <!-- ---- Tibia: lower leg, bends at the knee down to the foot. ------- -->
+    <joint name="${side}_${name}_tibia_joint" type="revolute">
+      <parent link="${side}_${name}_femur"/>
+      <child  link="${side}_${name}_tibia"/>
+      <origin xyz="${femur_length} 0 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="${-joint_limit}" upper="${joint_limit}"
+             effort="5.0" velocity="5.0"/>
+    </joint>
+
+    <link name="${side}_${name}_tibia">
+      <visual>
+        <origin xyz="${tibia_length/2} 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder radius="${seg_radius}" length="${tibia_length}"/>
+        </geometry>
+        <material name="leg_blue"/>
+      </visual>
+    </link>
+
+    <!-- ---- Foot: a fixed frame at the tip of the tibia. ---------------- -->
+    <!-- Used as the IK target; not a moving joint. -->
+    <joint name="${side}_${name}_foot_joint" type="fixed">
+      <parent link="${side}_${name}_tibia"/>
+      <child  link="${side}_${name}_foot"/>
+      <origin xyz="${tibia_length} 0 0" rpy="0 0 0"/>
+    </joint>
+    <link name="${side}_${name}_foot"/>
+
+  </xacro:macro>
+
+  <!-- =====================================================================
+       Instantiate the 6 legs.
+       Front legs point forward-sideways, middle legs point straight out,
+       rear legs point backward-sideways. Angles in radians.
+       ===================================================================== -->
+  <xacro:leg side="l" name="front"  mount_x=" ${leg_x}" mount_y=" ${side_y}" mount_yaw="${    side_yaw}"/>
+  <xacro:leg side="l" name="middle" mount_x="     0"    mount_y=" ${mid_y}"  mount_yaw="${  pi/2}"      />
+  <xacro:leg side="l" name="rear"   mount_x="${-leg_x}" mount_y=" ${side_y}" mount_yaw="${pi-side_yaw}" />
+  <xacro:leg side="r" name="front"  mount_x=" ${leg_x}" mount_y="${-side_y}" mount_yaw="${   -side_yaw}"/>
+  <xacro:leg side="r" name="middle" mount_x="     0"    mount_y="${-mid_y}"  mount_yaw="${ -pi/2}"      />
+  <xacro:leg side="r" name="rear"   mount_x="${-leg_x}" mount_y="${-side_y}" mount_yaw="${side_yaw-pi}" />
+
+</robot>
