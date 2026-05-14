@@ -1,4 +1,4 @@
-# hexapod_teleop
+# hexa_teleop
 
 Human-input nodes that publish to `/cmd_vel` and `/body/pose`.
 

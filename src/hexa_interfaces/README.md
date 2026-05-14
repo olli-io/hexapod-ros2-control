@@ -1,4 +1,4 @@
-# hexapod_interfaces
+# hexa_interfaces
 
 Custom ROS2 message, service, and action definitions shared across the stack.
 

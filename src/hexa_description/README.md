@@ -1,4 +1,4 @@
-# hexapod_description
+# hexa_description
 
 Robot description package: URDF (via xacro), meshes, joint limits, and the
 `robot_state_publisher` configuration.

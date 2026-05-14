@@ -1,4 +1,4 @@
-# hexapod_simulation
+# hexa_simulation
 
 Everything Gazebo-specific lives here, so the real-robot packages stay
 sim-free.
@@ -9,6 +9,6 @@ Contents (to be added):
   for gait stress-testing.
 - `config/gazebo_controllers.yaml` — ros2_control config wiring the
   `gazebo_ros2_control` plugin to the joints declared in
-  `hexapod_description`.
+  `hexa_description`.
 
 The real-robot bringup never loads this package.
