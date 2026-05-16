@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-ros2-control \
         ros-jazzy-ros2-controllers \
         ros-jazzy-controller-manager \
+        ros-jazzy-gz-ros2-control \
         ros-jazzy-xacro \
         ros-jazzy-joint-state-publisher-gui \
         python3-colcon-common-extensions \

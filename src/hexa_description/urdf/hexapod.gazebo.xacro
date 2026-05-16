@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<!--
+  Gazebo-only overlay for the hexapod URDF.
+
+  Included from hexapod.urdf.xacro when use_sim:=true. The real-robot
+  bringup leaves use_sim=false so none of these tags reach the
+  robot_description topic on the Pi (CLAUDE.md: hexa_simulation owns all
+  Gazebo-specific behaviour at runtime; the XML lives here because Gazebo
+  plugin/material tags are URDF-scoped).
+
+  Scope today: visual materials + foot friction so the model renders and
+  doesn't slide. ros2_control plugin tags land here once hexa_hardware
+  defines its Gazebo variant.
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ===================================================================
+       Visual materials. RViz reads <material> from the main URDF; Gazebo
+       needs a separate <gazebo reference="link"> block per link.
+       =================================================================== -->
+  <gazebo reference="base_link">
+    <material>Gazebo/DarkGrey</material>
+  </gazebo>
+
+  <xacro:macro name="leg_material" params="side name">
+    <gazebo reference="${side}_${name}_coxa"> <material>Gazebo/Blue</material></gazebo>
+    <gazebo reference="${side}_${name}_femur"><material>Gazebo/Blue</material></gazebo>
+    <gazebo reference="${side}_${name}_tibia"><material>Gazebo/Blue</material></gazebo>
+  </xacro:macro>
+
+  <xacro:leg_material side="l" name="front"/>
+  <xacro:leg_material side="l" name="middle"/>
+  <xacro:leg_material side="l" name="rear"/>
+  <xacro:leg_material side="r" name="front"/>
+  <xacro:leg_material side="r" name="middle"/>
+  <xacro:leg_material side="r" name="rear"/>
+
+  <!-- ===================================================================
+       Foot contact. mu1/mu2 high enough that stance feet bite the ground
+       and the body doesn't slide. kp/kd are typical defaults for rigid
+       contact at ~0.1 m foot scale.
+       =================================================================== -->
+  <xacro:macro name="foot_contact" params="link">
+    <gazebo reference="${link}">
+      <mu1>1.2</mu1>
+      <mu2>1.2</mu2>
+      <kp>1.0e6</kp>
+      <kd>10.0</kd>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:foot_contact link="l_front_foot"/>
+  <xacro:foot_contact link="l_middle_foot"/>
+  <xacro:foot_contact link="l_rear_foot"/>
+  <xacro:foot_contact link="r_front_foot"/>
+  <xacro:foot_contact link="r_middle_foot"/>
+  <xacro:foot_contact link="r_rear_foot"/>
+
+  <!-- ===================================================================
+       gz_ros2_control system plugin: hosts the ros2_control controller
+       manager inside Gazebo and binds it to the <ros2_control> block in
+       the main URDF (which selects GazeboSimSystem as its hardware when
+       use_sim=true). The controllers themselves are declared in
+       hexa_simulation/config/ros2_controllers.yaml.
+       =================================================================== -->
+  <gazebo>
+    <plugin filename="gz_ros2_control-system"
+            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find hexa_simulation)/config/ros2_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+</robot>

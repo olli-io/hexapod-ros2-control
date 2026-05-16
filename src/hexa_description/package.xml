@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_description</name>
+  <version>0.0.1</version>
+  <description>URDF, meshes, and joint limits for the hexapod. Single source of truth for the robot's kinematic structure.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>urdf</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

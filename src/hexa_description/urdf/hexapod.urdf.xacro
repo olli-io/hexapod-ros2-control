@@ -20,37 +20,34 @@
 <robot name="hexapod" xmlns:xacro="http://ros.org/wiki/xacro">
 
   <!-- =====================================================================
-       Dimensions (metres / radians). Tune these to match the real robot.
+       Args.
+       use_sim — when "true", pull in hexapod.gazebo.xacro (sim-only tags:
+                 materials, friction, etc.). The real-robot bringup must
+                 leave this false. See CLAUDE.md.
        ===================================================================== -->
+  <xacro:arg name="use_sim" default="false"/>
 
-  <!-- Body: a flat hexagonal-ish plate, modelled as a simple box. -->
-  <xacro:property name="body_length" value="0.20"/>  <!-- nose-to-tail   -->
-  <xacro:property name="body_width"  value="0.16"/>  <!-- side-to-side   -->
-  <xacro:property name="body_height" value="0.04"/>  <!-- top-to-bottom  -->
+  <!-- =====================================================================
+       Config. Geometry (body/leg/foot dimensions, masses, per-leg mounts)
+       and joint limits live in YAML so they can be tuned without editing
+       the URDF. Both files are loaded into Python dicts here.
+       ===================================================================== -->
+  <xacro:property name="joint_limits"
+                  value="${xacro.load_yaml('$(find hexa_description)/config/joint_limits.yaml')}"/>
+  <xacro:property name="geom"
+                  value="${xacro.load_yaml('$(find hexa_description)/config/geometry.yaml')}"/>
 
-  <!-- Leg coordinates. Define where each leg attaches to the main body.
-       Symmetry is assumed about both the x-axis (left/right) and the
-       y-axis (front/rear), so only the front-left quadrant is specified;
-       the other five legs mirror from it. -->
-  <xacro:property name="leg_x"  value="0.08"/>  <!-- front/rear |x| from centre  -->
-  <xacro:property name="side_y" value="0.07"/>  <!-- front/rear |y| sideways     -->
-  <xacro:property name="mid_y"  value="0.09"/>  <!-- middle pair sticks out more -->
-
-  <!-- Direction the front-left leg points outward (radians), measured
-       counter-clockwise from forward (+x). The middle pair points
-       straight sideways; the rear pair mirrors the front about y. -->
-  <xacro:property name="side_yaw" value="${pi/4}"/>  <!-- +45° -->
-
-  <!-- Leg segment lengths, from hip outward to the foot tip. -->
-  <xacro:property name="coxa_length"  value="0.04"/> <!-- hip → knee-top -->
-  <xacro:property name="femur_length" value="0.07"/> <!-- knee-top → knee -->
-  <xacro:property name="tibia_length" value="0.10"/> <!-- knee → foot tip -->
-
-  <!-- Visual thickness for the cylindrical segments. -->
-  <xacro:property name="seg_radius"   value="0.012"/>
-
-  <!-- How far each joint can travel (symmetric around zero). -->
-  <xacro:property name="joint_limit"  value="1.57"/>  <!-- ~90 degrees   -->
+  <!-- Shortcuts for the values used repeatedly inside the leg macro.
+       Sourced from geom so the YAML stays the single source of truth. -->
+  <xacro:property name="coxa_length"  value="${geom['leg']['coxa_length']}"/>
+  <xacro:property name="femur_length" value="${geom['leg']['femur_length']}"/>
+  <xacro:property name="tibia_length" value="${geom['leg']['tibia_length']}"/>
+  <xacro:property name="seg_radius"   value="${geom['leg']['seg_radius']}"/>
+  <xacro:property name="coxa_mass"    value="${geom['leg']['coxa_mass']}"/>
+  <xacro:property name="femur_mass"   value="${geom['leg']['femur_mass']}"/>
+  <xacro:property name="tibia_mass"   value="${geom['leg']['tibia_mass']}"/>
+  <xacro:property name="foot_radius"  value="${geom['foot']['radius']}"/>
+  <xacro:property name="foot_mass"    value="${geom['foot']['mass']}"/>
 
   <!-- =====================================================================
        Materials (just for colour in RViz / Gazebo).
@@ -64,23 +61,55 @@
   <link name="base_link">
     <visual>
       <geometry>
-        <box size="${body_length} ${body_width} ${body_height}"/>
+        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
       </geometry>
       <material name="body_grey"/>
     </visual>
     <collision>
       <geometry>
-        <box size="${body_length} ${body_width} ${body_height}"/>
+        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
       </geometry>
     </collision>
-    <inertial>
-      <mass value="1.0"/>
-      <!-- Rough box inertia; refine once real mass is known. -->
-      <inertia ixx="0.005" ixy="0" ixz="0"
-               iyy="0.008" iyz="0"
-               izz="0.012"/>
-    </inertial>
+    <xacro:box_inertial mass="${geom['body']['mass']}"
+                        x="${geom['body']['length']}"
+                        y="${geom['body']['width']}"
+                        z="${geom['body']['height']}"/>
   </link>
+
+  <!-- =====================================================================
+       Inertial macros. Both compute the tensor from mass + dimensions so
+       the YAML stays the only place a number is typed.
+       ===================================================================== -->
+
+  <!-- Solid cylinder of length L along the link's local +x:
+         ixx = (1/2) m r^2          (about the long axis)
+         iyy = izz = (1/12) m (3r^2 + L^2)
+       COM at the segment midpoint. -->
+  <xacro:macro name="cylinder_inertial" params="mass length radius">
+    <inertial>
+      <origin xyz="${length/2} 0 0" rpy="0 0 0"/>
+      <mass value="${mass}"/>
+      <inertia ixx="${0.5 * mass * radius * radius}"
+               iyy="${mass * (3*radius*radius + length*length) / 12.0}"
+               izz="${mass * (3*radius*radius + length*length) / 12.0}"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- Solid box of side lengths (x, y, z):
+         ixx = (1/12) m (y^2 + z^2)
+         iyy = (1/12) m (x^2 + z^2)
+         izz = (1/12) m (x^2 + y^2)
+       COM at link origin (the body box is centred on base_link). -->
+  <xacro:macro name="box_inertial" params="mass x y z">
+    <inertial>
+      <mass value="${mass}"/>
+      <inertia ixx="${mass * (y*y + z*z) / 12.0}"
+               iyy="${mass * (x*x + z*z) / 12.0}"
+               izz="${mass * (x*x + y*y) / 12.0}"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </xacro:macro>
 
   <!-- =====================================================================
        Leg macro.
@@ -104,8 +133,10 @@
       <origin xyz="${mount_x} ${mount_y} 0" rpy="0 0 ${mount_yaw}"/>
       <!-- Rotates around +z = swings the leg forward/backward. -->
       <axis xyz="0 0 1"/>
-      <limit lower="${-joint_limit}" upper="${joint_limit}"
-             effort="5.0" velocity="5.0"/>
+      <limit lower="${joint_limits['coxa']['lower']}"
+             upper="${joint_limits['coxa']['upper']}"
+             effort="${joint_limits['coxa']['effort']}"
+             velocity="${joint_limits['coxa']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_coxa">
@@ -117,6 +148,15 @@
         </geometry>
         <material name="leg_blue"/>
       </visual>
+      <collision>
+        <origin xyz="${coxa_length/2} 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder radius="${seg_radius}" length="${coxa_length}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertial mass="${coxa_mass}"
+                               length="${coxa_length}"
+                               radius="${seg_radius}"/>
     </link>
 
     <!-- ---- Femur: upper leg, lifts the knee up/down. ------------------- -->
@@ -127,8 +167,10 @@
       <origin xyz="${coxa_length} 0 0" rpy="0 0 0"/>
       <!-- Rotates around the leg's local +y = lifts/lowers the femur. -->
       <axis xyz="0 1 0"/>
-      <limit lower="${-joint_limit}" upper="${joint_limit}"
-             effort="5.0" velocity="5.0"/>
+      <limit lower="${joint_limits['femur']['lower']}"
+             upper="${joint_limits['femur']['upper']}"
+             effort="${joint_limits['femur']['effort']}"
+             velocity="${joint_limits['femur']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_femur">
@@ -139,6 +181,15 @@
         </geometry>
         <material name="leg_blue"/>
       </visual>
+      <collision>
+        <origin xyz="${femur_length/2} 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder radius="${seg_radius}" length="${femur_length}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertial mass="${femur_mass}"
+                               length="${femur_length}"
+                               radius="${seg_radius}"/>
     </link>
 
     <!-- ---- Tibia: lower leg, bends at the knee down to the foot. ------- -->
@@ -147,8 +198,10 @@
       <child  link="${side}_${name}_tibia"/>
       <origin xyz="${femur_length} 0 0" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
-      <limit lower="${-joint_limit}" upper="${joint_limit}"
-             effort="5.0" velocity="5.0"/>
+      <limit lower="${joint_limits['tibia']['lower']}"
+             upper="${joint_limits['tibia']['upper']}"
+             effort="${joint_limits['tibia']['effort']}"
+             velocity="${joint_limits['tibia']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_tibia">
@@ -159,29 +212,132 @@
         </geometry>
         <material name="leg_blue"/>
       </visual>
+      <collision>
+        <origin xyz="${tibia_length/2} 0 0" rpy="0 ${pi/2} 0"/>
+        <geometry>
+          <cylinder radius="${seg_radius}" length="${tibia_length}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertial mass="${tibia_mass}"
+                               length="${tibia_length}"
+                               radius="${seg_radius}"/>
     </link>
 
-    <!-- ---- Foot: a fixed frame at the tip of the tibia. ---------------- -->
-    <!-- Used as the IK target; not a moving joint. -->
+    <!-- ---- Foot: a small sphere at the tip of the tibia. --------------- -->
+    <!-- Used as the IK target and as the ground-contact body in sim. -->
     <joint name="${side}_${name}_foot_joint" type="fixed">
       <parent link="${side}_${name}_tibia"/>
       <child  link="${side}_${name}_foot"/>
       <origin xyz="${tibia_length} 0 0" rpy="0 0 0"/>
     </joint>
-    <link name="${side}_${name}_foot"/>
+    <link name="${side}_${name}_foot">
+      <visual>
+        <geometry><sphere radius="${foot_radius}"/></geometry>
+        <material name="leg_blue"/>
+      </visual>
+      <collision>
+        <geometry><sphere radius="${foot_radius}"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="${foot_mass}"/>
+        <!-- Solid sphere: I = (2/5) m r^2, isotropic. -->
+        <inertia ixx="${0.4 * foot_mass * foot_radius * foot_radius}"
+                 iyy="${0.4 * foot_mass * foot_radius * foot_radius}"
+                 izz="${0.4 * foot_mass * foot_radius * foot_radius}"
+                 ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
 
   </xacro:macro>
 
   <!-- =====================================================================
-       Instantiate the 6 legs.
-       Front legs point forward-sideways, middle legs point straight out,
-       rear legs point backward-sideways. Angles in radians.
+       Instantiate the 6 legs. Only l_front and l_middle are defined in
+       geometry.yaml; the other four legs derive by symmetry:
+         - rear mirrors front about y-axis: x → -x, yaw → pi - yaw
+         - right mirrors left  about x-axis: y → -y, yaw → -yaw
+       Applying both gives r_rear from l_front, and so on.
        ===================================================================== -->
-  <xacro:leg side="l" name="front"  mount_x=" ${leg_x}" mount_y=" ${side_y}" mount_yaw="${    side_yaw}"/>
-  <xacro:leg side="l" name="middle" mount_x="     0"    mount_y=" ${mid_y}"  mount_yaw="${  pi/2}"      />
-  <xacro:leg side="l" name="rear"   mount_x="${-leg_x}" mount_y=" ${side_y}" mount_yaw="${pi-side_yaw}" />
-  <xacro:leg side="r" name="front"  mount_x=" ${leg_x}" mount_y="${-side_y}" mount_yaw="${   -side_yaw}"/>
-  <xacro:leg side="r" name="middle" mount_x="     0"    mount_y="${-mid_y}"  mount_yaw="${ -pi/2}"      />
-  <xacro:leg side="r" name="rear"   mount_x="${-leg_x}" mount_y="${-side_y}" mount_yaw="${side_yaw-pi}" />
+  <xacro:macro name="mount_leg" params="side name">
+    <!-- Reference: middle legs use l_middle, front/rear use l_front. -->
+    <xacro:property name="ref"
+                    value="${geom['mounts']['l_middle' if name == 'middle' else 'l_front']}"/>
+    <!-- Front/rear mirror (only affects rear): flips x, reflects yaw about pi/2. -->
+    <xacro:property name="x_after_fr"   value="${-ref['x']   if name == 'rear' else ref['x']}"/>
+    <xacro:property name="yaw_after_fr" value="${pi - ref['yaw'] if name == 'rear' else ref['yaw']}"/>
+    <!-- Left/right mirror (only affects right side): flips y, negates yaw. -->
+    <xacro:property name="mx"  value="${x_after_fr}"/>
+    <xacro:property name="my"  value="${-ref['y']     if side == 'r' else ref['y']}"/>
+    <xacro:property name="myaw" value="${-yaw_after_fr if side == 'r' else yaw_after_fr}"/>
+    <xacro:leg side="${side}" name="${name}"
+               mount_x="${mx}" mount_y="${my}" mount_yaw="${myaw}"/>
+  </xacro:macro>
+
+  <xacro:mount_leg side="l" name="front"/>
+  <xacro:mount_leg side="l" name="middle"/>
+  <xacro:mount_leg side="l" name="rear"/>
+  <xacro:mount_leg side="r" name="front"/>
+  <xacro:mount_leg side="r" name="middle"/>
+  <xacro:mount_leg side="r" name="rear"/>
+
+  <!-- =====================================================================
+       ros2_control hardware interface declarations.
+
+       Lists every joint that ros2_control will command/observe. The
+       <plugin> element swaps between the Gazebo and real-robot
+       hardware_interface backends based on use_sim. The real-robot
+       plugin lives in hexa_hardware (not yet implemented — the name
+       here is the contract that package will fulfil).
+       ===================================================================== -->
+  <xacro:macro name="leg_joints_iface" params="side name">
+    <joint name="${side}_${name}_coxa_joint">
+      <command_interface name="position">
+        <param name="min">${joint_limits['coxa']['lower']}</param>
+        <param name="max">${joint_limits['coxa']['upper']}</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="${side}_${name}_femur_joint">
+      <command_interface name="position">
+        <param name="min">${joint_limits['femur']['lower']}</param>
+        <param name="max">${joint_limits['femur']['upper']}</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="${side}_${name}_tibia_joint">
+      <command_interface name="position">
+        <param name="min">${joint_limits['tibia']['lower']}</param>
+        <param name="max">${joint_limits['tibia']['upper']}</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </xacro:macro>
+
+  <ros2_control name="HexaSystem" type="system">
+    <hardware>
+      <xacro:if value="$(arg use_sim)">
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </xacro:if>
+      <xacro:unless value="$(arg use_sim)">
+        <plugin>hexa_hardware/HexaHardware</plugin>
+      </xacro:unless>
+    </hardware>
+    <xacro:leg_joints_iface side="l" name="front"/>
+    <xacro:leg_joints_iface side="l" name="middle"/>
+    <xacro:leg_joints_iface side="l" name="rear"/>
+    <xacro:leg_joints_iface side="r" name="front"/>
+    <xacro:leg_joints_iface side="r" name="middle"/>
+    <xacro:leg_joints_iface side="r" name="rear"/>
+  </ros2_control>
+
+  <!-- =====================================================================
+       Gazebo overlay — included only in sim. Real-robot bringup leaves
+       use_sim=false so none of these tags reach the robot_description topic.
+       ===================================================================== -->
+  <xacro:if value="$(arg use_sim)">
+    <xacro:include filename="$(find hexa_description)/urdf/hexapod.gazebo.xacro"/>
+  </xacro:if>
 
 </robot>

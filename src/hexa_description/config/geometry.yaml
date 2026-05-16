@@ -1,0 +1,46 @@
+# Hexapod geometry — body, leg, and foot dimensions plus per-leg mounts.
+#
+# Single source of truth for the robot's shape. Loaded by hexapod.urdf.xacro
+# via xacro.load_yaml; downstream code reads these values from the URDF
+# (joint origins, link sizes) rather than re-importing the YAML.
+#
+# Units: metres (lengths), radians (angles), kilograms (mass).
+# Coordinate frame: REP-103 — +x forward, +y left, +z up.
+
+body:
+  length: 0.20 # +x, nose-to-tail
+  width: 0.16 # +y, side-to-side
+  height: 0.04 # +z, top-to-bottom
+  mass: 1.0
+
+leg:
+  # Segment lengths (m) along the leg, hip outward to foot tip.
+  coxa_length: 0.04
+  femur_length: 0.07
+  tibia_length: 0.10
+  # Visual + collision thickness (m) of the cylindrical segments.
+  seg_radius: 0.012
+  # Per-segment masses (kg) (dominated by the servo at the proximal end).
+  coxa_mass: 0.05
+  femur_mass: 0.08
+  tibia_mass: 0.06
+
+foot:
+  radius: 0.02 # ground-contact sphere radius (m)
+  mass: 0.01 # foot tip mass (kg)
+
+# Reference mounts for the left-front and left-middle legs.
+# (x, y) is the hip position in metres from body centre; yaw is the
+# direction the leg points outward in radians, counter-clockwise from forward direction (+x).
+#
+# If you are modifying this to fit an asymmetric hexapod, 
+# changes to hexapod.urdf.xacro need to be made.
+#
+# The other four legs are derived in hexapod.urdf.xacro by symmetry:
+#   - rear mirrors front about the body y-axis:  x → -x,  yaw → pi - yaw
+#   - right mirrors left  about the body x-axis: y → -y,  yaw → -yaw
+# Define only the left-front and left-middle; never add l_rear / r_*
+# entries — they'd be ignored.
+mounts:
+  l_front: {x: 0.08, y: 0.07, yaw: 0.785398} #  pi/4
+  l_middle: {x: 0.00, y: 0.09, yaw: 1.570796} #  pi/2

@@ -1,0 +1,45 @@
+# ros2_control controller manager + controller config for the simulated hexapod.
+#
+# Loaded by the gz_ros2_control-system plugin (declared in
+# hexa_description/urdf/hexapod.gazebo.xacro) when use_sim:=true. Real-robot
+# bringup will provide its own copy via hexa_hardware / hexa_bringup.
+#
+# Joint names mirror the URDF macro instantiations: {side}_{name}_{seg}_joint
+# where side ∈ {l, r}, name ∈ {front, middle, rear}, seg ∈ {coxa, femur, tibia}.
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz. Matches the typical IK/gait command rate.
+    use_sim_time: true
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # Single group position controller for all 18 joints. Takes a
+    # std_msgs/Float64MultiArray on /joint_group_position_controller/commands
+    # in the joint order listed below. The kinematics node will adapt to this
+    # interface once it lands.
+    joint_group_position_controller:
+      type: position_controllers/JointGroupPositionController
+
+joint_group_position_controller:
+  ros__parameters:
+    joints:
+      - l_front_coxa_joint
+      - l_front_femur_joint
+      - l_front_tibia_joint
+      - l_middle_coxa_joint
+      - l_middle_femur_joint
+      - l_middle_tibia_joint
+      - l_rear_coxa_joint
+      - l_rear_femur_joint
+      - l_rear_tibia_joint
+      - r_front_coxa_joint
+      - r_front_femur_joint
+      - r_front_tibia_joint
+      - r_middle_coxa_joint
+      - r_middle_femur_joint
+      - r_middle_tibia_joint
+      - r_rear_coxa_joint
+      - r_rear_femur_joint
+      - r_rear_tibia_joint
