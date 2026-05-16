@@ -18,8 +18,10 @@ leg:
   coxa_length: 0.04
   femur_length: 0.07
   tibia_length: 0.10
-  # Visual + collision thickness (m) of the cylindrical segments.
-  seg_radius: 0.012
+  # Per-segment visual + collision radius (m) of the cylindrical segments.
+  coxa_radius: 0.016
+  femur_radius: 0.013
+  tibia_radius: 0.010
   # Per-segment masses (kg) (dominated by the servo at the proximal end).
   coxa_mass: 0.05
   femur_mass: 0.08

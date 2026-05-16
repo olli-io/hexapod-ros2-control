@@ -20,7 +20,11 @@ from launch.actions import (
 )
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -35,13 +39,19 @@ def generate_launch_description():
     )
     world = LaunchConfiguration("world")
     spawn_z = LaunchConfiguration("spawn_z")
+    headless = LaunchConfiguration("headless")
 
     # gz_sim. `-r` starts unpaused, `-v 3` is info-level verbosity.
+    # `-s` (added when headless:=true) runs the physics server with no GUI;
+    # useful for CI smoke tests and any environment without a display.
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([pkg_ros_gz_sim, "launch", "gz_sim.launch.py"])
         ),
-        launch_arguments={"gz_args": [world, " -r -v 3"]}.items(),
+        launch_arguments={
+            "gz_args": [world, " -r -v 3 ",
+                        PythonExpression(["'-s' if '", headless, "' == 'true' else ''"])],
+        }.items(),
     )
 
     # robot_state_publisher with the sim overlay enabled.
@@ -105,6 +115,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "spawn_z", default_value="0.25",
             description="Initial z-height (m) at which the model is spawned.",
+        ),
+        DeclareLaunchArgument(
+            "headless", default_value="false",
+            description="Run gz_sim in server-only mode (no GUI).",
         ),
         gz_sim,
         description,

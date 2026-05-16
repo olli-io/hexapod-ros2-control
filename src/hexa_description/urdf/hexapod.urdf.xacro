@@ -42,7 +42,9 @@
   <xacro:property name="coxa_length"  value="${geom['leg']['coxa_length']}"/>
   <xacro:property name="femur_length" value="${geom['leg']['femur_length']}"/>
   <xacro:property name="tibia_length" value="${geom['leg']['tibia_length']}"/>
-  <xacro:property name="seg_radius"   value="${geom['leg']['seg_radius']}"/>
+  <xacro:property name="coxa_radius"  value="${geom['leg']['coxa_radius']}"/>
+  <xacro:property name="femur_radius" value="${geom['leg']['femur_radius']}"/>
+  <xacro:property name="tibia_radius" value="${geom['leg']['tibia_radius']}"/>
   <xacro:property name="coxa_mass"    value="${geom['leg']['coxa_mass']}"/>
   <xacro:property name="femur_mass"   value="${geom['leg']['femur_mass']}"/>
   <xacro:property name="tibia_mass"   value="${geom['leg']['tibia_mass']}"/>
@@ -56,29 +58,10 @@
   <material name="leg_blue"> <color rgba="0.2 0.4 0.8 1.0"/></material>
 
   <!-- =====================================================================
-       Body link — the central chassis everything else hangs off of.
-       ===================================================================== -->
-  <link name="base_link">
-    <visual>
-      <geometry>
-        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
-      </geometry>
-      <material name="body_grey"/>
-    </visual>
-    <collision>
-      <geometry>
-        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
-      </geometry>
-    </collision>
-    <xacro:box_inertial mass="${geom['body']['mass']}"
-                        x="${geom['body']['length']}"
-                        y="${geom['body']['width']}"
-                        z="${geom['body']['height']}"/>
-  </link>
-
-  <!-- =====================================================================
        Inertial macros. Both compute the tensor from mass + dimensions so
-       the YAML stays the only place a number is typed.
+       the YAML stays the only place a number is typed. Declared before
+       any link uses them: xacro requires macro definitions to precede
+       their first use.
        ===================================================================== -->
 
   <!-- Solid cylinder of length L along the link's local +x:
@@ -112,6 +95,27 @@
   </xacro:macro>
 
   <!-- =====================================================================
+       Body link — the central chassis everything else hangs off of.
+       ===================================================================== -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
+      </geometry>
+      <material name="body_grey"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
+      </geometry>
+    </collision>
+    <xacro:box_inertial mass="${geom['body']['mass']}"
+                        x="${geom['body']['length']}"
+                        y="${geom['body']['width']}"
+                        z="${geom['body']['height']}"/>
+  </link>
+
+  <!-- =====================================================================
        Leg macro.
 
        Parameters:
@@ -125,7 +129,7 @@
        ===================================================================== -->
   <xacro:macro name="leg" params="side name mount_x mount_y mount_yaw">
 
-    <!-- ---- Coxa: short horizontal segment attached to the body. -------- -->
+    <!-- Coxa: short horizontal segment attached to the body. -->
     <joint name="${side}_${name}_coxa_joint" type="revolute">
       <parent link="base_link"/>
       <child  link="${side}_${name}_coxa"/>
@@ -144,22 +148,22 @@
         <!-- Cylinder lies along the leg's local +x (outward from body). -->
         <origin xyz="${coxa_length/2} 0 0" rpy="0 ${pi/2} 0"/>
         <geometry>
-          <cylinder radius="${seg_radius}" length="${coxa_length}"/>
+          <cylinder radius="${coxa_radius}" length="${coxa_length}"/>
         </geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
         <origin xyz="${coxa_length/2} 0 0" rpy="0 ${pi/2} 0"/>
         <geometry>
-          <cylinder radius="${seg_radius}" length="${coxa_length}"/>
+          <cylinder radius="${coxa_radius}" length="${coxa_length}"/>
         </geometry>
       </collision>
       <xacro:cylinder_inertial mass="${coxa_mass}"
                                length="${coxa_length}"
-                               radius="${seg_radius}"/>
+                               radius="${coxa_radius}"/>
     </link>
 
-    <!-- ---- Femur: upper leg, lifts the knee up/down. ------------------- -->
+    <!-- Femur: upper leg, lifts the knee up/down. -->
     <joint name="${side}_${name}_femur_joint" type="revolute">
       <parent link="${side}_${name}_coxa"/>
       <child  link="${side}_${name}_femur"/>
@@ -177,22 +181,22 @@
       <visual>
         <origin xyz="${femur_length/2} 0 0" rpy="0 ${pi/2} 0"/>
         <geometry>
-          <cylinder radius="${seg_radius}" length="${femur_length}"/>
+          <cylinder radius="${femur_radius}" length="${femur_length}"/>
         </geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
         <origin xyz="${femur_length/2} 0 0" rpy="0 ${pi/2} 0"/>
         <geometry>
-          <cylinder radius="${seg_radius}" length="${femur_length}"/>
+          <cylinder radius="${femur_radius}" length="${femur_length}"/>
         </geometry>
       </collision>
       <xacro:cylinder_inertial mass="${femur_mass}"
                                length="${femur_length}"
-                               radius="${seg_radius}"/>
+                               radius="${femur_radius}"/>
     </link>
 
-    <!-- ---- Tibia: lower leg, bends at the knee down to the foot. ------- -->
+    <!-- Tibia: lower leg, bends at the knee down to the foot. -->
     <joint name="${side}_${name}_tibia_joint" type="revolute">
       <parent link="${side}_${name}_femur"/>
       <child  link="${side}_${name}_tibia"/>
@@ -208,37 +212,46 @@
       <visual>
         <origin xyz="${tibia_length/2} 0 0" rpy="0 ${pi/2} 0"/>
         <geometry>
-          <cylinder radius="${seg_radius}" length="${tibia_length}"/>
+          <cylinder radius="${tibia_radius}" length="${tibia_length}"/>
         </geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
         <origin xyz="${tibia_length/2} 0 0" rpy="0 ${pi/2} 0"/>
         <geometry>
-          <cylinder radius="${seg_radius}" length="${tibia_length}"/>
+          <cylinder radius="${tibia_radius}" length="${tibia_length}"/>
         </geometry>
       </collision>
       <xacro:cylinder_inertial mass="${tibia_mass}"
                                length="${tibia_length}"
-                               radius="${seg_radius}"/>
+                               radius="${tibia_radius}"/>
     </link>
 
-    <!-- ---- Foot: a small sphere at the tip of the tibia. --------------- -->
-    <!-- Used as the IK target and as the ground-contact body in sim. -->
+    <!-- Foot: a small sphere at the tip of the tibia.
+         Used as the IK target and as the ground-contact body in sim.
+         The foot link origin sits at the bottom of the sphere along the
+         tibia's +x axis, so the IK target coincides with the ground
+         contact point under the assumption that the tibia is vertical
+         at touchdown. The sphere geometry is therefore shifted back by
+         -foot_radius in the foot frame to keep its centre at the
+         physical tibia tip. -->
     <joint name="${side}_${name}_foot_joint" type="fixed">
       <parent link="${side}_${name}_tibia"/>
       <child  link="${side}_${name}_foot"/>
-      <origin xyz="${tibia_length} 0 0" rpy="0 0 0"/>
+      <origin xyz="${tibia_length + foot_radius} 0 0" rpy="0 0 0"/>
     </joint>
     <link name="${side}_${name}_foot">
       <visual>
+        <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${foot_radius}"/></geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
+        <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${foot_radius}"/></geometry>
       </collision>
       <inertial>
+        <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
         <mass value="${foot_mass}"/>
         <!-- Solid sphere: I = (2/5) m r^2, isotropic. -->
         <inertia ixx="${0.4 * foot_mass * foot_radius * foot_radius}"

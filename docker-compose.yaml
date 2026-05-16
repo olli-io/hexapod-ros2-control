@@ -18,6 +18,11 @@ services:
       QT_X11_NO_MITSHM: "1"
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
       XDG_RUNTIME_DIR: "/tmp/runtime-dev"
+      # gz-transport advertises endpoints by IP. With network_mode: host and a
+      # custom container hostname, the hostname doesn't resolve, so processes
+      # fail to find each other ("create" loops on "list of world names").
+      # Pin to loopback — all gz processes are co-located in this container.
+      GZ_IP: "127.0.0.1"
     volumes:
       - .:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
