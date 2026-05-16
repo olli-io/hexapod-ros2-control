@@ -4,13 +4,32 @@ Forward and inverse kinematics for the hexapod.
 
 Two layers:
 - **Library** (`hexa_kinematics/`): pure Python, no ROS imports. Per-leg
-  3-DOF IK (coxa/femur/tibia) and body-frame transforms. Importable and
-  unit-testable on its own.
+  3-DOF IK (coxa/femur/tibia), body-frame transforms, and body-pose
+  composition (`apply_body_pose`). Importable and unit-testable on its
+  own.
 - **Node** (`hexa_kinematics/ik_node.py`): subscribes to `/legs/targets`
-  (`LegState[6]`), publishes `/joint_commands` (`sensor_msgs/JointState`).
+  (`LegState[6]`) **and** `/body/pose_target` (`BodyPose`), composes the
+  pose offset with each foot target, then publishes `/joint_commands`
+  (`sensor_msgs/JointState`).
 
 Geometry parameters come from `hexa_description` (loaded at startup), so
 the library doesn't hard-code leg dimensions.
+
+## Body pose composition
+
+The IK node holds the latest `BodyPose` from `/body/pose_target`
+(published by `hexa_posture`, defaulting to identity) and applies it to
+every incoming foot target before solving IK. This is the single
+composition point in the stack — gait strategies stay pure and unaware
+of body pose, and pose mode (feet grounded, gait idle) and gait-active
+body animation share the exact same code path: the gait engine emits
+foot targets in the nominal body frame, and the IK node re-expresses
+them in the offset body frame via `apply_body_pose`.
+
+`/body/pose_target` is latched-style (the IK node uses the most recent
+sample); foot targets drive the publish rate of `/joint_commands`. The
+node does **not** subscribe to `/body/pose` directly — the user input
+is shaped, animated, and clamped by `hexa_posture` first.
 
 ## Conventions
 

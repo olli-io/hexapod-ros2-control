@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_posture</name>
+  <version>0.0.1</version>
+  <description>Body posture controller: turns user pose input and gait state into a clamped, animation-overlaid body pose target for the IK node.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hexa_interfaces</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

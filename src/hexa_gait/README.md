@@ -1,7 +1,11 @@
 # hexa_gait
 
 Gait engine. Given a desired body velocity and gait parameters, emits a
-stream of per-leg foot targets in the body frame.
+stream of per-leg foot targets in the **nominal** body frame — i.e. the
+body frame as if the user hadn't applied any pose offset. Body pose is
+composed in downstream by `hexa_kinematics`, not here. This package is
+intentionally unaware of `/body/pose_target`; gait strategies stay pure
+functions of `(phase, params) → foot_target`.
 
 Designed around a strategy pattern so additional gaits drop in cleanly:
 - `gaits/tripod.py` — alternating 3+3 (fast, default).

@@ -4,9 +4,11 @@ Custom ROS2 message, service, and action definitions shared across the stack.
 
 Lives at the bottom of the dependency graph — every other package depends on this, and it depends on nothing hexapod-specific.
 
-Planned types (initial):
+Defined types:
+- `msg/BodyPose.msg` — 6-DOF body pose offset (x/y/z + roll/pitch/yaw) from the nominal walking pose. Used both for pose mode (gait idle, feet grounded) and gait-active body animation. See [`msg/BodyPose.msg`](msg/BodyPose.msg) for the full frame and rotation-order spec.
+
+Planned types (add as producer + consumer land together):
 - `msg/LegState.msg` — foot target pose + phase (stance/swing) for one leg.
 - `msg/GaitParams.msg` — gait selection, step height, cycle time, body velocity.
-- `msg/BodyPose.msg` — body trim: height + roll/pitch/yaw offsets.
 
 Action/service definitions (e.g. `CalibrateServos.srv`) will be added as needed.

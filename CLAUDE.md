@@ -11,12 +11,16 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 
 ## Architectural rules
 
-- Strict one-way dependency chain: `hexa_teleop → hexa_control → hexa_gait → hexa_kinematics → hexa_hardware`. No back-edges, no cycles. `hexa_bringup` composes the chain via launch files only.
+- Two parallel chains converge in `hexa_kinematics`:
+  - Velocity / gait chain: `hexa_teleop → hexa_control → hexa_gait → hexa_kinematics → hexa_hardware`.
+  - Body-pose chain: `hexa_teleop → hexa_posture → hexa_kinematics`.
+  No back-edges, no cycles. The two chains never import each other; `hexa_kinematics` composes their outputs. `hexa_bringup` composes both chains via launch files only.
 - `hexa_interfaces` depends on nothing hexapod-specific (leaf).
 - `hexa_description` is the **single source of truth** for URDF, joint limits, and leg geometry. Never duplicate these values elsewhere — load them at runtime.
 - `hexa_simulation` owns **all** Gazebo-specific code. The real-robot bringup must not import it.
-- Library code in `hexa_kinematics/` must be importable without `rclpy` (pure Python, unit-testable standalone). ROS glue lives in separate node files (e.g. `ik_node.py`).
-- Gait strategies are pure functions: `(phase, params) → foot_target`. No state, no I/O, no clocks. The phase clock and per-leg transition state live in the engine, not in strategies.
+- Library code in `hexa_kinematics/` and `hexa_posture/` must be importable without `rclpy` (pure Python, unit-testable standalone). ROS glue lives in separate node files (e.g. `ik_node.py`, `posture_node.py`).
+- Gait strategies are pure functions: `(phase, params) → foot_target`. No state, no I/O, no clocks. The phase clock and per-leg transition state live in the gait engine, not in strategies.
+- Posture animations are pure functions: `AnimationContext → BodyPose`. No state outside the animation instance, no I/O, no clocks. The clock and walking-vs-idle state live in the posture node, not in animations.
 
 ## Configurability
 
@@ -43,12 +47,16 @@ Use exactly these names in identifiers, log messages, and docstrings — not the
 - **duty factor** (β) — fraction of cycle in stance.
 - **cycle time** — duration of one full PEP → PEP cycle, in seconds.
 - **phase offset** — leg's cycle start relative to a reference leg.
+- **posture** — body pose state and the subsystem that controls it. Covers both static positioning (feet grounded, body translates/yaws/tilts) and gait-coupled body animation (sway, lean, bob). Not *body trim*, *body control*, *body animation* as standalone terms.
+- **animation** — a pure function from `AnimationContext` to a `BodyPose` offset; one ingredient in the posture stack. Use this word only inside `hexa_posture` for animation-stack layers, never for gait or kinematic motion.
+- **pose mode** — `/cmd_vel` is zero, body posture changes while feet stay planted.
+- **gait-active** — `/cmd_vel` is non-zero; posture animations run on top of the walking gait.
 
 Full definitions in `docs/leg-phases.md`. Do not introduce new synonyms.
 
 ## Language choice
 
-- `ament_python`: gait, kinematics, control, teleop, and other node code.
+- `ament_python`: gait, kinematics, posture, control, teleop, and other node code.
 - `ament_cmake` (C++): only where required — pluginlib (`hexa_hardware`), description, simulation, and bringup composition.
 - Do not reach for C++ speculatively for performance. Profile first.
 
