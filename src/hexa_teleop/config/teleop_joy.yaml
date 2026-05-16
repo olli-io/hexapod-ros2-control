@@ -1,0 +1,35 @@
+# Joystick teleop config — 8BitDo Pro 2 in X-input mode.
+#
+# Axis / button indices match sensor_msgs/Joy as published by joy_node
+# on Linux (xpad driver). Joy convention: stick pushed forward / left
+# is positive, matching the REP-103 body frame (+x forward, +y left)
+# so mapping is unit-gain.
+#
+# Press Start + X while powering the controller on to enter X-input
+# mode.
+
+initial_mode: posture   # "posture" (default, safe) or "gait"
+
+deadband: 0.1           # absolute stick magnitude below this is treated as zero
+
+# 8BitDo Pro 2 / Xbox-style axis indices in joy_node Joy.axes
+axis:
+  left_x: 0
+  left_y: 1
+  right_x: 3
+  right_y: 4
+
+# Button index that toggles posture <-> gait on rising edge.
+# 0=A, 1=B, 2=X, 3=Y on 8BitDo Pro 2 in X-input mode.
+mode_toggle_button: 3   # Y
+
+# Gait mode: left stick X -> angular.z, right stick -> linear.x/y
+gait:
+  linear_x_max: 0.30     # m/s
+  linear_y_max: 0.20     # m/s
+  angular_z_max: 1.00    # rad/s
+
+# Posture mode: right stick -> body translation (x,y) in body frame
+posture:
+  x_max: 0.05            # m (forward)
+  y_max: 0.05            # m (left)

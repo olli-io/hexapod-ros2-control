@@ -9,7 +9,7 @@
 
 body:
   length: 0.20 # +x, nose-to-tail
-  width: 0.16 # +y, side-to-side
+  width: 0.20 # +y, side-to-side
   height: 0.04 # +z, top-to-bottom
   mass: 1.0
 

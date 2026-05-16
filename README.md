@@ -5,7 +5,18 @@ ROS2 control stack for a 6-leg / 18-DOF hexapod robot.
 - **Hardware target**: Raspberry Pi 3 (Ubuntu Server 24.04, ARM64) driving a Pimoroni Servo 2040 over USB serial or I2C.
 - **ROS2 distro**: Jazzy Jalisco (LTS, supported through 2029).
 - **Simulator**: Gazebo Harmonic (paired with Jazzy, via `ros_gz`). The `hexa_hardware` package abstracts the servo bus so the same gait/control code runs in sim or on the real robot.
-- **Dev environment**: Docker container (`./scripts/dev.sh`), so the Arch / non-Ubuntu host doesn't need ROS2 installed. See [`docs/dev-environment.md`](docs/dev-environment.md).
+- **Dev environment**: Docker container (`./hexapod.sh --dev`), so the Arch / non-Ubuntu host doesn't need ROS2 installed. See [`docs/dev-environment.md`](docs/dev-environment.md).
+
+## Configuration
+
+All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`colcon build --symlink-install` re-links instantly), relaunch.
+
+- [`src/hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — body dimensions, leg segment lengths / radii / masses, foot, and per-leg hip mounts. Single source of truth for the robot's shape; loaded into the URDF via xacro.
+- [`src/hexa_description/config/joint_limits.yaml`](src/hexa_description/config/joint_limits.yaml) — per-joint-type (coxa / femur / tibia) position, effort, and velocity limits. Loaded into the URDF.
+- [`src/hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick axis / button mapping, deadband, posture↔gait toggle button, initial mode, and the max `cmd_vel` and posture offsets each mode emits.
+- [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and the joint-group controller's joint ordering. Sim-only; the real-robot bringup will ship its own copy via `hexa_hardware`.
+
+New packages follow the same convention: ship a `config/*.yaml` and load it at launch via parameters. Gait params, posture envelope / animation weights, and gait-selection thresholds will join the list as `hexa_gait`, `hexa_posture`, and `hexa_control` land.
 
 ## Design principles
 
@@ -62,7 +73,7 @@ Each step: producer — purpose — topic (message type) — consumer.
 All commands run inside the dev container. From the repo root on the host:
 
 ```
-./scripts/dev.sh                    # interactive shell in the container
+./hexapod.sh --dev                  # interactive shell in the container
 ```
 
 Then, inside the container:

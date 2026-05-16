@@ -1,19 +1,16 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>hexa_kinematics</name>
+  <name>hexa_teleop</name>
   <version>0.0.1</version>
-  <description>Forward and inverse kinematics for the hexapod.</description>
+  <description>Human-input nodes that produce body velocity (/cmd_vel) and body pose offsets (/body/pose) for the hexapod.</description>
   <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
-  <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>hexa_interfaces</depend>
-  <depend>hexa_description</depend>
-  <depend>ament_index_python</depend>
-  <depend>python3-yaml</depend>
+  <depend>joy</depend>
 
   <test_depend>python3-pytest</test_depend>
 

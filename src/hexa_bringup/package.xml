@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_bringup</name>
+  <version>0.0.1</version>
+  <description>Top-level launch composition for the hexapod stack, plus throw-away dev tools used while subsystems are still WIP.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hexa_interfaces</depend>
+  <depend>hexa_kinematics</depend>
+
+  <exec_depend>hexa_description</exec_depend>
+  <exec_depend>hexa_simulation</exec_depend>
+  <exec_depend>hexa_posture</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -5,7 +5,7 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 ## Stack
 
 - ROS2 Jazzy (Ubuntu 24.04), Gazebo Harmonic, colcon workspace.
-- All build/run commands execute **inside the Docker dev container**: `./scripts/dev.sh`. Do not assume native ROS2 on the host.
+- All build/run commands execute **inside the Docker dev container**: `./hexapod.sh --dev`. Do not assume native ROS2 on the host.
 - ROS2 packages live under `src/hexa_*/`. The top-level `README.md` documents the dependency graph and runtime data flow.
 - **Leg count is fixed at 6.** Do not parameterise it.
 

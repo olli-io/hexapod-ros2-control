@@ -13,6 +13,7 @@ this is complete scaffolding and not only a dev solution.
 Dockerfile               # image definition: jazzy-desktop + ros_gz + ros2_control + dev user
 docker/entrypoint.sh     # sources /opt/ros/jazzy/setup.bash, then install/setup.bash if built
 docker-compose.yml       # mounts workspace, X11 socket, host network for DDS
+hexapod.sh               # top-level dispatcher (e.g. --dev forwards to scripts/dev.sh)
 scripts/dev.sh           # xhost + docker compose run
 .dockerignore            # keeps build/, install/, .git/ out of the build context
 ```
@@ -30,7 +31,7 @@ No native ROS2 install needed.
 ## First-time setup
 
 ```
-./scripts/dev.sh
+./hexapod.sh --dev
 ```
 
 Builds `hexapod-dev:jazzy` (takes a few minutes the first time), then drops
@@ -56,8 +57,8 @@ to write outside `/workspace`.
 These should each pop a window on your desktop:
 
 ```
-./scripts/dev.sh rviz2
-./scripts/dev.sh gz sim shapes.sdf
+./hexapod.sh --dev rviz2
+./hexapod.sh --dev gz sim shapes.sdf
 ```
 
 If you get `cannot open display`, run `xhost +local:docker` once on the host
@@ -100,7 +101,7 @@ development on a workstation.
   attempts this but silently ignores failures.
 - **Files in `build/` / `install/` owned by root** — your host UID/GID didn't
   match what was baked into the image. Rebuild while passing the right IDs:
-  `UID=$(id -u) GID=$(id -g) docker compose build`. The `scripts/dev.sh`
+  `UID=$(id -u) GID=$(id -g) docker compose build`. The `hexapod.sh --dev`
   wrapper does this for you; the issue only appears if you call
   `docker compose` directly.
 - **`ros2 topic list` empty across containers** — check `ROS_DOMAIN_ID` is the

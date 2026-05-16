@@ -30,3 +30,8 @@ services:
     # Uncomment when the Pimoroni Servo 2040 is plugged in:
     # devices:
     #   - "/dev/ttyACM0:/dev/ttyACM0"
+    # Joystick passthrough for hexa_teleop. Uncomment when a controller
+    # (e.g. 8BitDo Pro 2 in X-input mode) is plugged in. The bind exposes
+    # /dev/input/js* and /dev/input/event* to joy_node.
+    # devices:
+    #   - "/dev/input:/dev/input"
