@@ -1,48 +1,106 @@
-# Hexapod geometry — body, leg, and foot dimensions plus per-leg mounts.
+# Hexapod geometry — body, leg, and foot dimensions, per-leg mounts,
+# and per-joint-type servo limits.
 #
-# Single source of truth for the robot's shape. Loaded by hexapod.urdf.xacro
-# via xacro.load_yaml; downstream code reads these values from the URDF
-# (joint origins, link sizes) rather than re-importing the YAML.
+# Single source of truth for the robot's shape and joint travel. Loaded
+# by hexapod.urdf.xacro via xacro.load_yaml; downstream code reads these
+# values from the URDF (joint origins, link sizes, <limit> windows)
+# rather than re-importing the YAML.
 #
-# Units: metres (lengths), radians (angles), kilograms (mass).
+# Units: metres (lengths), degrees (angles), kilograms (mass), Nm (effort),
+# rad/s (velocity).  All YAML angles are degrees, in each joint's own
+# intuitive sense; the deg→rad conversion happens at load time — once in
+# this URDF and once in hexa_kinematics/joint_config.py, kept in lockstep.
 # Coordinate frame: REP-103 — +x forward, +y left, +z up.
 
 body:
-  length: 0.20 # +x, nose-to-tail
-  width: 0.20 # +y, side-to-side
+  # length (+x, nose-to-tail) is derived in hexapod.urdf.xacro as
+  # 2 * mounts.l_front.x * 1.1 so the chassis stays sized to the mounts.
+  # width  (+y, side-to-side) is derived in hexapod.urdf.xacro as
+  # 2 * mounts.l_middle.y * 1.1 with the same 10% margin.
   height: 0.04 # +z, top-to-bottom
   mass: 1.0
 
 leg:
   # Segment lengths (m) along the leg, hip outward to foot tip.
-  coxa_length: 0.04
-  femur_length: 0.07
-  tibia_length: 0.10
+  coxa_length: 0.042
+  femur_length: 0.08
+  tibia_length: 0.134
   # Per-segment visual + collision radius (m) of the cylindrical segments.
-  coxa_radius: 0.016
-  femur_radius: 0.013
-  tibia_radius: 0.010
+  coxa_radius: 0.02
+  femur_radius: 0.020
+  tibia_radius: 0.01
   # Per-segment masses (kg) (dominated by the servo at the proximal end).
   coxa_mass: 0.05
   femur_mass: 0.08
   tibia_mass: 0.06
 
 foot:
-  radius: 0.02 # ground-contact sphere radius (m)
+  radius: 0.01 # ground-contact sphere radius (m)
   mass: 0.01 # foot tip mass (kg)
 
 # Reference mounts for the left-front and left-middle legs.
-# (x, y) is the hip position in metres from body centre; yaw is the
-# direction the leg points outward in radians, counter-clockwise from forward direction (+x).
+# (x, y) is the hip position in metres from body centre; yaw_deg is the
+# direction the leg points outward, counter-clockwise from forward (+x).
 #
-# If you are modifying this to fit an asymmetric hexapod, 
+# If you are modifying this to fit an asymmetric hexapod,
 # changes to hexapod.urdf.xacro need to be made.
 #
 # The other four legs are derived in hexapod.urdf.xacro by symmetry:
-#   - rear mirrors front about the body y-axis:  x → -x,  yaw → pi - yaw
+#   - rear mirrors front about the body y-axis:  x → -x,  yaw → 180 - yaw
 #   - right mirrors left  about the body x-axis: y → -y,  yaw → -yaw
 # Define only the left-front and left-middle; never add l_rear / r_*
 # entries — they'd be ignored.
 mounts:
-  l_front: {x: 0.08, y: 0.07, yaw: 0.785398} #  pi/4
-  l_middle: {x: 0.00, y: 0.09, yaw: 1.570796} #  pi/2
+  l_front:  {x: 0.083, y: 0.0575, yaw_deg: 30}
+  l_middle: {x: 0.00,  y: 0.082,  yaw_deg: 90}
+
+# Per-joint-type servo configuration.
+#
+# Each joint type stores the angle at which the servo arm reads its
+# physical zero ("servo center"), plus absolute lower / upper travel
+# limits — all in the joint's natural intuitive degrees. All 18 joints
+# (6 legs x {coxa, femur, tibia}) share the configuration of their type.
+#
+# The URDF (and hexa_kinematics/joint_config.py) converts these degrees
+# to IK-convention radians at load time. The URDF itself stays a pure
+# mathematical presentation of the hexapod (joint zero = legs splayed
+# horizontally); only the <limit> window is shifted to express the
+# servo's reachable range.
+#
+# Per-joint intuitive convention:
+#   coxa.deg                   — rotation about coxa-mount +z; 0 puts the
+#                                leg radial.
+#   femur.above_horizontal_deg — degrees the femur is lifted above
+#                                horizontal; positive raises the knee.
+#   tibia.interior_deg         — interior angle at the knee between
+#                                femur and tibia; 180 = fully extended.
+#
+# lower_limit_deg / upper_limit_deg are absolute angles in the same
+# intuitive units (not signed offsets from center). This lets asymmetric
+# builds bias travel toward one direction.
+#
+# The default standing pose lives separately in standing_pose.yaml; it
+# does not have to coincide with the servo center.
+#
+# Tune to match the real servo specs once known.
+joints:
+  coxa:
+    deg: 0                      # 0° — coxa centered (no fore/aft sweep)
+    lower_limit_deg: -90        # absolute lower bound in coxa.deg
+    upper_limit_deg:  90        # absolute upper bound in coxa.deg
+    effort: 5.0
+    velocity: 5.0
+
+  femur:
+    above_horizontal_deg: 35    # 35° — femur tilted above horizontal at servo zero
+    lower_limit_deg: -55        # absolute lower bound in above_horizontal_deg
+    upper_limit_deg: 125        # absolute upper bound in above_horizontal_deg
+    effort: 5.0
+    velocity: 5.0
+
+  tibia:
+    interior_deg: 68            # 68° — interior femur-tibia knee angle at servo zero
+    lower_limit_deg: -22        # absolute lower bound in interior_deg
+    upper_limit_deg: 158        # absolute upper bound in interior_deg
+    effort: 5.0
+    velocity: 5.0

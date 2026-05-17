@@ -49,9 +49,10 @@ Frame, joint-angle, and branch conventions are documented in
 Tracked for when the IK node lands:
 
 - **Joint limits are not enforced.** The library returns the unconstrained
-  mathematical IK solution. Once `hexa_description` publishes
-  `config/joint_limits.yaml`, `LegSpec` should grow `(min, max)` ranges
-  per joint and IK should validate (raise or clip).
+  mathematical IK solution. Per-joint-type limits are now loadable via
+  `joint_config.load_joint_limits` (reading the `joints:` block of
+  `hexa_description/config/geometry.yaml`); wire them into `LegSpec`
+  and have IK validate (raise or clip).
 - **URDF joint-zero offsets.** The library uses kinematic zeros
   (horizontal femur, extended tibia); the URDF will likely pick a
   different reference pose so joint zero sits mid-range. The IK node

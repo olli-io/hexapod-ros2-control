@@ -16,8 +16,8 @@ leg:
   femur_length: 0.07
   tibia_length: 0.10
 mounts:
-  l_front:  {x: 0.08, y: 0.07, yaw: 0.785398}  # pi/4
-  l_middle: {x: 0.00, y: 0.09, yaw: 1.570796}  # pi/2
+  l_front:  {x: 0.08, y: 0.07, yaw_deg: 45}
+  l_middle: {x: 0.00, y: 0.09, yaw_deg: 90}
 """
     path = tmp_path / "geometry.yaml"
     path.write_text(text)
@@ -40,11 +40,10 @@ def test_segment_lengths_propagate(geometry_yaml: Path):
     assert math.isclose(spec.tibia_len, 0.10)
 
 
-# Fixture yaw values are truncated decimals (matching the real
-# geometry.yaml); use the same numeric reference rather than math.pi/N
-# so the comparison is exact.
-_FRONT_YAW = 0.785398
-_MIDDLE_YAW = 1.570796
+# Fixture yaw values are whole degrees; convert via math.radians here
+# so the assertions match exactly what the loader produces.
+_FRONT_YAW = math.radians(45)
+_MIDDLE_YAW = math.radians(90)
 
 
 def test_left_legs_match_reference_mounts(geometry_yaml: Path):

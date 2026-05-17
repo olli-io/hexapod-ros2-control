@@ -29,11 +29,9 @@
 
   <!-- =====================================================================
        Config. Geometry (body/leg/foot dimensions, masses, per-leg mounts)
-       and joint limits live in YAML so they can be tuned without editing
-       the URDF. Both files are loaded into Python dicts here.
+       and per-joint-type servo limits live together in geometry.yaml so
+       they can be tuned without editing the URDF.
        ===================================================================== -->
-  <xacro:property name="joint_limits"
-                  value="${xacro.load_yaml('$(find hexa_description)/config/joint_limits.yaml')}"/>
   <xacro:property name="geom"
                   value="${xacro.load_yaml('$(find hexa_description)/config/geometry.yaml')}"/>
 
@@ -50,6 +48,38 @@
   <xacro:property name="tibia_mass"   value="${geom['leg']['tibia_mass']}"/>
   <xacro:property name="foot_radius"  value="${geom['foot']['radius']}"/>
   <xacro:property name="foot_mass"    value="${geom['foot']['mass']}"/>
+
+  <!-- Per-joint <limit> windows, in URDF-convention radians. The YAML
+       carries intuitive per-joint degrees (coxa.deg,
+       femur.above_horizontal_deg, tibia.interior_deg with absolute
+       lower_limit_deg / upper_limit_deg); the conversions here match
+       hexa_kinematics/hexa_kinematics/joint_config.py exactly. The URDF
+       itself stays a pure mathematical presentation of the hexapod —
+       joint zero remains "legs splayed horizontally"; only the <limit>
+       window is shifted to express the servo's reachable range.
+
+       Sign-aware swap: femur uses -radians(deg) and tibia uses
+       pi - radians(deg), both monotonically decreasing — so intuitive
+       upper_limit_deg maps to URDF lower_rad and vice versa. -->
+  <xacro:property name="coxa_lower_rad"
+                  value="${geom['joints']['coxa']['lower_limit_deg'] * pi / 180}"/>
+  <xacro:property name="coxa_upper_rad"
+                  value="${geom['joints']['coxa']['upper_limit_deg'] * pi / 180}"/>
+  <xacro:property name="femur_lower_rad"
+                  value="${-geom['joints']['femur']['upper_limit_deg'] * pi / 180}"/>
+  <xacro:property name="femur_upper_rad"
+                  value="${-geom['joints']['femur']['lower_limit_deg'] * pi / 180}"/>
+  <xacro:property name="tibia_lower_rad"
+                  value="${pi - geom['joints']['tibia']['upper_limit_deg'] * pi / 180}"/>
+  <xacro:property name="tibia_upper_rad"
+                  value="${pi - geom['joints']['tibia']['lower_limit_deg'] * pi / 180}"/>
+
+  <!-- Body length and width are derived from the front and middle mounts
+       so the chassis always extends just past the hips: 10% margin per side. -->
+  <xacro:property name="body_length" value="${2 * geom['mounts']['l_front']['x']  * 1.1}"/>
+  <xacro:property name="body_width"  value="${2 * geom['mounts']['l_middle']['y'] * 1.1}"/>
+  <xacro:property name="body_height" value="${geom['body']['height']}"/>
+  <xacro:property name="body_mass"   value="${geom['body']['mass']}"/>
 
   <!-- =====================================================================
        Materials (just for colour in RViz / Gazebo).
@@ -100,19 +130,19 @@
   <link name="base_link">
     <visual>
       <geometry>
-        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
+        <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
       <material name="body_grey"/>
     </visual>
     <collision>
       <geometry>
-        <box size="${geom['body']['length']} ${geom['body']['width']} ${geom['body']['height']}"/>
+        <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
     </collision>
-    <xacro:box_inertial mass="${geom['body']['mass']}"
-                        x="${geom['body']['length']}"
-                        y="${geom['body']['width']}"
-                        z="${geom['body']['height']}"/>
+    <xacro:box_inertial mass="${body_mass}"
+                        x="${body_length}"
+                        y="${body_width}"
+                        z="${body_height}"/>
   </link>
 
   <!-- =====================================================================
@@ -137,10 +167,10 @@
       <origin xyz="${mount_x} ${mount_y} 0" rpy="0 0 ${mount_yaw}"/>
       <!-- Rotates around +z = swings the leg forward/backward. -->
       <axis xyz="0 0 1"/>
-      <limit lower="${joint_limits['coxa']['lower']}"
-             upper="${joint_limits['coxa']['upper']}"
-             effort="${joint_limits['coxa']['effort']}"
-             velocity="${joint_limits['coxa']['velocity']}"/>
+      <limit lower="${coxa_lower_rad}"
+             upper="${coxa_upper_rad}"
+             effort="${geom['joints']['coxa']['effort']}"
+             velocity="${geom['joints']['coxa']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_coxa">
@@ -150,6 +180,17 @@
         <geometry>
           <cylinder radius="${coxa_radius}" length="${coxa_length}"/>
         </geometry>
+        <material name="leg_blue"/>
+      </visual>
+      <!-- Joint caps: visual-only spheres at each end of the segment. -->
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><sphere radius="${coxa_radius}"/></geometry>
+        <material name="leg_blue"/>
+      </visual>
+      <visual>
+        <origin xyz="${coxa_length} 0 0" rpy="0 0 0"/>
+        <geometry><sphere radius="${coxa_radius}"/></geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
@@ -171,10 +212,10 @@
       <origin xyz="${coxa_length} 0 0" rpy="0 0 0"/>
       <!-- Rotates around the leg's local +y = lifts/lowers the femur. -->
       <axis xyz="0 1 0"/>
-      <limit lower="${joint_limits['femur']['lower']}"
-             upper="${joint_limits['femur']['upper']}"
-             effort="${joint_limits['femur']['effort']}"
-             velocity="${joint_limits['femur']['velocity']}"/>
+      <limit lower="${femur_lower_rad}"
+             upper="${femur_upper_rad}"
+             effort="${geom['joints']['femur']['effort']}"
+             velocity="${geom['joints']['femur']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_femur">
@@ -183,6 +224,16 @@
         <geometry>
           <cylinder radius="${femur_radius}" length="${femur_length}"/>
         </geometry>
+        <material name="leg_blue"/>
+      </visual>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><sphere radius="${femur_radius}"/></geometry>
+        <material name="leg_blue"/>
+      </visual>
+      <visual>
+        <origin xyz="${femur_length} 0 0" rpy="0 0 0"/>
+        <geometry><sphere radius="${femur_radius}"/></geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
@@ -202,10 +253,10 @@
       <child  link="${side}_${name}_tibia"/>
       <origin xyz="${femur_length} 0 0" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
-      <limit lower="${joint_limits['tibia']['lower']}"
-             upper="${joint_limits['tibia']['upper']}"
-             effort="${joint_limits['tibia']['effort']}"
-             velocity="${joint_limits['tibia']['velocity']}"/>
+      <limit lower="${tibia_lower_rad}"
+             upper="${tibia_upper_rad}"
+             effort="${geom['joints']['tibia']['effort']}"
+             velocity="${geom['joints']['tibia']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_tibia">
@@ -214,6 +265,12 @@
         <geometry>
           <cylinder radius="${tibia_radius}" length="${tibia_length}"/>
         </geometry>
+        <material name="leg_blue"/>
+      </visual>
+      <!-- Proximal joint cap only; distal end is covered by the foot sphere. -->
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><sphere radius="${tibia_radius}"/></geometry>
         <material name="leg_blue"/>
       </visual>
       <collision>
@@ -276,7 +333,8 @@
                     value="${geom['mounts']['l_middle' if name == 'middle' else 'l_front']}"/>
     <!-- Front/rear mirror (only affects rear): flips x, reflects yaw about pi/2. -->
     <xacro:property name="x_after_fr"   value="${-ref['x']   if name == 'rear' else ref['x']}"/>
-    <xacro:property name="yaw_after_fr" value="${pi - ref['yaw'] if name == 'rear' else ref['yaw']}"/>
+    <xacro:property name="ref_yaw"      value="${ref['yaw_deg'] * pi / 180}"/>
+    <xacro:property name="yaw_after_fr" value="${pi - ref_yaw if name == 'rear' else ref_yaw}"/>
     <!-- Left/right mirror (only affects right side): flips y, negates yaw. -->
     <xacro:property name="mx"  value="${x_after_fr}"/>
     <xacro:property name="my"  value="${-ref['y']     if side == 'r' else ref['y']}"/>
@@ -304,24 +362,24 @@
   <xacro:macro name="leg_joints_iface" params="side name">
     <joint name="${side}_${name}_coxa_joint">
       <command_interface name="position">
-        <param name="min">${joint_limits['coxa']['lower']}</param>
-        <param name="max">${joint_limits['coxa']['upper']}</param>
+        <param name="min">${coxa_lower_rad}</param>
+        <param name="max">${coxa_upper_rad}</param>
       </command_interface>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="${side}_${name}_femur_joint">
       <command_interface name="position">
-        <param name="min">${joint_limits['femur']['lower']}</param>
-        <param name="max">${joint_limits['femur']['upper']}</param>
+        <param name="min">${femur_lower_rad}</param>
+        <param name="max">${femur_upper_rad}</param>
       </command_interface>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="${side}_${name}_tibia_joint">
       <command_interface name="position">
-        <param name="min">${joint_limits['tibia']['lower']}</param>
-        <param name="max">${joint_limits['tibia']['upper']}</param>
+        <param name="min">${tibia_lower_rad}</param>
+        <param name="max">${tibia_upper_rad}</param>
       </command_interface>
       <state_interface name="position"/>
       <state_interface name="velocity"/>

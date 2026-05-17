@@ -11,8 +11,7 @@ ROS2 control stack for a 6-leg / 18-DOF hexapod robot.
 
 All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`colcon build --symlink-install` re-links instantly), relaunch.
 
-- [`src/hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — body dimensions, leg segment lengths / radii / masses, foot, and per-leg hip mounts. Single source of truth for the robot's shape; loaded into the URDF via xacro.
-- [`src/hexa_description/config/joint_limits.yaml`](src/hexa_description/config/joint_limits.yaml) — per-joint-type (coxa / femur / tibia) position, effort, and velocity limits. Loaded into the URDF.
+- [`src/hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — body dimensions, leg segment lengths / radii / masses, foot, per-leg hip mounts, and per-joint-type (coxa / femur / tibia) servo center, lower / upper travel limits, effort, and velocity. Single source of truth for the robot's shape and joint travel; loaded into the URDF via xacro.
 - [`src/hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick axis / button mapping, deadband, posture↔gait toggle button, initial mode, and the max `cmd_vel` and posture offsets each mode emits.
 - [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and the joint-group controller's joint ordering. Sim-only; the real-robot bringup will ship its own copy via `hexa_hardware`.
 

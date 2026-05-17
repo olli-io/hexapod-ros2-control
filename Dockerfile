@@ -47,7 +47,8 @@ USER ${USERNAME}
 WORKDIR /workspace
 
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /home/${USERNAME}/.bashrc \
-    && echo '[ -f /workspace/install/setup.bash ] && source /workspace/install/setup.bash' >> /home/${USERNAME}/.bashrc
+    && echo '[ -f /workspace/install/setup.bash ] && source /workspace/install/setup.bash' >> /home/${USERNAME}/.bashrc \
+    && echo '[ -f /workspace/docker/aliases.sh ] && source /workspace/docker/aliases.sh' >> /home/${USERNAME}/.bashrc
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

@@ -13,7 +13,13 @@ cd "${REPO_ROOT}"
 # Harmless if there is no X server (e.g. headless / CI).
 xhost +local:docker >/dev/null 2>&1 || true
 
+# Host's `input` group GID, forwarded so the container user can read
+# /dev/input/event* (needed by joy_node when a controller is attached).
+# Falls back to 992 if the host has no `input` group.
+INPUT_GID="$(getent group input | cut -d: -f3)"
+INPUT_GID="${INPUT_GID:-992}"
+
 # `UID` is a readonly builtin in bash, so we can't `export` it.
 # Pass the values inline; docker compose reads them as env vars.
-exec env UID="$(id -u)" GID="$(id -g)" \
+exec env UID="$(id -u)" GID="$(id -g)" INPUT_GID="${INPUT_GID}" \
     docker compose run --rm --service-ports dev "${@:-bash}"

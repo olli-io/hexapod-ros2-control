@@ -13,6 +13,12 @@ services:
     stdin_open: true
     tty: true
     working_dir: /workspace
+    # Supplementary GIDs for the container user. INPUT_GID is the host's
+    # `input` group, needed so joy_node can open /dev/input/event* under
+    # the joystick passthrough below. Defaults to 992 (Arch / typical
+    # Ubuntu); override per-host via env if your distro differs.
+    group_add:
+      - "${INPUT_GID:-992}"
     environment:
       DISPLAY: "${DISPLAY:-:0}"
       QT_X11_NO_MITSHM: "1"
@@ -33,5 +39,5 @@ services:
     # Joystick passthrough for hexa_teleop. Uncomment when a controller
     # (e.g. 8BitDo Pro 2 in X-input mode) is plugged in. The bind exposes
     # /dev/input/js* and /dev/input/event* to joy_node.
-    # devices:
-    #   - "/dev/input:/dev/input"
+    devices:
+      - "/dev/input:/dev/input"

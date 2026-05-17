@@ -1,0 +1,29 @@
+# Default standing pose: per-joint angles when the robot is at rest.
+#
+# Loaded by hexa_bringup's stub_stance_publisher (and the future
+# hexa_gait STAND state) to derive nominal foot targets via forward
+# kinematics. Angles are in degrees, using the same intuitive per-joint
+# convention as the joints: block of geometry.yaml:
+#
+#   coxa.deg                   — rotation about the coxa-mount +z;
+#                                0 puts the leg radial.
+#   femur.above_horizontal_deg — degrees the femur is lifted above
+#                                horizontal; positive raises the knee.
+#   tibia.interior_deg         — interior angle at the knee between
+#                                femur and tibia; 180 = fully extended.
+#
+# The conversion to IK-convention radians lives in
+# hexa_kinematics/hexa_kinematics/joint_config.py (load_standing_pose),
+# which also validates that each angle sits inside the servo range
+# declared in geometry.yaml's joints: block.
+#
+# Default servo center and standing pose coincide on this build, but
+# they are kept in separate files so they can diverge — e.g. an
+# asymmetric build with servos biased toward one direction of travel.
+
+coxa:
+  deg: 0                    # 0° — leg radial at rest
+femur:
+  above_horizontal_deg: 35  # 35° — femur tilted above horizontal
+tibia:
+  interior_deg: 68          # 68° — interior femur-tibia knee angle

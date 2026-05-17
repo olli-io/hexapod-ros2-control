@@ -5,8 +5,12 @@ Emits the same six nominal-stance foot targets every tick on
 to let the IK loop (ik_node → controller → Gazebo) be exercised
 end-to-end before the real gait engine lands.
 
-Delete this node — and its launch reference — once hexa_gait's STAND
-state can publish the same shape on ``/legs/targets``.
+The standing pose comes from ``hexa_description/config/standing_pose.yaml``
+(loaded via ``hexa_kinematics.joint_config.load_standing_pose``, which
+also validates the angles against the ``joints:`` block of
+``geometry.yaml``). Reshape the stance by editing that YAML, not by
+touching this file. Delete this node — and its launch reference — once
+hexa_gait's STAND state can publish the same shape on ``/legs/targets``.
 """
 
 from __future__ import annotations
@@ -20,17 +24,12 @@ from geometry_msgs.msg import Point
 from hexa_interfaces.msg import LegState, LegTargets
 from rclpy.node import Node
 
+from hexa_kinematics.joint_config import load_standing_pose
+from hexa_kinematics.leg_ik import forward_kinematics
 # Reuse the shared YAML expander so the stub, the IK node, and the URDF
 # all derive the six legs from geometry.yaml the same way.
 from hexa_kinematics.leg_specs import LEG_NAMES, load_leg_specs
 
-
-# Foot reach radially outward from the coxa pivot (m) and standoff below
-# the body (m). Tuned for the default URDF (coxa 0.04, femur 0.07,
-# tibia 0.10, limits ±60°/±60°/±90°): puts the femur near horizontal and
-# bends the tibia ~75° — comfortably inside every joint limit.
-NOMINAL_RADIAL = 0.13
-NOMINAL_Z = -0.10
 
 PUBLISH_RATE_HZ = 50.0
 
@@ -39,22 +38,27 @@ class StubStancePublisher(Node):
     def __init__(self) -> None:
         super().__init__("stub_stance_publisher")
 
-        geometry_yaml = (
-            Path(get_package_share_directory("hexa_description"))
-            / "config"
-            / "geometry.yaml"
+        share = Path(get_package_share_directory("hexa_description")) / "config"
+        legs = load_leg_specs(share / "geometry.yaml")
+        standing_angles = load_standing_pose(
+            share / "standing_pose.yaml", share / "geometry.yaml"
         )
-        legs = load_leg_specs(geometry_yaml)
 
-        # Pre-compute one body-frame foot target per leg. The leg's local
-        # +x rotates into body frame by mount_yaw; the radial standoff
-        # walks the foot out from the coxa pivot along that direction.
+        # Pre-compute one body-frame foot target per leg. Forward
+        # kinematics gives the foot position in the leg's coxa-mount
+        # frame; rotate into the body frame by mount_yaw and translate
+        # by the mount position.
         self._foot_targets: dict[str, tuple[float, float, float]] = {}
         for name in LEG_NAMES:
             spec = legs[name]
-            fx = spec.mount_xyz[0] + NOMINAL_RADIAL * math.cos(spec.mount_yaw)
-            fy = spec.mount_xyz[1] + NOMINAL_RADIAL * math.sin(spec.mount_yaw)
-            fz = spec.mount_xyz[2] + NOMINAL_Z
+            fx_local, fy_local, fz_local = forward_kinematics(
+                standing_angles, spec
+            )
+            cos_yaw = math.cos(spec.mount_yaw)
+            sin_yaw = math.sin(spec.mount_yaw)
+            fx = spec.mount_xyz[0] + fx_local * cos_yaw - fy_local * sin_yaw
+            fy = spec.mount_xyz[1] + fx_local * sin_yaw + fy_local * cos_yaw
+            fz = spec.mount_xyz[2] + fz_local
             self._foot_targets[name] = (fx, fy, fz)
 
         self._pub = self.create_publisher(LegTargets, "/legs/targets", 10)
