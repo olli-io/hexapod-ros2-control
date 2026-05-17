@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_gait</name>
+  <version>0.0.1</version>
+  <description>Gait engine: turns a commanded body velocity and walk-cycle parameters into per-leg foot targets in the nominal body frame.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hexa_interfaces</depend>
+  <depend>hexa_kinematics</depend>
+  <depend>hexa_description</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-yaml</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
