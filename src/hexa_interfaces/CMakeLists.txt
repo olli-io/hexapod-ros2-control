@@ -10,6 +10,7 @@ find_package(geometry_msgs REQUIRED)
 # tight — only ship interfaces that have a concrete producer/consumer.
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/BodyPose.msg
+  msg/GaitParams.msg
   msg/LegState.msg
   msg/LegTargets.msg
   DEPENDENCIES std_msgs geometry_msgs
