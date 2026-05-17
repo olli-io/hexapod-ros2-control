@@ -22,6 +22,8 @@ setup(
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "gait_node = hexa_gait.gait_node:main",
+        ],
     },
 )

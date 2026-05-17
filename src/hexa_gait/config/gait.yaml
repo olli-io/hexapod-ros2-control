@@ -1,0 +1,32 @@
+# hexa_gait engine knobs — fallback values only.
+#
+# In normal operation, cycle_time / duty_factor / step_height arrive on
+# /gait/params from hexa_control (whose own control.yaml is the
+# canonical source of truth). The values below are used:
+#
+#   - at engine cold start, until the first /gait/params message lands;
+#   - by future standalone gait-engine smoke tests.
+#
+# Keep cycle_time, duty_factor, and step_height aligned with
+# hexa_control/config/control.yaml. The engine-internal knobs
+# (swing_width, controller_dt, force_touchdown_speed,
+# recenter_swing_time, recenter_order, cmd_zero_tol) live only here —
+# they are not on the wire.
+#
+# Units: m, s, rad. recenter_order lists all six legs exactly once.
+
+cycle_time: 1.2
+duty_factor: 0.5
+step_height: 0.035
+swing_width: 0.0
+controller_dt: 0.02
+cmd_zero_tol: 1.0e-4
+force_touchdown_speed: 0.05
+recenter_swing_time: 0.4
+recenter_order:
+  - l_front
+  - r_front
+  - l_middle
+  - r_middle
+  - l_rear
+  - r_rear
