@@ -12,6 +12,7 @@ Usage: ./hexapod.sh <command> [args...]
 
 Commands:
   --dev [args...]   Drop into the ROS2 Jazzy dev container (forwards args to the container).
+  kill              Stop and remove the dev container.
   -h, --help        Show this help message.
 EOF
 }
@@ -27,6 +28,9 @@ shift
 case "${cmd}" in
     --dev)
         exec "${REPO_ROOT}/scripts/dev.sh" "$@"
+        ;;
+    kill)
+        exec "${REPO_ROOT}/scripts/kill.sh" "$@"
         ;;
     -h|--help)
         usage

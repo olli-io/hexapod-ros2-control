@@ -1,5 +1,0 @@
-center-to-middle 82 mm
-center-to-front-x 166/2 mm
-center-to-front-y 57.5 mm
-front-yaw 30 degs
-
