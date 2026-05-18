@@ -6,9 +6,11 @@ the current context, sums in the user pose, clamps to the static safety
 envelope, and publishes the result on `/body/pose_target` for the IK
 node to consume.
 
-The animation stack is hard-coded for now (Still + Breathing). Once
-config-driven gait loading lands, this should move to a YAML-defined
-list of animation specs.
+The animation stack is built from the ``enabled_animations`` parameter
+(string list of layer names, in order). Default is the standard
+``("still", "breathing")``; the sim bringup launches with
+``["still"]`` while locomotion is being tuned so the bob doesn't mask
+gait-induced body motion.
 """
 
 import rclpy
@@ -16,11 +18,27 @@ from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
 
-from .animations import AnimationContext, Breathing, Stack, Still
+from .animations import Animation, AnimationContext, Breathing, Stack, Still
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp
 
 PUBLISH_RATE_HZ = 50.0
 CMD_VEL_ZERO_TOL = 1e-4
+
+DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")
+_ANIMATION_FACTORIES: dict[str, type[Animation]] = {
+    "still": Still,
+    "breathing": Breathing,
+}
+
+
+def _build_animation_stack(names: list[str]) -> Stack:
+    unknown = [n for n in names if n not in _ANIMATION_FACTORIES]
+    if unknown:
+        raise ValueError(
+            f"unknown animation(s) {unknown!r}; "
+            f"available: {sorted(_ANIMATION_FACTORIES)}"
+        )
+    return Stack(layers=tuple(_ANIMATION_FACTORIES[n]() for n in names))
 
 
 def _twist_is_zero(t: Twist) -> bool:
@@ -60,7 +78,14 @@ class PostureNode(Node):
         self._user_pose: BodyPose = IDENTITY
         self._walking: bool = False
 
-        self._animations = Stack(layers=(Still(), Breathing()))
+        self.declare_parameter("enabled_animations", list(DEFAULT_ANIMATIONS))
+        enabled = list(
+            self.get_parameter("enabled_animations")
+            .get_parameter_value()
+            .string_array_value
+        ) or list(DEFAULT_ANIMATIONS)
+        self._animations = _build_animation_stack(enabled)
+        self.get_logger().info(f"animations enabled: {enabled}")
         self._limits = PoseLimits()
 
         self._sub_pose = self.create_subscription(
