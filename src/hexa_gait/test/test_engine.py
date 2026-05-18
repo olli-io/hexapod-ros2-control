@@ -55,6 +55,7 @@ def _config(
         recenter_swing_time=0.4,
         cmd_zero_tol=1.0e-4,
         forced_touchdown_delay=forced_touchdown_delay,
+        touchdown_settle_time=0.0,
     )
 
 

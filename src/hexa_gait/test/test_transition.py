@@ -23,6 +23,7 @@ def _controller(**overrides):
         swing_clearance=0.03,
         swing_width=0.0,
         controller_dt=0.02,
+        touchdown_settle_time=0.0,
     )
     args.update(overrides)
     return TransitionController(**args)
@@ -202,5 +203,113 @@ def test_stand_emits_nominal_for_all_legs():
         assert out[name].foot_target == nominal[name]
         assert out[name].stance is True
         assert out[name].phase == 0.0
+
+
+def test_settle_state_holds_every_foot_still_after_force_touchdown():
+    # After FORCE_TOUCHDOWN lands the airborne legs, the controller
+    # must hold every foot still for ``touchdown_settle_time`` before
+    # advancing to RECENTER. Lets the chassis stop rocking from the
+    # touchdown impact before another leg lifts.
+    ctrl = _controller(recenter_swing_time=0.1, touchdown_settle_time=0.08)
+    nominal = _flat_stance()
+    swing_set = {"l_front", "r_middle", "l_rear"}
+    targets = dict(nominal)
+    for n in swing_set:
+        nx, ny, nz = nominal[n]
+        targets[n] = (nx + 0.04, ny - 0.03, nz + 0.05)
+    flags = {n: (n in swing_set) for n in LEG_NAMES}
+    ctrl.begin(last_targets=targets, swing_flags=flags)
+
+    # Drain FORCE_TOUCHDOWN; next state must be SETTLE, not RECENTER.
+    while ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+        ctrl.update(dt=0.02)
+    assert ctrl.state is TransitionState.SETTLE
+
+    # Snapshot positions at the moment SETTLE begins; nothing should
+    # move while we tick through the hold window.
+    held = dict(ctrl.update(dt=0.0))
+    settle_ticks = 0
+    while ctrl.state is TransitionState.SETTLE:
+        out = ctrl.update(dt=0.02)
+        settle_ticks += 1
+        for n in LEG_NAMES:
+            assert out[n].foot_target == held[n].foot_target
+            assert out[n].stance is True
+            assert out[n].phase == 0.0
+        assert settle_ticks < 20, "SETTLE never advanced"
+
+    # 0.08 s / 0.02 s per tick = 4 ticks of SETTLE, plus the dt=0.0
+    # snapshot that was already taken above.
+    assert settle_ticks == 4
+    assert ctrl.state is TransitionState.RECENTER
+
+
+def test_settle_skipped_when_no_leg_was_airborne():
+    # Settle exists to absorb force-touchdown impact. When every leg
+    # was already on the ground at stop time, FORCE_TOUCHDOWN is
+    # skipped — there is nothing to settle from, so begin() must drop
+    # straight to RECENTER regardless of touchdown_settle_time.
+    ctrl = _controller(touchdown_settle_time=0.5)
+    nominal = _flat_stance()
+    ctrl.begin(last_targets=nominal, swing_flags={n: False for n in LEG_NAMES})
+    assert ctrl.state is TransitionState.RECENTER
+
+
+def test_settle_skipped_when_settle_time_is_zero():
+    # Zero settle time disables the hold; FORCE_TOUCHDOWN must hand
+    # directly off to RECENTER on the same tick it finishes.
+    ctrl = _controller(recenter_swing_time=0.05, touchdown_settle_time=0.0)
+    nominal = _flat_stance()
+    swing_set = {"l_front"}
+    targets = dict(nominal)
+    nx, ny, nz = nominal["l_front"]
+    targets["l_front"] = (nx + 0.04, ny - 0.03, nz + 0.05)
+    flags = {n: (n in swing_set) for n in LEG_NAMES}
+    ctrl.begin(last_targets=targets, swing_flags=flags)
+
+    while ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+        ctrl.update(dt=0.02)
+    assert ctrl.state is TransitionState.RECENTER
+
+
+def test_force_touchdown_decelerates_to_rest_at_landing():
+    # The forced-touchdown swing arc must land at zero velocity so the
+    # foot does not slam into the floor at the steady-state stance
+    # velocity. We oversample the trajectory with a tight controller_dt
+    # and check that the last airborne sample (one tick before snap)
+    # is essentially at the nominal landing spot — a Bezier with
+    # non-zero endpoint velocity still has measurable residual motion
+    # over the final tick, while a rest-to-rest curve does not.
+    swing_time = 0.1
+    controller_dt = 0.001
+    ctrl = _controller(
+        recenter_swing_time=swing_time,
+        controller_dt=controller_dt,
+        touchdown_settle_time=0.0,
+    )
+    nominal = _flat_stance()
+    targets = dict(nominal)
+    nx, ny, nz = nominal["l_front"]
+    stride = (0.08, -0.06, 0.04)
+    targets["l_front"] = (nx + stride[0], ny + stride[1], nz + stride[2])
+    flags = {n: False for n in LEG_NAMES}
+    flags["l_front"] = True
+    ctrl.begin(last_targets=targets, swing_flags=flags)
+
+    samples: list[tuple[float, float, float]] = []
+    while ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+        out = ctrl.update(dt=controller_dt)
+        if ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+            samples.append(out["l_front"].foot_target)
+
+    # With dt = 1 ms and swing_time = 100 ms, samples[-1] is at
+    # phase ≈ 0.99 — far enough into the curve that any non-zero
+    # touchdown velocity would still leave a > 0.5 mm displacement on
+    # the largest-stride axis (the default would be |stride| / 100 =
+    # 0.8 mm on x). A rest-to-rest curve has near-zero residual.
+    last = samples[-1]
+    nominal_xyz = nominal["l_front"]
+    residual = max(abs(last[i] - nominal_xyz[i]) for i in range(3))
+    assert residual < 1e-4, f"residual {residual:.6f} m above rest-to-rest floor"
 
 

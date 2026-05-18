@@ -44,6 +44,7 @@ def _load_engine_config(path: Path) -> EngineConfig:
         recenter_swing_time=float(raw["recenter_swing_time"]),
         cmd_zero_tol=float(raw["cmd_zero_tol"]),
         forced_touchdown_delay=float(raw["forced_touchdown_delay"]),
+        touchdown_settle_time=float(raw["touchdown_settle_time"]),
     )
 
 

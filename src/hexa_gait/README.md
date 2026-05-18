@@ -82,24 +82,32 @@ See `hexa_gait/hexa_gait/limits.py` for the helper API.
 When GaitParams arrives with zero velocity (sent by `hexa_control` when
 `cmd_vel` goes idle), the engine does not simply freeze the phase clock
 — that would leave any leg in mid-swing dangling in the air. Instead it
-runs a three-state reset sequence that brings the robot from an
+runs a four-state reset sequence that brings the robot from an
 arbitrary mid-cycle pose to a clean standing pose:
 
 1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to its
    nominal stance position via the standard swing arc, rising through
    `swing_clearance` before descending, over `recenter_swing_time`.
-   All airborne legs move in parallel. The legs that were already on
-   the ground at stop time hold their stop-time positions exactly —
-   they do not budge. The forced lift matters when a leg stopped just
-   above the ground: a straight-line move there would skim the floor
-   instead of clearing it. Skipped if no leg was airborne when
-   `cmd_vel` went idle.
-2. **RECENTER** — sweep the originally-grounded legs to nominal one at
+   The swing arc runs with both endpoint velocities pinned to zero so
+   the Bezier decelerates fully at touchdown — landing at the
+   steady-state stance velocity would slam the foot into the floor
+   and rock the chassis. All airborne legs move in parallel. The legs
+   that were already on the ground at stop time hold their stop-time
+   positions exactly — they do not budge. The forced lift matters
+   when a leg stopped just above the ground: a straight-line move
+   there would skim the floor instead of clearing it. Skipped if no
+   leg was airborne when `cmd_vel` went idle.
+2. **SETTLE** — hold every foot still for `touchdown_settle_time`
+   seconds. Lets residual chassis sway from the touchdown impact damp
+   out before the next sweep adds more motion. Skipped when
+   `touchdown_settle_time` is zero or FORCE_TOUCHDOWN was skipped
+   (no impact to settle from).
+3. **RECENTER** — sweep the originally-grounded legs to nominal one at
    a time, in canonical leg order, using the normal swing-arc
    trajectory (lift → translate → place). By this point every foot is
    on the ground, so the support polygon is always 5/1 stance/swing
    and the body stays stable.
-3. **STAND** — hold the nominal stance with phase frozen. The engine
+4. **STAND** — hold the nominal stance with phase frozen. The engine
    stays here until a non-zero velocity arrives.
 
 The key stability invariant: a grounded foot is never repositioned
@@ -121,7 +129,7 @@ code is not duplicated.
 ### Resume
 
 If a non-zero velocity arrives mid-sequence, the engine completes the
-reset first (FORCE_TOUCHDOWN → RECENTER → STAND) and only then starts
+reset first (FORCE_TOUCHDOWN → SETTLE → RECENTER → STAND) and only then starts
 the new gait from the nominal stance. The reset is short (≤ one
 wave-style cycle ≈ 6 leg moves), so the latency cost is acceptable, and
 aborting mid-sequence would risk legs left in unsafe poses.

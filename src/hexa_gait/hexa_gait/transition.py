@@ -13,16 +13,24 @@ State ladder (matches ``src/hexa_gait/README.md``):
 1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to its
    nominal stance position via the standard swing arc, rising through
    ``swing_clearance`` before descending, over ``recenter_swing_time``.
-   All airborne legs move in parallel; the originally-grounded legs
-   hold their stop-time positions verbatim so the body stays immobile.
-   The forced lift-and-descend matters when a leg stops just above the
-   ground — a straight-line move there would skim the floor instead of
-   clearing it. Skipped entirely if no leg was airborne.
-2. **RECENTER** — sweep the originally-grounded legs to nominal, one at
+   The swing-arc is run with both endpoint velocities pinned to zero,
+   so the Bezier decelerates to a true rest at touchdown rather than
+   landing at the steady-state stance velocity — that softens the
+   impact and keeps the body from rocking. All airborne legs move in
+   parallel; the originally-grounded legs hold their stop-time
+   positions verbatim so the body stays immobile. The forced
+   lift-and-descend matters when a leg stops just above the ground —
+   a straight-line move there would skim the floor instead of clearing
+   it. Skipped entirely if no leg was airborne.
+2. **SETTLE** — hold every foot still for ``touchdown_settle_time``
+   seconds after force-touchdown lands. Lets the chassis stop swaying
+   before any further leg moves. Skipped when ``touchdown_settle_time``
+   is zero or no leg was airborne (nothing to settle from).
+3. **RECENTER** — sweep the originally-grounded legs to nominal, one at
    a time, via the standard swing arc, in canonical ``LEG_NAMES`` order.
    By this point every leg is on the ground, so the support polygon is
    always 5/1 stance/swing and the body remains stable.
-3. **STAND** — emit nominal stance for all six legs, ``stance=True``.
+4. **STAND** — emit nominal stance for all six legs, ``stance=True``.
    Terminal state inside the transition.
 
 Stability invariant: no grounded foot is repositioned while any other
@@ -52,6 +60,7 @@ Vec3 = tuple[float, float, float]
 
 class TransitionState(Enum):
     FORCE_TOUCHDOWN = "force_touchdown"
+    SETTLE = "settle"
     RECENTER = "recenter"
     STAND = "stand"
     DONE = "done"
@@ -73,7 +82,7 @@ class LegOutput:
 
 
 class TransitionController:
-    """FORCE_TOUCHDOWN -> RECENTER -> STAND ladder.
+    """FORCE_TOUCHDOWN -> SETTLE -> RECENTER -> STAND ladder.
 
     Construct once at engine startup. Call ``begin(...)`` whenever the
     engine enters the STOPPING state, then ``update(dt)`` each tick
@@ -87,6 +96,7 @@ class TransitionController:
         swing_clearance: float,
         swing_width: float,
         controller_dt: float,
+        touchdown_settle_time: float = 0.0,
     ) -> None:
         missing = set(LEG_NAMES) - set(nominal_stance)
         if missing:
@@ -97,6 +107,7 @@ class TransitionController:
         self._swing_clearance = swing_clearance
         self._swing_width = swing_width
         self._controller_dt = controller_dt
+        self._touchdown_settle_time = touchdown_settle_time
 
         self._state = TransitionState.DONE
         self._positions: dict[str, Vec3] = dict(self._nominal)
@@ -106,6 +117,7 @@ class TransitionController:
         self._recenter_order: tuple[str, ...] = ()
         self._recenter_idx = 0
         self._recenter_elapsed = 0.0
+        self._touchdown_settle_elapsed = 0.0
 
     @property
     def state(self) -> TransitionState:
@@ -135,19 +147,20 @@ class TransitionController:
         self._recenter_order = tuple(n for n in LEG_NAMES if not self._swing_flags[n])
         self._recenter_idx = 0
         self._recenter_elapsed = 0.0
+        self._touchdown_settle_elapsed = 0.0
 
         if any(self._swing_flags.values()):
             self._state = TransitionState.FORCE_TOUCHDOWN
         else:
-            self._state = TransitionState.RECENTER
-            if self._recenter_order:
-                self._swing_origins[self._recenter_order[0]] = self._positions[
-                    self._recenter_order[0]
-                ]
+            # No airborne legs ⇒ no force-touchdown impact ⇒ no need to
+            # settle. Drop straight to RECENTER.
+            self._enter_recenter()
 
     def update(self, dt: float) -> dict[str, LegOutput]:
         if self._state is TransitionState.FORCE_TOUCHDOWN:
             return self._tick_force_touchdown(dt)
+        if self._state is TransitionState.SETTLE:
+            return self._tick_settle(dt)
         if self._state is TransitionState.RECENTER:
             return self._tick_recenter(dt)
         # STAND / DONE both emit the nominal stance.
@@ -161,8 +174,11 @@ class TransitionController:
         # from their stop-time pose to nominal over ``recenter_swing_time``.
         # The arc lifts each foot through ``swing_clearance`` so legs
         # stopped just above the ground still clear it on the way home.
-        # Originally-grounded legs hold position — the body stays
-        # immobile until every foot is on the ground.
+        # Both endpoint velocities are pinned to zero so the Bezier
+        # decelerates fully at touchdown — landing at the steady-state
+        # stance velocity would slam the foot into the floor and rock
+        # the body. Originally-grounded legs hold position; the body
+        # stays immobile until every foot is on the ground.
         self._recenter_elapsed += dt
         phase = self._recenter_elapsed / self._recenter_swing_time
 
@@ -174,10 +190,7 @@ class TransitionController:
                 out[name] = LegOutput(
                     foot_target=self._positions[name], phase=0.0, stance=True
                 )
-            self._state = TransitionState.RECENTER
-            self._recenter_idx = 0
-            self._recenter_elapsed = 0.0
-            self._swing_origins = dict(self._positions)
+            self._advance_after_force_touchdown()
             return out
 
         for name in LEG_NAMES:
@@ -192,6 +205,7 @@ class TransitionController:
                     swing_time=self._recenter_swing_time,
                     controller_dt=self._controller_dt,
                     swing_origin_velocity=(0.0, 0.0, 0.0),
+                    swing_target_velocity=(0.0, 0.0, 0.0),
                 )
                 self._positions[name] = point
                 out[name] = LegOutput(foot_target=point, phase=phase, stance=False)
@@ -199,6 +213,42 @@ class TransitionController:
                 out[name] = LegOutput(
                     foot_target=self._positions[name], phase=0.0, stance=True
                 )
+        return out
+
+    def _advance_after_force_touchdown(self) -> None:
+        """Route FORCE_TOUCHDOWN -> SETTLE (if configured) or RECENTER.
+
+        Shared by the natural completion path and the begin-time fast
+        path that skips FORCE_TOUCHDOWN entirely.
+        """
+        self._swing_origins = dict(self._positions)
+        if self._touchdown_settle_time > 0.0:
+            self._state = TransitionState.SETTLE
+            self._touchdown_settle_elapsed = 0.0
+        else:
+            self._enter_recenter()
+
+    def _enter_recenter(self) -> None:
+        self._state = TransitionState.RECENTER
+        self._recenter_idx = 0
+        self._recenter_elapsed = 0.0
+        if self._recenter_order:
+            self._swing_origins[self._recenter_order[0]] = self._positions[
+                self._recenter_order[0]
+            ]
+
+    def _tick_settle(self, dt: float) -> dict[str, LegOutput]:
+        # Hold every foot still while the chassis stops swaying after
+        # FORCE_TOUCHDOWN. We emit the held positions verbatim so any
+        # tiny numerical drift from the swing curve does not propagate
+        # downstream as motion.
+        self._touchdown_settle_elapsed += dt
+        out = {
+            n: LegOutput(foot_target=self._positions[n], phase=0.0, stance=True)
+            for n in LEG_NAMES
+        }
+        if self._touchdown_settle_elapsed >= self._touchdown_settle_time:
+            self._enter_recenter()
         return out
 
     def _tick_recenter(self, dt: float) -> dict[str, LegOutput]:

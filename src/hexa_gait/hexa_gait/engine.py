@@ -90,6 +90,7 @@ class EngineConfig:
     recenter_swing_time: float
     cmd_zero_tol: float
     forced_touchdown_delay: float
+    touchdown_settle_time: float
 
 
 def nominal_stance_from_yaml(
@@ -145,6 +146,7 @@ class Engine:
             swing_clearance=config.step_height,
             swing_width=config.swing_width,
             controller_dt=config.controller_dt,
+            touchdown_settle_time=config.touchdown_settle_time,
         )
         self._engagement = EngagementController(
             nominal_stance=self._nominal,

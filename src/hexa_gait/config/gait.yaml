@@ -47,6 +47,15 @@ controller_dt: 0.02
 cmd_zero_tol: 1e-4
 recenter_swing_time: 0.2
 
+# Hold time between FORCE_TOUCHDOWN and RECENTER (s). After every
+# airborne leg lands at nominal, the controller holds all six feet
+# still for this long before the RECENTER ladder starts sweeping the
+# originally-grounded legs. Gives the chassis a beat to stop rocking
+# from touchdown so the next sweep does not pile motion on residual
+# wobble. Set to 0.0 to disable. Skipped entirely when no leg was
+# airborne (FORCE_TOUCHDOWN itself is skipped, nothing to settle from).
+touchdown_settle_time: 0.2
+
 # Debounce on cmd_vel → 0 before the engine commits to the stop
 # transition. Without this, the brief zero crossing the joystick produces
 # when it swings through center triggers FORCE_TOUCHDOWN on every yaw
@@ -54,7 +63,7 @@ recenter_swing_time: 0.2
 # active state (GAIT or ENGAGING) at zero stride — legs lift in place —
 # so a stick that re-engages before it expires picks the gait back up
 # without any reset sequence.
-forced_touchdown_delay: 0.15
+forced_touchdown_delay: 0.4
 
 # Maximum body yaw rate (rad/s). Explicit knob rather than
 # geometry-derived: the implicit ceiling from the gait is
