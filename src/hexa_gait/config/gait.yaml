@@ -29,12 +29,12 @@
 # a foot covers between AEP and PEP in one stance. Tuned to give joint-
 # limit margin: lower stride_length → tighter joint use, more headroom
 # against geometry.yaml limits, but slower v_max.
-stride_length: 0.12
+stride_length: 0.10
 
 # Fastest cycle. The gait's authoritative speed ceiling: at this value
 # the per-leg stride magnitude equals stride_length, and any further
 # velocity increase is absorbed by the stride clamp.
-min_cycle_time: 0.8
+min_cycle_time: 0.6
 
 # Slowest cycle. Below the v this implies, cycle_time stops growing and
 # stride shrinks instead — keeps slow walking visually brisk.
@@ -45,7 +45,7 @@ step_height: 0.035
 swing_width: 0.0
 controller_dt: 0.02
 cmd_zero_tol: 1e-4
-recenter_swing_time: 0.4
+recenter_swing_time: 0.2
 
 # Debounce on cmd_vel → 0 before the engine commits to the stop
 # transition. Without this, the brief zero crossing the joystick produces
@@ -62,4 +62,4 @@ forced_touchdown_delay: 0.15
 # plenty of headroom and trades reach for predictable feel.
 # Loaded by hexa_gait.limits.load_velocity_caps and consumed by both
 # hexa_teleop (stick scaling) and hexa_control (/cmd_vel clamp).
-angular_z_max: 1.00
+angular_z_max: 3.00

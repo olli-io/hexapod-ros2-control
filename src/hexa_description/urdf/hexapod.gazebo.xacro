@@ -23,9 +23,10 @@
   </gazebo>
 
   <xacro:macro name="leg_material" params="side name">
-    <gazebo reference="${side}_${name}_coxa"> <material>Gazebo/Blue</material></gazebo>
-    <gazebo reference="${side}_${name}_femur"><material>Gazebo/Blue</material></gazebo>
-    <gazebo reference="${side}_${name}_tibia"><material>Gazebo/Blue</material></gazebo>
+    <xacro:property name="gz_colour" value="${'Gazebo/Red' if name == 'front' else 'Gazebo/Blue'}"/>
+    <gazebo reference="${side}_${name}_coxa"> <material>${gz_colour}</material></gazebo>
+    <gazebo reference="${side}_${name}_femur"><material>${gz_colour}</material></gazebo>
+    <gazebo reference="${side}_${name}_tibia"><material>${gz_colour}</material></gazebo>
   </xacro:macro>
 
   <xacro:leg_material side="l" name="front"/>
