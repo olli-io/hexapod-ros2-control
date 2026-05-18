@@ -46,4 +46,4 @@ esac
 # Allocate a TTY only when stdin is one, so piped/CI invocations still work.
 exec_flags=(-i)
 [ -t 0 ] && exec_flags=(-it)
-exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" "${@:-bash}"
+exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh "${@:-bash}"

@@ -1,4 +1,4 @@
-!/usr/bin/env bash
+#!/usr/bin/env bash
 # Open a tmux session that runs sim (left pane) and teleop (right pane)
 # inside the shared hexapod-dev container.
 #   ./scripts/tmux.sh            -> attach panes to the existing dev container
