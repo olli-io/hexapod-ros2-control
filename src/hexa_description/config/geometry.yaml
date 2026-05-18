@@ -88,19 +88,19 @@ joints:
     deg: 0                      # 0° — coxa centered (no fore/aft sweep)
     lower_limit_deg: -90        # absolute lower bound in coxa.deg
     upper_limit_deg:  90        # absolute upper bound in coxa.deg
-    effort: 5.0
-    velocity: 5.0
+    effort: 3.09                # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
+    velocity: 7.25              # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
 
   femur:
     above_horizontal_deg: 35    # 35° — femur tilted above horizontal at servo zero
     lower_limit_deg: -55        # absolute lower bound in above_horizontal_deg
     upper_limit_deg: 125        # absolute upper bound in above_horizontal_deg
-    effort: 5.0
-    velocity: 5.0
+    effort: 3.09                # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
+    velocity: 7.25              # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
 
   tibia:
     interior_deg: 68            # 68° — interior femur-tibia knee angle at servo zero
     lower_limit_deg: -22        # absolute lower bound in interior_deg
     upper_limit_deg: 158        # absolute upper bound in interior_deg
-    effort: 5.0
-    velocity: 5.0
+    effort: 3.09                # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
+    velocity: 7.25              # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate

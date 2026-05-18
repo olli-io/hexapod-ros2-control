@@ -86,6 +86,7 @@
        ===================================================================== -->
   <material name="body_grey"><color rgba="0.3 0.3 0.3 1.0"/></material>
   <material name="leg_blue"> <color rgba="0.2 0.4 0.8 1.0"/></material>
+  <material name="leg_red">  <color rgba="0.8 0.2 0.2 1.0"/></material>
 
   <!-- =====================================================================
        Inertial macros. Both compute the tensor from mass + dimensions so
@@ -159,6 +160,9 @@
        ===================================================================== -->
   <xacro:macro name="leg" params="side name mount_x mount_y mount_yaw">
 
+    <!-- Front legs are red to mark orientation; others stay blue. -->
+    <xacro:property name="leg_material" value="${'leg_red' if name == 'front' else 'leg_blue'}"/>
+
     <!-- Coxa: short horizontal segment attached to the body. -->
     <joint name="${side}_${name}_coxa_joint" type="revolute">
       <parent link="base_link"/>
@@ -180,18 +184,18 @@
         <geometry>
           <cylinder radius="${coxa_radius}" length="${coxa_length}"/>
         </geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <!-- Joint caps: visual-only spheres at each end of the segment. -->
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${coxa_radius}"/></geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <visual>
         <origin xyz="${coxa_length} 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${coxa_radius}"/></geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <collision>
         <origin xyz="${coxa_length/2} 0 0" rpy="0 ${pi/2} 0"/>
@@ -224,17 +228,17 @@
         <geometry>
           <cylinder radius="${femur_radius}" length="${femur_length}"/>
         </geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${femur_radius}"/></geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <visual>
         <origin xyz="${femur_length} 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${femur_radius}"/></geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <collision>
         <origin xyz="${femur_length/2} 0 0" rpy="0 ${pi/2} 0"/>
@@ -265,13 +269,13 @@
         <geometry>
           <cylinder radius="${tibia_radius}" length="${tibia_length}"/>
         </geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <!-- Proximal joint cap only; distal end is covered by the foot sphere. -->
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${tibia_radius}"/></geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <collision>
         <origin xyz="${tibia_length/2} 0 0" rpy="0 ${pi/2} 0"/>
@@ -301,7 +305,7 @@
       <visual>
         <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${foot_radius}"/></geometry>
-        <material name="leg_blue"/>
+        <material name="${leg_material}"/>
       </visual>
       <collision>
         <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
