@@ -46,6 +46,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 USER ${USERNAME}
 WORKDIR /workspace
 
+# Put the workspace root on PATH so `hexa` is callable from every shell type
+# (interactive, non-interactive, `docker exec container hexa build`, ...).
+ENV PATH="/workspace:${PATH}"
+
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /home/${USERNAME}/.bashrc \
     && echo '[ -f /workspace/install/setup.bash ] && source /workspace/install/setup.bash' >> /home/${USERNAME}/.bashrc \
     && echo '[ -f /workspace/docker/aliases.sh ] && source /workspace/docker/aliases.sh' >> /home/${USERNAME}/.bashrc

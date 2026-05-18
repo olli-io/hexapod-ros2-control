@@ -11,8 +11,7 @@ def _cfg(**overrides) -> JoyConfig:
         axis_right_y=4,
         mode_toggle_button=3,
         deadband=0.1,
-        gait_linear_x_max=0.3,
-        gait_linear_y_max=0.2,
+        gait_linear_max=0.4,
         gait_angular_z_max=1.0,
         posture_x_max=0.05,
         posture_y_max=0.05,
@@ -80,8 +79,9 @@ def test_gait_right_stick_drives_linear_xy():
     cfg = _cfg()
     state = JoyState(mode=GAIT)
     out = map_joy(_axes(right_x=0.5, right_y=1.0), _buttons(), cfg, state)
-    assert math.isclose(out.linear_x, cfg.gait_linear_x_max)
-    assert math.isclose(out.linear_y, 0.5 * cfg.gait_linear_y_max)
+    # Linear cap is isotropic — same scale for x and y.
+    assert math.isclose(out.linear_x, cfg.gait_linear_max)
+    assert math.isclose(out.linear_y, 0.5 * cfg.gait_linear_max)
     assert out.angular_z == 0.0
 
 

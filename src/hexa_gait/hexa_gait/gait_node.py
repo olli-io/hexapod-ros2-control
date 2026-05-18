@@ -34,14 +34,14 @@ def _load_engine_config(path: Path) -> EngineConfig:
     with path.open() as f:
         raw = yaml.safe_load(f)
     return EngineConfig(
-        cycle_time=float(raw["cycle_time"]),
+        stride_length=float(raw["stride_length"]),
+        min_cycle_time=float(raw["min_cycle_time"]),
+        max_cycle_time=float(raw["max_cycle_time"]),
         duty_factor=float(raw["duty_factor"]),
         step_height=float(raw["step_height"]),
         swing_width=float(raw["swing_width"]),
         controller_dt=float(raw["controller_dt"]),
-        force_touchdown_speed=float(raw["force_touchdown_speed"]),
         recenter_swing_time=float(raw["recenter_swing_time"]),
-        recenter_order=tuple(raw["recenter_order"]),
         cmd_zero_tol=float(raw["cmd_zero_tol"]),
     )
 
@@ -67,15 +67,12 @@ class GaitNode(Node):
             leg_contexts=leg_contexts,
         )
 
-        # Latest GaitParams, falling back to engine defaults until the
-        # first message arrives.
+        # Latest GaitParams. Walk-cycle knobs are no longer on the wire;
+        # only the commanded velocity arrives via /gait/params.
         self._gait_name: str = "tripod"
         self._linear_x: float = 0.0
         self._linear_y: float = 0.0
         self._angular_z: float = 0.0
-        self._cycle_time: float = self._cfg.cycle_time
-        self._duty_factor: float = self._cfg.duty_factor
-        self._step_height: float = self._cfg.step_height
 
         self._sub_params = self.create_subscription(
             GaitParams, "/gait/params", self._on_params, 10
@@ -86,7 +83,8 @@ class GaitNode(Node):
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
 
         self.get_logger().info(
-            f"gait_node up: strategy=tripod, fallback cycle_time={self._cfg.cycle_time:.2f}s, "
+            f"gait_node up: strategy=tripod, stride_length={self._cfg.stride_length:.3f} m, "
+            f"cycle_time in [{self._cfg.min_cycle_time:.2f}, {self._cfg.max_cycle_time:.2f}] s, "
             f"duty_factor={self._cfg.duty_factor:.2f}, step_height={self._cfg.step_height:.3f} m"
         )
 
@@ -101,14 +99,6 @@ class GaitNode(Node):
         self._linear_x = float(msg.linear_x)
         self._linear_y = float(msg.linear_y)
         self._angular_z = float(msg.angular_z)
-        # Reject non-positive durations / out-of-range duty factor; keep
-        # the previous value rather than crash the timer.
-        if msg.cycle_time > 0.0:
-            self._cycle_time = float(msg.cycle_time)
-        if 0.0 < msg.duty_factor < 1.0:
-            self._duty_factor = float(msg.duty_factor)
-        if msg.step_height >= 0.0:
-            self._step_height = float(msg.step_height)
 
     def _tick(self) -> None:
         now_ns = self.get_clock().now().nanoseconds
@@ -126,9 +116,6 @@ class GaitNode(Node):
             dt=dt,
             v_body_xy=(self._linear_x, self._linear_y),
             omega_z=self._angular_z,
-            cycle_time=self._cycle_time,
-            duty_factor=self._duty_factor,
-            step_height=self._step_height,
         )
 
         msg = LegTargets()

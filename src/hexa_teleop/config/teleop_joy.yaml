@@ -23,11 +23,12 @@ axis:
 # 0=A, 1=B, 2=X, 3=Y on 8BitDo Pro 2 in X-input mode.
 mode_toggle_button: 3   # Y
 
-# Gait mode: left stick X -> angular.z, right stick -> linear.x/y
-gait:
-  linear_x_max: 0.30     # m/s
-  linear_y_max: 0.20     # m/s
-  angular_z_max: 1.00    # rad/s
+# Gait-mode stick scaling is loaded at startup from
+# hexa_gait/config/gait.yaml via hexa_gait.limits.load_velocity_caps:
+#   * full-stick translation maps to ±linear_max (isotropic for x and y),
+#     derived from stride_length / (min_cycle_time * duty_factor)
+#   * full-stick yaw maps to ±angular_z_max (explicit rad/s knob)
+# No knobs for those here on purpose — gait.yaml is the single source.
 
 # Posture mode: right stick -> body translation (x,y) in body frame
 posture:

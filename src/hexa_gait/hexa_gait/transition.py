@@ -10,23 +10,32 @@ velocity.
 
 State ladder (matches ``src/hexa_gait/README.md``):
 
-1. **FORCE_TOUCHDOWN** — every leg currently in swing descends straight
-   (hold XY, drive Z toward the ground at ``force_touchdown_speed``).
-   Legs already in stance hold position. Exits when all six are
-   grounded.
-2. **RECENTER** — sweep one leg at a time, in ``recenter_order``, from
-   its grounded position to its nominal stance via the standard swing
-   arc. With a single leg airborne and five planted, the support
-   polygon stays valid throughout (5/1 stance/swing).
+1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to its
+   nominal stance position via the standard swing arc, rising through
+   ``swing_clearance`` before descending, over ``recenter_swing_time``.
+   All airborne legs move in parallel; the originally-grounded legs
+   hold their stop-time positions verbatim so the body stays immobile.
+   The forced lift-and-descend matters when a leg stops just above the
+   ground — a straight-line move there would skim the floor instead of
+   clearing it. Skipped entirely if no leg was airborne.
+2. **RECENTER** — sweep the originally-grounded legs to nominal, one at
+   a time, via the standard swing arc, in canonical ``LEG_NAMES`` order.
+   By this point every leg is on the ground, so the support polygon is
+   always 5/1 stance/swing and the body remains stable.
 3. **STAND** — emit nominal stance for all six legs, ``stance=True``.
    Terminal state inside the transition.
+
+Stability invariant: no grounded foot is repositioned while any other
+foot is airborne. FORCE_TOUCHDOWN holds the stance legs perfectly still
+while the swing legs settle, and RECENTER only starts once all six are
+grounded.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from .clock import LEG_NAMES
 from .gaits.base import identity_y_sign, swing_arc
@@ -74,9 +83,7 @@ class TransitionController:
     def __init__(
         self,
         nominal_stance: Mapping[str, Vec3],
-        force_touchdown_speed: float,
         recenter_swing_time: float,
-        recenter_order: Sequence[str],
         swing_clearance: float,
         swing_width: float,
         controller_dt: float,
@@ -84,16 +91,9 @@ class TransitionController:
         missing = set(LEG_NAMES) - set(nominal_stance)
         if missing:
             raise ValueError(f"nominal_stance missing legs: {sorted(missing)}")
-        if set(recenter_order) != set(LEG_NAMES):
-            raise ValueError(
-                f"recenter_order must list all six legs exactly once; "
-                f"got {list(recenter_order)}"
-            )
 
         self._nominal: dict[str, Vec3] = {n: tuple(nominal_stance[n]) for n in LEG_NAMES}  # type: ignore[misc]
-        self._force_touchdown_speed = force_touchdown_speed
         self._recenter_swing_time = recenter_swing_time
-        self._recenter_order: tuple[str, ...] = tuple(recenter_order)
         self._swing_clearance = swing_clearance
         self._swing_width = swing_width
         self._controller_dt = controller_dt
@@ -101,6 +101,9 @@ class TransitionController:
         self._state = TransitionState.DONE
         self._positions: dict[str, Vec3] = dict(self._nominal)
         self._swing_origins: dict[str, Vec3] = dict(self._nominal)
+        # Built per-stop in ``begin()`` from the swing flags.
+        self._swing_flags: dict[str, bool] = {n: False for n in LEG_NAMES}
+        self._recenter_order: tuple[str, ...] = ()
         self._recenter_idx = 0
         self._recenter_elapsed = 0.0
 
@@ -113,24 +116,34 @@ class TransitionController:
         last_targets: Mapping[str, Vec3],
         swing_flags: Mapping[str, bool],
     ) -> None:
-        """Seed the controller with the legs' current pose at stop time."""
+        """Seed the controller with the legs' current pose at stop time.
+
+        FORCE_TOUCHDOWN handles every airborne leg in parallel;
+        RECENTER then sweeps the originally-grounded legs one at a
+        time in canonical ``LEG_NAMES`` order. Skipping straight to
+        RECENTER when no leg was airborne is fine — the controller
+        still has work to do on legs that stopped mid-stance away from
+        their nominal positions.
+        """
         missing = set(LEG_NAMES) - set(last_targets)
         if missing:
             raise ValueError(f"last_targets missing legs: {sorted(missing)}")
         self._positions = {n: tuple(last_targets[n]) for n in LEG_NAMES}  # type: ignore[misc]
         self._swing_origins = dict(self._positions)
-        # Skip FORCE_TOUCHDOWN if no leg is airborne — common when the
-        # engine stops with all six feet already grounded.
-        if any(swing_flags.get(n, False) for n in LEG_NAMES):
+        self._swing_flags = {n: bool(swing_flags.get(n, False)) for n in LEG_NAMES}
+
+        self._recenter_order = tuple(n for n in LEG_NAMES if not self._swing_flags[n])
+        self._recenter_idx = 0
+        self._recenter_elapsed = 0.0
+
+        if any(self._swing_flags.values()):
             self._state = TransitionState.FORCE_TOUCHDOWN
         else:
             self._state = TransitionState.RECENTER
-            self._recenter_idx = 0
-            self._recenter_elapsed = 0.0
-            self._swing_origins[self._recenter_order[0]] = self._positions[
-                self._recenter_order[0]
-            ]
-        self._swing_flags: dict[str, bool] = {n: bool(swing_flags.get(n, False)) for n in LEG_NAMES}
+            if self._recenter_order:
+                self._swing_origins[self._recenter_order[0]] = self._positions[
+                    self._recenter_order[0]
+                ]
 
     def update(self, dt: float) -> dict[str, LegOutput]:
         if self._state is TransitionState.FORCE_TOUCHDOWN:
@@ -144,27 +157,48 @@ class TransitionController:
         }
 
     def _tick_force_touchdown(self, dt: float) -> dict[str, LegOutput]:
-        out: dict[str, LegOutput] = {}
-        all_grounded = True
-        for name in LEG_NAMES:
-            ground_z = self._nominal[name][2]
-            x, y, z = self._positions[name]
-            if self._swing_flags[name] and z > ground_z:
-                z = max(ground_z, z - self._force_touchdown_speed * dt)
-                self._positions[name] = (x, y, z)
-                if z > ground_z:
-                    all_grounded = False
-                    out[name] = LegOutput((x, y, z), phase=0.0, stance=False)
-                    continue
-                # Just touched down this tick.
-                self._swing_flags[name] = False
-            out[name] = LegOutput(self._positions[name], phase=0.0, stance=True)
+        # All airborne legs follow a rest-to-rest swing arc in parallel
+        # from their stop-time pose to nominal over ``recenter_swing_time``.
+        # The arc lifts each foot through ``swing_clearance`` so legs
+        # stopped just above the ground still clear it on the way home.
+        # Originally-grounded legs hold position — the body stays
+        # immobile until every foot is on the ground.
+        self._recenter_elapsed += dt
+        phase = self._recenter_elapsed / self._recenter_swing_time
 
-        if all_grounded:
+        out: dict[str, LegOutput] = {}
+        if phase >= 1.0:
+            for name in LEG_NAMES:
+                if self._swing_flags[name]:
+                    self._positions[name] = self._nominal[name]
+                out[name] = LegOutput(
+                    foot_target=self._positions[name], phase=0.0, stance=True
+                )
             self._state = TransitionState.RECENTER
             self._recenter_idx = 0
             self._recenter_elapsed = 0.0
             self._swing_origins = dict(self._positions)
+            return out
+
+        for name in LEG_NAMES:
+            if self._swing_flags[name]:
+                point = swing_arc(
+                    phase_in_swing=phase,
+                    swing_origin=self._swing_origins[name],
+                    target=self._nominal[name],
+                    swing_clearance=self._swing_clearance,
+                    swing_width=self._swing_width,
+                    identity_y_sign=identity_y_sign(self._nominal[name]),
+                    swing_time=self._recenter_swing_time,
+                    controller_dt=self._controller_dt,
+                    swing_origin_velocity=(0.0, 0.0, 0.0),
+                )
+                self._positions[name] = point
+                out[name] = LegOutput(foot_target=point, phase=phase, stance=False)
+            else:
+                out[name] = LegOutput(
+                    foot_target=self._positions[name], phase=0.0, stance=True
+                )
         return out
 
     def _tick_recenter(self, dt: float) -> dict[str, LegOutput]:

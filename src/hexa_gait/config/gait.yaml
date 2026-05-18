@@ -1,32 +1,56 @@
-# hexa_gait engine knobs — fallback values only.
+# hexa_gait engine knobs — sole source of truth.
 #
-# In normal operation, cycle_time / duty_factor / step_height arrive on
-# /gait/params from hexa_control (whose own control.yaml is the
-# canonical source of truth). The values below are used:
+# The engine reads every walk-cycle parameter here at startup. None of
+# them are on the wire any more: hexa_control publishes only velocity
+# (linear_x / linear_y / angular_z) on /gait/params, and the engine
+# derives the appropriate cycle_time per tick from velocity and the
+# values below.
 #
-#   - at engine cold start, until the first /gait/params message lands;
-#   - by future standalone gait-engine smoke tests.
+# Velocity → cycle_time relationship (computed each tick in the engine):
 #
-# Keep cycle_time, duty_factor, and step_height aligned with
-# hexa_control/config/control.yaml. The engine-internal knobs
-# (swing_width, controller_dt, force_touchdown_speed,
-# recenter_swing_time, recenter_order, cmd_zero_tol) live only here —
-# they are not on the wire.
+#   v_max_leg = max( |v_leg| for all 6 legs )
+#                  where v_leg combines linear_xy with omega_z × r_leg
+#   cycle_time = clip( stride_length / (v_max_leg × duty_factor),
+#                      min_cycle_time, max_cycle_time )
 #
-# Units: m, s, rad. recenter_order lists all six legs exactly once.
+# Stride magnitude per leg is then v_leg × cycle_time × duty_factor,
+# bounded at stride_length so saturated commands never exceed the
+# joint-limit-safe footprint defined by stride_length.
+#
+# Implied per-leg velocity ceiling: stride_length / (min_cycle_time ×
+# duty_factor). Beyond that, the gait saturates: cycle_time stays at
+# min_cycle_time and the per-leg stride magnitude is capped at
+# stride_length. Below the v that implies max_cycle_time, cycle_time
+# stays at max_cycle_time and stride shrinks linearly with v.
+#
+# Units: m, s, rad.
 
-cycle_time: 1.2
+# Design per-leg stride magnitude (m). The maximum body-frame displacement
+# a foot covers between AEP and PEP in one stance. Tuned to give joint-
+# limit margin: lower stride_length → tighter joint use, more headroom
+# against geometry.yaml limits, but slower v_max.
+stride_length: 0.12
+
+# Fastest cycle. The gait's authoritative speed ceiling: at this value
+# the per-leg stride magnitude equals stride_length, and any further
+# velocity increase is absorbed by the stride clamp.
+min_cycle_time: 0.6
+
+# Slowest cycle. Below the v this implies, cycle_time stops growing and
+# stride shrinks instead — keeps slow walking visually brisk.
+max_cycle_time: 2.0
+
 duty_factor: 0.5
 step_height: 0.035
 swing_width: 0.0
 controller_dt: 0.02
 cmd_zero_tol: 1.0e-4
-force_touchdown_speed: 0.05
 recenter_swing_time: 0.4
-recenter_order:
-  - l_front
-  - r_front
-  - l_middle
-  - r_middle
-  - l_rear
-  - r_rear
+
+# Maximum body yaw rate (rad/s). Explicit knob rather than
+# geometry-derived: the implicit ceiling from the gait is
+# v_max / r_outer ≈ 3.96 rad/s for current values, so this cap leaves
+# plenty of headroom and trades reach for predictable feel.
+# Loaded by hexa_gait.limits.load_velocity_caps and consumed by both
+# hexa_teleop (stick scaling) and hexa_control (/cmd_vel clamp).
+angular_z_max: 1.00

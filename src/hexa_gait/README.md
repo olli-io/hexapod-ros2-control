@@ -18,8 +18,8 @@ same `Strategy` protocol. Multi-gait selection will land in
 `hexa_gait` itself stays agnostic about gait choice.
 
 Inputs:
-- `/gait/params` (`hexa_interfaces/GaitParams`) — gait selection, step
-  height, cycle time, target body velocity.
+- `/gait/params` (`hexa_interfaces/GaitParams`) — gait selection and the
+  target body velocity (`linear_x`, `linear_y`, `angular_z`).
 
 Outputs:
 - `/legs/targets` (`hexa_interfaces/LegState[6]`) — foot pose + phase.
@@ -27,9 +27,55 @@ Outputs:
 The engine is stateful (it owns the phase clock) but the gait strategies
 themselves are pure functions of `(phase, params) → foot_target`.
 
+All walk-cycle knobs (`stride_length`, `min_cycle_time`,
+`max_cycle_time`, `duty_factor`, `step_height`, ...) live in
+`config/gait.yaml` — they are not on the wire.
+
 See [`docs/leg-phases.md`](../../docs/leg-phases.md) for the shared
 vocabulary (stance, swing, AEP, PEP, duty factor, support polygon) used
 below and throughout the codebase.
+
+## Velocity → cycle_time
+
+`cycle_time` is **not** a configured constant. The engine derives it
+each GAIT tick from the commanded velocity and a fixed
+`stride_length`:
+
+- For each leg, compute `v_leg = v_body + ω_z × r_leg`.
+- `max_leg_v = max( |v_leg| for all 6 legs )`.
+- `cycle_time = clip( stride_length / (max_leg_v × duty_factor),
+  min_cycle_time, max_cycle_time )`.
+- Per-leg `stride_vector = v_leg × cycle_time × duty_factor`, with the
+  magnitude further clamped to `stride_length` so saturated commands
+  never push past the joint-limit-safe footprint.
+
+Faster commands therefore *cycle faster at constant stride* instead of
+taking *bigger steps at constant cycle*. The implied per-leg velocity
+ceiling is `stride_length / (min_cycle_time × duty_factor)`; beyond
+that the gait saturates (`cycle_time` pinned at `min_cycle_time`, stride
+clamped to `stride_length`). Below the velocity that implies
+`max_cycle_time`, the cycle stops dragging out — stride shrinks linearly
+instead.
+
+## Velocity caps for upstream nodes
+
+`gait.yaml` is the **single source of truth** for the velocity caps that
+upstream nodes (`hexa_teleop` for stick scaling, `hexa_control` for
+`/cmd_vel` clamping) apply at their respective boundaries. Both load
+the caps through `hexa_gait.load_velocity_caps(gait_yaml_path)` at
+startup; there are no duplicate knobs in the teleop or control YAML.
+
+- `linear_max` is **derived** isotropically as
+  `stride_length / (min_cycle_time × duty_factor)` — exactly the per-leg
+  velocity ceiling above. Anything above this would be silently clipped
+  by the engine, so we make the ceiling explicit at the input boundary.
+- `angular_z_max` is an **explicit** knob in `gait.yaml`. Kept explicit
+  (not geometry-derived) because angular feel is harder to predict from
+  leg radii — the gait's geometric ceiling
+  (`linear_max / r_outer`) is typically well above what feels
+  comfortable, so this knob trades reach for tunable feel.
+
+See `hexa_gait/hexa_gait/limits.py` for the helper API.
 
 ## Stopping: idle and standing reset
 
@@ -39,16 +85,27 @@ When GaitParams arrives with zero velocity (sent by `hexa_control` when
 runs a three-state reset sequence that brings the robot from an
 arbitrary mid-cycle pose to a clean standing pose:
 
-1. **FORCE_TOUCHDOWN** — for each leg currently in swing, drive the
-   foot straight down (current XY, ground Z) until it touches down.
-   Stance legs hold position. Exits when all six feet are grounded.
-2. **RECENTER** — move legs from their current grounded positions to
-   their nominal stance positions (the AEP for zero velocity). Done one
-   leg at a time, in wave order, using the normal swing-arc trajectory
-   (lift → translate → place). Sequential motion guarantees the support
-   polygon stays valid throughout.
+1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to its
+   nominal stance position via the standard swing arc, rising through
+   `swing_clearance` before descending, over `recenter_swing_time`.
+   All airborne legs move in parallel. The legs that were already on
+   the ground at stop time hold their stop-time positions exactly —
+   they do not budge. The forced lift matters when a leg stopped just
+   above the ground: a straight-line move there would skim the floor
+   instead of clearing it. Skipped if no leg was airborne when
+   `cmd_vel` went idle.
+2. **RECENTER** — sweep the originally-grounded legs to nominal one at
+   a time, in canonical leg order, using the normal swing-arc
+   trajectory (lift → translate → place). By this point every foot is
+   on the ground, so the support polygon is always 5/1 stance/swing
+   and the body stays stable.
 3. **STAND** — hold the nominal stance with phase frozen. The engine
    stays here until a non-zero velocity arrives.
+
+The key stability invariant: a grounded foot is never repositioned
+while any other foot is airborne. FORCE_TOUCHDOWN holds the stance legs
+perfectly still while the swing legs settle, and RECENTER only starts
+once all six feet are down.
 
 ### Architectural note
 

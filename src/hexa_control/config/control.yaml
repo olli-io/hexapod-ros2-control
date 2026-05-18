@@ -1,23 +1,16 @@
-# hexa_control wire values — canonical source of truth.
+# hexa_control wire values.
 #
-# control_node publishes these (alongside the clamped /cmd_vel) on
-# /gait/params at 50 Hz. The gait engine has its own fallback YAML at
-# hexa_gait/config/gait.yaml, but the values on the wire from this node
-# win in normal operation. Keep cycle_time / duty_factor / step_height
-# aligned with hexa_gait/config/gait.yaml so the engine cold-start matches
-# the steady-state command.
+# control_node clamps incoming /cmd_vel to the velocity caps loaded at
+# startup from hexa_gait/config/gait.yaml (via hexa_gait.load_velocity_caps)
+# and republishes the result on /gait/params at 50 Hz. v1 ships a single
+# gait, so gait_name is hard-coded here.
 #
-# Linear caps match hexa_teleop's gait scaling: anything above these is
-# either teleop misconfiguration or noise. v1 is a thin pass-through —
-# no deadband (teleop handles it), no accel limits, no gait selection.
+# The walk-cycle knobs (cycle_time, duty_factor, step_height, stride_length)
+# also live in hexa_gait/config/gait.yaml — control no longer owns them.
+# cycle_time is derived inside the engine each tick from the commanded
+# velocity, configured stride_length, and duty_factor.
 #
-# Units: linear m/s, angular rad/s, time s, length m.
+# v1 is a thin pass-through — no deadband (teleop handles it), no accel
+# limits, no gait selection.
 
 gait_name: "tripod"
-cycle_time: 1.2
-duty_factor: 0.5
-step_height: 0.035
-
-linear_x_max: 0.30
-linear_y_max: 0.20
-angular_z_max: 1.00

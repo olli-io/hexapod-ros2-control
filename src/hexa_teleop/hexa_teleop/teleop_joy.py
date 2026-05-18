@@ -26,14 +26,17 @@ from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
 
+from hexa_gait import load_velocity_caps
+
 from .joy_mapping import GAIT, POSTURE, JoyConfig, JoyState, map_joy
 
 PUBLISH_RATE_HZ = 50.0
 
 
-def _load_config(path: Path) -> tuple[JoyConfig, str]:
+def _load_config(path: Path, gait_yaml: Path) -> tuple[JoyConfig, str]:
     with path.open() as f:
         raw = yaml.safe_load(f)
+    caps = load_velocity_caps(gait_yaml)
     cfg = JoyConfig(
         axis_left_x=int(raw["axis"]["left_x"]),
         axis_left_y=int(raw["axis"]["left_y"]),
@@ -41,9 +44,8 @@ def _load_config(path: Path) -> tuple[JoyConfig, str]:
         axis_right_y=int(raw["axis"]["right_y"]),
         mode_toggle_button=int(raw["mode_toggle_button"]),
         deadband=float(raw["deadband"]),
-        gait_linear_x_max=float(raw["gait"]["linear_x_max"]),
-        gait_linear_y_max=float(raw["gait"]["linear_y_max"]),
-        gait_angular_z_max=float(raw["gait"]["angular_z_max"]),
+        gait_linear_max=caps.linear_max,
+        gait_angular_z_max=caps.angular_max,
         posture_x_max=float(raw["posture"]["x_max"]),
         posture_y_max=float(raw["posture"]["y_max"]),
     )
@@ -64,14 +66,24 @@ class TeleopJoyNode(Node):
             / "config"
             / "teleop_joy.yaml"
         )
+        gait_yaml_path = (
+            Path(get_package_share_directory("hexa_gait"))
+            / "config"
+            / "gait.yaml"
+        )
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
         )
-        self._cfg, initial_mode = _load_config(cfg_path)
+        self._cfg, initial_mode = _load_config(cfg_path, gait_yaml_path)
         self._state = JoyState(mode=initial_mode, prev_toggle=False)
 
         self.get_logger().info(f"loaded teleop config from {cfg_path}")
+        self.get_logger().info(
+            f"velocity caps from {gait_yaml_path}: "
+            f"linear_max={self._cfg.gait_linear_max:.2f} m/s, "
+            f"angular_z_max={self._cfg.gait_angular_z_max:.2f} rad/s"
+        )
         self.get_logger().info(f"mode={self._state.mode}")
 
         self._latest_axes: tuple[float, ...] = ()

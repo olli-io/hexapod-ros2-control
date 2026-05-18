@@ -14,6 +14,13 @@ body velocity:
   transition first, then restart the gait from ``master = 0``
   (per the velocity-mid-stop contract in ``src/hexa_gait/README.md``).
 
+``cycle_time`` is not configured directly. The engine derives it each
+GAIT tick from the commanded velocity, ``stride_length``, and
+``duty_factor``: faster commands ⇒ shorter cycles at constant stride.
+``min_cycle_time`` and ``max_cycle_time`` bound the derivation so the
+gait saturates cleanly at the speed ceiling and stays brisk at the
+slow end.
+
 The nominal-stance helper ``nominal_stance_from_yaml`` reuses
 ``hexa_kinematics``'s FK and ``leg_to_body`` so the engine never
 duplicates the trig that lives in ``body_transform.leg_to_body``.
@@ -21,6 +28,7 @@ duplicates the trig that lives in ``body_transform.leg_to_body``.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -56,20 +64,22 @@ class EngineState(Enum):
 
 @dataclass(frozen=True)
 class EngineConfig:
-    """Engine-internal knobs. Fallback values live in
-    ``hexa_gait/config/gait.yaml``; ``cycle_time``, ``duty_factor``,
-    and ``step_height`` are normally overridden on the wire by
-    ``GaitParams``.
+    """Engine-internal knobs, sourced entirely from
+    ``hexa_gait/config/gait.yaml``. None of these are on the wire.
+
+    ``stride_length`` and ``min_cycle_time`` / ``max_cycle_time`` define
+    the velocity → cycle_time relationship the engine applies each
+    GAIT tick.
     """
 
-    cycle_time: float
+    stride_length: float
+    min_cycle_time: float
+    max_cycle_time: float
     duty_factor: float
     step_height: float
     swing_width: float
     controller_dt: float
-    force_touchdown_speed: float
     recenter_swing_time: float
-    recenter_order: tuple[str, ...]
     cmd_zero_tol: float
 
 
@@ -92,10 +102,12 @@ def nominal_stance_from_yaml(
 class Engine:
     """Per-tick gait engine.
 
-    ``update(dt, v_body_xy, omega_z, cycle_time, duty_factor, step_height)``
-    returns one ``LegOutput`` per leg. Cold start is ``STAND`` with the
-    last-emitted targets seeded to ``nominal_stance``, so the first
-    tick matches the previous stub publisher's behaviour exactly.
+    ``update(dt, v_body_xy, omega_z)`` returns one ``LegOutput`` per
+    leg. Cold start is ``STAND`` with the last-emitted targets seeded
+    to ``nominal_stance``, so the first tick matches the previous stub
+    publisher's behaviour exactly. ``cycle_time`` is derived per-tick
+    from the commanded velocity and the engine's configured
+    ``stride_length`` / ``min_cycle_time`` / ``max_cycle_time``.
     """
 
     def __init__(
@@ -120,9 +132,7 @@ class Engine:
         self._clock = GaitClock(strategy.phase_offsets)
         self._transition = TransitionController(
             nominal_stance=self._nominal,
-            force_touchdown_speed=config.force_touchdown_speed,
             recenter_swing_time=config.recenter_swing_time,
-            recenter_order=config.recenter_order,
             swing_clearance=config.step_height,
             swing_width=config.swing_width,
             controller_dt=config.controller_dt,
@@ -141,9 +151,6 @@ class Engine:
         dt: float,
         v_body_xy: tuple[float, float],
         omega_z: float,
-        cycle_time: float,
-        duty_factor: float,
-        step_height: float,
     ) -> dict[str, LegOutput]:
         cmd_zero = self._cmd_is_zero(v_body_xy, omega_z)
 
@@ -151,15 +158,19 @@ class Engine:
             if not cmd_zero:
                 self._state = EngineState.GAIT
                 self._clock.reset(0.0)
-                return self._tick_gait(dt, v_body_xy, omega_z, cycle_time, duty_factor, step_height)
+                return self._tick_gait(dt, v_body_xy, omega_z)
             return self._emit_stand()
 
         if self._state is EngineState.GAIT:
             if cmd_zero:
                 self._state = EngineState.STOPPING
-                self._transition.begin(self._last_targets, self._last_stance)
+                # _last_stance is True when the leg is on the ground;
+                # the controller wants the opposite (True = airborne),
+                # so invert here.
+                swing_flags = {n: not self._last_stance[n] for n in LEG_NAMES}
+                self._transition.begin(self._last_targets, swing_flags)
                 return self._tick_transition(dt)
-            return self._tick_gait(dt, v_body_xy, omega_z, cycle_time, duty_factor, step_height)
+            return self._tick_gait(dt, v_body_xy, omega_z)
 
         # STOPPING: run the transition ladder to completion. A non-zero
         # cmd arriving mid-stop is honoured only after the transition
@@ -184,30 +195,40 @@ class Engine:
         dt: float,
         v_body_xy: tuple[float, float],
         omega_z: float,
-        cycle_time: float,
-        duty_factor: float,
-        step_height: float,
     ) -> dict[str, LegOutput]:
+        duty_factor = self._config.duty_factor
+        stride_length = self._config.stride_length
+
+        # Per-leg planar velocity: linear command plus the tangential
+        # contribution from body yaw rate. Computed once up front so
+        # the max-leg speed can drive a single cycle_time choice.
+        leg_velocities: dict[str, tuple[float, float]] = {}
+        max_leg_v = 0.0
+        for name in LEG_NAMES:
+            r_x, r_y, _ = self._legs[name].mount_xyz
+            v_x = v_body_xy[0] - omega_z * r_y
+            v_y = v_body_xy[1] + omega_z * r_x
+            leg_velocities[name] = (v_x, v_y)
+            speed = math.hypot(v_x, v_y)
+            if speed > max_leg_v:
+                max_leg_v = speed
+
+        cycle_time = self._derive_cycle_time(max_leg_v)
+        stance_time = cycle_time * duty_factor
+
         self._clock.advance(dt, cycle_time)
         phases = self._clock.phases()
-        stance_time = cycle_time * duty_factor
 
         out: dict[str, LegOutput] = {}
         for name in LEG_NAMES:
             leg = self._legs[name]
-            r_x, r_y, _ = leg.mount_xyz
-            v_x = v_body_xy[0] - omega_z * r_y
-            v_y = v_body_xy[1] + omega_z * r_x
-            stride_vec: Vec3 = (
-                v_x * stance_time,
-                v_y * stance_time,
-                0.0,
-            )
+            v_x, v_y = leg_velocities[name]
+            stride_vec = self._stride_vector(v_x, v_y, stance_time, stride_length)
             stride = StrideParams(
                 stride_vector=stride_vec,
                 cycle_time=cycle_time,
                 duty_factor=duty_factor,
-                swing_clearance=step_height,
+                swing_clearance=self._config.step_height,
                 swing_width=self._config.swing_width,
                 controller_dt=self._config.controller_dt,
             )
@@ -218,6 +239,46 @@ class Engine:
         self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
         self._last_stance = {n: out[n].stance for n in LEG_NAMES}
         return out
+
+    def _derive_cycle_time(self, max_leg_v: float) -> float:
+        """Pick cycle_time so the fastest leg's stride equals stride_length.
+
+        Clamped to ``[min_cycle_time, max_cycle_time]``. At zero
+        ``max_leg_v`` the raw quotient diverges, so we clamp to the
+        slow end — the resulting stride is zero anyway because every
+        ``v_leg`` is zero.
+        """
+        cfg = self._config
+        if max_leg_v <= 0.0:
+            return cfg.max_cycle_time
+        raw = cfg.stride_length / (max_leg_v * cfg.duty_factor)
+        if raw < cfg.min_cycle_time:
+            return cfg.min_cycle_time
+        if raw > cfg.max_cycle_time:
+            return cfg.max_cycle_time
+        return raw
+
+    def _stride_vector(
+        self,
+        v_x: float,
+        v_y: float,
+        stance_time: float,
+        stride_length: float,
+    ) -> Vec3:
+        """Per-leg stride displacement, magnitude-clamped to stride_length.
+
+        The clamp matters only when ``max_leg_v`` exceeds the implied
+        ceiling (``min_cycle_time`` has clipped ``cycle_time``); below
+        saturation the raw stride is already ``≤ stride_length``.
+        """
+        sx = v_x * stance_time
+        sy = v_y * stance_time
+        magnitude = math.hypot(sx, sy)
+        if magnitude > stride_length and magnitude > 0.0:
+            scale = stride_length / magnitude
+            sx *= scale
+            sy *= scale
+        return (sx, sy, 0.0)
 
     def _tick_transition(self, dt: float) -> dict[str, LegOutput]:
         # Map "in swing during transition" to "not stance" so that if

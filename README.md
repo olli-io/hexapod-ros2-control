@@ -5,7 +5,7 @@ ROS2 control stack for a 6-leg / 18-DOF hexapod robot.
 - **Hardware target**: Raspberry Pi 3 (Ubuntu Server 24.04, ARM64) driving a Pimoroni Servo 2040 over USB serial or I2C.
 - **ROS2 distro**: Jazzy Jalisco (LTS, supported through 2029).
 - **Simulator**: Gazebo Harmonic (paired with Jazzy, via `ros_gz`). The `hexa_hardware` package abstracts the servo bus so the same gait/control code runs in sim or on the real robot.
-- **Dev environment**: Docker container (`./hexapod.sh --dev`), so the Arch / non-Ubuntu host doesn't need ROS2 installed. See [`docs/dev-environment.md`](docs/dev-environment.md).
+- **Dev environment**: Docker container (`./pod --dev`), so the Arch / non-Ubuntu host doesn't need ROS2 installed. See [`docs/dev-environment.md`](docs/dev-environment.md).
 
 ## Configuration
 
@@ -72,7 +72,7 @@ Each step: producer — purpose — topic (message type) — consumer.
 All commands run inside the dev container. From the repo root on the host:
 
 ```
-./hexapod.sh --dev                  # interactive shell in the container
+./pod --dev                  # interactive shell in the container
 ```
 
 Then, inside the container:

@@ -37,8 +37,7 @@ class JoyConfig:
     axis_right_y: int
     mode_toggle_button: int
     deadband: float
-    gait_linear_x_max: float
-    gait_linear_y_max: float
+    gait_linear_max: float
     gait_angular_z_max: float
     posture_x_max: float
     posture_y_max: float
@@ -104,8 +103,8 @@ def map_joy(
             mode_changed=mode_changed,
         )
     return JoyOutput(
-        linear_x=ry * cfg.gait_linear_x_max,
-        linear_y=rx * cfg.gait_linear_y_max,
+        linear_x=ry * cfg.gait_linear_max,
+        linear_y=rx * cfg.gait_linear_max,
         angular_z=lx * cfg.gait_angular_z_max,
         pose_x=0.0,
         pose_y=0.0,

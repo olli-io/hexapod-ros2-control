@@ -30,7 +30,7 @@ case "${state}" in
     "")
         # No container yet — rebuild the image, then create and start it
         # detached. Always rebuilding on a fresh start means Dockerfile
-        # edits take effect after `hexapod.sh kill && hexapod.sh --dev`,
+        # edits take effect after `pod kill && pod --dev`,
         # without a separate rebuild step.
         # `UID` is a readonly builtin in bash, so we can't `export` it; pass
         # the values inline and docker compose reads them as env vars.

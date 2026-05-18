@@ -21,7 +21,7 @@ Power the controller on in **X-input mode**: hold `Start + X` until the
 LEDs flash, then plug in via USB-C.
 
 Inside the dev container — uncomment the `/dev/input` block in
-`docker-compose.yaml` before `./hexapod.sh --dev` so `joy_node` can see
+`docker-compose.yaml` before `./pod --dev` so `joy_node` can see
 the device.
 
 - Launch the sim (separate terminal): `ros2 launch hexa_bringup sim.launch.py`
@@ -33,7 +33,18 @@ Controller mapping:
 - **Left stick X** — yaw rate (gait mode only).
 - **Y button** — toggles posture ↔ gait on rising edge.
 
-The node starts in **posture** mode (safer: no walking). The mapping,
-deadband, and per-axis maxima live in
+The node starts in **posture** mode (safer: no walking). The axis
+indices, deadband, posture translation limits, and toggle button live in
 `config/teleop_joy.yaml` — override at launch with
 `joy_config_file:=/path/to/file.yaml`.
+
+Gait-mode stick scaling — the linear and angular velocity caps applied
+to a full-stick deflection — is **not** owned here. It is loaded at
+startup from `hexa_gait/config/gait.yaml` via
+`hexa_gait.load_velocity_caps`:
+
+- Linear is **isotropic**: full-stick forward and full-stick sideways
+  both saturate at `linear_max = stride_length / (min_cycle_time × duty_factor)`.
+- Angular cap is the explicit `angular_z_max` knob in `gait.yaml`.
+
+To change those caps, edit `gait.yaml`; no teleop config edit needed.

@@ -2,13 +2,16 @@
 <package format="3">
   <name>hexa_control</name>
   <version>0.0.1</version>
-  <description>Velocity shaping layer: clamps /cmd_vel against the configured speed cap and republishes it as GaitParams on /gait/params for the gait engine.</description>
+  <description>Velocity shaping layer: scales /cmd_vel to fit the gait's velocity envelope and republishes it as GaitParams on /gait/params for the gait engine.</description>
   <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>hexa_interfaces</depend>
+  <depend>hexa_gait</depend>
+  <depend>hexa_kinematics</depend>
+  <depend>hexa_description</depend>
   <depend>python3-yaml</depend>
 
   <test_depend>python3-pytest</test_depend>

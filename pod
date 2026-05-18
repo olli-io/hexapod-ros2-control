@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Entry point for hexapod project commands (host side).
+# Dispatches to per-process scripts under scripts/.
+#   ./pod --dev [args...]   -> drop into the ROS2 Jazzy dev container
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat <<EOF
+Usage: ./pod <command> [args...]
+
+Commands:
+  --dev [--clean] [args...]   Drop into the ROS2 Jazzy dev container (forwards args to the container).
+                              --clean tears down the existing container, rebuilds the image,
+                              and runs 'hexa build' before opening the shell.
+  --tmux [--clean] [vert]     Open a tmux session with sim and teleop sharing one dev container.
+                              Default split is side-by-side; pass 'vert' to stack the panes.
+                              --clean rebuilds the container first.
+  kill                        Stop and remove the dev container.
+  -h, --help                  Show this help message.
+EOF
+}
+
+if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+fi
+
+cmd="$1"
+shift
+
+case "${cmd}" in
+    --dev)
+        clean=0
+        dev_args=()
+        for arg in "$@"; do
+            if [[ "${arg}" == "--clean" ]]; then
+                clean=1
+            else
+                dev_args+=("${arg}")
+            fi
+        done
+        if [[ ${clean} -eq 1 ]]; then
+            "${REPO_ROOT}/scripts/kill.sh"
+            "${REPO_ROOT}/scripts/dev.sh" hexa build
+        fi
+        exec "${REPO_ROOT}/scripts/dev.sh" "${dev_args[@]}"
+        ;;
+    --tmux)
+        exec "${REPO_ROOT}/scripts/tmux.sh" "$@"
+        ;;
+    kill)
+        exec "${REPO_ROOT}/scripts/kill.sh" "$@"
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        echo "Unknown command: ${cmd}" >&2
+        usage
+        exit 1
+        ;;
+esac
