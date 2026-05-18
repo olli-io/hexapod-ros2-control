@@ -22,8 +22,6 @@ setup(
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [
-            "stub_stance_publisher = hexa_bringup.tools.stub_stance_publisher:main",
-        ],
+        "console_scripts": [],
     },
 )

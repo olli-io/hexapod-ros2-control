@@ -9,10 +9,13 @@ Composes the existing ``hexa_simulation`` launch (Gazebo + ros2_control
   ``/joint_commands`` to ``/joint_group_position_controller/commands``
   (Float64MultiArray) for the sim controller.
 - ``posture_node`` (hexa_posture) — turns ``/cmd_vel`` + ``/body/pose``
-  into ``/body/pose_target``.
-- ``stub_stance_publisher`` (hexa_bringup) — temporary stand-in
-  publishing a frozen six-leg stance while ``hexa_gait`` is still WIP.
-  Remove this node once ``hexa_gait`` STAND lands.
+  into ``/body/pose_target``. Launched here with the animation stack
+  trimmed to ``["still"]`` so the breathing bob doesn't mask
+  gait-induced body motion while locomotion is being tuned.
+- ``control_node`` (hexa_control) — clamps ``/cmd_vel`` and republishes
+  the result as ``GaitParams`` on ``/gait/params`` at 50 Hz.
+- ``gait_node`` (hexa_gait) — runs the tripod gait engine, publishing
+  per-leg foot targets on ``/legs/targets`` at 50 Hz.
 
 Run with::
 
@@ -55,12 +58,19 @@ def generate_launch_description():
         package="hexa_posture",
         executable="posture_node",
         output="screen",
+        parameters=common_params + [{"enabled_animations": ["still"]}],
+    )
+
+    control_node = Node(
+        package="hexa_control",
+        executable="control_node",
+        output="screen",
         parameters=common_params,
     )
 
-    stub_stance = Node(
-        package="hexa_bringup",
-        executable="stub_stance_publisher",
+    gait_node = Node(
+        package="hexa_gait",
+        executable="gait_node",
         output="screen",
         parameters=common_params,
     )
@@ -70,5 +80,6 @@ def generate_launch_description():
         ik_node,
         joint_command_bridge,
         posture_node,
-        stub_stance,
+        control_node,
+        gait_node,
     ])
