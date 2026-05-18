@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_control</name>
+  <version>0.0.1</version>
+  <description>Velocity shaping layer: clamps /cmd_vel against the configured speed cap and republishes it as GaitParams on /gait/params for the gait engine.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hexa_interfaces</depend>
+  <depend>python3-yaml</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
