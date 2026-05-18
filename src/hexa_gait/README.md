@@ -12,6 +12,11 @@ Designed around a strategy pattern so additional gaits drop in cleanly:
 - `gaits/wave.py`   — one leg at a time (slow, max stability).
 - `gaits/ripple.py` — overlapping wave (medium).
 
+v1 ships **tripod only**; `wave` and `ripple` are next drop-ins on the
+same `Strategy` protocol. Multi-gait selection will land in
+`hexa_control` (e.g. wave below a speed threshold, tripod above);
+`hexa_gait` itself stays agnostic about gait choice.
+
 Inputs:
 - `/gait/params` (`hexa_interfaces/GaitParams`) — gait selection, step
   height, cycle time, target body velocity.
