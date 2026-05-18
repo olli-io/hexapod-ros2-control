@@ -104,6 +104,7 @@ def swing_arc(
     swing_time: float,
     controller_dt: float,
     swing_origin_velocity: tuple[float, float, float] | None = None,
+    swing_target_velocity: tuple[float, float, float] | None = None,
 ) -> tuple[float, float, float]:
     """Evaluate the two-curve swing trajectory at ``phase_in_swing in [0, 1)``.
 
@@ -112,6 +113,12 @@ def swing_arc(
     a constant-velocity stance, ``-stride / swing_time``, where stride
     is ``target - swing_origin``. Pass ``swing_origin_velocity=(0,0,0)``
     for a rest-to-rest move (RECENTER from the transition controller).
+
+    ``swing_target_velocity`` overrides the touchdown velocity, which by
+    default equals the lift-off velocity (``-stride / swing_time``). The
+    engagement controller passes ``-v_leg`` here so swing → stance has
+    no body-frame velocity step: steady-state stance launches at the
+    same velocity. Default keeps the original behaviour.
 
     ``swing_delta_t = controller_dt / swing_time`` is the Bezier-parameter
     step per controller tick. Stance and swing share the same magnitude
@@ -127,6 +134,15 @@ def swing_arc(
         velocity_in = -stride / swing_time
     else:
         velocity_in = np.array(swing_origin_velocity, dtype=np.float64)
+
+    # The secondary curve's touchdown velocity is computed as
+    # ``-stride_vector / swing_time``. Synthesise an equivalent
+    # ``stride_vector`` so any caller-supplied target velocity is honoured
+    # without touching the lower-level node generator.
+    if swing_target_velocity is None:
+        secondary_stride = stride
+    else:
+        secondary_stride = -np.array(swing_target_velocity, dtype=np.float64) * swing_time
 
     swing_delta_t = controller_dt / swing_time
     stance_delta_t = swing_delta_t  # rest-to-rest symmetric join
@@ -144,7 +160,7 @@ def swing_arc(
     secondary = generate_secondary_swing_control_nodes(
         swing_1_nodes=primary,
         target=t,
-        stride_vector=stride,
+        stride_vector=secondary_stride,
         controller_dt=controller_dt,
         swing_delta_t=swing_delta_t,
         stance_delta_t=stance_delta_t,

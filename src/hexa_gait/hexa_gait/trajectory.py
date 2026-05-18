@@ -88,12 +88,16 @@ def _node_separation(
     """Translation between successive Bezier control nodes that yields
     a tip velocity of ``velocity`` at a curve endpoint.
 
-    Mirrors the C++ ``stance_node_seperation`` computation: each node
-    sits ``0.25 * v * (dt / delta_t)`` further along the curve than the
-    previous one, where ``delta_t`` is the Bezier-parameter step per
-    controller tick.
+    The Syropod C++ source uses a single Bezier per swing covering the
+    full ``swing_time``, with coefficient ``0.25``. This port splits
+    each swing into a primary and secondary quartic each covering
+    ``swing_time / 2``, so the Bezier parameter ``s`` advances at
+    ``2 / swing_time`` per second of real time. ``dB/dt`` at the
+    endpoint of a single curve is ``4 · sep · (ds/dt)``: with
+    coefficient ``0.125`` (half the C++ value) the resulting
+    ``dB/dt = velocity`` matches the requested endpoint velocity.
     """
-    return 0.25 * velocity * (controller_dt / swing_delta_t)
+    return 0.125 * velocity * (controller_dt / swing_delta_t)
 
 
 def generate_primary_swing_control_nodes(

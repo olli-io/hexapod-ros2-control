@@ -3,9 +3,10 @@ import math
 import pytest
 
 from hexa_gait.clock import LEG_NAMES
+from hexa_gait.engagement import EngagementState
 from hexa_gait.engine import Engine, EngineConfig, EngineState
 from hexa_gait.gaits.base import LegContext, StrideParams
-from hexa_gait.gaits.tripod import TRIPOD_OFFSETS
+from hexa_gait.gaits.tripod import TRIPOD_OFFSETS, Tripod
 
 
 # Symmetric six-leg layout. Front/rear sit at 0.18 m from body centre
@@ -87,12 +88,34 @@ def _engine(strategy: _SpyStrategy, config: EngineConfig | None = None) -> Engin
     )
 
 
+def _drive_to_gait(
+    engine: Engine,
+    v_body_xy: tuple[float, float],
+    omega_z: float,
+    dt: float = 0.02,
+) -> int:
+    """Run the engine from STAND through ENGAGING into GAIT.
+
+    Returns the number of ticks consumed. Used by the cycle_time /
+    stride tests that target steady-state GAIT behaviour and were
+    written before engagement existed — engagement freezes its snapshot
+    at entry, so they need a steady-state tick to inspect.
+    """
+    for i in range(200):
+        engine.update(dt=dt, v_body_xy=v_body_xy, omega_z=omega_z)
+        if engine.state is EngineState.GAIT:
+            return i + 1
+    raise AssertionError("engine did not reach GAIT within 200 ticks")
+
+
 def test_below_saturation_derives_cycle_time_from_velocity():
     # v = 0.20 m/s straight forward, stride_length = 0.10, duty = 0.5
     # → cycle_time_raw = 0.10 / (0.20 × 0.5) = 1.0 s, comfortably inside
     # [min, max]. stance_time = 0.5 s. Per-leg stride = 0.20 × 0.5 = 0.10 m.
     spy = _SpyStrategy()
     engine = _engine(spy)
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    spy.clear()
     engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
 
     assert engine.state is EngineState.GAIT
@@ -111,6 +134,8 @@ def test_saturation_clamps_cycle_time_and_per_leg_stride():
     # at stride_length (0.10 m).
     spy = _SpyStrategy()
     engine = _engine(spy)
+    _drive_to_gait(engine, v_body_xy=(0.80, 0.0), omega_z=0.0)
+    spy.clear()
     engine.update(dt=0.02, v_body_xy=(0.80, 0.0), omega_z=0.0)
 
     stride = spy.last_stride("l_front")
@@ -125,6 +150,8 @@ def test_slow_command_clamps_cycle_time_to_max_and_stride_shrinks_linearly():
     # 0.02 × 1.0 = 0.02 m — well under stride_length, so no further clamp.
     spy = _SpyStrategy()
     engine = _engine(spy)
+    _drive_to_gait(engine, v_body_xy=(0.02, 0.0), omega_z=0.0)
+    spy.clear()
     engine.update(dt=0.02, v_body_xy=(0.02, 0.0), omega_z=0.0)
 
     stride = spy.last_stride("l_front")
@@ -140,6 +167,8 @@ def test_pure_rotation_outer_leg_dictates_cycle_time():
     # stride_length; middle-leg stride is proportionally shorter.
     spy = _SpyStrategy()
     engine = _engine(spy)
+    _drive_to_gait(engine, v_body_xy=(0.0, 0.0), omega_z=1.0)
+    spy.clear()
     engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=1.0)
 
     outer_r = math.hypot(0.15, 0.10)
@@ -172,19 +201,140 @@ def test_zero_command_stays_in_stand_and_skips_cycle_time_math():
 def test_phase_advances_faster_at_higher_velocity():
     # Two engines, identical except for the commanded velocity: the
     # faster command must accumulate phase faster across a fixed dt
-    # because cycle_time shrinks proportionally.
+    # because cycle_time shrinks proportionally. Drive both through
+    # engagement first so this test isolates GAIT phase advance.
     spy_a = _SpyStrategy()
     spy_b = _SpyStrategy()
     engine_a = _engine(spy_a)
     engine_b = _engine(spy_b)
 
-    for _ in range(5):
-        engine_a.update(dt=0.05, v_body_xy=(0.10, 0.0), omega_z=0.0)
-        engine_b.update(dt=0.05, v_body_xy=(0.30, 0.0), omega_z=0.0)
+    _drive_to_gait(engine_a, v_body_xy=(0.10, 0.0), omega_z=0.0)
+    _drive_to_gait(engine_b, v_body_xy=(0.30, 0.0), omega_z=0.0)
+    spy_a.clear()
+    spy_b.clear()
 
-    # Use the last recorded phase for a representative leg.
+    # A handful of GAIT ticks; not enough for the faster engine's phase
+    # to lap the slower one, so the direct phase comparison is well-defined.
+    for _ in range(3):
+        engine_a.update(dt=0.02, v_body_xy=(0.10, 0.0), omega_z=0.0)
+        engine_b.update(dt=0.02, v_body_xy=(0.30, 0.0), omega_z=0.0)
+
     last_phase_a = next(phase for name, phase, _ in reversed(spy_a.calls) if name == "l_front")
     last_phase_b = next(phase for name, phase, _ in reversed(spy_b.calls) if name == "l_front")
 
     # The faster engine should be further along its (shorter) cycle.
     assert last_phase_b > last_phase_a
+
+
+def test_stand_to_first_nonzero_cmd_routes_through_engaging():
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.ENGAGING
+    assert engine._engagement.state is EngagementState.ENGAGING
+
+
+def test_no_first_tick_position_jump_from_stand():
+    # The reported bug: at STAND -> first non-zero cmd tick, no foot
+    # should jump. Every leg must still be near NOMINAL.
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    nominal = _nominal_stance()
+    out = engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    for name in LEG_NAMES:
+        dx = abs(out[name].foot_target[0] - nominal[name][0])
+        dy = abs(out[name].foot_target[1] - nominal[name][1])
+        # Pre-fix this would have been ≈ 0.05 m (half the steady-state
+        # stride) for both tripods. With engagement it's bounded by a
+        # fraction of swing clearance / smoothstep progress.
+        assert dx < 0.01, f"{name} jumped {dx:.4f} m on first tick"
+        assert dy < 0.01
+
+
+def test_engaging_to_gait_at_exit_master():
+    # After engage_time the engine must reach GAIT and the clock must
+    # be seeded at exit_master = duty_factor before any GAIT tick has
+    # advanced it.
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
+    # The handoff tick resets the clock to exit_master = 0.5; _drive_to_gait
+    # returns immediately after that tick, so the clock has not yet been
+    # advanced by a GAIT step.
+    assert engine._clock.master == pytest.approx(0.5, abs=1e-9)
+    # First GAIT tick advances by dt / cycle_time = 0.02 / 1.0.
+    engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine._clock.master == pytest.approx(0.5 + 0.02, abs=1e-9)
+
+
+def test_engaging_to_stopping_on_zero_cmd():
+    # cmd zeros mid-engagement: bail out to STOPPING via the
+    # TransitionController, just like a GAIT -> STOPPING.
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.ENGAGING
+    engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.STOPPING
+
+
+def test_repeat_engagement_after_full_stop():
+    # Walk -> stop -> walk: the second walk must re-engage cleanly
+    # (no first-tick jump on the second engagement either).
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    nominal = _nominal_stance()
+
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    # Stop the engine: drive cmd_vel to zero until STAND is reached.
+    for _ in range(500):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        if engine.state is EngineState.STAND:
+            break
+    assert engine.state is EngineState.STAND
+
+    # Re-engage: first tick should not jump.
+    out = engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.ENGAGING
+    for name in LEG_NAMES:
+        dx = abs(out[name].foot_target[0] - nominal[name][0])
+        assert dx < 0.01, f"{name} jumped {dx:.4f} m on second engagement"
+
+
+def test_gait_swing_liftoff_velocity_matches_body_velocity():
+    # Regression for the 2× swing-trajectory bug. Tripod B enters its
+    # first GAIT swing at master = exit_master with phase = 0 (lift-off
+    # from PEP). The body-frame foot velocity right after lift-off must
+    # equal -cmd_v, NOT -2·cmd_v (the value the bug used to produce).
+    #
+    # Measured strictly inside GAIT (not across the engagement boundary)
+    # so the O(dt) integration error in engagement doesn't contaminate
+    # the lift-off velocity reading.
+    engine = Engine(
+        config=_config(),
+        strategy=Tripod(),
+        nominal_stance=_nominal_stance(),
+        leg_contexts=_leg_contexts(),
+    )
+    dt = 0.001
+    cmd_v = 0.20
+
+    trace_gait: list[float] = []
+    for _ in range(700):
+        out = engine.update(dt=dt, v_body_xy=(cmd_v, 0.0), omega_z=0.0)
+        if engine.state is EngineState.GAIT:
+            trace_gait.append(out["r_front"].foot_target[0])
+            if len(trace_gait) >= 20:
+                break
+
+    # The engine flips state to GAIT *before* returning the engagement
+    # controller's last output, so trace_gait[0] still carries that
+    # value. Skip it and measure the velocity from index 1 onward, when
+    # GAIT's own swing_arc is producing every tick.
+    v_gait_liftoff = (trace_gait[11] - trace_gait[1]) / (10 * dt)
+    # Sampled at phase_in_swing ∈ [0.002, 0.022] — essentially the
+    # lift-off endpoint of the primary Bezier where dB/dt = -v_in. With
+    # the trajectory fix v_in = -cmd_v; pre-fix it was -2·cmd_v, which
+    # would land here near -0.40 m/s.
+    assert v_gait_liftoff == pytest.approx(-cmd_v, abs=5e-3)

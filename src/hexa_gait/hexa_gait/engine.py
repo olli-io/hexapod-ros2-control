@@ -1,11 +1,17 @@
 """Gait engine — orchestrates clock, strategy, and transition controller.
 
 The engine is the only stateful component in the gait chain. Strategies
-stay pure; the transition controller's state is per-stop and isolated.
-The engine itself routes between three modes based on the commanded
-body velocity:
+stay pure; the engagement and transition controllers each own a
+per-cycle slice of state. The engine itself routes between four modes
+based on the commanded body velocity:
 
 - **STAND**     — ``cmd_vel`` is zero. Emit the nominal stance.
+- **ENGAGING**  — ``cmd_vel`` just went non-zero from STAND. Run the
+  ``EngagementController`` through one asymmetric half-cycle that
+  ramps body velocity from 0 to ``v_body`` along a smoothstep S-curve,
+  with each leg's first stance / swing originating at NOMINAL rather
+  than PEP / AEP. Hands off to GAIT at master phase = β when the
+  steady-state PEP / AEP configuration has been reached.
 - **GAIT**      — ``cmd_vel`` is non-zero. Advance the phase clock and
   evaluate the active strategy.
 - **STOPPING**  — ``cmd_vel`` just went zero from a non-zero state. Run
@@ -40,6 +46,7 @@ from hexa_kinematics.leg_ik import forward_kinematics
 from hexa_kinematics.leg_specs import LEG_NAMES, load_leg_specs
 
 from .clock import GaitClock
+from .engagement import EngagementController, EngagementState
 from .gaits.base import LegContext, Strategy, StrideParams
 from .transition import LegOutput, TransitionController, TransitionState
 
@@ -58,6 +65,7 @@ Vec3 = tuple[float, float, float]
 
 class EngineState(Enum):
     STAND = "stand"
+    ENGAGING = "engaging"
     GAIT = "gait"
     STOPPING = "stopping"
 
@@ -137,6 +145,16 @@ class Engine:
             swing_width=config.swing_width,
             controller_dt=config.controller_dt,
         )
+        self._engagement = EngagementController(
+            nominal_stance=self._nominal,
+            stride_length=config.stride_length,
+            min_cycle_time=config.min_cycle_time,
+            max_cycle_time=config.max_cycle_time,
+            duty_factor=config.duty_factor,
+            swing_clearance=config.step_height,
+            swing_width=config.swing_width,
+            controller_dt=config.controller_dt,
+        )
 
         self._state = EngineState.STAND
         self._last_targets: dict[str, Vec3] = dict(self._nominal)
@@ -156,10 +174,28 @@ class Engine:
 
         if self._state is EngineState.STAND:
             if not cmd_zero:
-                self._state = EngineState.GAIT
-                self._clock.reset(0.0)
-                return self._tick_gait(dt, v_body_xy, omega_z)
+                self._engagement.begin(self._strategy, self._legs)
+                self._state = EngineState.ENGAGING
+                return self._tick_engagement(dt, v_body_xy, omega_z)
             return self._emit_stand()
+
+        if self._state is EngineState.ENGAGING:
+            if cmd_zero:
+                # Bail out: hand the engagement's mid-flight pose to
+                # the stop transition exactly like a GAIT -> STOPPING
+                # would.
+                self._state = EngineState.STOPPING
+                swing_flags = {n: not self._last_stance[n] for n in LEG_NAMES}
+                self._transition.begin(self._last_targets, swing_flags)
+                return self._tick_transition(dt)
+            out = self._tick_engagement(dt, v_body_xy, omega_z)
+            if self._engagement.state is EngagementState.DONE:
+                # Hand off to GAIT: seed the master clock at the
+                # engagement's exit phase so the strategy continues
+                # from the right point of the cycle on the next tick.
+                self._clock.reset(self._engagement.exit_master)
+                self._state = EngineState.GAIT
+            return out
 
         if self._state is EngineState.GAIT:
             if cmd_zero:
@@ -199,19 +235,11 @@ class Engine:
         duty_factor = self._config.duty_factor
         stride_length = self._config.stride_length
 
-        # Per-leg planar velocity: linear command plus the tangential
-        # contribution from body yaw rate. Computed once up front so
-        # the max-leg speed can drive a single cycle_time choice.
-        leg_velocities: dict[str, tuple[float, float]] = {}
-        max_leg_v = 0.0
-        for name in LEG_NAMES:
-            r_x, r_y, _ = self._legs[name].mount_xyz
-            v_x = v_body_xy[0] - omega_z * r_y
-            v_y = v_body_xy[1] + omega_z * r_x
-            leg_velocities[name] = (v_x, v_y)
-            speed = math.hypot(v_x, v_y)
-            if speed > max_leg_v:
-                max_leg_v = speed
+        leg_velocities = self._per_leg_planar_velocity(v_body_xy, omega_z)
+        max_leg_v = max(
+            (math.hypot(vx, vy) for vx, vy in leg_velocities.values()),
+            default=0.0,
+        )
 
         cycle_time = self._derive_cycle_time(max_leg_v)
         stance_time = cycle_time * duty_factor
@@ -285,6 +313,36 @@ class Engine:
         # the engine drops back to STAND mid-transition it carries the
         # right grounded flags forward.
         out = self._transition.update(dt)
+        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
+        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        return out
+
+    def _per_leg_planar_velocity(
+        self,
+        v_body_xy: tuple[float, float],
+        omega_z: float,
+    ) -> dict[str, tuple[float, float]]:
+        """Linear cmd plus tangential yaw contribution at each hip.
+
+        ``v_leg = v_body + omega × r``, evaluated in the body frame.
+        Returned in the same order as ``LEG_NAMES`` so downstream code
+        can take a single ``max`` over the speeds.
+        """
+        out: dict[str, tuple[float, float]] = {}
+        for name in LEG_NAMES:
+            r_x, r_y, _ = self._legs[name].mount_xyz
+            v_x = v_body_xy[0] - omega_z * r_y
+            v_y = v_body_xy[1] + omega_z * r_x
+            out[name] = (v_x, v_y)
+        return out
+
+    def _tick_engagement(
+        self,
+        dt: float,
+        v_body_xy: tuple[float, float],
+        omega_z: float,
+    ) -> dict[str, LegOutput]:
+        out = self._engagement.update(dt, v_body_xy, omega_z)
         self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
         self._last_stance = {n: out[n].stance for n in LEG_NAMES}
         return out

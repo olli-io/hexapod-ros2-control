@@ -58,16 +58,19 @@ def test_stance_curve_has_constant_velocity():
     np.testing.assert_allclose(v1, v2)
 
 
+SWING_TIME = 0.6
+STANCE_TIME = 0.6  # symmetric β = 0.5 chain.
+
+
 def _swing_chain(stride):
     swing_origin = np.array([0.5, 0.0, -0.1])
     target = swing_origin + stride
-    swing_time = 0.6
     dt = 0.02
-    swing_delta_t = dt / swing_time
-    stance_delta_t = dt / swing_time
+    swing_delta_t = dt / SWING_TIME
+    stance_delta_t = dt / SWING_TIME
     primary = generate_primary_swing_control_nodes(
         swing_origin=swing_origin,
-        swing_origin_velocity=-stride / swing_time,
+        swing_origin_velocity=-stride / SWING_TIME,
         target=target,
         swing_clearance=0.03,
         swing_width=0.0,
@@ -105,21 +108,51 @@ def test_swing_curves_join_with_c0_continuity():
 
 
 def test_swing_curves_join_with_c1_continuity():
-    # Velocity matches across each pair of consecutive curves.
+    # C1 means equal foot velocity *in real time* at each join. The
+    # primary and secondary swing Beziers each cover swing_time / 2, the
+    # stance Bezier covers stance_time. Parameter-space derivatives are
+    # therefore comparable directly only at the primary -> secondary
+    # apex (matching half-durations); the secondary -> stance join must
+    # be checked in time space.
     stride = np.array([0.1, 0.0, 0.0])
     _, _, primary, secondary, stance = _swing_chain(stride)
-    # Primary -> secondary join.
+
+    # Primary -> secondary apex (both cover swing_time / 2).
     np.testing.assert_allclose(
         quartic_bezier_dot(primary, 1.0),
         quartic_bezier_dot(secondary, 0.0),
         atol=1e-12,
     )
-    # Secondary -> stance join.
-    np.testing.assert_allclose(
-        quartic_bezier_dot(secondary, 1.0),
-        quartic_bezier_dot(stance, 0.0),
-        atol=1e-12,
-    )
+
+    # Secondary -> stance touchdown: convert each curve's dB/ds to dB/dt.
+    dBdt_secondary = quartic_bezier_dot(secondary, 1.0) * (2.0 / SWING_TIME)
+    dBdt_stance = quartic_bezier_dot(stance, 0.0) * (1.0 / STANCE_TIME)
+    np.testing.assert_allclose(dBdt_secondary, dBdt_stance, atol=1e-12)
+
+
+def test_swing_touchdown_velocity_matches_steady_state_stance():
+    # Regression for the 2× node-separation bug: the swing's secondary
+    # curve must touch down at exactly the steady-state stance velocity
+    # (-stride / stance_time), not twice that.
+    stride = np.array([0.1, 0.0, 0.0])
+    _, _, _, secondary, _ = _swing_chain(stride)
+
+    dBdt_secondary_touchdown = quartic_bezier_dot(secondary, 1.0) * (2.0 / SWING_TIME)
+    expected = -stride / STANCE_TIME
+    np.testing.assert_allclose(dBdt_secondary_touchdown, expected, atol=1e-12)
+
+
+def test_primary_swing_liftoff_velocity_matches_requested():
+    # Regression for the 2× node-separation bug on the lift-off side:
+    # dB/dt at the start of the primary swing must equal the velocity
+    # passed in (= -stride / swing_time for a steady-state join), not
+    # twice that.
+    stride = np.array([0.1, 0.0, 0.0])
+    _, _, primary, _, _ = _swing_chain(stride)
+
+    dBdt_primary_liftoff = quartic_bezier_dot(primary, 0.0) * (2.0 / SWING_TIME)
+    expected = -stride / SWING_TIME
+    np.testing.assert_allclose(dBdt_primary_liftoff, expected, atol=1e-12)
 
 
 def test_swing_apex_clears_origin_by_swing_clearance():
