@@ -89,6 +89,7 @@ class EngineConfig:
     controller_dt: float
     recenter_swing_time: float
     cmd_zero_tol: float
+    forced_touchdown_delay: float
 
 
 def nominal_stance_from_yaml(
@@ -159,6 +160,11 @@ class Engine:
         self._state = EngineState.STAND
         self._last_targets: dict[str, Vec3] = dict(self._nominal)
         self._last_stance: dict[str, bool] = {n: True for n in LEG_NAMES}
+        # Debounce timer for cmd_vel → 0. The engine only commits to
+        # STOPPING after the command has stayed below cmd_zero_tol for
+        # ``forced_touchdown_delay`` seconds, so brief joystick-center
+        # crossings don't kick off a FORCE_TOUCHDOWN.
+        self._cmd_zero_elapsed = 0.0
 
     @property
     def state(self) -> EngineState:
@@ -171,6 +177,16 @@ class Engine:
         omega_z: float,
     ) -> dict[str, LegOutput]:
         cmd_zero = self._cmd_is_zero(v_body_xy, omega_z)
+        if cmd_zero:
+            self._cmd_zero_elapsed += dt
+        else:
+            self._cmd_zero_elapsed = 0.0
+        # Only commit to STOPPING after cmd has stayed zero long enough
+        # to be deliberate; a brief joystick zero-crossing keeps us in
+        # the active state, ticking at zero stride.
+        should_stop = cmd_zero and (
+            self._cmd_zero_elapsed >= self._config.forced_touchdown_delay
+        )
 
         if self._state is EngineState.STAND:
             if not cmd_zero:
@@ -180,7 +196,7 @@ class Engine:
             return self._emit_stand()
 
         if self._state is EngineState.ENGAGING:
-            if cmd_zero:
+            if should_stop:
                 # Bail out: hand the engagement's mid-flight pose to
                 # the stop transition exactly like a GAIT -> STOPPING
                 # would.
@@ -198,7 +214,7 @@ class Engine:
             return out
 
         if self._state is EngineState.GAIT:
-            if cmd_zero:
+            if should_stop:
                 self._state = EngineState.STOPPING
                 # _last_stance is True when the leg is on the ground;
                 # the controller wants the opposite (True = airborne),

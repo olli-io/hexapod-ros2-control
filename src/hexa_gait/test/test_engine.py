@@ -42,6 +42,7 @@ def _config(
     min_cycle_time: float = 0.5,
     max_cycle_time: float = 2.0,
     duty_factor: float = 0.5,
+    forced_touchdown_delay: float = 0.0,
 ) -> EngineConfig:
     return EngineConfig(
         stride_length=stride_length,
@@ -53,6 +54,7 @@ def _config(
         controller_dt=0.02,
         recenter_swing_time=0.4,
         cmd_zero_tol=1.0e-4,
+        forced_touchdown_delay=forced_touchdown_delay,
     )
 
 
@@ -277,6 +279,74 @@ def test_engaging_to_stopping_on_zero_cmd():
     assert engine.state is EngineState.ENGAGING
     engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
     assert engine.state is EngineState.STOPPING
+
+
+def test_brief_zero_cmd_under_debounce_stays_in_gait():
+    # Right-joystick passing through center sends cmd_vel to zero for a
+    # handful of ticks before swinging back to the new yaw direction.
+    # With forced_touchdown_delay set, those zero ticks must not trip
+    # FORCE_TOUCHDOWN — the engine has to keep ticking GAIT so the
+    # cycle resumes seamlessly when cmd_vel returns.
+    spy = _SpyStrategy()
+    engine = _engine(
+        spy, config=_config(forced_touchdown_delay=0.15)
+    )
+    _drive_to_gait(engine, v_body_xy=(0.0, 0.0), omega_z=0.5)
+    assert engine.state is EngineState.GAIT
+
+    # 5 zero ticks at dt=0.02 ⇒ 0.10 s of dwell, well under the 0.15 s
+    # debounce. The engine must stay in GAIT throughout.
+    for _ in range(5):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        assert engine.state is EngineState.GAIT
+
+    # Stick re-engages on the other side of center: still GAIT, no
+    # transition controller in the loop.
+    engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=-0.5)
+    assert engine.state is EngineState.GAIT
+
+
+def test_sustained_zero_cmd_past_debounce_enters_stopping():
+    # If cmd_vel really does stay zero, the debounce expires and the
+    # engine commits to STOPPING as before.
+    spy = _SpyStrategy()
+    engine = _engine(
+        spy, config=_config(forced_touchdown_delay=0.10)
+    )
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
+
+    # 4 ticks × 0.02 = 0.08 s < 0.10 s ⇒ still in GAIT.
+    for _ in range(4):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
+
+    # The 6th zero tick puts elapsed at 0.12 s ≥ 0.10 s ⇒ STOPPING.
+    for _ in range(2):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.STOPPING
+
+
+def test_debounce_resets_on_nonzero_cmd():
+    # A near-miss zero crossing must fully reset the timer so the next
+    # zero burst gets its own full window — not whatever was left over
+    # from the previous one.
+    spy = _SpyStrategy()
+    engine = _engine(
+        spy, config=_config(forced_touchdown_delay=0.10)
+    )
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+
+    # Burn most of the window at zero, then bounce back to non-zero.
+    for _ in range(4):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
+
+    # New zero burst: 4 ticks (0.08 s) must still be inside the window.
+    for _ in range(4):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
 
 
 def test_repeat_engagement_after_full_stop():

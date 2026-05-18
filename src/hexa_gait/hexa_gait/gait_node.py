@@ -43,6 +43,7 @@ def _load_engine_config(path: Path) -> EngineConfig:
         controller_dt=float(raw["controller_dt"]),
         recenter_swing_time=float(raw["recenter_swing_time"]),
         cmd_zero_tol=float(raw["cmd_zero_tol"]),
+        forced_touchdown_delay=float(raw["forced_touchdown_delay"]),
     )
 
 
