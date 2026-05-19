@@ -21,7 +21,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
 from hexa_interfaces.msg import GaitParams, LegState, LegTargets
 from rclpy.node import Node
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, String
 
 from .clock import LEG_NAMES
 from .engine import (
@@ -112,6 +112,13 @@ class GaitNode(Node):
             Empty, "/gait/initialize", self._on_init, 10
         )
         self._pub_targets = self.create_publisher(LegTargets, "/legs/targets", 10)
+        # State broadcast for the posture chain: `hexa_posture` gates body
+        # pose application on this so the user can't push the chassis
+        # around while the legs are folded or mid-INITIALIZE / mid-FOLD.
+        # Published every tick so late subscribers converge within one
+        # 50 Hz interval — cheaper than configuring transient_local QoS
+        # on both ends.
+        self._pub_state = self.create_publisher(String, "/gait/state", 10)
 
         self._last_tick_ns: int | None = None
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
@@ -180,6 +187,7 @@ class GaitNode(Node):
             leg_states.append(state)
         msg.legs = leg_states
         self._pub_targets.publish(msg)
+        self._pub_state.publish(String(data=self._engine.state.value))
 
 
 def main(args=None) -> None:

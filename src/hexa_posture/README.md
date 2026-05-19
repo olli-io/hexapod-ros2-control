@@ -19,10 +19,10 @@ Mirrors the library/node split used by `hexa_kinematics`:
     `AnimationContext`, `Stack`) and starter implementations
     (`Still`, `Breathing`). Each animation is a pure function from
     context → pose offset.
-- **Node** (`posture_node.py`) — subscribes `/body/pose` (user input)
-  and `/cmd_vel` (walking-vs-idle state), runs the animation stack on
-  a timer, composes user pose + animations, clamps to the envelope,
-  publishes `/body/pose_target`.
+- **Node** (`posture_node.py`) — subscribes `/body/pose` (user input),
+  `/cmd_vel` (walking-vs-idle state), and `/gait/state` (engine state
+  gate). Runs the animation stack on a timer, composes user pose +
+  animations, clamps to the envelope, publishes `/body/pose_target`.
 
 ## Topics
 
@@ -31,6 +31,13 @@ Mirrors the library/node split used by `hexa_kinematics`:
     offset from teleop or autonomy. Latest sample wins.
   - `/cmd_vel` (`geometry_msgs/Twist`) — read for the
     walking-vs-idle distinction. Posture does not modify it.
+  - `/gait/state` (`std_msgs/String`) — engine state name
+    (`folded`, `initialize`, `stand`, `engaging`, `gait`, `stopping`,
+    `folding`). Posture only applies user pose + animations when the
+    state is one of `stand` / `engaging` / `gait` / `stopping`; in
+    the other states (or before the first message arrives) the node
+    publishes IDENTITY. This is what stops the user from translating
+    the chassis while the legs are folded or mid-cold-start.
 - Publishes:
   - `/body/pose_target` (`hexa_interfaces/BodyPose`) at 50 Hz — the
     final clamped pose for the IK node to apply via
@@ -45,9 +52,11 @@ Animations are pure functions of an `AnimationContext`:
 - `walking` — True iff `/cmd_vel` is non-zero. Lets animations gate
   themselves to pose mode (e.g. `Breathing`) or gait-active mode
   (e.g. sway, lean).
-- `gait_phase` — reserved for when `/gait/state` lands; phase-locked
-  animations (gait-synced sway, body bob in time with stride) will
-  consume it.
+- `gait_phase` — reserved for phase-locked animations (gait-synced
+  sway, body bob in time with stride). The current `/gait/state`
+  message carries only the engine state name; phase is not on the
+  wire yet, so animations that want it must fall back to a
+  free-running sine on `t` or skip themselves.
 
 All state lives in the animation instance (e.g. amplitude, period),
 not in the context. The posture node owns the clock; animations must
@@ -69,8 +78,8 @@ safety layer.
 
 ## Roadmap
 
-- Phase-locked animations once `hexa_gait` publishes a `/gait/state`
-  topic with the current cycle phase.
+- Phase-locked animations once `/gait/state` carries the current
+  cycle phase alongside the engine state name.
 - Config-driven animation stack (`animations.yaml` listing layer
   classes + parameters, loaded at startup).
 - Smoother envelope: use the current foot positions and leg geometry

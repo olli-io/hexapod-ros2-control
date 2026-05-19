@@ -11,6 +11,18 @@ cd "${REPO_ROOT}"
 
 CONTAINER_NAME="hexapod-dev"
 
+# Extract --test from the front of the arg list. When set, run colcon tests
+# after the main command (which defaults to `hexa build` in test mode).
+run_tests=0
+args=()
+for arg in "$@"; do
+    case "${arg}" in
+        --test) run_tests=1 ;;
+        *)      args+=("${arg}") ;;
+    esac
+done
+set -- "${args[@]}"
+
 # Allow the container to reach the host X server.
 # Harmless if there is no X server (e.g. headless / CI).
 xhost +local:docker >/dev/null 2>&1 || true
@@ -46,4 +58,15 @@ esac
 # Allocate a TTY only when stdin is one, so piped/CI invocations still work.
 exec_flags=(-i)
 [ -t 0 ] && exec_flags=(-it)
+
+if [[ ${run_tests} -eq 1 ]]; then
+    # In test mode the main command defaults to `hexa build` so a bare
+    # `dev.sh --test` means "build then test".
+    docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" \
+        /usr/local/bin/entrypoint.sh "${@:-hexa build}"
+    exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" \
+        /usr/local/bin/entrypoint.sh bash -c \
+        "colcon test --event-handlers console_direct+ && colcon test-result --verbose"
+fi
+
 exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh "${@:-bash}"

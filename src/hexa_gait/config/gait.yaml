@@ -90,7 +90,7 @@ angular_z_max: 3.00
 initialize:
   # Seconds per mirroring pair during PLACE_FEET. Three pairs ⇒ total
   # PLACE_FEET ≈ 3 * pair_swing_time.
-  pair_swing_time: 0.8
+  pair_swing_time: 0.4
   # Seconds for the LIFT_BODY z-ramp.
   lift_body_time: 0.6
   # Swing-arc clearance (m) added above each leg's apex during

@@ -30,7 +30,10 @@ the device.
 Controller mapping:
 
 - **Right stick** — body translation (posture mode) or linear velocity (gait mode). Stick forward → body `+x`; stick left → body `+y`.
-- **Left stick X** — yaw rate (gait mode only).
+- **Left stick (posture mode)** — body tilt toward the stick direction. Stick forward → pitch forward (front dips); stick left → roll left (left side dips).
+- **Left stick X (gait mode)** — yaw rate.
+- **L1 / R1 (posture mode)** — body yaw about `+z`. L1 yaws left (CCW from above), R1 yaws right. The buttons are binary, so the output is eased through a first-order low-pass (time constant `posture.yaw_tau_s`, default ~0.1 s) and saturates at `posture.yaw_max_deg` while held. Both buttons pressed cancel to zero. Inactive in gait mode.
+- **L2 / R2 (posture mode)** — "wiggle". Same yaw as L1 / R1 (shared target — L1 + L2 does not double up) plus a body translation that holds a point `posture.wiggle_pivot_forward_m` ahead of body centre stationary, so the rear swings while the front stays planted. Triggers are read as analog axes and thresholded at `wiggle_trigger_threshold` (default 0.5 of the joy_node Xbox-style trigger range). Translation eases through the same low-pass as yaw so engaging the wiggle mid-L1-hold doesn't snap. Inactive in gait mode.
 - **Y button** — toggles posture ↔ gait on rising edge.
 
 The node starts in **posture** mode (safer: no walking). The axis

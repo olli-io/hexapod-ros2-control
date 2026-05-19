@@ -9,11 +9,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 clean=0
-split_flag="-h"
+run_tests=0
+split_flag="-v"
 for arg in "$@"; do
     case "${arg}" in
-        --clean) clean=1 ;;
-        vert)    split_flag="-v" ;;
+        --clean)      clean=1 ;;
+        --test)       run_tests=1 ;;
+        --horizontal) split_flag="-h" ;;
         *)
             echo "Unknown argument: ${arg}" >&2
             exit 1
@@ -38,7 +40,11 @@ fi
 
 if [[ ${clean} -eq 1 ]]; then
     "${REPO_ROOT}/scripts/kill.sh"
-    "${REPO_ROOT}/scripts/dev.sh" hexa build
+    test_flag=()
+    [[ ${run_tests} -eq 1 ]] && test_flag=(--test)
+    "${REPO_ROOT}/scripts/dev.sh" "${test_flag[@]}" hexa build
+elif [[ ${run_tests} -eq 1 ]]; then
+    "${REPO_ROOT}/scripts/dev.sh" --test
 fi
 
 # Make sure the container exists before both panes try to attach, so they

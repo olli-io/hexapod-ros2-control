@@ -40,9 +40,11 @@ class AnimationContext:
     during gait (e.g. sway)."""
 
     gait_phase: float | None = None
-    """Reserved: gait phase in [0, 1) when /gait/state lands. None means
-    no gait phase available; phase-locked animations should fall back
-    to a free-running sine on ``t`` or skip themselves."""
+    """Reserved: gait phase in [0, 1) once it lands on /gait/state.
+    The current `/gait/state` message carries only the engine state
+    name; until phase is added to the wire this stays ``None`` and
+    phase-locked animations should fall back to a free-running sine
+    on ``t`` or skip themselves."""
 
 
 class Animation(Protocol):

@@ -16,6 +16,7 @@ zero-filled so consumers always see a coherent command.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import rclpy
@@ -32,6 +33,7 @@ from hexa_gait import load_velocity_caps
 from .joy_mapping import GAIT, POSTURE, JoyConfig, JoyState, map_joy
 
 PUBLISH_RATE_HZ = 50.0
+TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
 
 def _load_config(path: Path, gait_yaml: Path) -> tuple[JoyConfig, str]:
@@ -45,11 +47,23 @@ def _load_config(path: Path, gait_yaml: Path) -> tuple[JoyConfig, str]:
         axis_right_y=int(raw["axis"]["right_y"]),
         mode_toggle_button=int(raw["mode_toggle_button"]),
         init_button=int(raw["init_button"]),
+        yaw_left_button=int(raw["yaw_left_button"]),
+        yaw_right_button=int(raw["yaw_right_button"]),
+        wiggle_left_trigger_axis=int(raw["wiggle_left_trigger_axis"]),
+        wiggle_right_trigger_axis=int(raw["wiggle_right_trigger_axis"]),
+        wiggle_trigger_threshold=float(raw["wiggle_trigger_threshold"]),
         deadband=float(raw["deadband"]),
         gait_linear_max=caps.linear_max,
         gait_angular_z_max=caps.angular_max,
         posture_x_max=float(raw["posture"]["x_max"]),
         posture_y_max=float(raw["posture"]["y_max"]),
+        posture_roll_max=math.radians(float(raw["posture"]["roll_max_deg"])),
+        posture_pitch_max=math.radians(float(raw["posture"]["pitch_max_deg"])),
+        posture_yaw_max=math.radians(float(raw["posture"]["yaw_max_deg"])),
+        posture_yaw_tau=float(raw["posture"]["yaw_tau_s"]),
+        posture_wiggle_pivot_forward_m=float(
+            raw["posture"]["wiggle_pivot_forward_m"]
+        ),
     )
     initial_mode = str(raw.get("initial_mode", POSTURE))
     if initial_mode not in (POSTURE, GAIT):
@@ -110,7 +124,11 @@ class TeleopJoyNode(Node):
 
     def _tick(self) -> None:
         out = map_joy(
-            self._latest_axes, self._latest_buttons, self._cfg, self._state
+            self._latest_axes,
+            self._latest_buttons,
+            self._cfg,
+            self._state,
+            TICK_DT_S,
         )
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
@@ -130,6 +148,9 @@ class TeleopJoyNode(Node):
         pose.header.stamp = stamp
         pose.x = out.pose_x
         pose.y = out.pose_y
+        pose.yaw = out.pose_yaw
+        pose.roll = out.pose_roll
+        pose.pitch = out.pose_pitch
         self._pub_body_pose.publish(pose)
 
 

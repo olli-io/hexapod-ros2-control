@@ -59,6 +59,7 @@ Each step: producer — purpose — topic (message type) — consumer.
 3. `hexa_control` — select gait, shape velocity for current gait — `/gait/params` (`hexa_interfaces/GaitParams`) → `hexa_gait`
 4. `hexa_posture` — compose user pose + animations (sway, breathing, lean…), clamp to envelope — `/body/pose_target` (`hexa_interfaces/BodyPose`) → `hexa_kinematics`
 5. `hexa_gait` — per-leg phase + foot trajectory in nominal body frame — `/legs/targets` (`hexa_interfaces/LegState[6]`) → `hexa_kinematics`
+5b. `hexa_gait` — current engine state (FOLDED, INITIALIZE, STAND, ENGAGING, GAIT, STOPPING, FOLDING) — `/gait/state` (`std_msgs/String`) → `hexa_posture` (gates body-pose application so the chassis can't be tilted while folded or mid-cold-start)
 6. `hexa_kinematics` — compose pose target with foot targets, then IK: foot pose → 18 joint angles — `/joint_commands` (`sensor_msgs/JointState`) → `hexa_hardware`
 7. `hexa_hardware` — ros2_control: joints → PWM → Servo 2040 (real) or Gazebo (sim)
 

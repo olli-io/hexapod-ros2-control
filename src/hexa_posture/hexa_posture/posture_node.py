@@ -1,10 +1,18 @@
 """Posture controller node.
 
-Subscribes to the user pose (`/body/pose`) and the latest body velocity
-command (`/cmd_vel`). On a fixed timer, runs the animation stack with
-the current context, sums in the user pose, clamps to the static safety
-envelope, and publishes the result on `/body/pose_target` for the IK
-node to consume.
+Subscribes to the user pose (`/body/pose`), the latest body velocity
+command (`/cmd_vel`), and the gait engine state (`/gait/state`). On a
+fixed timer, runs the animation stack with the current context, sums
+in the user pose, clamps to the static safety envelope, and publishes
+the result on `/body/pose_target` for the IK node to consume.
+
+The gait state gates the whole stack: posture is only meaningful when
+the engine is in `stand`, `engaging`, `gait`, or `stopping` — i.e.
+when the legs are at (or transitioning around) the nominal stance
+footprint. In `folded`, `initialize`, or `folding` the foot targets
+come from a separate ladder and composing a body-pose offset onto
+them would be nonsense; the node emits IDENTITY in those states
+regardless of user input.
 
 The animation stack is built from the ``enabled_animations`` parameter
 (string list of layer names, in order). Default is the standard
@@ -17,12 +25,23 @@ import rclpy
 from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
+from std_msgs.msg import String
 
 from .animations import Animation, AnimationContext, Breathing, Stack, Still
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp
 
 PUBLISH_RATE_HZ = 50.0
 CMD_VEL_ZERO_TOL = 1e-4
+
+# Gait engine states in which body posture is meaningful. In the other
+# states (`folded`, `initialize`, `folding`) the legs are not at the
+# nominal standing footprint, so composing a body-pose offset would
+# push the IK against an unrelated foot configuration — at best
+# nonsense, at worst unsafe. Posture publishes IDENTITY in those
+# states regardless of user input.
+POSTURE_ACTIVE_STATES: frozenset[str] = frozenset(
+    {"stand", "engaging", "gait", "stopping"}
+)
 
 DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")
 _ANIMATION_FACTORIES: dict[str, type[Animation]] = {
@@ -77,6 +96,9 @@ class PostureNode(Node):
 
         self._user_pose: BodyPose = IDENTITY
         self._walking: bool = False
+        # Cold-start default: until /gait/state arrives the engine could
+        # still be in FOLDED, so play it safe and emit IDENTITY.
+        self._gait_state: str | None = None
 
         self.declare_parameter("enabled_animations", list(DEFAULT_ANIMATIONS))
         enabled = list(
@@ -94,6 +116,9 @@ class PostureNode(Node):
         self._sub_vel = self.create_subscription(
             Twist, "/cmd_vel", self._on_vel, 10
         )
+        self._sub_gait_state = self.create_subscription(
+            String, "/gait/state", self._on_gait_state, 10
+        )
         self._pub_target = self.create_publisher(BodyPoseMsg, "/body/pose_target", 10)
 
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
@@ -104,8 +129,19 @@ class PostureNode(Node):
     def _on_vel(self, msg: Twist) -> None:
         self._walking = not _twist_is_zero(msg)
 
+    def _on_gait_state(self, msg: String) -> None:
+        self._gait_state = msg.data
+
     def _tick(self) -> None:
         now = self.get_clock().now()
+        if self._gait_state not in POSTURE_ACTIVE_STATES:
+            # Engine is FOLDED / INITIALIZE / FOLDING (or no state seen
+            # yet): the legs aren't at nominal stance, so applying any
+            # body-pose offset would compose against the wrong foot
+            # configuration. Hold IDENTITY until the engine reports a
+            # state in which posture is meaningful.
+            self._pub_target.publish(_pose_to_msg(IDENTITY, now.to_msg()))
+            return
         t = now.nanoseconds * 1e-9
         ctx = AnimationContext(t=t, walking=self._walking)
         animated = self._animations(ctx)
