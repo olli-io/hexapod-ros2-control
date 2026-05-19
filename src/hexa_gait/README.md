@@ -101,6 +101,17 @@ startup; there are no duplicate knobs in the teleop or control YAML.
 
 See `hexa_gait/hexa_gait/limits.py` for the helper API.
 
+Acceleration shaping is **not** performed in this package during the
+steady GAIT cycle. `hexa_control` runs a stateful
+`BodyVelocityLimiter` between `scale_to_envelope` and the
+`/gait/params` publish, so the `linear_x` / `linear_y` / `angular_z`
+fields arriving here are already rate-limited. The engagement
+controller's smoothstep envelope (`hexa_gait/hexa_gait/engagement.py`)
+remains responsible for the geometric `STAND → GAIT` foot handoff
+(stance feet must land at PEP at `master = β`); the two shapers
+compose harmlessly. See `hexa_control/README.md` for the limiter's
+placement and the documented transient envelope-excursion behaviour.
+
 ## Cold start: FOLDED → INITIALIZE
 
 At power-on the hexapod sits on its belly with the legs folded above

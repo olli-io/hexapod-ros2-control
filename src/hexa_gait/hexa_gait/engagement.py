@@ -42,6 +42,24 @@ running command; the foot lands at PEP for the *current* command, with
 a small residual offset proportional to how much cmd_vel slewed within
 the half cycle. Mid-engagement ``cmd_vel → 0`` bails to STOPPING via
 the engine and reuses the existing ``TransitionController``.
+
+Composition with the upstream body-velocity rate limiter
+========================================================
+
+``hexa_control`` runs a stateful ``BodyVelocityLimiter`` between
+``scale_to_envelope`` and the ``/gait/params`` publish, so the
+``cmd_vel`` reaching this controller is itself rate-limited (bounded
+``|Δ(v_x, v_y)|`` and ``|Δω_z|`` per tick). Engagement is unaffected
+in design: it already reads ``cmd_vel`` live each tick and the
+"varying cmd_vel → small residual touchdown offset" regime described
+above is now the normal case from ``STAND``, not the exception. The
+two shapers compose harmlessly — the limiter ramps ``cmd_vel`` toward
+the user demand; this controller's smoothstep further shapes its
+internal ``v_body`` against whatever the limiter is currently
+publishing. The composed ramp still converges by ``master = β``. The
+limiter resets to zero on every edge that leaves the walking set
+(``{engaging, gait}``), so ``begin()`` always sees a zero-velocity
+upstream state.
 """
 
 from __future__ import annotations

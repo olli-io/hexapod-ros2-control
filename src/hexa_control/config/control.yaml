@@ -16,5 +16,15 @@
 # cycle_time is derived inside the engine each tick from the commanded
 # velocity, configured stride_length, and the active strategy's
 # duty_factor.
+#
+# Body-velocity acceleration limits bound the time derivative of the
+# published (v_x, v_y, omega_z) so envelope-unwind jumps,
+# joystick releases, gait-cap changes on /cmd_gait, and Nav2 stops
+# can't produce step jumps at /gait/params. Applied AFTER
+# scale_to_envelope and BEFORE publishing — the limiter intentionally
+# allows brief excursions outside the static envelope window during
+# ramp-down; it is not a hard safety limit. Tuned on sim.
 
 default_gait: "tripod"
+max_linear_accel: 0.5    # m/s^2 — bounds |Δ(v_x, v_y)| as a vector
+max_angular_accel: 2.0   # rad/s^2 — bounds |Δomega_z|

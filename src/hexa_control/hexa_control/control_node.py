@@ -4,8 +4,9 @@ Subscribes to ``/cmd_vel`` (``geometry_msgs/Twist``) from teleop / nav,
 shapes the linear and angular components to fit the gait's velocity
 envelope (loaded from ``hexa_gait/config/gait.yaml`` — single source of
 truth — via ``hexa_gait.load_velocity_caps`` and
-``hexa_gait.scale_to_envelope``), and republishes the result as
-``GaitParams`` on ``/gait/params`` at 50 Hz.
+``hexa_gait.scale_to_envelope``), applies a body-velocity rate limit
+(``BodyVelocityLimiter``), and republishes the result as ``GaitParams``
+on ``/gait/params`` at 50 Hz.
 
 Also subscribes to ``/cmd_gait`` (``std_msgs/String``, ``transient_local``
 durability so a late-starting control node still receives the latest
@@ -23,6 +24,19 @@ stick-yaw command keeps more of the commanded yaw at the extremes
 instead of being eaten by the engine's per-leg stride clamp. The
 trade-off vs uniform scaling is that the commanded translation:yaw
 ratio is not preserved when the cut kicks in.
+
+The rate limiter runs *after* ``scale_to_envelope`` and bounds the
+per-tick change in ``(v_x, v_y, omega_z)``. Without it, releasing one
+axis (e.g. yaw) makes ``scale_to_envelope`` stop suppressing the
+others, and the published velocity steps in a single tick. The limiter
+absorbs that step into a ``max_*_accel``-bounded ramp. It also smooths
+gait-cap changes on ``/cmd_gait`` and Nav2 stops. Subscribed to
+``/gait/state``; resets to zero on every transition out of the active
+walking set ({``engaging``, ``gait``}) so a fresh ``STAND → ENGAGING``
+cycle always starts the limiter from zero (no fight with the
+engagement controller's smoothstep). The limiter is not a hard safety
+limit: during ramp-down it allows brief excursions outside the static
+``scale_to_envelope`` window — see the package README.
 
 The walk-cycle knobs (cycle_time, duty_factor, step_height, stride_length)
 live in ``hexa_gait/config/gait.yaml`` and are not on the wire —
@@ -47,13 +61,22 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 
+from hexa_control.body_velocity_limiter import BodyVelocityLimiter
+
 
 PUBLISH_RATE_HZ = 50.0
+
+# Engine states (published as strings on /gait/state) during which the
+# engine is actively driving the body from cmd_vel. Outside this set
+# the limiter resets to zero so a future STAND→ENGAGING begins fresh.
+_WALKING_STATES: frozenset[str] = frozenset({"engaging", "gait"})
 
 
 @dataclass(frozen=True)
 class ControlConfig:
     default_gait: str
+    max_linear_accel: float
+    max_angular_accel: float
 
 
 def _load_config(path: Path) -> ControlConfig:
@@ -65,7 +88,13 @@ def _load_config(path: Path) -> ControlConfig:
             f"default_gait={name!r} not in STRATEGIES "
             f"({sorted(STRATEGIES)})"
         )
-    return ControlConfig(default_gait=name)
+    max_linear_accel = float(raw["max_linear_accel"])
+    max_angular_accel = float(raw["max_angular_accel"])
+    return ControlConfig(
+        default_gait=name,
+        max_linear_accel=max_linear_accel,
+        max_angular_accel=max_angular_accel,
+    )
 
 
 class ControlNode(Node):
@@ -88,6 +117,12 @@ class ControlNode(Node):
         }
         self._latest: Twist = Twist()  # zero-initialized
         self._active_gait: str = self._cfg.default_gait
+        self._limiter = BodyVelocityLimiter(
+            max_linear_accel=self._cfg.max_linear_accel,
+            max_angular_accel=self._cfg.max_angular_accel,
+        )
+        self._engine_state: str = ""
+        self._dt = 1.0 / PUBLISH_RATE_HZ
 
         # Transient-local on both sides so a late subscriber catches
         # the last published name without the publisher needing to keep
@@ -99,8 +134,11 @@ class ControlNode(Node):
         self._sub_gait = self.create_subscription(
             String, "/cmd_gait", self._on_gait, gait_qos
         )
+        self._sub_state = self.create_subscription(
+            String, "/gait/state", self._on_state, 10
+        )
         self._pub = self.create_publisher(GaitParams, "/gait/params", 10)
-        self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
+        self._timer = self.create_timer(self._dt, self._tick)
 
         cap_summary = ", ".join(
             f"{n}={v:.2f}" for n, v in sorted(self._caps.linear_max_by_gait.items())
@@ -110,7 +148,9 @@ class ControlNode(Node):
             f"caps from {gait_yaml}: "
             f"linear_max=({cap_summary}) m/s, "
             f"angular_z_max={self._caps.angular_max:.2f} rad/s, "
-            f"yaw_bias={self._caps.yaw_bias:.2f}"
+            f"yaw_bias={self._caps.yaw_bias:.2f}, "
+            f"max_linear_accel={self._cfg.max_linear_accel:.2f} m/s^2, "
+            f"max_angular_accel={self._cfg.max_angular_accel:.2f} rad/s^2"
         )
 
     def _on_vel(self, msg: Twist) -> None:
@@ -129,6 +169,19 @@ class ControlNode(Node):
         self.get_logger().info(f"/cmd_gait switching active gait to {name!r}")
         self._active_gait = name
 
+    def _on_state(self, msg: String) -> None:
+        new_state = msg.data
+        if new_state == self._engine_state:
+            return
+        # Edge: leaving the walking set. Drop the limiter to zero so the
+        # next STAND → ENGAGING begins from a known-zero state and
+        # cannot race the engagement controller's smoothstep.
+        was_walking = self._engine_state in _WALKING_STATES
+        now_walking = new_state in _WALKING_STATES
+        if was_walking and not now_walking:
+            self._limiter.reset((0.0, 0.0, 0.0))
+        self._engine_state = new_state
+
     def _tick(self) -> None:
         # Per-tick cap lookup: the active gait can change between ticks
         # when /cmd_gait arrives, and each gait has its own linear cap
@@ -144,6 +197,10 @@ class ControlNode(Node):
             self._caps.angular_max,
             self._caps.yaw_bias,
         )
+        # Apply body-velocity rate limit after the envelope shaper so
+        # the limiter smooths envelope-unwind jumps (the whole reason
+        # it exists). The limiter is stateful across ticks.
+        v_x, v_y, omega_z = self._limiter.step((v_x, v_y, omega_z), self._dt)
         out = GaitParams()
         out.header.stamp = self.get_clock().now().to_msg()
         out.gait_name = self._active_gait
