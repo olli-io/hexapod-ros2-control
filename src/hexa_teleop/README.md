@@ -21,7 +21,7 @@ Power the controller on in **X-input mode**: hold `Start + X` until the
 LEDs flash, then plug in via USB-C.
 
 Inside the dev container — uncomment the `/dev/input` block in
-`docker-compose.yaml` before `./pod --dev` so `joy_node` can see
+`docker-compose.yaml` before `./hexa --dev` so `joy_node` can see
 the device.
 
 - Launch the sim (separate terminal): `ros2 launch hexa_bringup sim.launch.py`

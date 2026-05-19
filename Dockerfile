@@ -46,8 +46,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 USER ${USERNAME}
 WORKDIR /workspace
 
-# Put the workspace root on PATH so `hexa` is callable from every shell type
-# (interactive, non-interactive, `docker exec container hexa build`, ...).
+# Put the workspace root on PATH so `pod` is callable from every shell type
+# (interactive, non-interactive, `docker exec container pod build`, ...).
 ENV PATH="/workspace:${PATH}"
 
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /home/${USERNAME}/.bashrc \

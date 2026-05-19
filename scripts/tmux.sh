@@ -32,17 +32,23 @@ fi
 SESSION="hexapod-dev"
 WINDOW="hexapod"
 
-# Already running? Just reattach — don't spin up a second pair of panes.
-if tmux has-session -t "${SESSION}" 2>/dev/null; then
-    echo "Reattaching to existing tmux session: ${SESSION}"
-    exec tmux attach-session -t "${SESSION}"
+# With --clean, tear down any existing session so the rebuild actually happens.
+if [[ ${clean} -eq 1 ]] && tmux has-session -t "${SESSION}" 2>/dev/null; then
+    echo "Killing existing tmux session: ${SESSION}"
+    tmux kill-session -t "${SESSION}"
+else
+    # Already running? Just reattach — don't spin up a second pair of panes.
+    if tmux has-session -t "${SESSION}" 2>/dev/null; then
+        echo "Reattaching to existing tmux session: ${SESSION}"
+        exec tmux attach-session -t "${SESSION}"
+    fi
 fi
 
 if [[ ${clean} -eq 1 ]]; then
     "${REPO_ROOT}/scripts/kill.sh"
     test_flag=()
     [[ ${run_tests} -eq 1 ]] && test_flag=(--test)
-    "${REPO_ROOT}/scripts/dev.sh" "${test_flag[@]}" hexa build
+    "${REPO_ROOT}/scripts/dev.sh" "${test_flag[@]}" pod build
 elif [[ ${run_tests} -eq 1 ]]; then
     "${REPO_ROOT}/scripts/dev.sh" --test
 fi
@@ -52,11 +58,11 @@ fi
 "${REPO_ROOT}/scripts/dev.sh" true
 
 # Pane 0 (left): drop into the dev container and launch sim.
-tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/pod --dev"
+tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/hexa --dev"
 tmux send-keys -t "${SESSION}:${WINDOW}.0" "sim" Enter
 
 # Pane 1 (right/below): attach, wait for /clock, then launch teleop.
-tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/pod --dev"
+tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/hexa --dev"
 tmux send-keys -t "${SESSION}:${WINDOW}.1" \
     "echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; teleop" Enter
 

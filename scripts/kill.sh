@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-CONTAINER_NAME="hexapod-dev"
+CONTAINER_NAME="hexa-dev"
 
 if [ -z "$(docker ps -aq --filter "name=^${CONTAINER_NAME}$")" ]; then
     echo "No ${CONTAINER_NAME} container to kill."

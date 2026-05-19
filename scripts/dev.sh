@@ -9,10 +9,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-CONTAINER_NAME="hexapod-dev"
+CONTAINER_NAME="hexa-dev"
 
 # Extract --test from the front of the arg list. When set, run colcon tests
-# after the main command (which defaults to `hexa build` in test mode).
+# after the main command (which defaults to `pod build` in test mode).
 run_tests=0
 args=()
 for arg in "$@"; do
@@ -42,7 +42,7 @@ case "${state}" in
     "")
         # No container yet — rebuild the image, then create and start it
         # detached. Always rebuilding on a fresh start means Dockerfile
-        # edits take effect after `pod kill && pod --dev`,
+        # edits take effect after `hexa kill && hexa --dev`,
         # without a separate rebuild step.
         # `UID` is a readonly builtin in bash, so we can't `export` it; pass
         # the values inline and docker compose reads them as env vars.
@@ -60,10 +60,10 @@ exec_flags=(-i)
 [ -t 0 ] && exec_flags=(-it)
 
 if [[ ${run_tests} -eq 1 ]]; then
-    # In test mode the main command defaults to `hexa build` so a bare
+    # In test mode the main command defaults to `pod build` so a bare
     # `dev.sh --test` means "build then test".
     docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" \
-        /usr/local/bin/entrypoint.sh "${@:-hexa build}"
+        /usr/local/bin/entrypoint.sh "${@:-pod build}"
     exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" \
         /usr/local/bin/entrypoint.sh bash -c \
         "colcon test --event-handlers console_direct+ && colcon test-result --verbose"
