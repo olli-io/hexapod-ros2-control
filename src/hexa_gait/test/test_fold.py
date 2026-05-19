@@ -98,6 +98,12 @@ def _engine_config() -> EngineConfig:
         init_lift_body_time=LIFT_TIME,
         init_swing_clearance=SWING_CLEARANCE,
         init_place_feet_clearance=PLACE_FEET_CLEARANCE,
+        # Reseat knobs (unused by these tests — Engine is constructed
+        # without leg_specs/reseat_geometry).
+        reseat_settle_delay=0.1,
+        reseat_height_change_threshold=0.001,
+        reseat_pair_swing_time=0.1,
+        reseat_swing_clearance=0.02,
     )
 
 

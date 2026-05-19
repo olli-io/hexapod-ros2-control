@@ -72,6 +72,13 @@ def _config(
         init_lift_body_time=0.04,
         init_swing_clearance=0.01,
         init_place_feet_clearance=0.001,
+        # Reseat knobs (used only by tests that opt in by passing
+        # leg_specs + reseat_geometry to the Engine). The tests below
+        # construct Engine without those, so these values are inert.
+        reseat_settle_delay=0.1,
+        reseat_height_change_threshold=0.001,
+        reseat_pair_swing_time=0.04,
+        reseat_swing_clearance=0.01,
     )
 
 

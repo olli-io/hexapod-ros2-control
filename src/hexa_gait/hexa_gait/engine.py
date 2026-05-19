@@ -37,6 +37,7 @@ duplicates the trig that lives in ``body_transform.leg_to_body``.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from enum import Enum
@@ -45,6 +46,7 @@ from typing import Mapping
 
 from hexa_kinematics.body_transform import leg_to_body
 from hexa_kinematics.joint_config import load_initial_pose, load_standing_pose
+from hexa_kinematics.leg_geometry import LegSpec
 from hexa_kinematics.leg_ik import forward_kinematics
 from hexa_kinematics.leg_specs import LEG_NAMES, load_leg_specs
 
@@ -53,6 +55,7 @@ from .engagement import EngagementController, EngagementState
 from .fold import FoldController
 from .gaits.base import LegContext, Strategy, StrideParams
 from .initialize import InitializeController
+from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
 from .transition import LegOutput, TransitionController, TransitionState
 
 
@@ -64,6 +67,7 @@ __all__ = [
     "build_leg_contexts",
     "initial_stance_from_yaml",
     "nominal_stance_from_yaml",
+    "reseat_geometry_from_yaml",
 ]
 
 Vec3 = tuple[float, float, float]
@@ -77,6 +81,10 @@ class EngineState(Enum):
     # power-on while the user is still attaching the battery / cables.
     # FOLDING is the symmetric warm-shutdown: STAND → FOLDED via the
     # FoldController, also operator-gated.
+    # RESEATING is the standing-pose-restoration ladder: after the user
+    # lifts/lowers the chassis via /body/pose.z and the height settles,
+    # the engine walks each foot pair to a new nominal stance that
+    # restores the YAML default joint angles at the new body height.
     FOLDED = "folded"
     INITIALIZE = "initialize"
     STAND = "stand"
@@ -84,6 +92,7 @@ class EngineState(Enum):
     GAIT = "gait"
     STOPPING = "stopping"
     FOLDING = "folding"
+    RESEATING = "reseating"
 
 
 @dataclass(frozen=True)
@@ -120,6 +129,18 @@ class EngineConfig:
     init_lift_body_time: float
     init_swing_clearance: float
     init_place_feet_clearance: float
+    # RESEATING knobs. ``reseat_settle_delay`` is the dwell the target
+    # pose.z must stay stable before reseat fires (so brief D-pad
+    # taps don't kick off the ladder). ``reseat_height_change_threshold``
+    # is the tolerance for "stable" (1 mm by default).
+    # ``reseat_pair_swing_time`` is the per-pair duration (matches
+    # initialize for visual symmetry). ``reseat_swing_clearance`` is
+    # the arc clearance above the standing footprint — feet start
+    # planted, so a moderate arc just clears ground noise.
+    reseat_settle_delay: float
+    reseat_height_change_threshold: float
+    reseat_pair_swing_time: float
+    reseat_swing_clearance: float
 
 
 def nominal_stance_from_yaml(
@@ -136,6 +157,26 @@ def nominal_stance_from_yaml(
     legs = load_leg_specs(geometry_yaml)
     angles = load_standing_pose(standing_pose_yaml, geometry_yaml)
     return {n: leg_to_body(forward_kinematics(angles, legs[n]), legs[n]) for n in LEG_NAMES}
+
+
+def reseat_geometry_from_yaml(
+    geometry_yaml: str | Path,
+    standing_pose_yaml: str | Path,
+) -> ReseatGeometry:
+    """Build the ``ReseatGeometry`` snapshot used by the engine.
+
+    Reads ``standing_pose.yaml`` for the default joint angles and
+    ``geometry.yaml`` for segment lengths, then derives the
+    tibia-from-vertical angle and the default foot depth via the same
+    FK helper that ``nominal_stance_from_yaml`` uses. Any leg works as
+    the reference (all six share segment lengths); the first one in
+    ``LEG_NAMES`` is picked deterministically.
+    """
+    from .reseat import default_geometry_from_pose
+
+    legs = load_leg_specs(geometry_yaml)
+    angles = load_standing_pose(standing_pose_yaml, geometry_yaml)
+    return default_geometry_from_pose(angles, legs[LEG_NAMES[0]])
 
 
 def initial_stance_from_yaml(geometry_yaml: str | Path) -> dict[str, Vec3]:
@@ -175,6 +216,8 @@ class Engine:
         initial_stance: Mapping[str, Vec3],
         coxa_to_bottom: float,
         leg_contexts: Mapping[str, LegContext],
+        leg_specs: Mapping[str, LegSpec] | None = None,
+        reseat_geometry: ReseatGeometry | None = None,
     ) -> None:
         missing = set(LEG_NAMES) - set(nominal_stance)
         if missing:
@@ -185,6 +228,11 @@ class Engine:
         missing = set(LEG_NAMES) - set(leg_contexts)
         if missing:
             raise ValueError(f"leg_contexts missing legs: {sorted(missing)}")
+        if (leg_specs is None) != (reseat_geometry is None):
+            raise ValueError(
+                "leg_specs and reseat_geometry must be supplied together "
+                "(both None disables reseat, both set enables it)"
+            )
 
         self._config = config
         self._strategy = strategy
@@ -192,30 +240,22 @@ class Engine:
         self._initial: dict[str, Vec3] = {n: tuple(initial_stance[n]) for n in LEG_NAMES}  # type: ignore[misc]
         self._coxa_to_bottom = coxa_to_bottom
         self._legs: dict[str, LegContext] = dict(leg_contexts)
+        self._leg_specs: dict[str, LegSpec] | None = (
+            dict(leg_specs) if leg_specs is not None else None
+        )
+        self._reseat_geometry: ReseatGeometry | None = reseat_geometry
 
         self._clock = GaitClock(strategy.phase_offsets)
-        self._transition = TransitionController(
-            nominal_stance=self._nominal,
-            recenter_swing_time=config.recenter_swing_time,
-            swing_clearance=config.step_height,
-            swing_width=config.swing_width,
-            controller_dt=config.controller_dt,
-            touchdown_settle_time=config.touchdown_settle_time,
-        )
-        self._engagement = EngagementController(
-            nominal_stance=self._nominal,
-            stride_length=config.stride_length,
-            min_cycle_time=config.min_cycle_time,
-            max_cycle_time=config.max_cycle_time,
-            duty_factor=config.duty_factor,
-            swing_clearance=config.step_height,
-            swing_width=config.swing_width,
-            controller_dt=config.controller_dt,
-        )
+        self._transition = self._build_transition()
+        self._engagement = self._build_engagement()
         self._initialize = self._build_initialize()
         # Built lazily on the operator trigger so a fresh ladder runs
         # each time the user requests a fold (STAND → FOLDING).
         self._fold: FoldController | None = None
+        # Built each time the height settles to a new value while the
+        # engine is in STAND. Mid-cycle the engine commits to running
+        # this ladder to completion.
+        self._reseat: ReseatController | None = None
 
         # Cold start: assume the operator placed the chassis in the
         # folded initial_pose. The engine emits initial_stance and
@@ -232,6 +272,23 @@ class Engine:
         # FORCE_TOUCHDOWN. ENGAGING bypasses this debounce — see
         # ``update`` for why.
         self._cmd_zero_elapsed = 0.0
+
+        # Reseat state. ``_applied_height`` is the pose.z the current
+        # ``_nominal`` was computed at — starts at 0 (the YAML-derived
+        # standing pose). ``_target_height`` tracks the latest
+        # operator-commanded height, updated via ``set_target_height``.
+        # The stability timer measures how long the target has been
+        # stable; once it passes the settle delay AND target differs
+        # from applied, the engine fires the reseat ladder.
+        self._applied_height: float = 0.0
+        self._target_height: float = 0.0
+        self._height_stable_elapsed: float = 0.0
+        # Pending fold flag: latched by ``request_fold`` so a Start
+        # press during RESEATING (or any non-STAND state) is consumed
+        # when the engine next reaches STAND with the height at 0.
+        # Lets the teleop's two-press scheme work: press 1 snaps
+        # height → 0 (kicks off reseat); press 2 queues the fold.
+        self._pending_fold: bool = False
 
     @property
     def state(self) -> EngineState:
@@ -262,12 +319,50 @@ class Engine:
         already folded is a safe no-op. Builds a fresh
         ``FoldController`` so repeated fold cycles each get a clean
         ladder.
+
+        Prefer ``request_fold`` from the ROS layer — it handles the
+        ``RESEATING`` case where the user has pressed Start twice
+        rapidly while the chassis is lifted. ``start_fold`` is kept
+        for tests that want the unconditional transition.
         """
         if self._state is not EngineState.STAND:
             return False
         self._fold = self._build_fold()
         self._state = EngineState.FOLDING
         return True
+
+    def request_fold(self) -> bool:
+        """Idempotent fold request.
+
+        Latches ``_pending_fold``: the engine consumes the flag the
+        next time it lands in STAND with both applied and target
+        height at zero. Lets the teleop's two-press Start scheme work
+        — press 1 (while chassis lifted) snaps the height to 0 and
+        kicks off a reseat ladder; press 2 during that ladder queues
+        the fold, which fires automatically when reseat completes.
+
+        Returns ``True`` if the request was queued (engine isn't
+        already FOLDED or FOLDING), ``False`` otherwise so the ROS
+        layer can keep its existing log line tidy.
+        """
+        if self._state is EngineState.FOLDED or self._state is EngineState.FOLDING:
+            return False
+        self._pending_fold = True
+        return True
+
+    def set_target_height(self, target_height: float) -> None:
+        """Update the operator-commanded body height.
+
+        Called by the ROS layer on every ``/body/pose`` message,
+        forwarding only ``pose.z``. The stability timer resets when
+        the target moves by more than ``reseat_height_change_threshold``
+        from the previously-tracked value, so a slow ramp keeps
+        re-resetting the timer until the user lets go.
+        """
+        threshold = self._config.reseat_height_change_threshold
+        if abs(target_height - self._target_height) > threshold:
+            self._height_stable_elapsed = 0.0
+        self._target_height = float(target_height)
 
     def _build_initialize(self) -> InitializeController:
         cfg = self._config
@@ -297,6 +392,61 @@ class Engine:
             controller_dt=cfg.controller_dt,
         )
 
+    def _build_transition(self) -> TransitionController:
+        cfg = self._config
+        return TransitionController(
+            nominal_stance=self._nominal,
+            recenter_swing_time=cfg.recenter_swing_time,
+            swing_clearance=cfg.step_height,
+            swing_width=cfg.swing_width,
+            controller_dt=cfg.controller_dt,
+            touchdown_settle_time=cfg.touchdown_settle_time,
+        )
+
+    def _build_engagement(self) -> EngagementController:
+        cfg = self._config
+        return EngagementController(
+            nominal_stance=self._nominal,
+            stride_length=cfg.stride_length,
+            min_cycle_time=cfg.min_cycle_time,
+            max_cycle_time=cfg.max_cycle_time,
+            duty_factor=cfg.duty_factor,
+            swing_clearance=cfg.step_height,
+            swing_width=cfg.swing_width,
+            controller_dt=cfg.controller_dt,
+        )
+
+    def _build_reseat(self, target_stance: Mapping[str, Vec3]) -> ReseatController:
+        cfg = self._config
+        return ReseatController(
+            current_stance=self._nominal,
+            target_stance=target_stance,
+            pair_swing_time=cfg.reseat_pair_swing_time,
+            swing_clearance=cfg.reseat_swing_clearance,
+            swing_width=cfg.swing_width,
+            controller_dt=cfg.controller_dt,
+        )
+
+    def _commit_new_nominal(
+        self, new_nominal: Mapping[str, Vec3], applied_height: float
+    ) -> None:
+        """Adopt a new nominal stance as the engine's standing pose.
+
+        Rebuilds the transition / engagement controllers (each caches
+        its own snapshot of the nominal stance) and the per-leg
+        ``LegContext`` map (the strategy reads ``leg.nominal_stance``
+        from there), so subsequent ENGAGING / GAIT / STOPPING cycles
+        run against the new posture.
+        """
+        self._nominal = {n: tuple(new_nominal[n]) for n in LEG_NAMES}  # type: ignore[misc]
+        self._legs = {
+            n: dataclasses.replace(self._legs[n], nominal_stance=self._nominal[n])
+            for n in LEG_NAMES
+        }
+        self._transition = self._build_transition()
+        self._engagement = self._build_engagement()
+        self._applied_height = applied_height
+
     def update(
         self,
         dt: float,
@@ -315,6 +465,10 @@ class Engine:
         should_stop = cmd_zero and (
             self._cmd_zero_elapsed >= self._config.forced_touchdown_delay
         )
+        # Height-stability timer: ticks up while the target is within
+        # tolerance of its previously-recorded value. ``set_target_height``
+        # resets the timer on a significant change.
+        self._height_stable_elapsed += dt
 
         if self._state is EngineState.FOLDED:
             # Operator-gated cold start: emit the folded foot positions
@@ -363,10 +517,71 @@ class Engine:
 
         if self._state is EngineState.STAND:
             if not cmd_zero:
+                # Walking takes priority over a pending reseat / fold:
+                # the user is explicitly commanding the body, so honour
+                # that immediately. The pending flag stays latched so a
+                # later return to STAND consumes it.
                 self._engagement.begin(self._strategy, self._legs)
                 self._state = EngineState.ENGAGING
                 return self._tick_engagement(dt, v_body_xy, omega_z)
+            # Pending fold takes priority over reseat at zero height —
+            # the user explicitly asked to fold while the chassis was
+            # at default, so just fold.
+            if (
+                self._pending_fold
+                and abs(self._applied_height) <= self._config.reseat_height_change_threshold
+                and abs(self._target_height) <= self._config.reseat_height_change_threshold
+            ):
+                self._pending_fold = False
+                self._fold = self._build_fold()
+                self._state = EngineState.FOLDING
+                return self._tick_fold(dt)
+            # If the height has settled at a new value, reseat to it.
+            # This handles two cases identically:
+            #   * the user just released the D-pad after lifting
+            #     (target_height != 0, _pending_fold may or may not
+            #     be set);
+            #   * the user pressed Start while lifted (target_height
+            #     just snapped to 0, _pending_fold may be set);
+            # In both cases the engine walks the feet to the new
+            # nominal, then re-enters STAND, where _pending_fold is
+            # consumed on the next tick.
+            if (
+                self._reseat_geometry is not None
+                and self._leg_specs is not None
+                and abs(self._target_height - self._applied_height)
+                > self._config.reseat_height_change_threshold
+                and self._height_stable_elapsed >= self._config.reseat_settle_delay
+            ):
+                try:
+                    target_stance = reseat_nominal_stance(
+                        self._target_height,
+                        self._reseat_geometry,
+                        self._leg_specs,
+                    )
+                except ValueError:
+                    # Geometrically infeasible target — drop the reseat
+                    # silently rather than crashing the engine. The
+                    # height stays applied via pose.z; the legs just
+                    # don't snap back to default joint angles. The
+                    # teleop clamps so we should never get here unless
+                    # the YAML envelopes are mis-tuned.
+                    return self._emit_stand()
+                self._reseat = self._build_reseat(target_stance)
+                self._state = EngineState.RESEATING
+                # Snapshot target so the commit can use it without
+                # re-running the geometry.
+                self._reseat_target_stance: dict[str, Vec3] = dict(target_stance)
+                self._reseat_target_height = self._target_height
+                return self._tick_reseat(dt)
             return self._emit_stand()
+
+        if self._state is EngineState.RESEATING:
+            # Commit-to-completion ladder. cmd_vel and Start presses
+            # may arrive mid-flight; cmd_vel is held until DONE, Start
+            # presses latch via ``request_fold`` so the consumer in
+            # STAND handles them once the legs are in place.
+            return self._tick_reseat(dt)
 
         if self._state is EngineState.ENGAGING:
             if cmd_zero:
@@ -511,6 +726,33 @@ class Engine:
         out = self._transition.update(dt)
         self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
         self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        return out
+
+    def _tick_reseat(self, dt: float) -> dict[str, LegOutput]:
+        assert self._reseat is not None
+        out = self._reseat.update(dt)
+        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
+        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        if self._reseat.done:
+            self._commit_new_nominal(
+                self._reseat_target_stance, self._reseat_target_height
+            )
+            self._state = EngineState.STAND
+            # Make sure subsequent updates snap to the new nominal even
+            # if downstream code reads ``_last_targets`` first.
+            self._last_targets = dict(self._nominal)
+            self._last_stance = {n: True for n in LEG_NAMES}
+        return out
+
+    def _tick_fold(self, dt: float) -> dict[str, LegOutput]:
+        assert self._fold is not None
+        out = self._fold.update(dt)
+        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
+        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        if self._fold.done:
+            self._state = EngineState.FOLDED
+            self._last_targets = dict(self._initial)
+            self._last_stance = {n: True for n in LEG_NAMES}
         return out
 
     def _per_leg_planar_velocity(

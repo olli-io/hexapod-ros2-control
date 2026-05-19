@@ -40,11 +40,14 @@ def _load_config(path: Path, gait_yaml: Path) -> tuple[JoyConfig, str]:
     with path.open() as f:
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml)
+    height = raw["posture"]["height"]
     cfg = JoyConfig(
         axis_left_x=int(raw["axis"]["left_x"]),
         axis_left_y=int(raw["axis"]["left_y"]),
         axis_right_x=int(raw["axis"]["right_x"]),
         axis_right_y=int(raw["axis"]["right_y"]),
+        axis_dpad_y=int(raw["axis_dpad_y"]),
+        dpad_up_sign=float(raw["dpad_up_sign"]),
         mode_toggle_button=int(raw["mode_toggle_button"]),
         init_button=int(raw["init_button"]),
         yaw_left_button=int(raw["yaw_left_button"]),
@@ -64,6 +67,9 @@ def _load_config(path: Path, gait_yaml: Path) -> tuple[JoyConfig, str]:
         posture_wiggle_pivot_forward_m=float(
             raw["posture"]["wiggle_pivot_forward_m"]
         ),
+        posture_height_max=float(height["max_m"]),
+        posture_height_min=float(height["min_m"]),
+        posture_height_rate=float(height["rate_m_per_s"]),
     )
     initial_mode = str(raw.get("initial_mode", POSTURE))
     if initial_mode not in (POSTURE, GAIT):
@@ -148,6 +154,7 @@ class TeleopJoyNode(Node):
         pose.header.stamp = stamp
         pose.x = out.pose_x
         pose.y = out.pose_y
+        pose.z = out.pose_z
         pose.yaw = out.pose_yaw
         pose.roll = out.pose_roll
         pose.pitch = out.pose_pitch

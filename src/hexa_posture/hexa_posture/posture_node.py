@@ -39,8 +39,13 @@ CMD_VEL_ZERO_TOL = 1e-4
 # push the IK against an unrelated foot configuration — at best
 # nonsense, at worst unsafe. Posture publishes IDENTITY in those
 # states regardless of user input.
+#
+# `reseating` is included so the persistent height offset (pose.z)
+# continues to be applied to the IK while the gait engine walks the
+# feet to the new nominal stance — the body stays lifted throughout
+# the ladder.
 POSTURE_ACTIVE_STATES: frozenset[str] = frozenset(
-    {"stand", "engaging", "gait", "stopping"}
+    {"stand", "engaging", "gait", "stopping", "reseating"}
 )
 
 DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")

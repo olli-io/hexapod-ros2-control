@@ -12,6 +12,8 @@ def _cfg(**overrides) -> JoyConfig:
         axis_left_y=1,
         axis_right_x=3,
         axis_right_y=4,
+        axis_dpad_y=7,
+        dpad_up_sign=1.0,
         mode_toggle_button=3,
         init_button=7,
         yaw_left_button=4,
@@ -29,6 +31,9 @@ def _cfg(**overrides) -> JoyConfig:
         posture_yaw_max=math.radians(20.0),
         posture_yaw_tau=0.10,
         posture_wiggle_pivot_forward_m=0.06,
+        posture_height_max=0.04,
+        posture_height_min=-0.04,
+        posture_height_rate=0.05,
     )
     base.update(overrides)
     return JoyConfig(**base)
@@ -41,10 +46,11 @@ def _axes(
     right_y=0.0,
     lt=1.0,
     rt=1.0,
+    dpad_y=0.0,
 ) -> tuple[float, ...]:
     # Trigger rest value is +1.0 (joy_node Xbox-style convention),
-    # so defaults read as "not pressed".
-    return (left_x, left_y, lt, right_x, right_y, rt, 0.0, 0.0)
+    # so defaults read as "not pressed". D-pad Y rest value is 0.0.
+    return (left_x, left_y, lt, right_x, right_y, rt, 0.0, dpad_y)
 
 
 def _buttons(
@@ -422,3 +428,163 @@ def test_wiggle_trigger_threshold_respected():
     out = map_joy(_press_lt(0.4), _buttons(), cfg, state, DT)
     assert state.wiggle_amount > 0.0
     assert out.pose_yaw > 0.0
+
+
+# ---- D-pad-driven body height ----------------------------------------------
+
+
+def test_dpad_up_held_in_posture_integrates_height_up():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    # Hold D-pad up (+1) for 1 s — height integrates at rate * dt every
+    # tick; 50 ticks at dt=0.02 and rate=0.05 m/s gives 1.0 m * 0.05 =
+    # 0.05 m, which the clamp pins to posture_height_max = 0.04.
+    for _ in range(50):
+        out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture_height_max)
+    assert math.isclose(out.pose_z, cfg.posture_height_max)
+
+
+def test_dpad_down_held_in_posture_integrates_height_down():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    for _ in range(50):
+        out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture_height_min)
+    assert math.isclose(out.pose_z, cfg.posture_height_min)
+
+
+def test_dpad_release_holds_height():
+    # After lifting halfway and releasing, the height stays put — it
+    # does not decay like the other posture axes.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    # Lift for 10 ticks: 10 * 0.02 * 0.05 = 0.010 m
+    for _ in range(10):
+        map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    held = state.height_current
+    assert held > 0.0
+    # Now release the D-pad — many ticks should not change height.
+    for _ in range(200):
+        out = map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, held)
+    assert math.isclose(out.pose_z, held)
+
+
+def test_dpad_inactive_in_gait_mode_but_height_bleeds_through():
+    # In GAIT mode the D-pad must NOT change the height (walking-time
+    # height adjustments would force a reseat mid-walk). The already-
+    # integrated height bleeds through unchanged into pose.z so the
+    # robot walks at the lifted posture.
+    cfg = _cfg()
+    state = JoyState(mode=GAIT, height_current=0.02)
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, 0.02)
+    assert math.isclose(out.pose_z, 0.02)
+
+
+def test_dpad_sign_can_be_flipped_via_config():
+    # joy_node's sign on the D-pad Y axis varies by driver / build. If
+    # the YAML's dpad_up_sign needs flipping to match the live joystick,
+    # the integration sign follows.
+    cfg = _cfg(dpad_up_sign=-1.0)
+    state = JoyState(mode=POSTURE)
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    # With dpad_up_sign=-1, +1 on the axis should LOWER the body.
+    assert state.height_current < 0.0
+    assert out.pose_z < 0.0
+
+
+def test_height_clamps_at_max():
+    # Once the integrator pins to max, additional held ticks do not
+    # accumulate.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=cfg.posture_height_max)
+    for _ in range(50):
+        map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture_height_max)
+
+
+def test_height_clamps_at_min():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=cfg.posture_height_min)
+    for _ in range(50):
+        map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture_height_min)
+
+
+def test_mode_toggle_preserves_height():
+    # The whole point of height: it must survive a POSTURE → GAIT
+    # toggle so the robot walks at the lifted posture.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=0.03)
+    out = map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    assert state.mode == GAIT
+    assert math.isclose(state.height_current, 0.03)
+    assert math.isclose(out.pose_z, 0.03)
+
+
+# ---- Start button two-press semantics --------------------------------------
+
+
+def test_start_at_zero_height_fires_init_request_in_stand():
+    # Existing behaviour preserved: when height is at default, Start
+    # publishes /gait/initialize as before so the gait engine can
+    # fold or initialize per its current state.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=0.0)
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is True
+    assert state.height_current == 0.0
+
+
+def test_start_at_nonzero_height_snaps_to_zero_and_suppresses_init():
+    # New: first press while lifted just snaps height back to default
+    # (the gait engine then runs its reseat ladder). No fold yet.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=0.03)
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is False
+    assert state.height_current == 0.0
+
+
+def test_two_press_start_from_lifted_state():
+    # Press 1 snaps height; press 2 (after release) fires init_request.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=0.03)
+
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is False
+    assert state.height_current == 0.0
+
+    # Release the button so the next press is a rising edge.
+    out = map_joy(_axes(), _buttons(init=False), cfg, state, DT)
+    assert out.init_request is False
+
+    # Second press: at zero height now, so init_request fires.
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is True
+
+
+def test_holding_start_at_nonzero_height_snaps_once():
+    # Snap is a rising-edge action — holding the button doesn't
+    # repeatedly clobber height (a brief D-pad press after the snap
+    # should re-integrate, not be wiped on every tick).
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, height_current=0.03)
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert state.height_current == 0.0
+    # Held: even with D-pad held up, the integrator now climbs from 0.
+    out = map_joy(_axes(dpad_y=1.0), _buttons(init=True), cfg, state, DT)
+    assert state.height_current > 0.0
+    assert out.init_request is False
+
+
+def test_short_joy_message_zero_pose_z():
+    # Regression: the pose_z field exists on JoyOutput and is zero for
+    # the empty-input case.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    out = map_joy((), (), cfg, state, DT)
+    assert out.pose_z == 0.0
+    assert state.height_current == 0.0

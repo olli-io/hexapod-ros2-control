@@ -110,3 +110,30 @@ initialize:
   # LIFT_BODY starts. ~foot_radius (geometry.yaml foot.radius = 0.01)
   # leaves a small real-clearance margin.
   place_feet_clearance: 0.012
+
+# RESEAT ladder. Fires from STAND once the user-commanded body height
+# (pose.z on /body/pose) has been stable for settle_delay seconds AND
+# differs from the height the current nominal stance was computed at.
+# Three sequential mirroring pairs (same order as initialize.PLACE_FEET:
+# middle, then each diagonal) swing each foot to the new nominal that
+# restores the YAML-defined standing-pose joint angles at the new body
+# height — body lift is owned by pose.z, the legs just realign.
+# Non-preemptible (commit-to-completion, like INITIALIZE / FOLDING).
+reseat:
+  # Seconds the target pose.z must stay stable before reseat fires.
+  # Bigger = less twitchy on intermediate D-pad releases. Small enough
+  # that the user doesn't sit waiting after letting go.
+  settle_delay: 1.0
+  # Tolerance for "stable" (m) — also the dead-band for "target ≠
+  # applied". 1 mm is comfortably above the float-arithmetic noise on
+  # the joystick → integrator → topic round-trip.
+  height_change_threshold: 0.001
+  # Seconds per mirroring pair during the reseat swing. Matches
+  # initialize.pair_swing_time so the two ladders feel visually
+  # symmetric.
+  pair_swing_time: 0.4
+  # Swing-arc clearance (m) above the standing footprint while a pair
+  # is mid-swing. Feet are coming off a planted standing pose, so the
+  # arc only needs to clear ground noise and the apex margin used by
+  # the rest of the engine.
+  swing_clearance: 0.025

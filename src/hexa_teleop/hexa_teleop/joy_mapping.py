@@ -70,6 +70,8 @@ class JoyConfig:
     axis_left_y: int
     axis_right_x: int
     axis_right_y: int
+    axis_dpad_y: int
+    dpad_up_sign: float
     mode_toggle_button: int
     init_button: int
     yaw_left_button: int
@@ -87,6 +89,9 @@ class JoyConfig:
     posture_yaw_max: float
     posture_yaw_tau: float
     posture_wiggle_pivot_forward_m: float
+    posture_height_max: float
+    posture_height_min: float
+    posture_height_rate: float
 
 
 @dataclass
@@ -96,6 +101,12 @@ class JoyState:
     prev_init: bool = False
     yaw_current: float = 0.0
     wiggle_amount: float = 0.0
+    # Persistent body-height offset, driven by the D-pad in POSTURE
+    # mode. Unlike every other posture axis this value survives D-pad
+    # release and a mode toggle into GAIT (the robot walks at the
+    # lifted/lowered posture). Reset to zero on a Start press while
+    # non-zero — see ``map_joy`` for the two-press semantics.
+    height_current: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,7 @@ class JoyOutput:
     angular_z: float
     pose_x: float
     pose_y: float
+    pose_z: float
     pose_yaw: float
     pose_roll: float
     pose_pitch: float
@@ -152,18 +164,55 @@ def map_joy(
         state.mode = GAIT if state.mode == POSTURE else POSTURE
     state.prev_toggle = pressed
 
-    # Start button: one-shot rising-edge trigger that asks the gait
-    # engine to switch between FOLDED and STAND — INITIALIZE on the
-    # way up, FOLDING on the way down. Holding the button does nothing
-    # extra; the user must release and press again.
+    # Start button: one-shot rising-edge trigger with two-press
+    # semantics when the chassis is lifted/lowered.
+    #
+    #   * height != 0 — first press snaps state.height_current to 0
+    #     and SUPPRESSES init_request (the gait engine's reseat
+    #     ladder restores default joint geometry; no fold yet).
+    #   * height == 0 — fires init_request, which the engine routes
+    #     to start_initialize() if FOLDED or to a deferred fold
+    #     request if STAND.
+    #
+    # So a "lifted-then-fold" sequence is two presses: snap, then
+    # fold. Holding the button does nothing extra; the user must
+    # release and press again.
     init_pressed = _read_button(buttons, cfg.init_button)
-    init_request = init_pressed and not state.prev_init
+    init_edge = init_pressed and not state.prev_init
     state.prev_init = init_pressed
+    init_request = False
+    if init_edge:
+        # Tolerance well below the integration step so a stale tiny
+        # value from a very brief D-pad tap doesn't trap the user in
+        # a perpetual "snap-then-snap" loop. 0.1 mm is far below the
+        # min increment per tick at the YAML defaults
+        # (rate=0.05 m/s * dt=0.02 s = 1 mm).
+        if abs(state.height_current) > 1e-4:
+            state.height_current = 0.0
+        else:
+            init_request = True
 
     lx = _read_axis(axes, cfg.axis_left_x, cfg.deadband)
     ly = _read_axis(axes, cfg.axis_left_y, cfg.deadband)
     rx = _read_axis(axes, cfg.axis_right_x, cfg.deadband)
     ry = _read_axis(axes, cfg.axis_right_y, cfg.deadband)
+
+    # D-pad Y: integrate body-height offset while held (POSTURE only).
+    # No deadband — joy_node reports the D-pad as a clean ±1 / 0 axis.
+    # In GAIT mode the integration is suppressed so the user can't
+    # change the chassis height while walking; the already-integrated
+    # height bleeds through unchanged into pose.z.
+    if state.mode == POSTURE:
+        dpad_y = 0.0
+        if 0 <= cfg.axis_dpad_y < len(axes):
+            dpad_y = float(axes[cfg.axis_dpad_y])
+        state.height_current += (
+            cfg.dpad_up_sign * dpad_y * cfg.posture_height_rate * dt
+        )
+        if state.height_current > cfg.posture_height_max:
+            state.height_current = cfg.posture_height_max
+        elif state.height_current < cfg.posture_height_min:
+            state.height_current = cfg.posture_height_min
 
     # L1/R1 (shoulder buttons) and L2/R2 (analog triggers thresholded
     # to on/off) share the same yaw target. L1 and L2 both push left;
@@ -221,18 +270,22 @@ def map_joy(
             angular_z=0.0,
             pose_x=ry * cfg.posture_x_max + wx,
             pose_y=rx * cfg.posture_y_max + wy,
+            pose_z=state.height_current,
             pose_yaw=state.yaw_current,
             pose_roll=-lx * cfg.posture_roll_max,
             pose_pitch=ly * cfg.posture_pitch_max,
             mode_changed=mode_changed,
             init_request=init_request,
         )
+    # GAIT mode: posture axes are zero EXCEPT height, which is held
+    # so the robot walks at the lifted/lowered posture.
     return JoyOutput(
         linear_x=ry * cfg.gait_linear_max,
         linear_y=rx * cfg.gait_linear_max,
         angular_z=lx * cfg.gait_angular_z_max,
         pose_x=0.0,
         pose_y=0.0,
+        pose_z=state.height_current,
         pose_yaw=0.0,
         pose_roll=0.0,
         pose_pitch=0.0,

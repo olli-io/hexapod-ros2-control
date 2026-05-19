@@ -19,7 +19,9 @@ import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
+from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from hexa_interfaces.msg import GaitParams, LegState, LegTargets
+from hexa_kinematics.leg_specs import load_leg_specs
 from rclpy.node import Node
 from std_msgs.msg import Empty, String
 
@@ -30,6 +32,7 @@ from .engine import (
     build_leg_contexts,
     initial_stance_from_yaml,
     nominal_stance_from_yaml,
+    reseat_geometry_from_yaml,
 )
 from .gaits.tripod import Tripod
 
@@ -41,6 +44,7 @@ def _load_engine_config(path: Path) -> EngineConfig:
     with path.open() as f:
         raw = yaml.safe_load(f)
     init_cfg = raw["initialize"]
+    reseat_cfg = raw["reseat"]
     return EngineConfig(
         stride_length=float(raw["stride_length"]),
         min_cycle_time=float(raw["min_cycle_time"]),
@@ -57,6 +61,10 @@ def _load_engine_config(path: Path) -> EngineConfig:
         init_lift_body_time=float(init_cfg["lift_body_time"]),
         init_swing_clearance=float(init_cfg["swing_clearance"]),
         init_place_feet_clearance=float(init_cfg["place_feet_clearance"]),
+        reseat_settle_delay=float(reseat_cfg["settle_delay"]),
+        reseat_height_change_threshold=float(reseat_cfg["height_change_threshold"]),
+        reseat_pair_swing_time=float(reseat_cfg["pair_swing_time"]),
+        reseat_swing_clearance=float(reseat_cfg["swing_clearance"]),
     )
 
 
@@ -82,6 +90,10 @@ class GaitNode(Node):
         leg_contexts = build_leg_contexts(
             desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
         )
+        leg_specs = load_leg_specs(desc_share / "geometry.yaml")
+        reseat_geometry = reseat_geometry_from_yaml(
+            desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
+        )
         self._engine = Engine(
             config=self._cfg,
             strategy=Tripod(),
@@ -89,6 +101,8 @@ class GaitNode(Node):
             initial_stance=initial,
             coxa_to_bottom=coxa_to_bottom,
             leg_contexts=leg_contexts,
+            leg_specs=leg_specs,
+            reseat_geometry=reseat_geometry,
         )
 
         # Latest GaitParams. Walk-cycle knobs are no longer on the wire;
@@ -110,6 +124,14 @@ class GaitNode(Node):
         # are no-ops.
         self._sub_init = self.create_subscription(
             Empty, "/gait/initialize", self._on_init, 10
+        )
+        # Sniff /body/pose for the height axis only. The other fields
+        # belong to the kinematics / posture chain, not the gait. The
+        # engine watches the height for a settle window and runs its
+        # reseat ladder when the user lets the chassis come to rest
+        # at a new height — see Engine.set_target_height.
+        self._sub_body_pose = self.create_subscription(
+            BodyPoseMsg, "/body/pose", self._on_body_pose, 10
         )
         self._pub_targets = self.create_publisher(LegTargets, "/legs/targets", 10)
         # State broadcast for the posture chain: `hexa_posture` gates body
@@ -133,12 +155,23 @@ class GaitNode(Node):
         if self._engine.start_initialize():
             self.get_logger().info("start-button trigger received: FOLDED → INITIALIZE")
             return
-        if self._engine.start_fold():
-            self.get_logger().info("start-button trigger received: STAND → FOLDING")
+        # Anywhere other than FOLDED: queue a fold request. The engine
+        # consumes the flag the next time it sits in STAND at zero
+        # height, so a press while RESEATING / STAND folds cleanly
+        # once the legs are settled. A stray press during GAIT /
+        # STOPPING is harmless — the request stays latched until the
+        # engine returns to STAND.
+        if self._engine.request_fold():
+            self.get_logger().info(
+                f"start-button trigger received: fold requested (engine in {self._engine.state.name})"
+            )
             return
         self.get_logger().info(
             f"start-button trigger ignored: engine in state {self._engine.state.name}"
         )
+
+    def _on_body_pose(self, msg: BodyPoseMsg) -> None:
+        self._engine.set_target_height(float(msg.z))
 
     def _on_params(self, msg: GaitParams) -> None:
         if msg.gait_name and msg.gait_name != "tripod":

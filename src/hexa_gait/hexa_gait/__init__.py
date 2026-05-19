@@ -7,12 +7,14 @@ from .engine import (
     build_leg_contexts,
     initial_stance_from_yaml,
     nominal_stance_from_yaml,
+    reseat_geometry_from_yaml,
 )
 from .fold import FoldController, FoldState
 from .gaits.base import LegContext, Strategy, StrideParams, swing_arc
 from .gaits.tripod import TRIPOD_OFFSETS, Tripod
 from .initialize import InitializeController, InitializeState
 from .limits import VelocityCaps, load_velocity_caps, scale_to_envelope
+from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
 from .transition import TransitionController, TransitionState
 
 __all__ = [
@@ -28,6 +30,8 @@ __all__ = [
     "LegContext",
     "LegOutput",
     "PhaseOffsets",
+    "ReseatController",
+    "ReseatGeometry",
     "Strategy",
     "StrideParams",
     "TRIPOD_OFFSETS",
@@ -39,6 +43,8 @@ __all__ = [
     "initial_stance_from_yaml",
     "load_velocity_caps",
     "nominal_stance_from_yaml",
+    "reseat_geometry_from_yaml",
+    "reseat_nominal_stance",
     "scale_to_envelope",
     "swing_arc",
 ]

@@ -23,13 +23,34 @@ axis:
 # 0=A, 1=B, 2=X, 3=Y on 8BitDo Pro 2 in X-input mode.
 mode_toggle_button: 3 # Y
 
-# Button that toggles FOLDED ↔ STAND on rising edge. Publishes a
-# one-shot std_msgs/Empty on /gait/initialize, which the gait engine
-# routes to either start_initialize() (FOLDED → INITIALIZE → STAND) or
-# start_fold() (STAND → FOLDING → FOLDED). Presses in any other engine
-# state are no-ops, so repeat presses mid-walk are harmless. 7 = Start
-# on 8BitDo Pro 2 / Xbox-style controllers in X-input mode.
+# Button that toggles FOLDED ↔ STAND on rising edge AND snaps the
+# posture height back to zero when the chassis is currently lifted /
+# lowered. Press semantics:
+#
+#   * height != 0 (chassis lifted by D-pad): first press snaps
+#     posture.height to zero and triggers the gait engine's reseat
+#     ladder; does NOT publish /gait/initialize.
+#   * height == 0 in STAND: press folds (STAND → FOLDING → FOLDED) via
+#     /gait/initialize as before.
+#   * height == 0 in FOLDED: press initializes (FOLDED → INITIALIZE →
+#     STAND) via /gait/initialize as before.
+#
+# So a "lifted-then-fold" sequence is two presses: first snaps the
+# height (no fold yet), second folds. Presses in any other engine state
+# are no-ops, so repeat presses mid-walk are harmless. 7 = Start on
+# 8BitDo Pro 2 / Xbox-style controllers in X-input mode.
 init_button: 7 # Start
+
+# D-pad Y axis on Xbox-style controllers in X-input mode. joy_node
+# reports the D-pad as analog axes, with the up direction reading
+# +1.0 on this build (dpad_up_sign=+1.0). Pressing up integrates
+# posture.height positive (body lifts), pressing down integrates
+# negative (body drops). The axis is read only in POSTURE mode; in
+# GAIT mode the D-pad is inert (the lifted height bleeds through
+# unchanged via /body/pose.z so the robot walks at the lifted
+# posture).
+axis_dpad_y: 7
+dpad_up_sign: 1.0
 
 # Shoulder buttons that yaw the body in posture mode. L1 yaws left
 # (+yaw about body +z), R1 yaws right (-yaw). Holding past the easing
@@ -78,3 +99,16 @@ posture:
   # wiggle is pivot_forward_m * sin(yaw_max_deg). At the defaults
   # (0.06 m, 20°) that's ~21 mm sideways and ~3.6 mm forward bob.
   wiggle_pivot_forward_m: 0.06
+
+  # D-pad-driven body-height offset. Integrated while the D-pad is held
+  # in POSTURE mode, clamped to [min_m, max_m], and emitted on
+  # /body/pose.z. Unlike every other posture axis this value PERSISTS
+  # when the D-pad is released and across a mode toggle into GAIT, so
+  # the robot keeps walking at the lifted/lowered posture. The Start
+  # button snaps it back to zero (which also triggers the gait
+  # engine's reseat ladder to restore default joint geometry at the
+  # new body height).
+  height:
+    max_m: 0.04 # upper bound on the lift (body up)
+    min_m: -0.04 # lower bound on the drop (body down)
+    rate_m_per_s: 0.05 # integration speed while D-pad held
