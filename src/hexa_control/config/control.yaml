@@ -2,15 +2,19 @@
 #
 # control_node clamps incoming /cmd_vel to the velocity caps loaded at
 # startup from hexa_gait/config/gait.yaml (via hexa_gait.load_velocity_caps)
-# and republishes the result on /gait/params at 50 Hz. v1 ships a single
-# gait, so gait_name is hard-coded here.
+# and republishes the result on /gait/params at 50 Hz. The active gait
+# selection is multiplexed onto GaitParams.gait_name.
+#
+# Gait selection lifecycle: ``default_gait`` is what control publishes
+# on cold start; teleop's D-pad cycler publishes a new name on
+# /cmd_gait (transient_local QoS so a late control node still picks up
+# the latest selection), which control validates against the
+# tripod/ripple/wave set and stores as the active gait.
 #
 # The walk-cycle knobs (cycle_time, duty_factor, step_height, stride_length)
-# also live in hexa_gait/config/gait.yaml — control no longer owns them.
+# live in hexa_gait/config/gait.yaml — control no longer owns them.
 # cycle_time is derived inside the engine each tick from the commanded
-# velocity, configured stride_length, and duty_factor.
-#
-# v1 is a thin pass-through — no deadband (teleop handles it), no accel
-# limits, no gait selection.
+# velocity, configured stride_length, and the active strategy's
+# duty_factor.
 
-gait_name: "tripod"
+default_gait: "tripod"

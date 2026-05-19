@@ -12,10 +12,13 @@ def _cfg(**overrides) -> JoyConfig:
         axis_left_y=1,
         axis_right_x=3,
         axis_right_y=4,
+        axis_dpad_x=6,
         axis_dpad_y=7,
         dpad_up_sign=1.0,
+        dpad_right_sign=1.0,
         mode_toggle_button=3,
         init_button=7,
+        record_button=6,
         yaw_left_button=4,
         yaw_right_button=5,
         wiggle_left_trigger_axis=2,
@@ -30,10 +33,12 @@ def _cfg(**overrides) -> JoyConfig:
         posture_pitch_max=math.radians(15.0),
         posture_yaw_max=math.radians(20.0),
         posture_yaw_tau=0.10,
+        posture_revert_tau=0.50,
         posture_wiggle_pivot_forward_m=0.06,
         posture_height_max=0.04,
         posture_height_min=-0.04,
         posture_height_rate=0.05,
+        gait_cycle=("wave", "ripple", "tripod"),
     )
     base.update(overrides)
     return JoyConfig(**base)
@@ -46,16 +51,18 @@ def _axes(
     right_y=0.0,
     lt=1.0,
     rt=1.0,
+    dpad_x=0.0,
     dpad_y=0.0,
 ) -> tuple[float, ...]:
     # Trigger rest value is +1.0 (joy_node Xbox-style convention),
-    # so defaults read as "not pressed". D-pad Y rest value is 0.0.
-    return (left_x, left_y, lt, right_x, right_y, rt, 0.0, dpad_y)
+    # so defaults read as "not pressed". D-pad rest values are 0.0.
+    return (left_x, left_y, lt, right_x, right_y, rt, dpad_x, dpad_y)
 
 
 def _buttons(
     toggle: bool = False,
     init: bool = False,
+    record: bool = False,
     yaw_left: bool = False,
     yaw_right: bool = False,
 ) -> tuple[int, ...]:
@@ -63,6 +70,7 @@ def _buttons(
     out[3] = int(toggle)
     out[4] = int(yaw_left)
     out[5] = int(yaw_right)
+    out[6] = int(record)
     out[7] = int(init)
     return tuple(out)
 
@@ -538,46 +546,61 @@ def test_start_at_zero_height_fires_init_request_in_stand():
     assert state.height_current == 0.0
 
 
-def test_start_at_nonzero_height_snaps_to_zero_and_suppresses_init():
-    # New: first press while lifted just snaps height back to default
-    # (the gait engine then runs its reseat ladder). No fold yet.
+def test_start_at_nonzero_height_arms_smooth_revert():
+    # First press while lifted arms a smooth revert (reverting flag
+    # set, init suppressed). The height decays this tick — it does not
+    # snap to zero — and continues to decay on subsequent ticks toward
+    # default.
     cfg = _cfg()
     state = JoyState(mode=POSTURE, height_current=0.03)
     out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
     assert out.init_request is False
-    assert state.height_current == 0.0
+    assert state.reverting is True
+    # One tick of decay at tau=0.5s, dt=0.02s: exp(-0.04) ≈ 0.9608.
+    expected = 0.03 * math.exp(-DT / cfg.posture_revert_tau)
+    assert math.isclose(state.height_current, expected, rel_tol=1e-9)
 
 
 def test_two_press_start_from_lifted_state():
-    # Press 1 snaps height; press 2 (after release) fires init_request.
+    # Press 1 arms the smooth revert; after enough ticks for the decay
+    # to settle below the 1e-4 tolerance, press 2 fires init_request.
     cfg = _cfg()
     state = JoyState(mode=POSTURE, height_current=0.03)
 
     out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
     assert out.init_request is False
-    assert state.height_current == 0.0
+    assert state.reverting is True
 
-    # Release the button so the next press is a rising edge.
-    out = map_joy(_axes(), _buttons(init=False), cfg, state, DT)
-    assert out.init_request is False
+    # Release the button so the next press would be a rising edge, and
+    # let the revert run to completion. At tau=0.5s a 0.03 m offset
+    # decays below 1e-4 in ~3 s; 250 ticks @ 20 ms is 5 s, plenty of
+    # margin.
+    for _ in range(250):
+        map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert state.reverting is False
+    assert state.height_current == 0.0
 
     # Second press: at zero height now, so init_request fires.
     out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
     assert out.init_request is True
 
 
-def test_holding_start_at_nonzero_height_snaps_once():
-    # Snap is a rising-edge action — holding the button doesn't
-    # repeatedly clobber height (a brief D-pad press after the snap
-    # should re-integrate, not be wiped on every tick).
+def test_holding_start_at_nonzero_height_keeps_revert_armed():
+    # Revert is armed by the rising edge — holding the Start button
+    # across ticks doesn't re-arm or otherwise disturb the decay. The
+    # height continues to decay smoothly while the button is held.
     cfg = _cfg()
     state = JoyState(mode=POSTURE, height_current=0.03)
     out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
-    assert state.height_current == 0.0
-    # Held: even with D-pad held up, the integrator now climbs from 0.
-    out = map_joy(_axes(dpad_y=1.0), _buttons(init=True), cfg, state, DT)
-    assert state.height_current > 0.0
+    assert state.reverting is True
+    after_first = state.height_current
+    # Hold the button for a few more ticks: decay continues normally,
+    # init stays suppressed.
+    for _ in range(3):
+        out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
     assert out.init_request is False
+    assert state.reverting is True
+    assert state.height_current < after_first
 
 
 def test_short_joy_message_zero_pose_z():
@@ -588,3 +611,364 @@ def test_short_joy_message_zero_pose_z():
     out = map_joy((), (), cfg, state, DT)
     assert out.pose_z == 0.0
     assert state.height_current == 0.0
+
+
+# ---- Select-button posture recording ----------------------------------------
+
+
+def test_select_in_posture_records_current_joystick_pose():
+    # Push left stick fully left → roll at -roll_max. Press Select,
+    # then release the stick: the robot must hold the recorded tilt.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    assert math.isclose(state.recorded_roll, -cfg.posture_roll_max)
+    # Release stick AND release Select: output should still be at the
+    # recorded tilt.
+    out = map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
+
+
+def test_recorded_pose_plus_stick_clamps_at_limit():
+    # The user's example: tilt fully left, record, tilt fully left
+    # again — the second push must have no further effect because the
+    # baseline is already saturated.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    # First: record while pushing left.
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    # Release record button so a future press would re-record; keep
+    # the stick pushed.
+    out = map_joy(_axes(left_x=1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
+
+
+def test_recorded_pose_plus_opposite_stick_unwinds():
+    # Record at full left roll, then push right at full deflection:
+    # the joystick fully cancels the baseline, output goes to zero.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    # Release record, push opposite direction.
+    out = map_joy(_axes(left_x=-1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(out.pose_roll, 0.0, abs_tol=1e-9)
+
+
+def test_select_folds_height_into_recorded_z_and_zeros_height():
+    # Lift halfway with D-pad, press Select: recorded_z absorbs the
+    # height, height_current resets to zero, pose_z stays where it was.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    for _ in range(20):  # 20 * 0.02 * 0.05 = 0.020 m
+        map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    height_before = state.height_current
+    assert height_before > 0.0
+    out = map_joy(_axes(), _buttons(record=True), cfg, state, DT)
+    assert math.isclose(state.recorded_z, height_before)
+    assert state.height_current == 0.0
+    assert math.isclose(out.pose_z, height_before)
+
+
+def test_select_folds_yaw_current_into_recorded_yaw():
+    # Hold L1 long enough that yaw_current saturates, press Select
+    # while still holding L1: easing runs BEFORE the fold, so the
+    # held-button case keeps yaw_current at the cap going INTO the
+    # fold; the fold then absorbs the cap into recorded_yaw and zeros
+    # yaw_current. Visible pose stays continuous because the output
+    # reads recorded_yaw + yaw_current after the fold.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    for _ in range(400):
+        map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
+    yaw_before = state.yaw_current
+    assert math.isclose(yaw_before, cfg.posture_yaw_max, rel_tol=1e-6)
+    out = map_joy(_axes(), _buttons(record=True, yaw_left=True), cfg, state, DT)
+    assert math.isclose(state.recorded_yaw, yaw_before, rel_tol=1e-6)
+    assert state.yaw_current == 0.0
+    assert math.isclose(out.pose_yaw, yaw_before, rel_tol=1e-6)
+    # On the next tick the still-held L1 eases yaw_current back from 0
+    # so the live state is alive again. The recorded baseline stops it
+    # from accumulating past the cap.
+    alpha = 1.0 - math.exp(-DT / cfg.posture_yaw_tau)
+    out2 = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
+    assert math.isclose(state.yaw_current, alpha * cfg.posture_yaw_max, rel_tol=1e-6)
+    assert math.isclose(out2.pose_yaw, cfg.posture_yaw_max, rel_tol=1e-6)
+
+
+def test_select_in_gait_mode_is_noop():
+    # Outside POSTURE mode the Select press must not capture anything;
+    # the recorded state stays at default.
+    cfg = _cfg()
+    state = JoyState(mode=GAIT)
+    out = map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    assert state.recorded_roll == 0.0
+    assert state.recorded_x == 0.0
+    assert state.recorded_y == 0.0
+    assert state.recorded_pitch == 0.0
+    assert state.recorded_yaw == 0.0
+    assert out.pose_roll == 0.0
+
+
+def test_recorded_pose_bleeds_through_to_gait_mode():
+    # Record a non-zero posture in POSTURE, toggle to GAIT: the
+    # recorded baseline still appears on every posture axis (like
+    # height bleeds through today). Sticks now drive linear velocity,
+    # not posture.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    # Push left + right sticks fully in their max-effect directions,
+    # then record.
+    map_joy(
+        _axes(left_x=1.0, left_y=1.0, right_x=1.0, right_y=1.0),
+        _buttons(record=True),
+        cfg,
+        state,
+        DT,
+    )
+    # Release record, then toggle to GAIT.
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(right_x=1.0, right_y=1.0), _buttons(toggle=True), cfg, state, DT)
+    assert state.mode == GAIT
+    # Recorded posture bleeds through, sticks drive linear velocity.
+    assert math.isclose(out.pose_x, cfg.posture_x_max)
+    assert math.isclose(out.pose_y, cfg.posture_y_max)
+    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
+    assert math.isclose(out.pose_pitch, cfg.posture_pitch_max)
+    assert math.isclose(out.linear_x, cfg.gait_linear_max)
+    assert math.isclose(out.linear_y, cfg.gait_linear_max)
+
+
+def test_start_with_recorded_pose_arms_revert_and_suppresses_init():
+    # Record a non-zero posture, press Start: the reverting flag arms,
+    # init_request is suppressed, and the persistent baseline starts
+    # decaying (no instant snap).
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    # Get every axis non-zero in one shot.
+    map_joy(_axes(left_x=1.0, left_y=1.0, right_x=1.0, right_y=1.0),
+            _buttons(record=True), cfg, state, DT)
+    # Release record, integrate some height, hold L1 for a few ticks.
+    for _ in range(5):
+        map_joy(_axes(dpad_y=1.0), _buttons(yaw_left=True), cfg, state, DT)
+    pre_recorded_roll = state.recorded_roll
+    pre_height = state.height_current
+    assert pre_recorded_roll != 0.0
+    assert pre_height > 0.0
+    assert state.yaw_current > 0.0
+
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is False
+    assert state.reverting is True
+    # One tick of decay leaves the baseline slightly reduced but
+    # nowhere near zero.
+    decay = math.exp(-DT / cfg.posture_revert_tau)
+    assert math.isclose(state.recorded_roll, pre_recorded_roll * decay, rel_tol=1e-9)
+    assert math.isclose(state.height_current, pre_height * decay, rel_tol=1e-9)
+
+
+def test_revert_settles_to_zero_and_clears_flag():
+    # Tick the revert long enough for every component to drop below
+    # the 1e-4 tolerance: the flag clears and the persistent state
+    # snaps to exactly zero so the next Start press fires init cleanly.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, recorded_roll=0.1, recorded_z=0.03)
+    map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert state.reverting is True
+    # 0.1 * exp(-N*0.04) < 1e-4 → N > ln(1e-3)/(-0.04) ≈ 173 ticks.
+    # 250 ticks (5 s) is comfortably past that.
+    for _ in range(250):
+        map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert state.reverting is False
+    assert state.recorded_roll == 0.0
+    assert state.recorded_z == 0.0
+    assert state.height_current == 0.0
+
+
+def test_two_press_start_from_recorded_state():
+    # Press 1 arms the revert; once the decay settles, press 2 at the
+    # now-default state fires init_request.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    map_joy(_axes(), _buttons(), cfg, state, DT)  # release record
+    assert state.recorded_roll != 0.0
+
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is False
+    assert state.reverting is True
+
+    # Release the button and let the revert run to completion.
+    for _ in range(250):
+        map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert state.reverting is False
+    assert state.recorded_roll == 0.0
+
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is True
+
+
+def test_select_during_revert_cancels_it():
+    # Recording a fresh baseline mid-revert overrides the decay — the
+    # user is explicitly setting a pose, which must not bleed away.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, recorded_roll=0.1)
+    map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert state.reverting is True
+
+    # A few decay ticks, then press Select with the stick at full
+    # right (positive roll input).
+    for _ in range(3):
+        map_joy(_axes(), _buttons(), cfg, state, DT)
+    map_joy(_axes(left_x=-1.0), _buttons(record=True), cfg, state, DT)
+    assert state.reverting is False
+    # The fold-in clamped to +roll_max (existing baseline + stick
+    # contribution both push positive past the cap).
+    assert math.isclose(state.recorded_roll, cfg.posture_roll_max)
+
+
+def test_revert_runs_across_mode_toggle():
+    # A revert armed in POSTURE mode keeps decaying after a toggle to
+    # GAIT — the persistent baseline bleeds through into gait mode by
+    # design, so the revert must keep running there too.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, recorded_roll=0.1)
+    map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert state.reverting is True
+    # Toggle to GAIT and tick the revert to completion there.
+    map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    assert state.mode == GAIT
+    for _ in range(250):
+        map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert state.reverting is False
+    assert state.recorded_roll == 0.0
+
+
+def test_select_rising_edge_only():
+    # Holding Select across many ticks must NOT re-record on every
+    # tick — the recording is a rising-edge action, identical to the
+    # toggle/init buttons.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    # First tick at full left roll: records.
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    recorded_after_first = state.recorded_roll
+    assert math.isclose(recorded_after_first, -cfg.posture_roll_max)
+    # Hold Select for many more ticks with the stick at full left.
+    # Without rising-edge gating, recorded_roll would saturate by
+    # repeated folding — but the per-axis clamp at record time pins it
+    # to -roll_max, so use a different signal: keep stick at NEUTRAL
+    # while holding Select and check that recorded_roll does not drift
+    # (it would drift toward 0 if folded again with stick=0).
+    for _ in range(20):
+        map_joy(_axes(), _buttons(record=True), cfg, state, DT)
+    assert math.isclose(state.recorded_roll, recorded_after_first)
+
+
+def test_recorded_pose_respects_per_axis_limit_at_record_time():
+    # Set a tight roll limit, record with the baseline already at the
+    # positive cap and the stick driving in the same direction: the
+    # snapshot clamps at the cap rather than overflowing.
+    cfg = _cfg(posture_roll_max=0.10)
+    state = JoyState(mode=POSTURE, recorded_roll=0.10)
+    # left_x = -1.0 → -lx * roll_max = +0.10, fold = clamp(0.10 + 0.10, ±0.10) = 0.10
+    map_joy(_axes(left_x=-1.0), _buttons(record=True), cfg, state, DT)
+    assert math.isclose(state.recorded_roll, 0.10)
+
+
+# ---- D-pad X gait cycling ---------------------------------------------------
+
+
+def test_dpad_right_rising_edge_advances_gait_index():
+    # Cycle starts at "tripod" (index 2). D-right rising edge advances
+    # the index wrap-around → "wave" (index 0).
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=2)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select == "wave"
+    assert state.current_gait_idx == 0
+
+
+def test_dpad_left_rising_edge_advances_backward():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=2)
+    out = map_joy(_axes(dpad_x=-1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select == "ripple"
+    assert state.current_gait_idx == 1
+
+
+def test_dpad_x_hold_does_not_retrigger():
+    # First tick at +1: fires. Subsequent ticks at +1 must NOT keep
+    # cycling, matching the rising-edge contract of the other buttons.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=2)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select == "wave"
+    for _ in range(20):
+        out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+        assert out.gait_select is None
+    # Release then press again → next slot.
+    map_joy(_axes(dpad_x=0.0), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select == "ripple"
+
+
+def test_dpad_x_wraparound_full_cycle_returns_to_start():
+    # Three D-right presses through wave→ripple→tripod gets the user
+    # back to the starting selection.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=2)
+    names = []
+    for _ in range(3):
+        out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+        names.append(out.gait_select)
+        # Release between presses to satisfy edge detection.
+        map_joy(_axes(dpad_x=0.0), _buttons(), cfg, state, DT)
+    assert names == ["wave", "ripple", "tripod"]
+    assert state.current_gait_idx == 2
+
+
+def test_dpad_x_works_in_gait_mode_too():
+    # The pure mapping is mode-agnostic — the ROS layer is what filters
+    # publishes on /gait/state == "stand". Both modes must report the
+    # rising edge.
+    cfg = _cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=0)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select == "ripple"
+
+
+def test_dpad_x_no_select_when_axis_neutral():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=0)
+    out = map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert out.gait_select is None
+    assert state.current_gait_idx == 0
+
+
+def test_dpad_x_sign_can_be_flipped_via_config():
+    # joy_node's sign on D-pad X varies by driver. dpad_right_sign=-1
+    # should reverse the cycle direction.
+    cfg = _cfg(dpad_right_sign=-1.0)
+    state = JoyState(mode=POSTURE, current_gait_idx=0)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    # With the flip, axis +1 should walk BACKWARD through the cycle
+    # — from wave (0) to tripod (2).
+    assert out.gait_select == "tripod"
+    assert state.current_gait_idx == 2
+
+
+def test_dpad_x_short_message_does_not_crash():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=0)
+    out = map_joy((), (), cfg, state, DT)
+    assert out.gait_select is None
+    assert state.current_gait_idx == 0
+
+
+def test_dpad_x_empty_cycle_is_inert():
+    # No registered gait list → mapper must not blow up; gait_select
+    # stays None regardless of the axis.
+    cfg = _cfg(gait_cycle=())
+    state = JoyState(mode=POSTURE, current_gait_idx=0)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select is None

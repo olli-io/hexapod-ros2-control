@@ -6,7 +6,9 @@ from hexa_gait.clock import LEG_NAMES
 from hexa_gait.engagement import EngagementState
 from hexa_gait.engine import Engine, EngineConfig, EngineState
 from hexa_gait.gaits.base import LegContext, StrideParams
+from hexa_gait.gaits.ripple import Ripple
 from hexa_gait.gaits.tripod import TRIPOD_OFFSETS, Tripod
+from hexa_gait.gaits.wave import Wave
 
 
 # Symmetric six-leg layout. Front/rear sit at 0.18 m from body centre
@@ -47,16 +49,17 @@ def _leg_contexts() -> dict[str, LegContext]:
 def _config(
     *,
     stride_length: float = 0.10,
-    min_cycle_time: float = 0.5,
+    min_swing_time: float = 0.25,
     max_cycle_time: float = 2.0,
-    duty_factor: float = 0.5,
     forced_touchdown_delay: float = 0.0,
 ) -> EngineConfig:
+    # min_swing_time=0.25, β=0.5 (tripod) → min_cycle_time = 0.5 s, same
+    # as the pre-refactor default. Other gait factors derive their own
+    # floor from min_swing_time / (1 − β).
     return EngineConfig(
         stride_length=stride_length,
-        min_cycle_time=min_cycle_time,
+        min_swing_time=min_swing_time,
         max_cycle_time=max_cycle_time,
-        duty_factor=duty_factor,
         step_height=0.03,
         swing_width=0.0,
         controller_dt=0.02,
@@ -464,3 +467,95 @@ def test_gait_swing_liftoff_velocity_matches_body_velocity():
     # the trajectory fix v_in = -cmd_v; pre-fix it was -2·cmd_v, which
     # would land here near -0.40 m/s.
     assert v_gait_liftoff == pytest.approx(-cmd_v, abs=5e-3)
+
+
+# ---- set_strategy --------------------------------------------------------
+
+
+def test_set_strategy_swap_in_stand_succeeds():
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    _drive_past_initialize(engine)
+    assert engine.state is EngineState.STAND
+    assert engine.set_strategy("ripple") is True
+    assert engine.strategy_name == "ripple"
+    # Engagement controller is rebuilt with the new β so a subsequent
+    # walk uses ripple's duty factor.
+    assert engine._strategy.duty_factor == pytest.approx(2.0 / 3.0)
+
+
+def test_set_strategy_unknown_name_returns_false():
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    _drive_past_initialize(engine)
+    assert engine.set_strategy("gallop") is False
+    # Strategy must not change.
+    assert engine._strategy is spy
+
+
+def test_set_strategy_outside_stand_rejected():
+    # Set up a walking engine: the swap must be refused. The engine
+    # stays on its current strategy.
+    engine = Engine(
+        config=_config(),
+        strategy=Tripod(),
+        nominal_stance=_nominal_stance(),
+        initial_stance=_initial_stance(),
+        coxa_to_bottom=0.02,
+        leg_contexts=_leg_contexts(),
+    )
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
+    assert engine.set_strategy("ripple") is False
+    assert engine.strategy_name == "tripod"
+
+
+def test_set_strategy_same_name_is_no_op():
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    _drive_past_initialize(engine)
+    # The spy resolves to "_spystrategy" via the fallback so use
+    # the real Tripod for this check.
+    engine2 = Engine(
+        config=_config(),
+        strategy=Tripod(),
+        nominal_stance=_nominal_stance(),
+        initial_stance=_initial_stance(),
+        coxa_to_bottom=0.02,
+        leg_contexts=_leg_contexts(),
+    )
+    _drive_past_initialize(engine2)
+    strategy_before = engine2._strategy
+    assert engine2.set_strategy("tripod") is True
+    # No swap performed — strategy instance is the same object.
+    assert engine2._strategy is strategy_before
+
+
+@pytest.mark.parametrize(
+    "name,expected_duty",
+    [("tripod", 0.5), ("ripple", 2.0 / 3.0), ("wave", 5.0 / 6.0)],
+)
+def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
+    # The engine derives min_cycle_time = min_swing_time / (1 − β),
+    # then clamps cycle_time = stride / (v * β). Verify both the floor
+    # and the divisor track the active strategy.
+    spy = _SpyStrategy()
+    engine = _engine(spy, config=_config(stride_length=0.10, min_swing_time=0.25))
+    _drive_past_initialize(engine)
+    assert engine.set_strategy(name) is True
+    expected_min_cycle = 0.25 / (1.0 - expected_duty)
+
+    # Slow command well under saturation: cycle_time ~= stride/(v*β).
+    # Use v small enough that all gaits stay below their min_cycle
+    # floor; the engine should report the floor.
+    v_small = 0.01
+    raw = 0.10 / (v_small * expected_duty)
+    assert raw > expected_min_cycle
+    out_cycle = engine._derive_cycle_time(v_small)
+    # raw should be clamped to max_cycle_time = 2.0
+    assert out_cycle == pytest.approx(2.0)
+
+    # Fast command above saturation: cycle_time clamped to min_cycle.
+    v_fast = 10.0
+    out_cycle = engine._derive_cycle_time(v_fast)
+    assert out_cycle == pytest.approx(expected_min_cycle)

@@ -24,11 +24,13 @@ based on the commanded body velocity:
   is *not* debounced (see ``update``).
 
 ``cycle_time`` is not configured directly. The engine derives it each
-GAIT tick from the commanded velocity, ``stride_length``, and
-``duty_factor``: faster commands ⇒ shorter cycles at constant stride.
-``min_cycle_time`` and ``max_cycle_time`` bound the derivation so the
-gait saturates cleanly at the speed ceiling and stays brisk at the
-slow end.
+GAIT tick from the commanded velocity, ``stride_length``, and the
+active strategy's ``duty_factor`` (β): faster commands ⇒ shorter cycles
+at constant stride. The lower bound comes from a global
+``min_swing_time`` — the real physical constraint is on swing-phase
+foot velocity, not cycle time, so the per-gait floor is derived as
+``min_swing_time / (1 − β)``. ``max_cycle_time`` is a visual slow-end
+clamp so the gait stays brisk at zero command.
 
 The nominal-stance helper ``nominal_stance_from_yaml`` reuses
 ``hexa_kinematics``'s FK and ``leg_to_body`` so the engine never
@@ -53,6 +55,7 @@ from hexa_kinematics.leg_specs import LEG_NAMES, load_leg_specs
 from .clock import GaitClock
 from .engagement import EngagementController, EngagementState
 from .fold import FoldController
+from .gaits import STRATEGIES
 from .gaits.base import LegContext, Strategy, StrideParams
 from .initialize import InitializeController
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
@@ -100,15 +103,15 @@ class EngineConfig:
     """Engine-internal knobs, sourced entirely from
     ``hexa_gait/config/gait.yaml``. None of these are on the wire.
 
-    ``stride_length`` and ``min_cycle_time`` / ``max_cycle_time`` define
+    ``stride_length`` and ``min_swing_time`` / ``max_cycle_time`` define
     the velocity → cycle_time relationship the engine applies each
-    GAIT tick.
+    GAIT tick. ``duty_factor`` lives on the active ``Strategy`` (so it
+    can change with the gait); the engine reads it from there.
     """
 
     stride_length: float
-    min_cycle_time: float
+    min_swing_time: float
     max_cycle_time: float
-    duty_factor: float
     step_height: float
     swing_width: float
     controller_dt: float
@@ -204,8 +207,9 @@ class Engine:
     leg. Cold start is ``STAND`` with the last-emitted targets seeded
     to ``nominal_stance``, so the first tick matches the previous stub
     publisher's behaviour exactly. ``cycle_time`` is derived per-tick
-    from the commanded velocity and the engine's configured
-    ``stride_length`` / ``min_cycle_time`` / ``max_cycle_time``.
+    from the commanded velocity, ``stride_length``, the active
+    strategy's ``duty_factor``, and the engine's
+    ``min_swing_time`` / ``max_cycle_time`` bounds.
     """
 
     def __init__(
@@ -293,6 +297,45 @@ class Engine:
     @property
     def state(self) -> EngineState:
         return self._state
+
+    @property
+    def strategy_name(self) -> str:
+        """Name of the currently-active strategy from the registry.
+
+        Lookup is by identity (one entry in ``STRATEGIES`` per gait), so
+        a strategy not built from the registry returns its class name
+        lower-cased as a best-effort fallback.
+        """
+        for name, factory in STRATEGIES.items():
+            if isinstance(self._strategy, factory):  # type: ignore[arg-type]
+                return name
+        return type(self._strategy).__name__.lower()
+
+    def set_strategy(self, name: str) -> bool:
+        """Swap the active gait strategy.
+
+        Strict: only succeeds when the engine is in ``STAND``. Anywhere
+        else (walking, engaging, transitioning, folding, reseating)
+        returns ``False`` without queueing. The teleop layer gates the
+        publish on ``/gait/state`` so stale intent does not sit on the
+        wire.
+
+        Returns ``True`` on a successful swap (including the no-op case
+        where ``name`` matches the current strategy), ``False`` on an
+        unknown name or a non-STAND state. Rebuilds the engagement
+        controller (β-dependent) and the phase clock (offsets change).
+        """
+        factory = STRATEGIES.get(name)
+        if factory is None:
+            return False
+        if name == self.strategy_name:
+            return True
+        if self._state is not EngineState.STAND:
+            return False
+        self._strategy = factory()
+        self._clock = GaitClock(self._strategy.phase_offsets)
+        self._engagement = self._build_engagement()
+        return True
 
     def start_initialize(self) -> bool:
         """Operator-gated trigger: FOLDED → INITIALIZE.
@@ -405,12 +448,19 @@ class Engine:
 
     def _build_engagement(self) -> EngagementController:
         cfg = self._config
+        beta = self._strategy.duty_factor
+        # Per-gait min_cycle_time = min_swing_time / (1 − β). Wave's
+        # short swing window means a much larger min_cycle than
+        # tripod's at the same min_swing_time.
+        min_cycle_time = (
+            cfg.min_swing_time / (1.0 - beta) if beta < 1.0 else cfg.max_cycle_time
+        )
         return EngagementController(
             nominal_stance=self._nominal,
             stride_length=cfg.stride_length,
-            min_cycle_time=cfg.min_cycle_time,
+            min_cycle_time=min_cycle_time,
             max_cycle_time=cfg.max_cycle_time,
-            duty_factor=cfg.duty_factor,
+            duty_factor=beta,
             swing_clearance=cfg.step_height,
             swing_width=cfg.swing_width,
             controller_dt=cfg.controller_dt,
@@ -643,7 +693,7 @@ class Engine:
         v_body_xy: tuple[float, float],
         omega_z: float,
     ) -> dict[str, LegOutput]:
-        duty_factor = self._config.duty_factor
+        duty_factor = self._strategy.duty_factor
         stride_length = self._config.stride_length
 
         leg_velocities = self._per_leg_planar_velocity(v_body_xy, omega_z)
@@ -682,17 +732,24 @@ class Engine:
     def _derive_cycle_time(self, max_leg_v: float) -> float:
         """Pick cycle_time so the fastest leg's stride equals stride_length.
 
-        Clamped to ``[min_cycle_time, max_cycle_time]``. At zero
-        ``max_leg_v`` the raw quotient diverges, so we clamp to the
-        slow end — the resulting stride is zero anyway because every
-        ``v_leg`` is zero.
+        Clamped to ``[min_cycle_time, max_cycle_time]`` where the lower
+        bound is derived from the strategy's duty factor:
+        ``min_cycle_time = min_swing_time / (1 − β)``. That keeps the
+        swing-phase foot velocity bounded as β shrinks (tripod) or
+        grows (wave). At zero ``max_leg_v`` the raw quotient diverges,
+        so we clamp to the slow end — the resulting stride is zero
+        anyway because every ``v_leg`` is zero.
         """
         cfg = self._config
+        beta = self._strategy.duty_factor
+        min_cycle_time = (
+            cfg.min_swing_time / (1.0 - beta) if beta < 1.0 else cfg.max_cycle_time
+        )
         if max_leg_v <= 0.0:
             return cfg.max_cycle_time
-        raw = cfg.stride_length / (max_leg_v * cfg.duty_factor)
-        if raw < cfg.min_cycle_time:
-            return cfg.min_cycle_time
+        raw = cfg.stride_length / (max_leg_v * beta)
+        if raw < min_cycle_time:
+            return min_cycle_time
         if raw > cfg.max_cycle_time:
             return cfg.max_cycle_time
         return raw

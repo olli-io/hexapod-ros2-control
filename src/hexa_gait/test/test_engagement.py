@@ -5,7 +5,9 @@ import pytest
 from hexa_gait.clock import LEG_NAMES
 from hexa_gait.engagement import EngagementController, EngagementState
 from hexa_gait.gaits.base import LegContext
+from hexa_gait.gaits.ripple import Ripple
 from hexa_gait.gaits.tripod import Tripod
+from hexa_gait.gaits.wave import Wave
 
 
 # Symmetric stance shared with test_engine.py. Front / rear sit at
@@ -60,8 +62,8 @@ def _controller(**overrides) -> EngagementController:
     return EngagementController(**args)
 
 
-def _begin(ctrl: EngagementController) -> Tripod:
-    strategy = Tripod()
+def _begin(ctrl: EngagementController, strategy_cls=Tripod):
+    strategy = strategy_cls()
     ctrl.begin(strategy=strategy, leg_contexts=_leg_contexts())
     return strategy
 
@@ -321,3 +323,163 @@ def test_begin_rejects_strategy_duty_mismatch():
 
     with pytest.raises(ValueError):
         ctrl.begin(strategy=_BadStrategy(), leg_contexts=_leg_contexts())
+
+
+# Ripple / wave engagement coverage. Both gaits share METACHRONAL_OFFSETS;
+# they only differ in duty_factor. The bug they exercise is in the
+# initial-stance branch: legs whose ``transition_m + (1 − β) < β``
+# (i.e. swing window closes before engagement ends) used to be kept in
+# the "swing" branch with ``phase_in_swing`` clamped at 1.0, freezing the
+# foot at the live AEP while the body kept moving. The fix collapses
+# their in_swing window to ``[transition_m, transition_m + (1 − β))`` so
+# they fall through to stance integration for the rest of engagement.
+#
+# Stuck legs per gait (initial_stance with transition_m + (1−β) < β):
+#   ripple (β = 2/3, swing_end = 1/3): l_middle (transition_m = 1/6)
+#   wave   (β = 5/6, swing_end = 1/6): l_middle (1/6), r_front (1/3), l_rear (1/2)
+
+
+_RIPPLE_STUCK = ("l_middle",)
+_WAVE_STUCK = ("l_middle", "r_front", "l_rear")
+
+
+def _stuck_window(offset: float, duty_factor: float) -> tuple[float, float]:
+    # Master interval during which an initial-stance leg's swing curve is
+    # active. The post-fix predicate switches the leg back to stance at
+    # the upper bound.
+    swing_window = 1.0 - duty_factor
+    transition_m = 1.0 - offset
+    return transition_m, transition_m + swing_window
+
+
+@pytest.mark.parametrize(
+    "strategy_cls, stuck_legs",
+    [(Ripple, _RIPPLE_STUCK), (Wave, _WAVE_STUCK)],
+)
+def test_post_swing_legs_return_to_stance(strategy_cls, stuck_legs):
+    # After the swing window closes, the leg must be reported with
+    # stance=True (the bug had stance=False for the rest of engagement).
+    duty_factor = strategy_cls.duty_factor
+    ctrl = _controller(duty_factor=duty_factor)
+    strategy = _begin(ctrl, strategy_cls)
+    offsets = strategy.phase_offsets.offsets
+
+    # Drive at a non-saturating cmd_vel so cycle_time is the raw quotient.
+    # stride/(v·β): ripple → 1.5 s, wave → 1.2 s. Both above min_cycle.
+    v_cmd_x = 0.10
+    saw_post_swing_stance = {n: False for n in stuck_legs}
+    while ctrl.state is not EngagementState.DONE:
+        out = ctrl.update(dt=0.02, v_cmd_xy=(v_cmd_x, 0.0), omega_cmd=0.0)
+        for name in stuck_legs:
+            _, swing_end_master = _stuck_window(offsets[name], duty_factor)
+            # Allow one-tick slop on either side of the boundary (the
+            # master phase advances by dt/cycle_time per tick).
+            tick_slop_master = 0.02 / (_STRIDE_LENGTH / (v_cmd_x * duty_factor))
+            if ctrl._master > swing_end_master + tick_slop_master:
+                if out[name].stance:
+                    saw_post_swing_stance[name] = True
+
+    assert all(saw_post_swing_stance.values()), (
+        f"post-swing stance never reported for {strategy_cls.__name__}: "
+        f"{saw_post_swing_stance}"
+    )
+
+
+@pytest.mark.parametrize(
+    "strategy_cls, stuck_legs",
+    [(Ripple, _RIPPLE_STUCK), (Wave, _WAVE_STUCK)],
+)
+def test_post_swing_foot_leaves_aep(strategy_cls, stuck_legs):
+    # Once stance integration resumes, the foot must move back toward
+    # PEP — the bug held it frozen at AEP regardless of body motion.
+    duty_factor = strategy_cls.duty_factor
+    ctrl = _controller(duty_factor=duty_factor)
+    strategy = _begin(ctrl, strategy_cls)
+    offsets = strategy.phase_offsets.offsets
+
+    v_cmd_x = 0.10
+    aep_observed: dict[str, float] = {}
+    final_foot_x: dict[str, float] = {}
+    while ctrl.state is not EngagementState.DONE:
+        out = ctrl.update(dt=0.02, v_cmd_xy=(v_cmd_x, 0.0), omega_cmd=0.0)
+        for name in stuck_legs:
+            transition_m, swing_end_master = _stuck_window(
+                offsets[name], duty_factor
+            )
+            # AEP for forward motion = nominal.x + 0.5·stride. Capture the
+            # foot x at the swing endpoint.
+            if (
+                name not in aep_observed
+                and ctrl._master >= swing_end_master - 1e-6
+            ):
+                aep_observed[name] = out[name].foot_target[0]
+            final_foot_x[name] = out[name].foot_target[0]
+
+    for name in stuck_legs:
+        assert name in aep_observed, f"never reached swing end for {name}"
+        # The post-swing stance integration must walk the foot back from
+        # AEP — i.e. final x is strictly behind the swing-endpoint x.
+        # Without the fix, foot was frozen at AEP and the two were equal.
+        assert final_foot_x[name] < aep_observed[name] - 1e-4, (
+            f"{name} did not integrate stance after swing ended "
+            f"({strategy_cls.__name__}): swing_end_x={aep_observed[name]}, "
+            f"final_x={final_foot_x[name]}"
+        )
+
+
+@pytest.mark.parametrize("strategy_cls", [Ripple, Wave])
+def test_engagement_reaches_done(strategy_cls):
+    # Smoke test: ripple / wave engagement completes without errors.
+    # Pre-fix this also completed, but with three legs (wave) frozen at
+    # AEP for up to half of engagement — the smoke test alone won't
+    # catch that, hence the explicit post-swing checks above.
+    ctrl = _controller(duty_factor=strategy_cls.duty_factor)
+    _begin(ctrl, strategy_cls)
+    _drive(ctrl, v_cmd_xy=(0.10, 0.0), max_ticks=400)
+
+
+@pytest.mark.parametrize(
+    "strategy_cls, stuck_legs",
+    [(Ripple, _RIPPLE_STUCK), (Wave, _WAVE_STUCK)],
+)
+def test_no_body_frame_position_step_at_swing_end(strategy_cls, stuck_legs):
+    # The swing → stance handoff inside the engagement must not introduce
+    # a body-frame position step. The swing branch's last tick stores the
+    # AEP into self._foot_position; the stance branch's first tick reads
+    # from there and integrates −v_body·dt. So the swing-end → stance-
+    # start tick delta is bounded by one tick of stance velocity
+    # (≤ v_cmd·dt). Pre-fix this delta could be many cm — the leg was
+    # kept in the "swing" branch with phase_in_swing pinned at 1.0 so
+    # foot stayed at AEP while body moved, then GAIT handoff jumped it
+    # to the strategy's expected stance position.
+    duty_factor = strategy_cls.duty_factor
+    ctrl = _controller(duty_factor=duty_factor)
+    strategy = _begin(ctrl, strategy_cls)
+    offsets = strategy.phase_offsets.offsets
+
+    v_cmd_x = 0.10
+    dt = 0.02
+    prev_targets: dict[str, tuple[float, float, float]] = {}
+    prev_stance: dict[str, bool] = {}
+    while ctrl.state is not EngagementState.DONE:
+        out = ctrl.update(dt=dt, v_cmd_xy=(v_cmd_x, 0.0), omega_cmd=0.0)
+        for name in stuck_legs:
+            # Only check the swing → stance transition tick. Swing apex
+            # tip velocity legitimately exceeds body velocity, so a
+            # tick-by-tick bound across the whole engagement would fail.
+            transitioning = (
+                name in prev_stance
+                and prev_stance[name] is False
+                and out[name].stance is True
+            )
+            if transitioning:
+                pa = prev_targets[name]
+                pb = out[name].foot_target
+                step = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+                assert step < 2.0 * v_cmd_x * dt, (
+                    f"{strategy_cls.__name__}/{name} foot position stepped "
+                    f"by {step:.4f} m at swing → stance handoff "
+                    f"(master={ctrl._master:.3f})"
+                )
+            prev_targets[name] = out[name].foot_target
+            prev_stance[name] = out[name].stance

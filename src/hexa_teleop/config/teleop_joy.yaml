@@ -41,6 +41,19 @@ mode_toggle_button: 3 # Y
 # 8BitDo Pro 2 / Xbox-style controllers in X-input mode.
 init_button: 7 # Start
 
+# Record button: rising-edge press in POSTURE mode folds the current
+# live posture input (stick tilt/translation, eased yaw, integrated
+# height) into a persistent baseline on JoyState. The robot then holds
+# that baseline when the joystick is released; subsequent stick input
+# is added on top of the baseline and clamped per-axis, so re-pushing a
+# stick that's already at its limit has no further effect. The baseline
+# bleeds through into GAIT mode just like the D-pad height, so the
+# robot walks at the recorded posture. The Start button resets the full
+# baseline (in addition to the height snap). Inactive in GAIT mode.
+# 6 = Select / Back on 8BitDo Pro 2 / Xbox-style controllers in X-input
+# mode.
+record_button: 6 # Select
+
 # D-pad Y axis on Xbox-style controllers in X-input mode. joy_node
 # reports the D-pad as analog axes, with the up direction reading
 # +1.0 on this build (dpad_up_sign=+1.0). Pressing up integrates
@@ -51,6 +64,22 @@ init_button: 7 # Start
 # posture).
 axis_dpad_y: 7
 dpad_up_sign: 1.0
+
+# D-pad X axis. Rising edges cycle the active gait through
+# ``gait_cycle`` below; D-right advances by +1, D-left by -1. The
+# resulting publish on /cmd_gait is gated on /gait/state == "stand"
+# (the engine's set_strategy is strict about non-STAND switches), but
+# the local index advances on every press so the user can keep cycling
+# past slots the engine rejected.
+axis_dpad_x: 6
+dpad_right_sign: 1.0
+
+# Gait cycler. Order is D-right-toward-more-dynamic (wave → ripple →
+# tripod) so a single D-right from the slowest gait gets a faster one.
+# Must be a subset of hexa_gait's STRATEGIES; default_gait must be in
+# the list and is the slot the cycler starts at on cold start.
+gait_cycle: [wave, ripple, tripod]
+default_gait: tripod
 
 # Shoulder buttons that yaw the body in posture mode. L1 yaws left
 # (+yaw about body +z), R1 yaws right (-yaw). Holding past the easing
@@ -73,8 +102,10 @@ wiggle_trigger_threshold: 0.5 # axis value below this counts as pressed
 
 # Gait-mode stick scaling is loaded at startup from
 # hexa_gait/config/gait.yaml via hexa_gait.limits.load_velocity_caps:
-#   * full-stick translation maps to ±linear_max (isotropic for x and y),
-#     derived from stride_length / (min_cycle_time * duty_factor)
+#   * full-stick translation maps to ±linear_max(active_gait) — derived
+#     per-gait as stride_length * (1 − β) / (min_swing_time * β). The
+#     teleop rebuilds the cap whenever a D-pad gait cycle is accepted,
+#     so 100% stick always equals the active gait's actual capacity.
 #   * full-stick yaw maps to ±angular_z_max (explicit rad/s knob)
 # No knobs for those here on purpose — gait.yaml is the single source.
 
@@ -94,6 +125,14 @@ posture:
   # yaw_max one tau after a press and is practically saturated within
   # 0.5s.
   yaw_tau_s: 0.10
+  # First-order low-pass time constant for the Start-button revert to
+  # default posture. While the revert is active, the persistent height
+  # and recorded baseline (and the eased yaw) decay toward zero with
+  # this time constant instead of snapping. Larger = slower, smoother
+  # return; smaller = closer to the previous instant snap. At 0.50s the
+  # offset is down to ~37% one tau after the press and practically
+  # zeroed within ~2.5s.
+  revert_tau_s: 0.25
   # Wiggle pivot — distance forward (+x) of body centre. Yaw amplitude
   # is shared with yaw_max_deg above, so peak side translation at full
   # wiggle is pivot_forward_m * sin(yaw_max_deg). At the defaults

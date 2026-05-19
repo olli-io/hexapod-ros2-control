@@ -10,18 +10,18 @@
 #
 #   v_max_leg = max( |v_leg| for all 6 legs )
 #                  where v_leg combines linear_xy with omega_z × r_leg
-#   cycle_time = clip( stride_length / (v_max_leg × duty_factor),
-#                      min_cycle_time, max_cycle_time )
+#   β         = active strategy's duty_factor
+#   min_cycle = min_swing_time / (1 − β)        # per-gait, derived
+#   cycle_time = clip( stride_length / (v_max_leg × β),
+#                      min_cycle, max_cycle_time )
 #
-# Stride magnitude per leg is then v_leg × cycle_time × duty_factor,
-# bounded at stride_length so saturated commands never exceed the
-# joint-limit-safe footprint defined by stride_length.
+# Stride magnitude per leg is then v_leg × cycle_time × β, bounded at
+# stride_length so saturated commands never exceed the joint-limit-safe
+# footprint defined by stride_length.
 #
-# Implied per-leg velocity ceiling: stride_length / (min_cycle_time ×
-# duty_factor). Beyond that, the gait saturates: cycle_time stays at
-# min_cycle_time and the per-leg stride magnitude is capped at
-# stride_length. Below the v that implies max_cycle_time, cycle_time
-# stays at max_cycle_time and stride shrinks linearly with v.
+# Implied per-leg velocity ceiling (per gait): stride_length × (1 − β)
+# / (min_swing_time × β). Tripod (β=0.5) sets the highest ceiling and
+# is the anchor the teleop/control velocity caps use.
 #
 # Units: m, s, rad.
 
@@ -31,17 +31,18 @@
 # against geometry.yaml limits, but slower v_max.
 stride_length: 0.10
 
-# Fastest cycle. The gait's authoritative speed ceiling: at this value
-# the per-leg stride magnitude equals stride_length, and any further
-# velocity increase is absorbed by the stride clamp.
-min_cycle_time: 0.6
+# Minimum swing-phase duration (s). The real physical constraint at
+# the speed ceiling is on foot velocity during swing — independent of
+# duty factor. Engine derives min_cycle_time = min_swing_time / (1 − β)
+# per gait, so tripod (β=0.5) gets min_cycle_time = 0.6 s while wave
+# (β=5/6) gets 1.8 s at the same min_swing_time.
+min_swing_time: 0.30
 
 # Slowest cycle. Below the v this implies, cycle_time stops growing and
 # stride shrinks instead — keeps slow walking visually brisk.
 max_cycle_time: 2.0
 
-duty_factor: 0.5
-step_height: 0.035
+step_height: 0.045
 swing_width: 0.0
 controller_dt: 0.02
 cmd_zero_tol: 1e-4
@@ -72,6 +73,39 @@ forced_touchdown_delay: 0.8
 # Loaded by hexa_gait.limits.load_velocity_caps and consumed by both
 # hexa_teleop (stick scaling) and hexa_control (/cmd_vel clamp).
 angular_z_max: 3.00
+
+# Yaw bias used when scale_to_envelope has to cut a combined
+# linear+angular command to fit the per-leg velocity envelope. The
+# reduction is split between translation and yaw in the ratio
+# yaw_bias : (1 − yaw_bias) — translation absorbs the larger fraction,
+# so the resulting motion keeps more of the commanded yaw. 0.5 is the
+# unbiased baseline (translation and yaw cut equally); values above 0.5
+# bias the cut toward keeping yaw. At full v_x + full angular_z_max:
+#   0.50 → (50% v, 50% ω)   (no bias)
+#   0.75 → (25% v, 75% ω)   (current setting)
+#   1.00 → ( 0% v, 100% ω)  (pure yaw priority)
+# The commanded translation:yaw ratio is not preserved when this kicks
+# in — the trade is direction fidelity for yaw responsiveness at the
+# extremes.
+yaw_bias: 0.6
+
+# Default gait at engine startup. Must be a key in the ``gaits`` block
+# below. The control node uses the same key (its own ``default_gait``)
+# to seed /gait/params.gait_name on cold start, and the teleop's D-pad
+# cycler walks through the list in ``gaits.cycle``.
+default_gait: tripod
+
+# Per-gait knobs. Each entry is a separate strategy in
+# hexa_gait/hexa_gait/gaits/. Only ``duty_factor`` (β) is gait-specific
+# right now — phase offsets and the swing/stance curves are derived
+# from β plus the shared metachronal table for ripple/wave.
+gaits:
+  tripod:
+    duty_factor: 0.5 # alternating 3+3, fastest of the three
+  ripple:
+    duty_factor: 0.6667 # 2/3 — two legs in swing, 4 on the ground
+  wave:
+    duty_factor: 0.8333 # 5/6 — one leg in swing, 5 on the ground
 
 # Cold-start (INITIALIZE) ladder. Runs once at engine startup to bridge
 # the folded initial_pose (legs tucked above body, chassis on its belly)

@@ -8,14 +8,20 @@ intentionally unaware of `/body/pose_target`; gait strategies stay pure
 functions of `(phase, params) → foot_target`.
 
 Designed around a strategy pattern so additional gaits drop in cleanly:
-- `gaits/tripod.py` — alternating 3+3 (fast, default).
-- `gaits/wave.py`   — one leg at a time (slow, max stability).
-- `gaits/ripple.py` — overlapping wave (medium).
+- `gaits/tripod.py` — alternating 3+3 (β = 0.5, fast, default).
+- `gaits/ripple.py` — metachronal pair, two legs in swing (β = 2/3,
+  medium).
+- `gaits/wave.py`   — one leg in swing at a time (β = 5/6, max
+  stability).
 
-v1 ships **tripod only**; `wave` and `ripple` are next drop-ins on the
-same `Strategy` protocol. Multi-gait selection will land in
-`hexa_control` (e.g. wave below a speed threshold, tripod above);
-`hexa_gait` itself stays agnostic about gait choice.
+Ripple and wave share the metachronal phase-offset table; they differ
+only in duty factor. The strategy registry in `gaits/__init__.py`
+exposes them by name (`STRATEGIES["tripod" | "ripple" | "wave"]`).
+Switching at runtime is strict: `Engine.set_strategy(name)` only swaps
+in `STAND` and returns `False` otherwise. The teleop's D-pad cycler
+publishes the chosen name on `/cmd_gait`; `hexa_control` multiplexes
+it onto `GaitParams.gait_name`, and `gait_node` calls `set_strategy`
+accordingly.
 
 Inputs:
 - `/gait/params` (`hexa_interfaces/GaitParams`) — gait selection and the
@@ -27,9 +33,12 @@ Outputs:
 The engine is stateful (it owns the phase clock) but the gait strategies
 themselves are pure functions of `(phase, params) → foot_target`.
 
-All walk-cycle knobs (`stride_length`, `min_cycle_time`,
-`max_cycle_time`, `duty_factor`, `step_height`, ...) live in
-`config/gait.yaml` — they are not on the wire.
+All walk-cycle knobs (`stride_length`, `min_swing_time`,
+`max_cycle_time`, per-gait `duty_factor`, `step_height`, ...) live in
+`config/gait.yaml` — they are not on the wire. `duty_factor` is
+per-gait under the `gaits:` block; the engine reads it from the active
+strategy each tick. The engine derives `min_cycle_time = min_swing_time /
+(1 − β)` per gait so the swing-phase foot velocity ceiling is shared.
 
 See [`docs/leg-phases.md`](../../docs/leg-phases.md) for the shared
 vocabulary (stance, swing, AEP, PEP, duty factor, support polygon) used
@@ -43,19 +52,18 @@ each GAIT tick from the commanded velocity and a fixed
 
 - For each leg, compute `v_leg = v_body + ω_z × r_leg`.
 - `max_leg_v = max( |v_leg| for all 6 legs )`.
-- `cycle_time = clip( stride_length / (max_leg_v × duty_factor),
-  min_cycle_time, max_cycle_time )`.
-- Per-leg `stride_vector = v_leg × cycle_time × duty_factor`, with the
-  magnitude further clamped to `stride_length` so saturated commands
-  never push past the joint-limit-safe footprint.
+- `β = active strategy's duty_factor`; `min_cycle = min_swing_time / (1 − β)`.
+- `cycle_time = clip( stride_length / (max_leg_v × β), min_cycle, max_cycle_time )`.
+- Per-leg `stride_vector = v_leg × cycle_time × β`, with the magnitude
+  further clamped to `stride_length` so saturated commands never push
+  past the joint-limit-safe footprint.
 
 Faster commands therefore *cycle faster at constant stride* instead of
 taking *bigger steps at constant cycle*. The implied per-leg velocity
-ceiling is `stride_length / (min_cycle_time × duty_factor)`; beyond
-that the gait saturates (`cycle_time` pinned at `min_cycle_time`, stride
-clamped to `stride_length`). Below the velocity that implies
-`max_cycle_time`, the cycle stops dragging out — stride shrinks linearly
-instead.
+ceiling per gait is `stride_length × (1 − β) / (min_swing_time × β)`;
+tripod sits at the high end of this curve. Below the velocity that
+implies `max_cycle_time`, the cycle stops dragging out — stride shrinks
+linearly instead.
 
 ## Velocity caps for upstream nodes
 
@@ -65,15 +73,31 @@ upstream nodes (`hexa_teleop` for stick scaling, `hexa_control` for
 the caps through `hexa_gait.load_velocity_caps(gait_yaml_path)` at
 startup; there are no duplicate knobs in the teleop or control YAML.
 
-- `linear_max` is **derived** isotropically as
-  `stride_length / (min_cycle_time × duty_factor)` — exactly the per-leg
-  velocity ceiling above. Anything above this would be silently clipped
-  by the engine, so we make the ceiling explicit at the input boundary.
+- `linear_max` is **derived per-gait** as
+  `stride_length × (1 − β) / (min_swing_time × β)` — exactly each gait's
+  per-leg velocity ceiling. Tripod sits at the high end (β=0.5),
+  ripple in the middle (β=2/3), wave at the low end (β=5/6). The
+  cap is applied at the `/cmd_vel` boundary using the *active* gait's
+  value: `hexa_control` looks it up on every tick, and `hexa_teleop`
+  rebuilds its stick scaling whenever the user's D-pad cycler accepts
+  a new gait. Anchoring on the active gait keeps the engagement
+  controller's stance integration bounded — over-cap commands would
+  push initial-stance feet past PEP and trip joint limits.
 - `angular_z_max` is an **explicit** knob in `gait.yaml`. Kept explicit
   (not geometry-derived) because angular feel is harder to predict from
   leg radii — the gait's geometric ceiling
   (`linear_max / r_outer`) is typically well above what feels
   comfortable, so this knob trades reach for tunable feel.
+- `yaw_bias` controls how `scale_to_envelope` splits the cut between
+  translation and yaw when a combined command overruns the per-leg
+  envelope. The reduction is allocated in ratio
+  `yaw_bias : (1 − yaw_bias)`, so values above 0.5 push the cut onto
+  translation and preserve more of the commanded yaw. `0.5` is the
+  unbiased baseline (uniform scaling, direction preserved); `0.75` is
+  the current setting (at full v_x + full angular_z_max the result is
+  25% v, 75% ω instead of 50% / 50%). Pure yaw priority is the
+  `yaw_bias → 1` limit. The trade-off is direction fidelity for yaw
+  responsiveness at the extremes.
 
 See `hexa_gait/hexa_gait/limits.py` for the helper API.
 

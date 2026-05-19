@@ -52,6 +52,40 @@ mid-yaw. Translation magnitude per tick:
 
 where ``px`` is ``posture_wiggle_pivot_forward_m``. Like the rest of
 the posture-mode outputs, both terms are forced to zero in gait mode.
+
+**D-pad X** rising edges cycle through the configured ``gait_cycle``.
+D-right advances by +1, D-left by -1, modulo the list length. Cycling
+is mode-agnostic (works in POSTURE and GAIT); the teleop ROS layer
+filters the resulting ``gait_select`` against the engine's ``STAND``
+state and only publishes when the swap is acceptable. The index in
+``JoyState`` advances on every press regardless of whether the publish
+landed, so the user can press past slots that were rejected mid-walk
+and resume cycling from there once the engine returns to STAND.
+
+A rising-edge press of the **record** button (Select) in posture mode
+folds the current live posture input into a persistent baseline on
+``JoyState`` (the six ``recorded_*`` fields), then zeros the integrated
+``height_current`` and eased ``yaw_current`` so the live state can't
+double-count on the next tick. The output for each posture axis is
+``clamp(recorded + live, ±axis_max)``, so re-pushing a stick that's
+already at its limit has no further effect (the user's "tilt full left,
+record, tilt full left again" example). The baseline bleeds through
+into gait mode like the D-pad height does — the robot walks at the
+recorded posture. Select in gait mode is a no-op (but ``prev_record``
+still updates so edge detection stays correct).
+
+The **Start** button extends today's two-press semantics over the
+recorded baseline as well: if any posture state is non-default
+(``height_current``, ``yaw_current``, or any ``recorded_*`` outside a
+small tolerance), the first press arms a smooth revert
+(``state.reverting``) instead of snapping to zero. Each subsequent
+tick decays ``height_current`` and the six ``recorded_*`` toward zero
+with the ``posture_revert_tau`` time constant; the eased
+``yaw_current`` rides the existing yaw low-pass back to zero on its
+own. ``init_request`` is suppressed during the revert; the next
+Start press at the now-default state fires init as usual. A Select
+press mid-revert cancels the revert (the user is recording a fresh
+baseline and that should not bleed away).
 """
 
 from __future__ import annotations
@@ -70,10 +104,13 @@ class JoyConfig:
     axis_left_y: int
     axis_right_x: int
     axis_right_y: int
+    axis_dpad_x: int
     axis_dpad_y: int
     dpad_up_sign: float
+    dpad_right_sign: float
     mode_toggle_button: int
     init_button: int
+    record_button: int
     yaw_left_button: int
     yaw_right_button: int
     wiggle_left_trigger_axis: int
@@ -88,10 +125,17 @@ class JoyConfig:
     posture_pitch_max: float
     posture_yaw_max: float
     posture_yaw_tau: float
+    posture_revert_tau: float
     posture_wiggle_pivot_forward_m: float
     posture_height_max: float
     posture_height_min: float
     posture_height_rate: float
+    # Ordered list of gait names the D-pad X cycler walks through. Index
+    # ``current_gait_idx`` on ``JoyState`` tracks the user's selection;
+    # D-right advances by +1, D-left by −1, modulo the list length. The
+    # teleop ROS layer filters and publishes; the mapping itself is
+    # mode-agnostic so the user can cycle in POSTURE or GAIT.
+    gait_cycle: tuple[str, ...]
 
 
 @dataclass
@@ -99,6 +143,7 @@ class JoyState:
     mode: str = POSTURE
     prev_toggle: bool = False
     prev_init: bool = False
+    prev_record: bool = False
     yaw_current: float = 0.0
     wiggle_amount: float = 0.0
     # Persistent body-height offset, driven by the D-pad in POSTURE
@@ -107,6 +152,32 @@ class JoyState:
     # lifted/lowered posture). Reset to zero on a Start press while
     # non-zero — see ``map_joy`` for the two-press semantics.
     height_current: float = 0.0
+    # Persistent posture baseline captured by a rising-edge Select
+    # press. Each component is bounded by its ``posture_*_max`` from
+    # ``JoyConfig`` at record time. Bleeds through into GAIT mode (the
+    # robot walks at the recorded body offset). Reset to zero by the
+    # Start button alongside ``height_current`` / ``yaw_current`` when
+    # any of them is non-default — see ``map_joy``.
+    recorded_x: float = 0.0
+    recorded_y: float = 0.0
+    recorded_z: float = 0.0
+    recorded_roll: float = 0.0
+    recorded_pitch: float = 0.0
+    recorded_yaw: float = 0.0
+    # True while a Start-triggered revert to default posture is in
+    # progress. Each tick decays ``height_current`` and the six
+    # ``recorded_*`` toward zero with ``posture_revert_tau``; cleared
+    # when every persistent component is below the 1e-4 tolerance, or
+    # immediately by a Select press (the user is recording a new
+    # baseline, which trumps the revert).
+    reverting: bool = False
+    # D-pad X edge-detect state for the gait cycler. ``prev_dpad_x`` is
+    # the sign of the last tick's D-pad X (rounded to {-1, 0, +1});
+    # ``current_gait_idx`` is the user's current position in
+    # ``cfg.gait_cycle``. The ROS layer seeds the index from the
+    # control-node default at startup and on every accepted publish.
+    prev_dpad_x: int = 0
+    current_gait_idx: int = 0
 
 
 @dataclass(frozen=True)
@@ -122,6 +193,11 @@ class JoyOutput:
     pose_pitch: float
     mode_changed: bool
     init_request: bool
+    # Populated with the freshly-cycled gait name on a D-pad X rising
+    # edge; ``None`` on every other tick. The mapping does NOT gate on
+    # engine state (POSTURE/GAIT, STAND/walking) — that lives in the
+    # ROS layer so the pure function stays I/O-free.
+    gait_select: str | None = None
 
 
 def apply_deadband(value: float, deadband: float) -> float:
@@ -151,6 +227,10 @@ def _read_trigger(axes: Sequence[float], idx: int) -> float:
     return float(axes[idx])
 
 
+def _clip(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
 def map_joy(
     axes: Sequence[float],
     buttons: Sequence[int],
@@ -165,18 +245,22 @@ def map_joy(
     state.prev_toggle = pressed
 
     # Start button: one-shot rising-edge trigger with two-press
-    # semantics when the chassis is lifted/lowered.
+    # semantics when the chassis is in a non-default posture.
     #
-    #   * height != 0 — first press snaps state.height_current to 0
-    #     and SUPPRESSES init_request (the gait engine's reseat
-    #     ladder restores default joint geometry; no fold yet).
-    #   * height == 0 — fires init_request, which the engine routes
-    #     to start_initialize() if FOLDED or to a deferred fold
+    #   * any of height_current / yaw_current / recorded_* outside a
+    #     small tolerance — first press arms a SMOOTH revert (sets
+    #     ``state.reverting``; the per-tick decay below pulls every
+    #     persistent component toward zero with
+    #     ``posture_revert_tau``) and SUPPRESSES init_request.
+    #   * everything at default — fires init_request, which the engine
+    #     routes to start_initialize() if FOLDED or to a deferred fold
     #     request if STAND.
     #
-    # So a "lifted-then-fold" sequence is two presses: snap, then
-    # fold. Holding the button does nothing extra; the user must
-    # release and press again.
+    # So a "non-default-then-fold" sequence is two presses: revert,
+    # then (once the revert has settled) fold. Holding the button does
+    # nothing extra; the user must release and press again. Pressing
+    # Start again mid-revert is a no-op (posture is still non-default
+    # so init stays suppressed and ``reverting`` is just re-armed).
     init_pressed = _read_button(buttons, cfg.init_button)
     init_edge = init_pressed and not state.prev_init
     state.prev_init = init_pressed
@@ -184,13 +268,72 @@ def map_joy(
     if init_edge:
         # Tolerance well below the integration step so a stale tiny
         # value from a very brief D-pad tap doesn't trap the user in
-        # a perpetual "snap-then-snap" loop. 0.1 mm is far below the
-        # min increment per tick at the YAML defaults
-        # (rate=0.05 m/s * dt=0.02 s = 1 mm).
-        if abs(state.height_current) > 1e-4:
-            state.height_current = 0.0
+        # a perpetual "revert-then-revert" loop. 0.1 mm / 0.0001 rad is
+        # far below the min increment per tick at the YAML defaults
+        # (height rate=0.05 m/s * dt=0.02 s = 1 mm; one yaw easing
+        # tick from zero is on the order of yaw_max * 0.18).
+        posture_modified = (
+            abs(state.height_current) > 1e-4
+            or abs(state.yaw_current) > 1e-4
+            or abs(state.recorded_x) > 1e-4
+            or abs(state.recorded_y) > 1e-4
+            or abs(state.recorded_z) > 1e-4
+            or abs(state.recorded_roll) > 1e-4
+            or abs(state.recorded_pitch) > 1e-4
+            or abs(state.recorded_yaw) > 1e-4
+        )
+        if posture_modified:
+            state.reverting = True
         else:
             init_request = True
+
+    # Revert decay: while ``state.reverting`` is set, ease the
+    # persistent baseline (height + recorded_*) toward zero with the
+    # ``posture_revert_tau`` time constant. ``yaw_current`` is left to
+    # the existing yaw_tau easing further down (which already pulls it
+    # toward zero when no yaw button is held); we still check it in
+    # the settle condition so the revert doesn't clear while a stale
+    # eased yaw lingers. Runs in both modes so a revert armed in
+    # POSTURE keeps running across a mid-revert toggle to GAIT.
+    if state.reverting:
+        decay = math.exp(-dt / cfg.posture_revert_tau)
+        state.height_current *= decay
+        state.recorded_x *= decay
+        state.recorded_y *= decay
+        state.recorded_z *= decay
+        state.recorded_roll *= decay
+        state.recorded_pitch *= decay
+        state.recorded_yaw *= decay
+        if (
+            abs(state.height_current) <= 1e-4
+            and abs(state.yaw_current) <= 1e-4
+            and abs(state.recorded_x) <= 1e-4
+            and abs(state.recorded_y) <= 1e-4
+            and abs(state.recorded_z) <= 1e-4
+            and abs(state.recorded_roll) <= 1e-4
+            and abs(state.recorded_pitch) <= 1e-4
+            and abs(state.recorded_yaw) <= 1e-4
+        ):
+            state.height_current = 0.0
+            state.recorded_x = 0.0
+            state.recorded_y = 0.0
+            state.recorded_z = 0.0
+            state.recorded_roll = 0.0
+            state.recorded_pitch = 0.0
+            state.recorded_yaw = 0.0
+            state.reverting = False
+
+    # Select button: rising-edge press in POSTURE mode folds the
+    # current live posture input into ``state.recorded_*`` (clamped
+    # per-axis), then zeros the integrated height and eased yaw so the
+    # live state can't double-count on the next tick. Stick reads stay
+    # live — the per-axis clamp on the final output handles the
+    # "already at the limit" saturation. ``prev_record`` updates in
+    # GAIT mode too so the edge detection stays correct across mode
+    # toggles, but the recording itself only happens in POSTURE.
+    record_pressed = _read_button(buttons, cfg.record_button)
+    record_edge = record_pressed and not state.prev_record
+    state.prev_record = record_pressed
 
     lx = _read_axis(axes, cfg.axis_left_x, cfg.deadband)
     ly = _read_axis(axes, cfg.axis_left_y, cfg.deadband)
@@ -213,6 +356,32 @@ def map_joy(
             state.height_current = cfg.posture_height_max
         elif state.height_current < cfg.posture_height_min:
             state.height_current = cfg.posture_height_min
+
+    # D-pad X: rising-edge cycle through ``cfg.gait_cycle``. Direction
+    # is governed by ``dpad_right_sign`` so a flipped joy_node sign can
+    # be normalised in YAML. Works regardless of POSTURE / GAIT mode;
+    # the ROS layer gates the publish on the current engine state.
+    gait_select: str | None = None
+    if cfg.gait_cycle:
+        dpad_x_raw = 0.0
+        if 0 <= cfg.axis_dpad_x < len(axes):
+            dpad_x_raw = float(axes[cfg.axis_dpad_x])
+        # Normalize joy_node's ±1 / 0 axis to an integer sign, then
+        # flip if the driver reports right as −1. Anything between is
+        # treated as released so a bouncy axis can't double-cycle.
+        if dpad_x_raw > 0.5:
+            dpad_x = 1
+        elif dpad_x_raw < -0.5:
+            dpad_x = -1
+        else:
+            dpad_x = 0
+        signed = int(cfg.dpad_right_sign) * dpad_x
+        if signed != 0 and state.prev_dpad_x == 0:
+            state.current_gait_idx = (
+                state.current_gait_idx + signed
+            ) % len(cfg.gait_cycle)
+            gait_select = cfg.gait_cycle[state.current_gait_idx]
+        state.prev_dpad_x = signed
 
     # L1/R1 (shoulder buttons) and L2/R2 (analog triggers thresholded
     # to on/off) share the same yaw target. L1 and L2 both push left;
@@ -251,44 +420,131 @@ def map_joy(
     state.yaw_current += (yaw_target - state.yaw_current) * alpha
     state.wiggle_amount += (wiggle_target - state.wiggle_amount) * alpha
 
+    # Wiggle translation: rotation about a pivot at (+px, 0) in the
+    # body frame is equivalent to (rotate about body centre) +
+    # (translate by px*(1-cos θ), -px*sin θ). Scaled by the eased
+    # wiggle scalar so the translation only appears when the user
+    # actually wants the pivoting effect. Computed unconditionally
+    # (gait mode forces wiggle_amount toward zero, so wx/wy decay to
+    # zero there) so the record-fold below can read them too.
+    px = cfg.posture_wiggle_pivot_forward_m
+    wx = state.wiggle_amount * px * (1.0 - math.cos(state.yaw_current))
+    wy = -state.wiggle_amount * px * math.sin(state.yaw_current)
+
+    # Apply the deferred Select press now that every live posture
+    # component is up to date. Fold the live values into the recorded
+    # baseline (per-axis clamped at record time) and zero the
+    # integrated/eased values so they can't double-count on the next
+    # tick. Stick reads (lx/ly/rx/ry) and wiggle (wx/wy) are NOT
+    # zeroed — they're re-read or re-eased on the next tick, and the
+    # output clamp below catches the saturation.
+    if record_edge and state.mode == POSTURE:
+        # A new baseline is being captured — trumps any in-flight
+        # revert (the user is explicitly setting a pose, not asking
+        # for default).
+        state.reverting = False
+        state.recorded_x = _clip(
+            state.recorded_x + ry * cfg.posture_x_max + wx,
+            -cfg.posture_x_max,
+            cfg.posture_x_max,
+        )
+        state.recorded_y = _clip(
+            state.recorded_y + rx * cfg.posture_y_max + wy,
+            -cfg.posture_y_max,
+            cfg.posture_y_max,
+        )
+        state.recorded_z = _clip(
+            state.recorded_z + state.height_current,
+            cfg.posture_height_min,
+            cfg.posture_height_max,
+        )
+        state.recorded_roll = _clip(
+            state.recorded_roll + (-lx) * cfg.posture_roll_max,
+            -cfg.posture_roll_max,
+            cfg.posture_roll_max,
+        )
+        state.recorded_pitch = _clip(
+            state.recorded_pitch + ly * cfg.posture_pitch_max,
+            -cfg.posture_pitch_max,
+            cfg.posture_pitch_max,
+        )
+        state.recorded_yaw = _clip(
+            state.recorded_yaw + state.yaw_current,
+            -cfg.posture_yaw_max,
+            cfg.posture_yaw_max,
+        )
+        state.height_current = 0.0
+        state.yaw_current = 0.0
+
     if state.mode == POSTURE:
         # Tilt sign: stick-forward (ly > 0) → +pitch about +y (front
         # dips). stick-left (lx > 0) → -roll about +x (left side dips,
         # which is CCW about +x viewed from behind).
         #
-        # Wiggle translation: rotation about a pivot at (+px, 0) in
-        # the body frame is equivalent to (rotate about body centre)
-        # + (translate by px*(1-cos θ), -px*sin θ). Scaled by the
-        # eased wiggle scalar so the translation only appears when
-        # the user actually wants the pivoting effect.
-        px = cfg.posture_wiggle_pivot_forward_m
-        wx = state.wiggle_amount * px * (1.0 - math.cos(state.yaw_current))
-        wy = -state.wiggle_amount * px * math.sin(state.yaw_current)
+        # Each axis is the sum of the persistent baseline and the live
+        # input, clamped to its YAML max. With a fully-saturated
+        # baseline, additional stick input in the same direction has
+        # no further effect (the user's "tilt left, record, tilt left
+        # again" example); opposite-direction input unwinds the
+        # baseline up to its own limit.
         return JoyOutput(
             linear_x=0.0,
             linear_y=0.0,
             angular_z=0.0,
-            pose_x=ry * cfg.posture_x_max + wx,
-            pose_y=rx * cfg.posture_y_max + wy,
-            pose_z=state.height_current,
-            pose_yaw=state.yaw_current,
-            pose_roll=-lx * cfg.posture_roll_max,
-            pose_pitch=ly * cfg.posture_pitch_max,
+            pose_x=_clip(
+                state.recorded_x + ry * cfg.posture_x_max + wx,
+                -cfg.posture_x_max,
+                cfg.posture_x_max,
+            ),
+            pose_y=_clip(
+                state.recorded_y + rx * cfg.posture_y_max + wy,
+                -cfg.posture_y_max,
+                cfg.posture_y_max,
+            ),
+            pose_z=_clip(
+                state.recorded_z + state.height_current,
+                cfg.posture_height_min,
+                cfg.posture_height_max,
+            ),
+            pose_yaw=_clip(
+                state.recorded_yaw + state.yaw_current,
+                -cfg.posture_yaw_max,
+                cfg.posture_yaw_max,
+            ),
+            pose_roll=_clip(
+                state.recorded_roll + (-lx) * cfg.posture_roll_max,
+                -cfg.posture_roll_max,
+                cfg.posture_roll_max,
+            ),
+            pose_pitch=_clip(
+                state.recorded_pitch + ly * cfg.posture_pitch_max,
+                -cfg.posture_pitch_max,
+                cfg.posture_pitch_max,
+            ),
             mode_changed=mode_changed,
             init_request=init_request,
+            gait_select=gait_select,
         )
-    # GAIT mode: posture axes are zero EXCEPT height, which is held
-    # so the robot walks at the lifted/lowered posture.
+    # GAIT mode: live posture input is suppressed (sticks drive
+    # linear/angular velocity instead), but the recorded baseline
+    # bleeds through on every posture axis so the robot walks at the
+    # recorded posture. pose_z keeps today's "height_current bleeds
+    # through" behavior on top of the recorded_z baseline.
     return JoyOutput(
         linear_x=ry * cfg.gait_linear_max,
         linear_y=rx * cfg.gait_linear_max,
         angular_z=lx * cfg.gait_angular_z_max,
-        pose_x=0.0,
-        pose_y=0.0,
-        pose_z=state.height_current,
-        pose_yaw=0.0,
-        pose_roll=0.0,
-        pose_pitch=0.0,
+        pose_x=state.recorded_x,
+        pose_y=state.recorded_y,
+        pose_z=_clip(
+            state.recorded_z + state.height_current,
+            cfg.posture_height_min,
+            cfg.posture_height_max,
+        ),
+        pose_yaw=state.recorded_yaw,
+        pose_roll=state.recorded_roll,
+        pose_pitch=state.recorded_pitch,
         mode_changed=mode_changed,
         init_request=init_request,
+        gait_select=gait_select,
     )

@@ -286,7 +286,21 @@ class EngagementController:
             if self._initial_swing[name]:
                 in_swing = self._master < transition_m
             else:
-                in_swing = self._master >= transition_m
+                # Initial-stance legs lift off at ``transition_m`` and
+                # touch down one swing window later. Past that window
+                # they must return to stance integration, otherwise the
+                # foot stays clipped at the live AEP until exit_master
+                # and the GAIT handoff sees a step-shaped position
+                # jump. Tripod hides this: every initial-stance leg has
+                # ``transition_m = exit_master`` so the post-swing
+                # branch is unreachable. Ripple and wave place lift-offs
+                # well before exit_master, so the upper bound matters.
+                leg_swing_window_master = 1.0 - self._duty_factor
+                in_swing = (
+                    transition_m
+                    <= self._master
+                    < transition_m + leg_swing_window_master
+                )
 
             if in_swing:
                 if not self._has_lifted_off[name]:

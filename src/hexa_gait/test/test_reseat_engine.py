@@ -39,9 +39,8 @@ def _desc() -> Path:
 def _config() -> EngineConfig:
     return EngineConfig(
         stride_length=0.10,
-        min_cycle_time=0.5,
+        min_swing_time=0.25,
         max_cycle_time=2.0,
-        duty_factor=0.5,
         step_height=0.03,
         swing_width=0.0,
         controller_dt=0.02,
