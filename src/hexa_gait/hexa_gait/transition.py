@@ -10,18 +10,21 @@ velocity.
 
 State ladder (matches ``src/hexa_gait/README.md``):
 
-1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to its
-   nominal stance position via the standard swing arc, rising through
-   ``swing_clearance`` before descending, over ``recenter_swing_time``.
-   The swing-arc is run with both endpoint velocities pinned to zero,
-   so the Bezier decelerates to a true rest at touchdown rather than
-   landing at the steady-state stance velocity — that softens the
-   impact and keeps the body from rocking. All airborne legs move in
-   parallel; the originally-grounded legs hold their stop-time
-   positions verbatim so the body stays immobile. The forced
-   lift-and-descend matters when a leg stops just above the ground —
-   a straight-line move there would skim the floor instead of clearing
-   it. Skipped entirely if no leg was airborne.
+1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to
+   its nominal stance position via the standard swing arc over
+   ``recenter_swing_time``. The apex is capped at ``target_z +
+   step_height/2`` per leg: legs that stopped near the floor get a
+   small upward arc to clear it on the way home, and legs already at
+   or above that half-step threshold descend with no extra lift (the
+   curve's apex equals ``origin_z`` and the path sweeps horizontally
+   to the midpoint before dropping to nominal — no up-then-down
+   bounce). Both endpoint velocities are pinned to zero, so the
+   Bezier decelerates to a true rest at touchdown rather than landing
+   at the steady-state stance velocity — that softens the impact and
+   keeps the body from rocking. All airborne legs move in parallel;
+   the originally-grounded legs hold their stop-time positions
+   verbatim so the body stays immobile. Skipped entirely if no leg
+   was airborne.
 2. **SETTLE** — hold every foot still for ``touchdown_settle_time``
    seconds after force-touchdown lands. Lets the chassis stop swaying
    before any further leg moves. Skipped when ``touchdown_settle_time``
@@ -172,13 +175,17 @@ class TransitionController:
     def _tick_force_touchdown(self, dt: float) -> dict[str, LegOutput]:
         # All airborne legs follow a rest-to-rest swing arc in parallel
         # from their stop-time pose to nominal over ``recenter_swing_time``.
-        # The arc lifts each foot through ``swing_clearance`` so legs
-        # stopped just above the ground still clear it on the way home.
-        # Both endpoint velocities are pinned to zero so the Bezier
-        # decelerates fully at touchdown — landing at the steady-state
-        # stance velocity would slam the foot into the floor and rock
-        # the body. Originally-grounded legs hold position; the body
-        # stays immobile until every foot is on the ground.
+        # Per-leg apex caps at ``target_z + step_height/2``: legs that
+        # stopped near the floor get a small upward arc to clear it,
+        # and legs already above that threshold descend with no extra
+        # lift (the apex sits at ``origin_z``, so the curve sweeps
+        # horizontally to the midpoint then drops to nominal — no
+        # superfluous up-then-down motion). Both endpoint velocities
+        # are pinned to zero so the Bezier decelerates fully at
+        # touchdown; landing at the steady-state stance velocity would
+        # slam the foot into the floor and rock the body.
+        # Originally-grounded legs hold position; the body stays
+        # immobile until every foot is on the ground.
         self._recenter_elapsed += dt
         phase = self._recenter_elapsed / self._recenter_swing_time
 
@@ -193,13 +200,25 @@ class TransitionController:
             self._advance_after_force_touchdown()
             return out
 
+        half_height = self._swing_clearance / 2.0
         for name in LEG_NAMES:
             if self._swing_flags[name]:
+                origin_z = self._swing_origins[name][2]
+                target_z = self._nominal[name][2]
+                # ``swing_arc`` places its apex at
+                # ``max(origin_z, target_z) + swing_clearance``. Solve
+                # for the clearance that puts the apex at
+                # ``max(origin_z, target_z + half_height)`` — i.e. a
+                # half-step lift above ground, or ``origin_z`` (no
+                # extra lift) when the leg is already at or above that
+                # threshold.
+                required_apex_z = max(origin_z, target_z + half_height)
+                effective_clearance = required_apex_z - max(origin_z, target_z)
                 point = swing_arc(
                     phase_in_swing=phase,
                     swing_origin=self._swing_origins[name],
                     target=self._nominal[name],
-                    swing_clearance=self._swing_clearance,
+                    swing_clearance=effective_clearance,
                     swing_width=self._swing_width,
                     identity_y_sign=identity_y_sign(self._nominal[name]),
                     swing_time=self._recenter_swing_time,

@@ -12,6 +12,10 @@ Brings up, in order:
      been spawned (and gz_ros2_control has therefore started its
      controller_manager).
 """
+from pathlib import Path
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -33,6 +37,15 @@ def generate_launch_description():
     pkg_hexa_simulation = FindPackageShare("hexa_simulation")
     pkg_hexa_description = FindPackageShare("hexa_description")
     pkg_ros_gz_sim = FindPackageShare("ros_gz_sim")
+
+    # Spawn z defaults to the chassis's coxa-to-bottom half-thickness so
+    # the hexapod lands belly-flush on the ground at the folded
+    # initial_pose. Resolved eagerly (not via Substitution) because
+    # DeclareLaunchArgument needs a concrete string for its default and
+    # for its -h help text. Override on the CLI when debugging.
+    _geom_path = Path(get_package_share_directory("hexa_description")) / "config" / "geometry.yaml"
+    _geom = yaml.safe_load(_geom_path.read_text())
+    default_spawn_z = str(_geom["body"]["coxa_to_bottom"])
 
     default_world = PathJoinSubstitution(
         [pkg_hexa_simulation, "worlds", "empty.sdf"]
@@ -113,8 +126,11 @@ def generate_launch_description():
             description="SDF world to load in gz_sim.",
         ),
         DeclareLaunchArgument(
-            "spawn_z", default_value="0.25",
-            description="Initial z-height (m) at which the model is spawned.",
+            "spawn_z", default_value=default_spawn_z,
+            description="Initial z-height (m) at which the model is spawned. "
+                        "Defaults to body.coxa_to_bottom from "
+                        "hexa_description/config/geometry.yaml so the model "
+                        "spawns belly-flush at the folded initial_pose.",
         ),
         DeclareLaunchArgument(
             "headless", default_value="false",

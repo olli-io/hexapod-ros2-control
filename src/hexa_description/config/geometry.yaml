@@ -16,8 +16,22 @@ body:
   # length (+x, nose-to-tail) is derived in hexapod.urdf.xacro as
   # 2 * mounts.l_front.x * 1.1 so the chassis stays sized to the mounts.
   # width  (+y, side-to-side) is derived in hexapod.urdf.xacro as
-  # 2 * mounts.l_middle.y * 1.1 with the same 10% margin.
-  height: 0.04 # +z, top-to-bottom
+  # 2 * mounts.l_middle.y * 0.8 — narrower than the middle hip span, with
+  # a blue middle bar bridging the gap between the coxa bases.
+  #
+  # Vertical extent is split around the coxa joint plane (= base_link
+  # origin, z=0). hexapod.urdf.xacro sets the body box height to
+  # coxa_to_bottom + coxa_to_top and offsets the box origin by
+  # (coxa_to_top - coxa_to_bottom)/2 so the coxa joints land at the
+  # right z relative to the chassis. Lets the config express an
+  # asymmetric stack-up (battery and electronics above the coxa plane,
+  # nothing much below) without re-baselining the URDF math.
+  #
+  # coxa_to_bottom also doubles as the sim spawn z: with feet folded
+  # up at the initial_pose, the body's bottom face rests flush on the
+  # ground when base_link sits at world z = coxa_to_bottom.
+  coxa_to_bottom: 0.03 # +z half from coxa plane down to body bottom
+  coxa_to_top: 0.02 # +z half from coxa plane up to body top
   mass: 1.0
 
 leg:
@@ -27,7 +41,7 @@ leg:
   tibia_length: 0.134
   # Per-segment visual + collision radius (m) of the cylindrical segments.
   coxa_radius: 0.02
-  femur_radius: 0.020
+  femur_radius: 0.02
   tibia_radius: 0.01
   # Per-segment masses (kg) (dominated by the servo at the proximal end).
   coxa_mass: 0.05
@@ -51,8 +65,8 @@ foot:
 # Define only the left-front and left-middle; never add l_rear / r_*
 # entries — they'd be ignored.
 mounts:
-  l_front:  {x: 0.083, y: 0.0575, yaw_deg: 30}
-  l_middle: {x: 0.00,  y: 0.082,  yaw_deg: 90}
+  l_front: {x: 0.083, y: 0.0575, yaw_deg: 30}
+  l_middle: {x: 0.00, y: 0.082, yaw_deg: 90}
 
 # Per-joint-type servo configuration.
 #
@@ -85,22 +99,49 @@ mounts:
 # Tune to match the real servo specs once known.
 joints:
   coxa:
-    deg: 0                      # 0° — coxa centered (no fore/aft sweep)
-    lower_limit_deg: -90        # absolute lower bound in coxa.deg
-    upper_limit_deg:  90        # absolute upper bound in coxa.deg
-    effort: 3.09                # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
-    velocity: 7.25              # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
+    deg: 0 # 0° — coxa centered (no fore/aft sweep)
+    lower_limit_deg: -90 # absolute lower bound in coxa.deg
+    upper_limit_deg: 90 # absolute upper bound in coxa.deg
+    effort: 3.09 # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
+    velocity: 7.25 # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
 
   femur:
-    above_horizontal_deg: 35    # 35° — femur tilted above horizontal at servo zero
-    lower_limit_deg: -55        # absolute lower bound in above_horizontal_deg
-    upper_limit_deg: 125        # absolute upper bound in above_horizontal_deg
-    effort: 3.09                # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
-    velocity: 7.25              # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
+    above_horizontal_deg: 35 # 35° — femur tilted above horizontal at servo zero
+    lower_limit_deg: -55 # absolute lower bound in above_horizontal_deg
+    upper_limit_deg: 125 # absolute upper bound in above_horizontal_deg
+    effort: 3.09 # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
+    velocity: 7.25 # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
 
   tibia:
-    interior_deg: 68            # 68° — interior femur-tibia knee angle at servo zero
-    lower_limit_deg: -22        # absolute lower bound in interior_deg
-    upper_limit_deg: 158        # absolute upper bound in interior_deg
-    effort: 3.09                # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
-    velocity: 7.25              # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
+    interior_deg: 68 # 68° — interior femur-tibia knee angle at servo zero
+    lower_limit_deg: -22 # absolute lower bound in interior_deg
+    upper_limit_deg: 158 # absolute upper bound in interior_deg
+    effort: 3.09 # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
+    velocity: 7.25 # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
+
+# Joint angles assumed at startup, before any commanded motion.
+#
+# Read by hexapod.urdf.xacro and emitted as <param
+# name="initial_value"> on each ros2_control <state_interface
+# name="position">. In sim, gz_ros2_control applies these before
+# any controller starts (so the model spawns in this pose). On the
+# real robot, the hardware plugin uses them as the assumed pose
+# for servos that cannot report their own angle — physically, the
+# operator is responsible for placing the hexapod in roughly this
+# pose at power-on.
+#
+# Same intuitive-degrees convention as joints: and
+# standing_pose.yaml. Femur and tibia apply uniformly to all six
+# legs. Coxa is per-leg-type: only the left-front and left-middle
+# entries are listed, and hexapod.urdf.xacro derives the other
+# four by the same x/y symmetry used for mounts:
+#   - r_*    : coxa.deg → -coxa.deg  (left/right mirror)
+#   - *_rear : coxa.deg → -coxa.deg  (front/rear mirror)
+initial_pose:
+  coxa:
+    l_front_deg: 60 # 30° mount yaw + 60° coxa → leg points at body-yaw 90°
+    l_middle_deg: 0 # 90° mount yaw + 0° coxa → leg points straight outward
+  femur:
+    above_horizontal_deg: 100 # femur tucked steeply above horizontal
+  tibia:
+    interior_deg: 40 # knee folded tight

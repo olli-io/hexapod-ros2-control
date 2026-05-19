@@ -77,6 +77,48 @@ startup; there are no duplicate knobs in the teleop or control YAML.
 
 See `hexa_gait/hexa_gait/limits.py` for the helper API.
 
+## Cold start: FOLDED → INITIALIZE
+
+At power-on the hexapod sits on its belly with the legs folded above
+the body (see `initial_pose:` in `hexa_description/config/geometry.yaml`).
+On the real robot some servos cannot report their own angle, so the
+operator is responsible for placing the chassis in roughly this folded
+pose; the engine must not assume any other starting position. The first
+state the engine enters is therefore `FOLDED`: the gait emits the
+folded foot positions verbatim, ignores `cmd_vel`, and waits for an
+operator trigger before doing anything. The trigger is a one-shot
+`std_msgs/Empty` message on `/gait/initialize` (published by `hexa_teleop`
+on the joystick start button's rising edge); the engine then transitions
+to `INITIALIZE`, which runs an orchestrated ladder from `initial_pose`
+to the standing pose:
+
+1. **PLACE_FEET** — three sequential mirroring pairs swing one at a
+   time from the folded foot position to the standing footprint with
+   the foot held `place_feet_clearance` (~1 mm) above the floor, while
+   the body stays on its belly. The small gap keeps the swing arc
+   from scuffing the ground at touchdown and gives LIFT_BODY a clean
+   ground-contact transition. Pair order is middle pair → front-left +
+   rear-right diagonal → front-right + rear-left diagonal, chosen to
+   keep the body's centre of mass near the chassis centre throughout
+   (inactive legs hold their last positions; the body is supported on
+   its belly and on whatever legs have already been placed). Each pair
+   takes `pair_swing_time`.
+2. **LIFT_BODY** — all six feet stay at their standing XY; their
+   body-frame z ramps via a smoothstep S-curve from the PLACE_FEET
+   endpoint (1 mm above the floor) down to each leg's standing z. The
+   kinematics chain reads this as "legs extending down": as the feet
+   make ground contact, the body lifts off its belly. Gait owns the
+   lift here rather than handing off to posture, so the cold start
+   needs no gait↔posture coordination topic.
+3. **DONE** — the controller emits the nominal stance for every leg;
+   the engine treats this as the cue to transition to `STAND`.
+
+The ladder is non-preemptible — `cmd_vel` arriving mid-sequence is
+ignored until the engine transitions to `STAND`, mirroring `STOPPING`'s
+commit-to-completion contract. Tuning knobs (`pair_swing_time`,
+`lift_body_time`, `swing_clearance`) live under `initialize:` in
+`config/gait.yaml`.
+
 ## Stopping: idle and standing reset
 
 When GaitParams arrives with zero velocity (sent by `hexa_control` when
@@ -85,18 +127,21 @@ When GaitParams arrives with zero velocity (sent by `hexa_control` when
 runs a four-state reset sequence that brings the robot from an
 arbitrary mid-cycle pose to a clean standing pose:
 
-1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to its
-   nominal stance position via the standard swing arc, rising through
-   `swing_clearance` before descending, over `recenter_swing_time`.
-   The swing arc runs with both endpoint velocities pinned to zero so
-   the Bezier decelerates fully at touchdown — landing at the
-   steady-state stance velocity would slam the foot into the floor
-   and rock the chassis. All airborne legs move in parallel. The legs
-   that were already on the ground at stop time hold their stop-time
-   positions exactly — they do not budge. The forced lift matters
-   when a leg stopped just above the ground: a straight-line move
-   there would skim the floor instead of clearing it. Skipped if no
-   leg was airborne when `cmd_vel` went idle.
+1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to
+   its nominal stance position via the standard swing arc over
+   `recenter_swing_time`. The apex is capped at `target_z +
+   step_height/2` per leg: legs that stopped near the floor get a
+   small upward arc to clear it on the way home, and legs already at
+   or above that half-step threshold descend with no extra lift (the
+   curve sweeps horizontally to the midpoint at `origin_z` before
+   dropping to nominal — no up-then-down bounce). The swing arc runs
+   with both endpoint velocities pinned to zero so the Bezier
+   decelerates fully at touchdown — landing at the steady-state
+   stance velocity would slam the foot into the floor and rock the
+   chassis. All airborne legs move in parallel. The legs that were
+   already on the ground at stop time hold their stop-time positions
+   exactly — they do not budge. Skipped if no leg was airborne when
+   `cmd_vel` went idle.
 2. **SETTLE** — hold every foot still for `touchdown_settle_time`
    seconds. Lets residual chassis sway from the touchdown impact damp
    out before the next sweep adds more motion. Skipped when

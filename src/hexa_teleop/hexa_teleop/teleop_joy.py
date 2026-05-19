@@ -25,6 +25,7 @@ from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Empty
 
 from hexa_gait import load_velocity_caps
 
@@ -43,6 +44,7 @@ def _load_config(path: Path, gait_yaml: Path) -> tuple[JoyConfig, str]:
         axis_right_x=int(raw["axis"]["right_x"]),
         axis_right_y=int(raw["axis"]["right_y"]),
         mode_toggle_button=int(raw["mode_toggle_button"]),
+        init_button=int(raw["init_button"]),
         deadband=float(raw["deadband"]),
         gait_linear_max=caps.linear_max,
         gait_angular_z_max=caps.angular_max,
@@ -92,6 +94,13 @@ class TeleopJoyNode(Node):
         self._sub_joy = self.create_subscription(Joy, "/joy", self._on_joy, 10)
         self._pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
         self._pub_body_pose = self.create_publisher(BodyPoseMsg, "/body/pose", 10)
+        # One-shot trigger fired on rising-edge of the start button.
+        # hexa_gait's gait_node routes this to either
+        # ``Engine.start_initialize`` (FOLDED → INITIALIZE → STAND) or
+        # ``Engine.start_fold`` (STAND → FOLDING → FOLDED) depending on
+        # the engine's current state; a stray press in any other state
+        # is a no-op.
+        self._pub_init = self.create_publisher(Empty, "/gait/initialize", 10)
 
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
 
@@ -105,6 +114,9 @@ class TeleopJoyNode(Node):
         )
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
+        if out.init_request:
+            self.get_logger().info("start button pressed — publishing /gait/initialize")
+            self._pub_init.publish(Empty())
 
         stamp = self.get_clock().now().to_msg()
 

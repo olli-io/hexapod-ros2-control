@@ -86,3 +86,32 @@ on flat ground. Tripod (3 legs down) is statically stable only when the
 three stance legs form a triangle enclosing the CoG projection — which
 our standard leg layout achieves, but with a smaller margin than the
 other two gaits.
+
+## 5. Cold start
+
+Terminology specific to the cold-start sequence the gait engine runs
+once at power-on, bridging the folded shipping pose to the standing
+pose:
+
+- **initial pose** — the per-joint angles assumed at startup, before
+  any commanded motion. Defined in `hexa_description/config/geometry.yaml`
+  under `initial_pose:` and applied to ros2_control's
+  `<state_interface name="position">` as `<param name="initial_value">`.
+  In sim, gz_ros2_control spawns the model in this pose; on the real
+  robot, the hardware plugin uses it as the assumed pose for servos
+  that cannot report their own angle (the operator is responsible for
+  placing the chassis in roughly this pose at power-on).
+- **folded** — pre-INITIALIZE engine state. The engine emits the
+  initial-pose foot positions and ignores `cmd_vel`; an operator
+  trigger (`/gait/initialize` on rising edge of the joystick start
+  button) advances to INITIALIZE.
+- **initialize** — engine state covering the cold-start sequence from
+  the initial pose to standing.
+- **place feet** — INITIALIZE sub-phase: pair-wise foot placement from
+  the folded initial-pose footprint to the standing footprint, with
+  the foot held `place_feet_clearance` (~1 mm) above the floor at
+  touchdown so the swing arc doesn't scuff the ground.
+- **lift body** — INITIALIZE sub-phase that follows place feet: ramp
+  foot z in the body frame from the place-feet endpoint (1 mm above
+  the floor) down to nominal standing z, raising the body to standing
+  height as the legs extend and the feet make ground contact.

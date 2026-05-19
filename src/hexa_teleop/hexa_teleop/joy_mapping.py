@@ -36,6 +36,7 @@ class JoyConfig:
     axis_right_x: int
     axis_right_y: int
     mode_toggle_button: int
+    init_button: int
     deadband: float
     gait_linear_max: float
     gait_angular_z_max: float
@@ -47,6 +48,7 @@ class JoyConfig:
 class JoyState:
     mode: str = POSTURE
     prev_toggle: bool = False
+    prev_init: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class JoyOutput:
     pose_x: float
     pose_y: float
     mode_changed: bool
+    init_request: bool
 
 
 def apply_deadband(value: float, deadband: float) -> float:
@@ -89,6 +92,14 @@ def map_joy(
         state.mode = GAIT if state.mode == POSTURE else POSTURE
     state.prev_toggle = pressed
 
+    # Start button: one-shot rising-edge trigger that asks the gait
+    # engine to switch between FOLDED and STAND — INITIALIZE on the
+    # way up, FOLDING on the way down. Holding the button does nothing
+    # extra; the user must release and press again.
+    init_pressed = _read_button(buttons, cfg.init_button)
+    init_request = init_pressed and not state.prev_init
+    state.prev_init = init_pressed
+
     lx = _read_axis(axes, cfg.axis_left_x, cfg.deadband)
     rx = _read_axis(axes, cfg.axis_right_x, cfg.deadband)
     ry = _read_axis(axes, cfg.axis_right_y, cfg.deadband)
@@ -101,6 +112,7 @@ def map_joy(
             pose_x=ry * cfg.posture_x_max,
             pose_y=rx * cfg.posture_y_max,
             mode_changed=mode_changed,
+            init_request=init_request,
         )
     return JoyOutput(
         linear_x=ry * cfg.gait_linear_max,
@@ -109,4 +121,5 @@ def map_joy(
         pose_x=0.0,
         pose_y=0.0,
         mode_changed=mode_changed,
+        init_request=init_request,
     )

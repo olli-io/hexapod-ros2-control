@@ -23,6 +23,14 @@ axis:
 # 0=A, 1=B, 2=X, 3=Y on 8BitDo Pro 2 in X-input mode.
 mode_toggle_button: 3   # Y
 
+# Button that toggles FOLDED ↔ STAND on rising edge. Publishes a
+# one-shot std_msgs/Empty on /gait/initialize, which the gait engine
+# routes to either start_initialize() (FOLDED → INITIALIZE → STAND) or
+# start_fold() (STAND → FOLDING → FOLDED). Presses in any other engine
+# state are no-ops, so repeat presses mid-walk are harmless. 7 = Start
+# on 8BitDo Pro 2 / Xbox-style controllers in X-input mode.
+init_button: 7          # Start
+
 # Gait-mode stick scaling is loaded at startup from
 # hexa_gait/config/gait.yaml via hexa_gait.limits.load_velocity_caps:
 #   * full-stick translation maps to ±linear_max (isotropic for x and y),

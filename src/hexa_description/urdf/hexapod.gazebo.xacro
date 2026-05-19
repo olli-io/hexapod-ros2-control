@@ -21,6 +21,9 @@
   <gazebo reference="base_link">
     <material>Gazebo/DarkGrey</material>
   </gazebo>
+  <gazebo reference="middle_bar">
+    <material>Gazebo/Blue</material>
+  </gazebo>
 
   <xacro:macro name="leg_material" params="side name">
     <xacro:property name="gz_colour" value="${'Gazebo/Red' if name == 'front' else 'Gazebo/Blue'}"/>

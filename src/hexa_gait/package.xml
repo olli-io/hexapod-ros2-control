@@ -8,6 +8,7 @@
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
   <depend>hexa_kinematics</depend>
   <depend>hexa_description</depend>

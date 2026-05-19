@@ -21,9 +21,16 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
 from hexa_interfaces.msg import GaitParams, LegState, LegTargets
 from rclpy.node import Node
+from std_msgs.msg import Empty
 
 from .clock import LEG_NAMES
-from .engine import Engine, EngineConfig, build_leg_contexts, nominal_stance_from_yaml
+from .engine import (
+    Engine,
+    EngineConfig,
+    build_leg_contexts,
+    initial_stance_from_yaml,
+    nominal_stance_from_yaml,
+)
 from .gaits.tripod import Tripod
 
 
@@ -33,6 +40,7 @@ PUBLISH_RATE_HZ = 50.0
 def _load_engine_config(path: Path) -> EngineConfig:
     with path.open() as f:
         raw = yaml.safe_load(f)
+    init_cfg = raw["initialize"]
     return EngineConfig(
         stride_length=float(raw["stride_length"]),
         min_cycle_time=float(raw["min_cycle_time"]),
@@ -45,7 +53,17 @@ def _load_engine_config(path: Path) -> EngineConfig:
         cmd_zero_tol=float(raw["cmd_zero_tol"]),
         forced_touchdown_delay=float(raw["forced_touchdown_delay"]),
         touchdown_settle_time=float(raw["touchdown_settle_time"]),
+        init_pair_swing_time=float(init_cfg["pair_swing_time"]),
+        init_lift_body_time=float(init_cfg["lift_body_time"]),
+        init_swing_clearance=float(init_cfg["swing_clearance"]),
+        init_place_feet_clearance=float(init_cfg["place_feet_clearance"]),
     )
+
+
+def _load_coxa_to_bottom(geometry_path: Path) -> float:
+    with geometry_path.open() as f:
+        raw = yaml.safe_load(f)
+    return float(raw["body"]["coxa_to_bottom"])
 
 
 class GaitNode(Node):
@@ -59,6 +77,8 @@ class GaitNode(Node):
         nominal = nominal_stance_from_yaml(
             desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
         )
+        initial = initial_stance_from_yaml(desc_share / "geometry.yaml")
+        coxa_to_bottom = _load_coxa_to_bottom(desc_share / "geometry.yaml")
         leg_contexts = build_leg_contexts(
             desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
         )
@@ -66,6 +86,8 @@ class GaitNode(Node):
             config=self._cfg,
             strategy=Tripod(),
             nominal_stance=nominal,
+            initial_stance=initial,
+            coxa_to_bottom=coxa_to_bottom,
             leg_contexts=leg_contexts,
         )
 
@@ -79,6 +101,16 @@ class GaitNode(Node):
         self._sub_params = self.create_subscription(
             GaitParams, "/gait/params", self._on_params, 10
         )
+        # Operator-gated FOLDED ↔ STAND toggle. The engine starts in
+        # FOLDED and emits the initial_pose foot positions until this
+        # message arrives. Once standing, a second press triggers the
+        # symmetric warm-shutdown (STAND → FOLDING → FOLDED). The start
+        # button on the joystick is the canonical source, but anything
+        # publishing here counts. Stray presses outside FOLDED / STAND
+        # are no-ops.
+        self._sub_init = self.create_subscription(
+            Empty, "/gait/initialize", self._on_init, 10
+        )
         self._pub_targets = self.create_publisher(LegTargets, "/legs/targets", 10)
 
         self._last_tick_ns: int | None = None
@@ -88,6 +120,17 @@ class GaitNode(Node):
             f"gait_node up: strategy=tripod, stride_length={self._cfg.stride_length:.3f} m, "
             f"cycle_time in [{self._cfg.min_cycle_time:.2f}, {self._cfg.max_cycle_time:.2f}] s, "
             f"duty_factor={self._cfg.duty_factor:.2f}, step_height={self._cfg.step_height:.3f} m"
+        )
+
+    def _on_init(self, _msg: Empty) -> None:
+        if self._engine.start_initialize():
+            self.get_logger().info("start-button trigger received: FOLDED → INITIALIZE")
+            return
+        if self._engine.start_fold():
+            self.get_logger().info("start-button trigger received: STAND → FOLDING")
+            return
+        self.get_logger().info(
+            f"start-button trigger ignored: engine in state {self._engine.state.name}"
         )
 
     def _on_params(self, msg: GaitParams) -> None:

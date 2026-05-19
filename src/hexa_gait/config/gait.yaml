@@ -63,7 +63,7 @@ touchdown_settle_time: 0.2
 # active state (GAIT or ENGAGING) at zero stride — legs lift in place —
 # so a stick that re-engages before it expires picks the gait back up
 # without any reset sequence.
-forced_touchdown_delay: 0.4
+forced_touchdown_delay: 0.8
 
 # Maximum body yaw rate (rad/s). Explicit knob rather than
 # geometry-derived: the implicit ceiling from the gait is
@@ -72,3 +72,41 @@ forced_touchdown_delay: 0.4
 # Loaded by hexa_gait.limits.load_velocity_caps and consumed by both
 # hexa_teleop (stick scaling) and hexa_control (/cmd_vel clamp).
 angular_z_max: 3.00
+
+# Cold-start (INITIALIZE) ladder. Runs once at engine startup to bridge
+# the folded initial_pose (legs tucked above body, chassis on its belly)
+# to the standing pose:
+#   PLACE_FEET  — three sequential mirroring pairs swing one at a time
+#                 from the folded foot position onto the standing
+#                 footprint at ground level. Pair order is fixed in
+#                 initialize.py (middle pair, then each diagonal) to
+#                 keep the body's CoM near centre.
+#   LIFT_BODY   — all six feet stay at standing XY; body-frame z ramps
+#                 via smoothstep from -coxa_to_bottom to nominal.z
+#                 (world frame: feet pressed down, body lifts).
+# The ladder is non-preemptible — cmd_vel arriving mid-sequence is held
+# until the engine transitions to STAND, mirroring STOPPING's
+# commit-to-completion contract.
+initialize:
+  # Seconds per mirroring pair during PLACE_FEET. Three pairs ⇒ total
+  # PLACE_FEET ≈ 3 * pair_swing_time.
+  pair_swing_time: 0.8
+  # Seconds for the LIFT_BODY z-ramp.
+  lift_body_time: 0.6
+  # Swing-arc clearance (m) added above each leg's apex during
+  # PLACE_FEET. Small because the folded foot already sits well above
+  # the ground.
+  swing_clearance: 0.04
+  # Body-frame offset (m) from the floor (with body on belly) of the
+  # IK target at the end of each PLACE_FEET swing. Must clear the foot
+  # collision sphere, not just the IK target: the URDF puts the IK
+  # target at the bottom of the foot sphere only when the tibia is
+  # vertical (see hexapod.urdf.xacro foot link comment). At the
+  # PLACE_FEET endpose the tibia is partially folded (~50° below
+  # horizontal for the current standing footprint), so the sphere
+  # bottom sits up to ~foot_radius below the IK target. A value below
+  # ~foot_radius lets the sphere penetrate the floor and Gazebo
+  # contact resolution lifts the chassis off its belly before
+  # LIFT_BODY starts. ~foot_radius (geometry.yaml foot.radius = 0.01)
+  # leaves a small real-clearance margin.
+  place_feet_clearance: 0.012

@@ -10,6 +10,7 @@ def _cfg(**overrides) -> JoyConfig:
         axis_right_x=3,
         axis_right_y=4,
         mode_toggle_button=3,
+        init_button=7,
         deadband=0.1,
         gait_linear_max=0.4,
         gait_angular_z_max=1.0,
@@ -24,9 +25,10 @@ def _axes(left_x=0.0, left_y=0.0, right_x=0.0, right_y=0.0) -> tuple[float, ...]
     return (left_x, left_y, 0.0, right_x, right_y, 0.0, 0.0, 0.0)
 
 
-def _buttons(toggle: bool = False) -> tuple[int, ...]:
+def _buttons(toggle: bool = False, init: bool = False) -> tuple[int, ...]:
     out = [0] * 11
     out[3] = int(toggle)
+    out[7] = int(init)
     return tuple(out)
 
 
@@ -138,3 +140,35 @@ def test_short_joy_message_does_not_crash():
     assert out.pose_x == 0.0
     assert out.pose_y == 0.0
     assert out.mode_changed is False
+    assert out.init_request is False
+
+
+def test_init_request_fires_on_rising_edge():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE, prev_init=False)
+
+    out = map_joy(_axes(), _buttons(init=True), cfg, state)
+    assert out.init_request is True
+
+    # Held: must NOT re-fire while the button stays down.
+    for _ in range(5):
+        out = map_joy(_axes(), _buttons(init=True), cfg, state)
+        assert out.init_request is False
+
+    # Release: still no fire.
+    out = map_joy(_axes(), _buttons(init=False), cfg, state)
+    assert out.init_request is False
+
+    # Re-press after release: fires again.
+    out = map_joy(_axes(), _buttons(init=True), cfg, state)
+    assert out.init_request is True
+
+
+def test_init_request_independent_of_mode():
+    # The init button works the same in posture and gait modes — the
+    # cold-start gate is orthogonal to teleop modes.
+    cfg = _cfg()
+    for mode in (POSTURE, GAIT):
+        state = JoyState(mode=mode, prev_init=False)
+        out = map_joy(_axes(), _buttons(init=True), cfg, state)
+        assert out.init_request is True

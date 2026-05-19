@@ -28,6 +28,14 @@ def _nominal_stance() -> dict[str, tuple[float, float, float]]:
     return {n: (xyz[0], xyz[1], -0.10) for n, xyz in _MOUNTS.items()}
 
 
+def _initial_stance() -> dict[str, tuple[float, float, float]]:
+    # Folded feet sitting above each hip at body-frame z > 0. Exact
+    # value doesn't matter for the post-INITIALIZE behaviours these
+    # tests target; only matters that the engine starts in INITIALIZE
+    # and runs the ladder to STAND before anything else.
+    return {n: (xyz[0], xyz[1], 0.05) for n, xyz in _MOUNTS.items()}
+
+
 def _leg_contexts() -> dict[str, LegContext]:
     nominal = _nominal_stance()
     return {
@@ -56,6 +64,14 @@ def _config(
         cmd_zero_tol=1.0e-4,
         forced_touchdown_delay=forced_touchdown_delay,
         touchdown_settle_time=0.0,
+        # Compact INITIALIZE timings: 3*0.04 + 0.04 = 0.16 s. Keeps the
+        # cold-start ladder short enough that drive-past-initialize
+        # finishes in well under 20 ticks at dt=0.02. test_initialize.py
+        # covers the production-time behaviour separately.
+        init_pair_swing_time=0.04,
+        init_lift_body_time=0.04,
+        init_swing_clearance=0.01,
+        init_place_feet_clearance=0.001,
     )
 
 
@@ -87,8 +103,26 @@ def _engine(strategy: _SpyStrategy, config: EngineConfig | None = None) -> Engin
         config=config or _config(),
         strategy=strategy,
         nominal_stance=_nominal_stance(),
+        initial_stance=_initial_stance(),
+        coxa_to_bottom=0.02,
         leg_contexts=_leg_contexts(),
     )
+
+
+def _drive_past_initialize(engine: Engine, dt: float = 0.02) -> None:
+    """Trigger the cold-start ladder and tick until it reaches STAND.
+
+    Existing tests were written before the cold-start FOLDED /
+    INITIALIZE states existed and assume the engine begins at STAND.
+    The compact init timings in ``_config`` keep this loop short
+    (≈8 ticks at dt=0.02).
+    """
+    engine.start_initialize()
+    for _ in range(200):
+        if engine.state is EngineState.STAND:
+            return
+        engine.update(dt=dt, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    raise AssertionError("engine did not reach STAND within 200 ticks")
 
 
 def _drive_to_gait(
@@ -97,13 +131,14 @@ def _drive_to_gait(
     omega_z: float,
     dt: float = 0.02,
 ) -> int:
-    """Run the engine from STAND through ENGAGING into GAIT.
+    """Run the engine from FOLDED through INITIALIZE / STAND / ENGAGING into GAIT.
 
     Returns the number of ticks consumed. Used by the cycle_time /
     stride tests that target steady-state GAIT behaviour and were
     written before engagement existed — engagement freezes its snapshot
     at entry, so they need a steady-state tick to inspect.
     """
+    engine.start_initialize()
     for i in range(200):
         engine.update(dt=dt, v_body_xy=v_body_xy, omega_z=omega_z)
         if engine.state is EngineState.GAIT:
@@ -192,6 +227,8 @@ def test_pure_rotation_outer_leg_dictates_cycle_time():
 def test_zero_command_stays_in_stand_and_skips_cycle_time_math():
     spy = _SpyStrategy()
     engine = _engine(spy)
+    _drive_past_initialize(engine)
+    spy.clear()
     out = engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
 
     assert engine.state is EngineState.STAND
@@ -232,6 +269,7 @@ def test_phase_advances_faster_at_higher_velocity():
 def test_stand_to_first_nonzero_cmd_routes_through_engaging():
     spy = _SpyStrategy()
     engine = _engine(spy)
+    _drive_past_initialize(engine)
     engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
     assert engine.state is EngineState.ENGAGING
     assert engine._engagement.state is EngagementState.ENGAGING
@@ -243,6 +281,7 @@ def test_no_first_tick_position_jump_from_stand():
     spy = _SpyStrategy()
     engine = _engine(spy)
     nominal = _nominal_stance()
+    _drive_past_initialize(engine)
     out = engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
     for name in LEG_NAMES:
         dx = abs(out[name].foot_target[0] - nominal[name][0])
@@ -273,9 +312,15 @@ def test_engaging_to_gait_at_exit_master():
 
 def test_engaging_to_stopping_on_zero_cmd():
     # cmd zeros mid-engagement: bail out to STOPPING via the
-    # TransitionController, just like a GAIT -> STOPPING.
+    # TransitionController on the very first zero tick, regardless of
+    # forced_touchdown_delay. The debounce exists for joystick
+    # zero-crossings during GAIT; ENGAGING is a transient state whose
+    # body velocity has barely ramped, and ticking it at zero cmd would
+    # snap mid-flight swing legs back to NOMINAL (AEP collapses to
+    # NOMINAL when stride is zero).
     spy = _SpyStrategy()
-    engine = _engine(spy)
+    engine = _engine(spy, config=_config(forced_touchdown_delay=0.8))
+    _drive_past_initialize(engine)
     engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
     assert engine.state is EngineState.ENGAGING
     engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
@@ -386,8 +431,11 @@ def test_gait_swing_liftoff_velocity_matches_body_velocity():
         config=_config(),
         strategy=Tripod(),
         nominal_stance=_nominal_stance(),
+        initial_stance=_initial_stance(),
+        coxa_to_bottom=0.02,
         leg_contexts=_leg_contexts(),
     )
+    engine.start_initialize()
     dt = 0.001
     cmd_v = 0.20
 

@@ -139,3 +139,58 @@ def load_standing_pose(
         angles[joint_type] = theta
 
     return (angles["coxa"], angles["femur"], angles["tibia"])
+
+
+def load_initial_pose(geometry_path: str | Path) -> dict[str, JointAngles]:
+    """Parse ``geometry.yaml``'s ``initial_pose:`` block into per-leg ``JointAngles``.
+
+    Returns ``{"l_front": (th_coxa, th_femur, th_tibia), ...}`` with one
+    entry per leg, all in IK-convention radians. The YAML stores only
+    the two reference coxa values (``l_front_deg`` and ``l_middle_deg``);
+    the other four legs derive by the same mirror rules as the
+    ``leg_joints_iface`` macro in ``hexapod.urdf.xacro`` and
+    ``load_leg_specs``:
+
+    - rear  : negate the reference coxa.deg (front/rear mirror)
+    - r_*   : negate after the front/rear mirror (left/right mirror)
+
+    Applying both leaves r_rear with the same sign as l_front. Femur
+    and tibia are uniform across all six legs. Each per-leg angle is
+    validated against ``geometry.yaml``'s ``[lower, upper]`` window so
+    an inconsistent edit fails fast at startup.
+    """
+    with open(geometry_path) as f:
+        raw = yaml.safe_load(f)
+    limits = load_joint_limits(geometry_path)
+    init = raw["initial_pose"]
+
+    femur_theta = _to_urdf_rad("femur", float(init["femur"]["above_horizontal_deg"]))
+    tibia_theta = _to_urdf_rad("tibia", float(init["tibia"]["interior_deg"]))
+    for joint_type, theta in (("femur", femur_theta), ("tibia", tibia_theta)):
+        lim = limits[joint_type]
+        if not (lim.lower <= theta <= lim.upper):
+            raise ValueError(
+                f"initial pose {joint_type} angle {math.degrees(theta):.2f}° "
+                f"lies outside servo range "
+                f"[{math.degrees(lim.lower):.2f}°, {math.degrees(lim.upper):.2f}°]"
+            )
+
+    coxa_lim = limits["coxa"]
+    out: dict[str, JointAngles] = {}
+    for side in ("l", "r"):
+        for name in ("front", "middle", "rear"):
+            ref_deg = float(
+                init["coxa"]["l_middle_deg" if name == "middle" else "l_front_deg"]
+            )
+            after_fr = -ref_deg if name == "rear" else ref_deg
+            after_lr = -after_fr if side == "r" else after_fr
+            coxa_theta = _to_urdf_rad("coxa", after_lr)
+            if not (coxa_lim.lower <= coxa_theta <= coxa_lim.upper):
+                raise ValueError(
+                    f"initial pose coxa angle for {side}_{name} "
+                    f"{math.degrees(coxa_theta):.2f}° lies outside servo range "
+                    f"[{math.degrees(coxa_lim.lower):.2f}°, "
+                    f"{math.degrees(coxa_lim.upper):.2f}°]"
+                )
+            out[f"{side}_{name}"] = (coxa_theta, femur_theta, tibia_theta)
+    return out

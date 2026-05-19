@@ -37,29 +37,33 @@ def test_begin_skips_force_touchdown_when_all_grounded():
 
 
 def test_force_touchdown_drives_airborne_legs_to_nominal_in_parallel():
-    ctrl = _controller(recenter_swing_time=0.1, swing_clearance=0.03)
+    swing_clearance = 0.03
+    half_height = swing_clearance / 2.0
+    ctrl = _controller(recenter_swing_time=0.1, swing_clearance=swing_clearance)
     nominal = _flat_stance()
     # Tripod-style stop: three legs airborne at non-nominal poses.
     swing_set = {"l_front", "r_middle", "l_rear"}
     targets = dict(nominal)
     for n in swing_set:
-        # Offset XY and lift Z above ground so the arc has motion on
-        # every axis.
+        # XY offset + a small Z lift below the half-step threshold so
+        # the apex rule prescribes a meaningful lift (apex = target_z
+        # + half_height, well above origin_z).
         nx, ny, nz = nominal[n]
-        targets[n] = (nx + 0.04, ny - 0.03, nz + 0.05)
+        targets[n] = (nx + 0.04, ny - 0.03, nz + 0.005)
     flags = {n: (n in swing_set) for n in LEG_NAMES}
     ctrl.begin(last_targets=targets, swing_flags=flags)
     assert ctrl.state is TransitionState.FORCE_TOUCHDOWN
 
     # Mid-FORCE_TOUCHDOWN (t = 0.05 s of 0.10 s): every airborne leg
-    # should still be airborne and lifted at least above the higher of
-    # its two endpoints by ``swing_clearance``. Grounded legs hold.
+    # should still be airborne and sitting at the half-step apex
+    # (target_z + step_height/2) — that is the curve's peak when the
+    # origin is below the threshold. Grounded legs hold.
     out = ctrl.update(dt=0.05)
     assert ctrl.state is TransitionState.FORCE_TOUCHDOWN
     for n in swing_set:
         assert out[n].stance is False
-        peak_floor = max(targets[n][2], nominal[n][2])
-        assert out[n].foot_target[2] > peak_floor + 0.01
+        expected_apex_z = nominal[n][2] + half_height
+        assert out[n].foot_target[2] == pytest.approx(expected_apex_z, abs=1e-9)
     for n in LEG_NAMES:
         if n in swing_set:
             continue
@@ -77,9 +81,10 @@ def test_force_touchdown_drives_airborne_legs_to_nominal_in_parallel():
 
 def test_force_touchdown_lifts_leg_that_stopped_just_above_ground():
     # Regression: when a leg stops in late swing — almost touching down
-    # — the recenter arc must still rise to swing_clearance, not skim
+    # — the recenter arc must still rise to step_height/2, not skim
     # along the ground from stop pose to nominal.
     swing_clearance = 0.03
+    half_height = swing_clearance / 2.0
     ctrl = _controller(recenter_swing_time=0.1, swing_clearance=swing_clearance)
     nominal = _flat_stance()
     targets = dict(nominal)
@@ -96,10 +101,10 @@ def test_force_touchdown_lifts_leg_that_stopped_just_above_ground():
     while ctrl.state is TransitionState.FORCE_TOUCHDOWN:
         out = ctrl.update(dt=0.02)
         if ctrl.state is TransitionState.FORCE_TOUCHDOWN:
-            # Mid-flight Z must clear nominal+swing_clearance with
-            # margin — the arc apex is at least the clearance, even
-            # though origin Z is essentially ground.
-            if out["l_front"].foot_target[2] > peak_z + swing_clearance * 0.5:
+            # Mid-flight Z must clear nominal + half-step with margin
+            # — the apex sits at target_z + half_height for a leg that
+            # stopped essentially on the ground.
+            if out["l_front"].foot_target[2] > peak_z + half_height * 0.5:
                 seen_lifted = True
     assert seen_lifted, "FORCE_TOUCHDOWN arc never lifted the leg above ground"
 
@@ -311,5 +316,70 @@ def test_force_touchdown_decelerates_to_rest_at_landing():
     nominal_xyz = nominal["l_front"]
     residual = max(abs(last[i] - nominal_xyz[i]) for i in range(3))
     assert residual < 1e-4, f"residual {residual:.6f} m above rest-to-rest floor"
+
+
+def test_force_touchdown_skips_extra_lift_when_origin_is_already_high():
+    # A leg that stopped well above ground (mid-swing apex) does not
+    # need to rise any further before descending — the up-then-down
+    # bounce was the user-reported source of harshness. With the
+    # half-step apex rule the effective clearance drops to zero and
+    # the max z along the trajectory must equal origin_z.
+    swing_clearance = 0.03
+    half_height = swing_clearance / 2.0
+    ctrl = _controller(recenter_swing_time=0.1, swing_clearance=swing_clearance)
+    nominal = _flat_stance()
+    target_z = nominal["l_front"][2]
+    # Origin sits comfortably above the half-step threshold; the arc
+    # should not lift further.
+    origin_z = target_z + half_height + 0.01
+    targets = dict(nominal)
+    nx, ny, _ = nominal["l_front"]
+    targets["l_front"] = (nx + 0.04, ny - 0.03, origin_z)
+    flags = {n: False for n in LEG_NAMES}
+    flags["l_front"] = True
+    ctrl.begin(last_targets=targets, swing_flags=flags)
+
+    max_z = origin_z
+    while ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+        out = ctrl.update(dt=0.005)
+        if ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+            max_z = max(max_z, out["l_front"].foot_target[2])
+    # The arc may dip below origin_z but must not rise above it
+    # (modulo Bezier numerical noise). A naive max(origin, target) +
+    # swing_clearance apex would land near origin_z + swing_clearance,
+    # i.e. ≈ 5 mm above origin_z — well beyond the tolerance here.
+    assert max_z <= origin_z + 1e-6, (
+        f"trajectory peaked at {max_z:.5f} m, above origin_z {origin_z:.5f}"
+    )
+
+
+def test_force_touchdown_partial_clearance_caps_apex_at_half_step():
+    # A leg that stopped between the ground and the half-step
+    # threshold should rise exactly to that threshold — the effective
+    # clearance is whatever fills the gap up to target_z + half_height.
+    swing_clearance = 0.03
+    half_height = swing_clearance / 2.0
+    ctrl = _controller(recenter_swing_time=0.1, swing_clearance=swing_clearance)
+    nominal = _flat_stance()
+    target_z = nominal["l_front"][2]
+    # Origin is 5 mm above the ground — well below the half-step
+    # threshold (15 mm).
+    origin_z = target_z + 0.005
+    targets = dict(nominal)
+    nx, ny, _ = nominal["l_front"]
+    targets["l_front"] = (nx + 0.04, ny - 0.03, origin_z)
+    flags = {n: False for n in LEG_NAMES}
+    flags["l_front"] = True
+    ctrl.begin(last_targets=targets, swing_flags=flags)
+
+    expected_apex_z = target_z + half_height
+    max_z = origin_z
+    while ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+        out = ctrl.update(dt=0.005)
+        if ctrl.state is TransitionState.FORCE_TOUCHDOWN:
+            max_z = max(max_z, out["l_front"].foot_target[2])
+    # Quartic-Bezier apex is the curve's exact peak; samples may miss
+    # the true max by a tick, but should be within 0.2 mm.
+    assert max_z == pytest.approx(expected_apex_z, abs=2e-4)
 
 

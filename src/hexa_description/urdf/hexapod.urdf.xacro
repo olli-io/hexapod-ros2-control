@@ -74,12 +74,39 @@
   <xacro:property name="tibia_upper_rad"
                   value="${pi - geom['joints']['tibia']['lower_limit_deg'] * pi / 180}"/>
 
-  <!-- Body length and width are derived from the front and middle mounts
-       so the chassis always extends just past the hips: 10% margin per side. -->
+  <!-- Initial pose used by ros2_control's <initial_value>: same deg→rad
+       conversion as the <limit> window above. In sim, gz_ros2_control
+       applies it on spawn; on the real robot, the hardware plugin uses it
+       as the assumed pose for servos that cannot report position. Femur
+       and tibia are uniform across all six legs; the per-leg coxa value
+       lives inside the leg_joints_iface macro so it can apply the same
+       x/y mirror as mount_leg. -->
+  <xacro:property name="initial_femur_rad"
+                  value="${-geom['initial_pose']['femur']['above_horizontal_deg'] * pi / 180}"/>
+  <xacro:property name="initial_tibia_rad"
+                  value="${pi - geom['initial_pose']['tibia']['interior_deg'] * pi / 180}"/>
+
+  <!-- Body length and width are derived from the front and middle mounts.
+       Length extends 10% past the front hips; width is 80% of the middle
+       hip span, so the chassis is narrower than the coxa bases and the
+       middle bar (below) bridges the gap between them. -->
   <xacro:property name="body_length" value="${2 * geom['mounts']['l_front']['x']  * 1.1}"/>
-  <xacro:property name="body_width"  value="${2 * geom['mounts']['l_middle']['y'] * 1.1}"/>
-  <xacro:property name="body_height" value="${geom['body']['height']}"/>
-  <xacro:property name="body_mass"   value="${geom['body']['mass']}"/>
+  <xacro:property name="body_width"  value="${2 * geom['mounts']['l_middle']['y'] * 0.8}"/>
+  <!-- Body box vertical extent is split around the coxa joint plane
+       (= base_link origin, z=0). The box height is the sum of the two
+       halves; body_z_offset shifts the box origin so the coxa joints
+       end up at the requested z relative to the chassis (positive
+       offset moves the box centre up). Equal coxa_to_bottom and
+       coxa_to_top reproduce the previous centred-box behaviour. -->
+  <xacro:property name="coxa_to_bottom" value="${geom['body']['coxa_to_bottom']}"/>
+  <xacro:property name="coxa_to_top"    value="${geom['body']['coxa_to_top']}"/>
+  <xacro:property name="body_height"    value="${coxa_to_bottom + coxa_to_top}"/>
+  <xacro:property name="body_z_offset"  value="${(coxa_to_top - coxa_to_bottom) / 2}"/>
+  <xacro:property name="body_mass"      value="${geom['body']['mass']}"/>
+
+  <!-- Half-span between the middle coxa bases; the bar spans from
+       -middle_mount_y to +middle_mount_y along the body y-axis. -->
+  <xacro:property name="middle_mount_y" value="${geom['mounts']['l_middle']['y']}"/>
 
   <!-- =====================================================================
        Materials (just for colour in RViz / Gazebo).
@@ -114,9 +141,12 @@
          ixx = (1/12) m (y^2 + z^2)
          iyy = (1/12) m (x^2 + z^2)
          izz = (1/12) m (x^2 + y^2)
-       COM at link origin (the body box is centred on base_link). -->
-  <xacro:macro name="box_inertial" params="mass x y z">
+       COM defaults to the link origin; pass z_offset to shift it along
+       +z (used by base_link when the body box is split asymmetrically
+       around the coxa plane). -->
+  <xacro:macro name="box_inertial" params="mass x y z z_offset:=0">
     <inertial>
+      <origin xyz="0 0 ${z_offset}" rpy="0 0 0"/>
       <mass value="${mass}"/>
       <inertia ixx="${mass * (y*y + z*z) / 12.0}"
                iyy="${mass * (x*x + z*z) / 12.0}"
@@ -130,12 +160,14 @@
        ===================================================================== -->
   <link name="base_link">
     <visual>
+      <origin xyz="0 0 ${body_z_offset}" rpy="0 0 0"/>
       <geometry>
         <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
       <material name="body_grey"/>
     </visual>
     <collision>
+      <origin xyz="0 0 ${body_z_offset}" rpy="0 0 0"/>
       <geometry>
         <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
@@ -143,7 +175,41 @@
     <xacro:box_inertial mass="${body_mass}"
                         x="${body_length}"
                         y="${body_width}"
-                        z="${body_height}"/>
+                        z="${body_height}"
+                        z_offset="${body_z_offset}"/>
+  </link>
+
+  <!-- =====================================================================
+       Middle bar — decorative blue cylinder spanning the middle coxa
+       bases, with endcap spheres on each mount point. Lives in its own
+       link so the Gazebo material reference can paint it independently
+       of the dark-grey body box. Visual-only; the fixed joint lumps it
+       into base_link for dynamics, so no inertial entry is needed.
+       ===================================================================== -->
+  <joint name="middle_bar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="middle_bar"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="middle_bar">
+    <visual>
+      <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+      <geometry>
+        <cylinder radius="${coxa_radius}" length="${2 * middle_mount_y}"/>
+      </geometry>
+      <material name="leg_blue"/>
+    </visual>
+    <visual>
+      <origin xyz="0 ${middle_mount_y} 0" rpy="0 0 0"/>
+      <geometry><sphere radius="${coxa_radius}"/></geometry>
+      <material name="leg_blue"/>
+    </visual>
+    <visual>
+      <origin xyz="0 ${-middle_mount_y} 0" rpy="0 0 0"/>
+      <geometry><sphere radius="${coxa_radius}"/></geometry>
+      <material name="leg_blue"/>
+    </visual>
   </link>
 
   <!-- =====================================================================
@@ -364,12 +430,27 @@
        here is the contract that package will fulfil).
        ===================================================================== -->
   <xacro:macro name="leg_joints_iface" params="side name">
+    <!-- Per-leg coxa initial angle, derived from
+         initial_pose.coxa.l_{front,middle}_deg by the same x/y mirror as
+         mount_leg above:
+           - rear  : negate (front/rear mirror)
+           - r_*   : negate (left/right mirror)
+         Applying both leaves r_rear with the same sign as l_front. -->
+    <xacro:property name="ref_initial_coxa_deg"
+                    value="${geom['initial_pose']['coxa']['l_middle_deg' if name == 'middle' else 'l_front_deg']}"/>
+    <xacro:property name="initial_coxa_deg_after_fr"
+                    value="${-ref_initial_coxa_deg if name == 'rear' else ref_initial_coxa_deg}"/>
+    <xacro:property name="initial_coxa_rad"
+                    value="${(-initial_coxa_deg_after_fr if side == 'r' else initial_coxa_deg_after_fr) * pi / 180}"/>
+
     <joint name="${side}_${name}_coxa_joint">
       <command_interface name="position">
         <param name="min">${coxa_lower_rad}</param>
         <param name="max">${coxa_upper_rad}</param>
       </command_interface>
-      <state_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">${initial_coxa_rad}</param>
+      </state_interface>
       <state_interface name="velocity"/>
     </joint>
     <joint name="${side}_${name}_femur_joint">
@@ -377,7 +458,9 @@
         <param name="min">${femur_lower_rad}</param>
         <param name="max">${femur_upper_rad}</param>
       </command_interface>
-      <state_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">${initial_femur_rad}</param>
+      </state_interface>
       <state_interface name="velocity"/>
     </joint>
     <joint name="${side}_${name}_tibia_joint">
@@ -385,7 +468,9 @@
         <param name="min">${tibia_lower_rad}</param>
         <param name="max">${tibia_upper_rad}</param>
       </command_interface>
-      <state_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">${initial_tibia_rad}</param>
+      </state_interface>
       <state_interface name="velocity"/>
     </joint>
   </xacro:macro>
