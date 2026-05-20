@@ -214,11 +214,17 @@ class GaitNode(Node):
                 return
         self._last_tick_ns = now_ns
 
+        # DEBUG: trace engine state transitions. Remove once verified.
+        _prev_engine_state = self._engine.state
         out = self._engine.update(
             dt=dt,
             v_body_xy=(self._linear_x, self._linear_y),
             omega_z=self._angular_z,
         )
+        if self._engine.state is not _prev_engine_state:
+            self.get_logger().info(
+                f"[gait-debug] {_prev_engine_state.name} -> {self._engine.state.name}"
+            )
 
         msg = LegTargets()
         msg.header.stamp = self.get_clock().now().to_msg()

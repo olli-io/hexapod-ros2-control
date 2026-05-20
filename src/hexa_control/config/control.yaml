@@ -13,3 +13,13 @@
 default_gait: "tripod"
 tau_linear: 0.25    # s — first-order time constant on (v_x, v_y)
 tau_angular: 0.40   # s — first-order time constant on omega_z
+
+# Snap-to-target thresholds. The exponential filter only approaches the
+# target asymptotically, so a release-from-walking would otherwise leave
+# a tail well above the gait engine's cmd_zero_tol (1e-4) for over a
+# second. During that tail GAIT keeps re-evaluating with a shrinking
+# stride and swing legs drift toward nominal before STOPPING ever fires.
+# Snapping kills only the bottom of the tail; decel above the threshold
+# stays smooth.
+snap_tol_linear: 1.0e-3   # m/s
+snap_tol_angular: 1.0e-3  # rad/s

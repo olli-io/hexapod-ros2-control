@@ -38,9 +38,12 @@ def generate_launch_description():
             # /dev/input/jsN selector — bump if multiple joysticks are
             # attached. 0 is the default but stated here for clarity.
             "device_id": 0,
-            # Deadband is applied in teleop_joy so the YAML stays the
-            # single source of truth; tell joy_node to pass through raw.
-            "deadzone": 0.0,
+            # Small driver-level deadzone to nuke stick noise at the
+            # source — keeps released-stick axes pinned to exact zero so
+            # downstream cmd_vel doesn't flicker around the gait engine's
+            # cmd_zero_tol. The larger shaping deadband still lives in
+            # teleop_joy / the YAML.
+            "deadzone": 0.05,
             # Resend the last Joy at this rate so teleop_joy keeps
             # producing fresh /cmd_vel + /body/pose even when the
             # sticks are idle.

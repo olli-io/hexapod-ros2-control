@@ -39,6 +39,8 @@ class ControlConfig:
     default_gait: str
     tau_linear: float
     tau_angular: float
+    snap_tol_linear: float
+    snap_tol_angular: float
 
 
 def _load_config(path: Path) -> ControlConfig:
@@ -52,10 +54,14 @@ def _load_config(path: Path) -> ControlConfig:
         )
     tau_linear = float(raw["tau_linear"])
     tau_angular = float(raw["tau_angular"])
+    snap_tol_linear = float(raw.get("snap_tol_linear", 1.0e-3))
+    snap_tol_angular = float(raw.get("snap_tol_angular", 1.0e-3))
     return ControlConfig(
         default_gait=name,
         tau_linear=tau_linear,
         tau_angular=tau_angular,
+        snap_tol_linear=snap_tol_linear,
+        snap_tol_angular=snap_tol_angular,
     )
 
 
@@ -82,6 +88,8 @@ class ControlNode(Node):
         self._limiter = BodyVelocityLimiter(
             tau_linear=self._cfg.tau_linear,
             tau_angular=self._cfg.tau_angular,
+            snap_tol_linear=self._cfg.snap_tol_linear,
+            snap_tol_angular=self._cfg.snap_tol_angular,
         )
         self._engine_state: str = ""
         self._dt = 1.0 / PUBLISH_RATE_HZ

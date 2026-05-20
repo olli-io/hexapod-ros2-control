@@ -690,7 +690,7 @@ class Engine:
                     master_phase=self._clock.master,
                 )
                 return self._tick_disengagement(dt)
-            return self._tick_gait(dt, v_body_xy, omega_z)
+            return self._tick_gait(dt, v_body_xy, omega_z, cmd_zero)
 
         # STOPPING: run the disengagement queue to completion. A
         # non-zero cmd arriving mid-stop is honoured only after the
@@ -715,7 +715,30 @@ class Engine:
         dt: float,
         v_body_xy: tuple[float, float],
         omega_z: float,
+        cmd_zero: bool,
     ) -> dict[str, LegOutput]:
+        # Hold the previous tick's targets verbatim during the cmd-zero
+        # debounce window. Freezing only the clock is not enough: the
+        # strategy parameterizes its arcs by current stride, so at
+        # stride=0 it snaps every leg from its mid-walking arc point to
+        # the zero-stride centred arc (PEP=AEP=nominal) on the first
+        # cmd_zero tick — a visible discontinuity that looked like an
+        # extra disengagement pass. Skipping the strategy call entirely
+        # holds every foot exactly where it was; when cmd resumes, the
+        # clock advances from the frozen phase and the strategy picks
+        # up; when the debounce expires, STOPPING fires and the
+        # disengagement controller lands the held positions to nominal.
+        if cmd_zero:
+            phases = self._clock.phases()
+            return {
+                n: LegOutput(
+                    foot_target=self._last_targets[n],
+                    phase=phases[n],
+                    stance=self._last_stance[n],
+                )
+                for n in LEG_NAMES
+            }
+
         duty_factor = self._strategy.duty_factor
         stride_length = self._config.stride_length
 

@@ -24,7 +24,13 @@ Vec3 = tuple[float, float, float]
 
 
 class BodyVelocityLimiter:
-    def __init__(self, tau_linear: float, tau_angular: float) -> None:
+    def __init__(
+        self,
+        tau_linear: float,
+        tau_angular: float,
+        snap_tol_linear: float = 1.0e-3,
+        snap_tol_angular: float = 1.0e-3,
+    ) -> None:
         if tau_linear <= 0.0:
             raise ValueError(
                 f"tau_linear must be positive, got {tau_linear}"
@@ -33,8 +39,18 @@ class BodyVelocityLimiter:
             raise ValueError(
                 f"tau_angular must be positive, got {tau_angular}"
             )
+        if snap_tol_linear < 0.0:
+            raise ValueError(
+                f"snap_tol_linear must be non-negative, got {snap_tol_linear}"
+            )
+        if snap_tol_angular < 0.0:
+            raise ValueError(
+                f"snap_tol_angular must be non-negative, got {snap_tol_angular}"
+            )
         self._tau_linear = tau_linear
         self._tau_angular = tau_angular
+        self._snap_tol_linear = snap_tol_linear
+        self._snap_tol_angular = snap_tol_angular
         self._v_x = 0.0
         self._v_y = 0.0
         self._omega = 0.0
@@ -52,11 +68,37 @@ class BodyVelocityLimiter:
 
         tgt_vx, tgt_vy, tgt_omega = target
 
-        alpha_lin = 1.0 - math.exp(-dt / self._tau_linear)
-        self._v_x += alpha_lin * (tgt_vx - self._v_x)
-        self._v_y += alpha_lin * (tgt_vy - self._v_y)
+        # Zero-target axes snap immediately. Asymptotic decay on a
+        # release-from-walking leaves the filter state above the gait
+        # engine's cmd_zero_tol for hundreds of milliseconds; during
+        # that tail GAIT keeps ticking with a shrinking stride and
+        # master phase keeps advancing, so legs visibly settle and
+        # *new* lift-offs can trigger before cmd_zero ever fires.
+        # Smoothing only matters when stepping cmd_vel down to a lower
+        # non-zero value — a full release doesn't benefit from being
+        # rounded off.
+        if tgt_vx == 0.0:
+            self._v_x = 0.0
+        else:
+            alpha_lin = 1.0 - math.exp(-dt / self._tau_linear)
+            self._v_x += alpha_lin * (tgt_vx - self._v_x)
+            if abs(self._v_x) < self._snap_tol_linear:
+                self._v_x = 0.0
 
-        alpha_ang = 1.0 - math.exp(-dt / self._tau_angular)
-        self._omega += alpha_ang * (tgt_omega - self._omega)
+        if tgt_vy == 0.0:
+            self._v_y = 0.0
+        else:
+            alpha_lin = 1.0 - math.exp(-dt / self._tau_linear)
+            self._v_y += alpha_lin * (tgt_vy - self._v_y)
+            if abs(self._v_y) < self._snap_tol_linear:
+                self._v_y = 0.0
+
+        if tgt_omega == 0.0:
+            self._omega = 0.0
+        else:
+            alpha_ang = 1.0 - math.exp(-dt / self._tau_angular)
+            self._omega += alpha_ang * (tgt_omega - self._omega)
+            if abs(self._omega) < self._snap_tol_angular:
+                self._omega = 0.0
 
         return self.state
