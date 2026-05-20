@@ -37,7 +37,7 @@ from hexa_kinematics.leg_ik import forward_kinematics
 from .clock import LEG_NAMES
 from .gaits.base import identity_y_sign, swing_arc
 from .initialize import PAIR_ORDER
-from .transition import LegOutput
+from .disengagement import LegOutput
 
 
 __all__ = [

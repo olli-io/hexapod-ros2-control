@@ -63,10 +63,10 @@ def _config(
         step_height=0.03,
         swing_width=0.0,
         controller_dt=0.02,
-        recenter_swing_time=0.4,
         cmd_zero_tol=1.0e-4,
         forced_touchdown_delay=forced_touchdown_delay,
-        touchdown_settle_time=0.0,
+        max_foot_speed=0.333,
+        max_swing_time=0.6,
         # Compact INITIALIZE timings: 3*0.04 + 0.04 = 0.16 s. Keeps the
         # cold-start ladder short enough that drive-past-initialize
         # finishes in well under 20 ticks at dt=0.02. test_initialize.py
@@ -304,25 +304,25 @@ def test_no_first_tick_position_jump_from_stand():
 
 
 def test_engaging_to_gait_at_exit_master():
-    # After engage_time the engine must reach GAIT and the clock must
-    # be seeded at exit_master = duty_factor before any GAIT tick has
-    # advanced it.
+    # After one full engagement cycle the engine must reach GAIT and the
+    # clock must be seeded at exit_master, which wraps to 0.0 (engagement
+    # covers a full master cycle).
     spy = _SpyStrategy()
     engine = _engine(spy)
     _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
     assert engine.state is EngineState.GAIT
-    # The handoff tick resets the clock to exit_master = 0.5; _drive_to_gait
-    # returns immediately after that tick, so the clock has not yet been
-    # advanced by a GAIT step.
-    assert engine._clock.master == pytest.approx(0.5, abs=1e-9)
+    # The handoff tick resets the clock to exit_master = 0.0;
+    # _drive_to_gait returns immediately after that tick, so the clock
+    # has not yet been advanced by a GAIT step.
+    assert engine._clock.master == pytest.approx(0.0, abs=1e-9)
     # First GAIT tick advances by dt / cycle_time = 0.02 / 1.0.
     engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
-    assert engine._clock.master == pytest.approx(0.5 + 0.02, abs=1e-9)
+    assert engine._clock.master == pytest.approx(0.02, abs=1e-9)
 
 
 def test_engaging_to_stopping_on_zero_cmd():
     # cmd zeros mid-engagement: bail out to STOPPING via the
-    # TransitionController on the very first zero tick, regardless of
+    # DisengagementController on the very first zero tick, regardless of
     # forced_touchdown_delay. The debounce exists for joystick
     # zero-crossings during GAIT; ENGAGING is a transient state whose
     # body velocity has barely ramped, and ticking it at zero cmd would
@@ -341,7 +341,7 @@ def test_brief_zero_cmd_under_debounce_stays_in_gait():
     # Right-joystick passing through center sends cmd_vel to zero for a
     # handful of ticks before swinging back to the new yaw direction.
     # With forced_touchdown_delay set, those zero ticks must not trip
-    # FORCE_TOUCHDOWN — the engine has to keep ticking GAIT so the
+    # the stop transition — the engine has to keep ticking GAIT so the
     # cycle resumes seamlessly when cmd_vel returns.
     spy = _SpyStrategy()
     engine = _engine(
@@ -377,10 +377,14 @@ def test_sustained_zero_cmd_past_debounce_enters_stopping():
         engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
     assert engine.state is EngineState.GAIT
 
-    # The 6th zero tick puts elapsed at 0.12 s ≥ 0.10 s ⇒ STOPPING.
+    # The 6th zero tick puts elapsed at 0.12 s ≥ 0.10 s ⇒ engine
+    # leaves GAIT. With every leg already at nominal (stride was zero
+    # during the debounce ticks) the stop transition completes inside
+    # the same tick it begins, so the engine can be observed in either
+    # STOPPING (just entered) or STAND (already drained).
     for _ in range(2):
         engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
-    assert engine.state is EngineState.STOPPING
+    assert engine.state in (EngineState.STOPPING, EngineState.STAND)
 
 
 def test_debounce_resets_on_nonzero_cmd():
@@ -429,14 +433,12 @@ def test_repeat_engagement_after_full_stop():
 
 
 def test_gait_swing_liftoff_velocity_matches_body_velocity():
-    # Regression for the 2× swing-trajectory bug. Tripod B enters its
-    # first GAIT swing at master = exit_master with phase = 0 (lift-off
-    # from PEP). The body-frame foot velocity right after lift-off must
-    # equal -cmd_v, NOT -2·cmd_v (the value the bug used to produce).
-    #
-    # Measured strictly inside GAIT (not across the engagement boundary)
-    # so the O(dt) integration error in engagement doesn't contaminate
-    # the lift-off velocity reading.
+    # Regression for the 2× swing-trajectory bug. Engagement now covers
+    # one full cycle and exits at master = 0, so the legs at PEP and
+    # about to swing are Tripod A (l_front, r_middle, l_rear — offset 0,
+    # phase = 0 at GAIT entry). Tripod B (offset 0.5) sits at AEP and
+    # begins GAIT in stance. We trace l_front to capture the swing
+    # lift-off velocity.
     engine = Engine(
         config=_config(),
         strategy=Tripod(),
@@ -450,10 +452,13 @@ def test_gait_swing_liftoff_velocity_matches_body_velocity():
     cmd_v = 0.20
 
     trace_gait: list[float] = []
-    for _ in range(700):
+    # Engagement is one full cycle (≈ 1.0 s at v=0.20) plus the short
+    # INITIALIZE ladder, so we need well over 1000 ticks at dt=0.001 to
+    # collect a useful slice of GAIT.
+    for _ in range(1600):
         out = engine.update(dt=dt, v_body_xy=(cmd_v, 0.0), omega_z=0.0)
         if engine.state is EngineState.GAIT:
-            trace_gait.append(out["r_front"].foot_target[0])
+            trace_gait.append(out["l_front"].foot_target[0])
             if len(trace_gait) >= 20:
                 break
 

@@ -101,16 +101,14 @@ startup; there are no duplicate knobs in the teleop or control YAML.
 
 See `hexa_gait/hexa_gait/limits.py` for the helper API.
 
-Acceleration shaping is **not** performed in this package during the
-steady GAIT cycle. `hexa_control` runs a stateful
-`BodyVelocityLimiter` between `scale_to_envelope` and the
-`/gait/params` publish, so the `linear_x` / `linear_y` / `angular_z`
-fields arriving here are already rate-limited. The engagement
-controller's smoothstep envelope (`hexa_gait/hexa_gait/engagement.py`)
-remains responsible for the geometric `STAND → GAIT` foot handoff
-(stance feet must land at PEP at `master = β`); the two shapers
-compose harmlessly. See `hexa_control/README.md` for the limiter's
-placement and the documented transient envelope-excursion behaviour.
+Command-velocity smoothing is **not** done here. `hexa_control` runs
+a first-order `BodyVelocityLimiter` between `scale_to_envelope` and
+the `/gait/params` publish, so the velocity arriving here is already
+filtered. The engagement smoothstep (`engagement.py`) still owns the
+geometric `STAND → GAIT` foot handoff: it runs one full master cycle
+during which each leg performs its single first swing from NOMINAL,
+landing at the strategy's expected position by `master = 1.0`. The two
+shapers compose harmlessly.
 
 ## Cold start: FOLDED → INITIALIZE
 
@@ -159,57 +157,81 @@ commit-to-completion contract. Tuning knobs (`pair_swing_time`,
 When GaitParams arrives with zero velocity (sent by `hexa_control` when
 `cmd_vel` goes idle), the engine does not simply freeze the phase clock
 — that would leave any leg in mid-swing dangling in the air. Instead it
-runs a four-state reset sequence that brings the robot from an
-arbitrary mid-cycle pose to a clean standing pose:
+drains the legs to the nominal stance via a small queue of **group
+swings**, where a group is a set of legs scheduled to swing in parallel.
+Groups run back-to-back. The same algorithm works for every gait; only
+the group composition changes.
 
-1. **FORCE_TOUCHDOWN** — every leg airborne at stop time swings to
-   its nominal stance position via the standard swing arc over
-   `recenter_swing_time`. The apex is capped at `target_z +
-   step_height/2` per leg: legs that stopped near the floor get a
-   small upward arc to clear it on the way home, and legs already at
-   or above that half-step threshold descend with no extra lift (the
-   curve sweeps horizontally to the midpoint at `origin_z` before
-   dropping to nominal — no up-then-down bounce). The swing arc runs
-   with both endpoint velocities pinned to zero so the Bezier
-   decelerates fully at touchdown — landing at the steady-state
-   stance velocity would slam the foot into the floor and rock the
-   chassis. All airborne legs move in parallel. The legs that were
-   already on the ground at stop time hold their stop-time positions
-   exactly — they do not budge. Skipped if no leg was airborne when
-   `cmd_vel` went idle.
-2. **SETTLE** — hold every foot still for `touchdown_settle_time`
-   seconds. Lets residual chassis sway from the touchdown impact damp
-   out before the next sweep adds more motion. Skipped when
-   `touchdown_settle_time` is zero or FORCE_TOUCHDOWN was skipped
-   (no impact to settle from).
-3. **RECENTER** — sweep the originally-grounded legs to nominal one at
-   a time, in canonical leg order, using the normal swing-arc
-   trajectory (lift → translate → place). By this point every foot is
-   on the ground, so the support polygon is always 5/1 stance/swing
-   and the body stays stable.
-4. **STAND** — hold the nominal stance with phase frozen. The engine
-   stays here until a non-zero velocity arrives.
+The queue is built at the moment the engine enters STOPPING:
 
-The key stability invariant: a grounded foot is never repositioned
-while any other foot is airborne. FORCE_TOUCHDOWN holds the stance legs
-perfectly still while the swing legs settle, and RECENTER only starts
-once all six feet are down.
+1. **Airborne group** — every leg currently in the swing window
+   (`phase < 1 − β` per the active gait, or flagged airborne by the
+   engine) goes in the first group. They are already in the air, so
+   they must come down before anything else moves. For tripod this is
+   one of the two natural triples; for ripple it can be one or two
+   singletons that happened to overlap in the swing window; for wave
+   it is at most one leg.
+2. **Stance groups** — the remaining legs are bucketed by exact phase
+   offset (legs sharing an offset are gait-natural parallel partners,
+   e.g. tripod's three) and ordered by **descending current phase**.
+   The bucket whose phase is closest to wrapping to 0 is the next leg
+   the gait itself would have lifted off, so it goes next; the bucket
+   furthest from a natural lift-off goes last. This continues the
+   gait's cyclic rotation from where it stopped.
+3. **Empty-group strip** — any group whose every leg is already at
+   nominal is dropped (no twitch).
+
+Each group's swings then run in parallel, rest-to-rest, with per-leg
+adaptive duration `clamp(distance_xy / max_foot_speed, min_swing_time,
+max_swing_time)`. The apex is the higher of `origin_z` and `target_z +
+step_height`: a grounded leg lifts the full clearance; an airborne leg
+already above that height descends with no extra bounce; an airborne
+leg near the floor gets a partial lift to the same apex. Both endpoint
+velocities are pinned to zero so the Bezier decelerates fully at
+touchdown — landing at the steady-state stance velocity would slam the
+foot into the floor and rock the chassis. The group completes when its
+slowest leg lands; the next group starts immediately.
+
+Once the queue is drained the controller emits the nominal stance with
+`stance=True` for all six legs and the engine transitions to STAND.
+
+Per-gait stop-time bound (at `min_swing_time = 0.3 s`, all legs near
+nominal):
+
+- **Tripod** (β=0.5, two offset groups) — ≤ 2 × `max_swing_time`.
+- **Ripple** (β=2/3, up to five groups after merging the swing
+  overlap) — ≤ 5 × `max_swing_time`.
+- **Wave** (β=5/6, six groups) — ≤ 6 × `max_swing_time`.
+
+### Stability
+
+Sequential groups are strictly more conservative than the gait's
+overlapping mid-walk swing windows. Tripod's two triples are each a
+stable support set; ripple/wave never have more than one stance group
+airborne at a time. The "support polygon contains the CoM" invariant is
+*inherited from the gait itself* — β and the phase offsets are chosen
+so it holds, and the disengagement controller's groups are subsets of
+gait-natural lift-off events.
 
 ### Architectural note
 
-The reset sequence is *stateful per leg* (each leg remembers where it
+The drain sequence is *stateful per leg* (each leg remembers where it
 started and where it's going), which does not fit the
 `(phase, params) → foot_target` pure-function contract of the gait
-strategies. It is therefore implemented as a separate **transition
-controller** alongside the strategies; the engine routes between the
-active strategy and the transition controller based on commanded
-velocity. RECENTER reuses the strategy's swing-arc helper so trajectory
-code is not duplicated.
+strategies. It is therefore implemented as a separate **disengagement
+controller** (semantic counterpart to the engagement controller that
+handles STAND → GAIT) alongside the strategies; the engine routes
+between the active strategy and the disengagement controller based on
+commanded velocity. The controller computes its own swing trajectories
+rather than calling the strategy because at `stride = 0` the strategy
+degenerates: PEP equals AEP equals nominal, the stance Bezier collapses
+to a constant, and the swing arc reduces to a degenerate hop. Owning
+the trajectory math here keeps the strategy contract clean while
+letting the disengagement controller reuse the strategy's *schedule*
+(phase offsets and duty factor) for free.
 
 ### Resume
 
-If a non-zero velocity arrives mid-sequence, the engine completes the
-reset first (FORCE_TOUCHDOWN → SETTLE → RECENTER → STAND) and only then starts
-the new gait from the nominal stance. The reset is short (≤ one
-wave-style cycle ≈ 6 leg moves), so the latency cost is acceptable, and
-aborting mid-sequence would risk legs left in unsafe poses.
+If a non-zero velocity arrives mid-drain, the engine completes the
+queue first and only then starts the new gait from the nominal stance.
+Aborting mid-sequence would risk legs left in unsafe poses.

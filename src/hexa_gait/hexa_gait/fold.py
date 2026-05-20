@@ -37,7 +37,7 @@ from typing import Mapping
 from .clock import LEG_NAMES
 from .gaits.base import identity_y_sign, swing_arc
 from .initialize import PAIR_ORDER, _smoothstep
-from .transition import LegOutput
+from .disengagement import LegOutput
 
 
 __all__ = [

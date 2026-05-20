@@ -5,9 +5,9 @@ services:
       args:
         USER_UID: "${UID:-1000}"
         USER_GID: "${GID:-1000}"
-    image: hexapod-dev:jazzy
-    container_name: hexapod-dev
-    hostname: hexapod-dev
+    image: hexa-dev:jazzy
+    container_name: hexa-dev
+    hostname: hexa-dev
     network_mode: host
     ipc: host
     stdin_open: true

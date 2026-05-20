@@ -1,47 +1,11 @@
 """Velocity shaping pass-through.
 
-Subscribes to ``/cmd_vel`` (``geometry_msgs/Twist``) from teleop / nav,
-shapes the linear and angular components to fit the gait's velocity
-envelope (loaded from ``hexa_gait/config/gait.yaml`` — single source of
-truth — via ``hexa_gait.load_velocity_caps`` and
-``hexa_gait.scale_to_envelope``), applies a body-velocity rate limit
-(``BodyVelocityLimiter``), and republishes the result as ``GaitParams``
-on ``/gait/params`` at 50 Hz.
-
-Also subscribes to ``/cmd_gait`` (``std_msgs/String``, ``transient_local``
-durability so a late-starting control node still receives the latest
-selection) and multiplexes the chosen gait onto
-``GaitParams.gait_name``. Validates against the known strategy set
-(tripod / ripple / wave); unknown names are warned and dropped.
-
-Shaping cuts the velocity triple in one pass. ``omega_z`` is clamped to
-``angular_max`` first; then if the implied per-leg planar speed
-(computed from the leg mounts loaded via
-``hexa_kinematics.load_leg_specs``) exceeds ``linear_max``, the cut is
-split between translation and yaw in ratio ``yaw_bias : (1 − yaw_bias)``
-— translation absorbs the larger fraction, so a stick-fully-forward +
-stick-yaw command keeps more of the commanded yaw at the extremes
-instead of being eaten by the engine's per-leg stride clamp. The
-trade-off vs uniform scaling is that the commanded translation:yaw
-ratio is not preserved when the cut kicks in.
-
-The rate limiter runs *after* ``scale_to_envelope`` and bounds the
-per-tick change in ``(v_x, v_y, omega_z)``. Without it, releasing one
-axis (e.g. yaw) makes ``scale_to_envelope`` stop suppressing the
-others, and the published velocity steps in a single tick. The limiter
-absorbs that step into a ``max_*_accel``-bounded ramp. It also smooths
-gait-cap changes on ``/cmd_gait`` and Nav2 stops. Subscribed to
-``/gait/state``; resets to zero on every transition out of the active
-walking set ({``engaging``, ``gait``}) so a fresh ``STAND → ENGAGING``
-cycle always starts the limiter from zero (no fight with the
-engagement controller's smoothstep). The limiter is not a hard safety
-limit: during ramp-down it allows brief excursions outside the static
-``scale_to_envelope`` window — see the package README.
-
-The walk-cycle knobs (cycle_time, duty_factor, step_height, stride_length)
-live in ``hexa_gait/config/gait.yaml`` and are not on the wire —
-cycle_time is derived inside the gait engine each tick from the commanded
-velocity and the configured stride_length.
+Subscribes to ``/cmd_vel``, runs it through ``scale_to_envelope`` and
+the ``BodyVelocityLimiter`` first-order filter, and republishes as
+``GaitParams`` on ``/gait/params`` at 50 Hz. ``/cmd_gait`` multiplexes
+the active gait name (validated against tripod/ripple/wave).
+The filter resets to zero on edges leaving the walking set
+(``{engaging, gait}``) so each STAND → ENGAGING starts clean.
 """
 
 from __future__ import annotations
@@ -66,17 +30,15 @@ from hexa_control.body_velocity_limiter import BodyVelocityLimiter
 
 PUBLISH_RATE_HZ = 50.0
 
-# Engine states (published as strings on /gait/state) during which the
-# engine is actively driving the body from cmd_vel. Outside this set
-# the limiter resets to zero so a future STAND→ENGAGING begins fresh.
+# Engine states in which cmd_vel is actively driving the body.
 _WALKING_STATES: frozenset[str] = frozenset({"engaging", "gait"})
 
 
 @dataclass(frozen=True)
 class ControlConfig:
     default_gait: str
-    max_linear_accel: float
-    max_angular_accel: float
+    tau_linear: float
+    tau_angular: float
 
 
 def _load_config(path: Path) -> ControlConfig:
@@ -88,12 +50,12 @@ def _load_config(path: Path) -> ControlConfig:
             f"default_gait={name!r} not in STRATEGIES "
             f"({sorted(STRATEGIES)})"
         )
-    max_linear_accel = float(raw["max_linear_accel"])
-    max_angular_accel = float(raw["max_angular_accel"])
+    tau_linear = float(raw["tau_linear"])
+    tau_angular = float(raw["tau_angular"])
     return ControlConfig(
         default_gait=name,
-        max_linear_accel=max_linear_accel,
-        max_angular_accel=max_angular_accel,
+        tau_linear=tau_linear,
+        tau_angular=tau_angular,
     )
 
 
@@ -118,16 +80,13 @@ class ControlNode(Node):
         self._latest: Twist = Twist()  # zero-initialized
         self._active_gait: str = self._cfg.default_gait
         self._limiter = BodyVelocityLimiter(
-            max_linear_accel=self._cfg.max_linear_accel,
-            max_angular_accel=self._cfg.max_angular_accel,
+            tau_linear=self._cfg.tau_linear,
+            tau_angular=self._cfg.tau_angular,
         )
         self._engine_state: str = ""
         self._dt = 1.0 / PUBLISH_RATE_HZ
 
-        # Transient-local on both sides so a late subscriber catches
-        # the last published name without the publisher needing to keep
-        # re-sending it. Single-slot history is enough — the value
-        # changes only on a user press, never at high rate.
+        # Transient-local so a late subscriber catches the last name.
         gait_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
         self._sub = self.create_subscription(Twist, "/cmd_vel", self._on_vel, 10)
@@ -149,8 +108,8 @@ class ControlNode(Node):
             f"linear_max=({cap_summary}) m/s, "
             f"angular_z_max={self._caps.angular_max:.2f} rad/s, "
             f"yaw_bias={self._caps.yaw_bias:.2f}, "
-            f"max_linear_accel={self._cfg.max_linear_accel:.2f} m/s^2, "
-            f"max_angular_accel={self._cfg.max_angular_accel:.2f} rad/s^2"
+            f"tau_linear={self._cfg.tau_linear:.2f} s, "
+            f"tau_angular={self._cfg.tau_angular:.2f} s"
         )
 
     def _on_vel(self, msg: Twist) -> None:
@@ -173,9 +132,6 @@ class ControlNode(Node):
         new_state = msg.data
         if new_state == self._engine_state:
             return
-        # Edge: leaving the walking set. Drop the limiter to zero so the
-        # next STAND → ENGAGING begins from a known-zero state and
-        # cannot race the engagement controller's smoothstep.
         was_walking = self._engine_state in _WALKING_STATES
         now_walking = new_state in _WALKING_STATES
         if was_walking and not now_walking:
@@ -183,11 +139,6 @@ class ControlNode(Node):
         self._engine_state = new_state
 
     def _tick(self) -> None:
-        # Per-tick cap lookup: the active gait can change between ticks
-        # when /cmd_gait arrives, and each gait has its own linear cap
-        # (slower gaits would otherwise push the engagement controller's
-        # stance integration past PEP and hit joint limits — the cap is
-        # the gait's actual per-leg velocity ceiling).
         v_x, v_y, omega_z = scale_to_envelope(
             self._latest.linear.x,
             self._latest.linear.y,
@@ -197,9 +148,6 @@ class ControlNode(Node):
             self._caps.angular_max,
             self._caps.yaw_bias,
         )
-        # Apply body-velocity rate limit after the envelope shaper so
-        # the limiter smooths envelope-unwind jumps (the whole reason
-        # it exists). The limiter is stateful across ticks.
         v_x, v_y, omega_z = self._limiter.step((v_x, v_y, omega_z), self._dt)
         out = GaitParams()
         out.header.stamp = self.get_clock().now().to_msg()

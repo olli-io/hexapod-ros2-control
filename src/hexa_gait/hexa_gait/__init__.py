@@ -14,10 +14,12 @@ from .gaits.base import LegContext, Strategy, StrideParams, swing_arc
 from .gaits.tripod import TRIPOD_OFFSETS, Tripod
 from .initialize import InitializeController, InitializeState
 from .limits import VelocityCaps, load_velocity_caps, scale_to_envelope
+from .disengagement import DisengagementController, DisengagementState
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
-from .transition import TransitionController, TransitionState
 
 __all__ = [
+    "DisengagementController",
+    "DisengagementState",
     "Engine",
     "EngineConfig",
     "EngineState",
@@ -35,8 +37,6 @@ __all__ = [
     "Strategy",
     "StrideParams",
     "TRIPOD_OFFSETS",
-    "TransitionController",
-    "TransitionState",
     "Tripod",
     "VelocityCaps",
     "build_leg_contexts",

@@ -16,7 +16,8 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        recenter_swing_time=0.4,
+        max_foot_speed=0.333,
+        max_swing_time=0.6,
         angular_z_max=1.0,
         yaw_bias=0.75,
         gaits={

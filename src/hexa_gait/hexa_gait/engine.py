@@ -1,23 +1,27 @@
-"""Gait engine — orchestrates clock, strategy, and transition controller.
+"""Gait engine — orchestrates clock, strategy, and the engagement /
+disengagement controllers.
 
 The engine is the only stateful component in the gait chain. Strategies
-stay pure; the engagement and transition controllers each own a
+stay pure; the engagement and disengagement controllers each own a
 per-cycle slice of state. The engine itself routes between four modes
 based on the commanded body velocity:
 
 - **STAND**     — ``cmd_vel`` is zero. Emit the nominal stance.
 - **ENGAGING**  — ``cmd_vel`` just went non-zero from STAND. Run the
-  ``EngagementController`` through one asymmetric half-cycle that
-  ramps body velocity from 0 to ``v_body`` along a smoothstep S-curve,
-  with each leg's first stance / swing originating at NOMINAL rather
-  than PEP / AEP. Hands off to GAIT at master phase = β when the
-  steady-state PEP / AEP configuration has been reached.
+  ``EngagementController`` through one full master cycle. Body velocity
+  ramps from 0 to ``v_body`` along a smoothstep S-curve over the
+  earliest first-touchdown horizon, then holds at ``v_body``. Each leg
+  performs exactly one "from NOMINAL" swing during this cycle; legs
+  that have already completed their first swing follow the strategy
+  directly, so the engagement → GAIT handoff is continuous. Hands off
+  to GAIT at master = 1.0 (≡ 0.0 in the modular clock).
 - **GAIT**      — ``cmd_vel`` is non-zero. Advance the phase clock and
   evaluate the active strategy.
 - **STOPPING**  — ``cmd_vel`` just went zero from a non-zero state. Run
-  the ``TransitionController`` ladder to bring all six legs back to
-  nominal. If a non-zero ``cmd_vel`` arrives mid-stop, complete the
-  transition first, then restart the gait from ``master = 0``
+  the ``DisengagementController`` group-swing queue to bring all six
+  legs back to nominal in gait-natural lift-off order. If a non-zero
+  ``cmd_vel`` arrives mid-stop, complete the disengagement first, then
+  restart the gait from ``master = 0``
   (per the velocity-mid-stop contract in ``src/hexa_gait/README.md``).
   GAIT → STOPPING is debounced by ``forced_touchdown_delay`` so brief
   joystick zero crossings don't trip a touchdown; ENGAGING → STOPPING
@@ -59,7 +63,7 @@ from .gaits import STRATEGIES
 from .gaits.base import LegContext, Strategy, StrideParams
 from .initialize import InitializeController
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
-from .transition import LegOutput, TransitionController, TransitionState
+from .disengagement import DisengagementController, DisengagementState, LegOutput
 
 
 __all__ = [
@@ -115,10 +119,14 @@ class EngineConfig:
     step_height: float
     swing_width: float
     controller_dt: float
-    recenter_swing_time: float
     cmd_zero_tol: float
     forced_touchdown_delay: float
-    touchdown_settle_time: float
+    # Disengagement adaptive-timing knobs. ``max_foot_speed`` is the
+    # body-frame planar foot-speed cap (m/s) used to derive each
+    # swing's landing duration as ``distance_xy / max_foot_speed``,
+    # clamped to ``[min_swing_time, max_swing_time]``.
+    max_foot_speed: float
+    max_swing_time: float
     # INITIALIZE cold-start knobs. ``init_pair_swing_time`` is the
     # per-pair duration during PLACE_FEET; ``init_lift_body_time`` is
     # the LIFT_BODY z-ramp duration; ``init_swing_clearance`` is the
@@ -250,7 +258,7 @@ class Engine:
         self._reseat_geometry: ReseatGeometry | None = reseat_geometry
 
         self._clock = GaitClock(strategy.phase_offsets)
-        self._transition = self._build_transition()
+        self._disengagement = self._build_disengagement()
         self._engagement = self._build_engagement()
         self._initialize = self._build_initialize()
         # Built lazily on the operator trigger so a fresh ladder runs
@@ -272,8 +280,8 @@ class Engine:
         # Debounce timer for cmd_vel → 0 while in GAIT. The engine
         # only commits to STOPPING from GAIT after the command has
         # stayed below cmd_zero_tol for ``forced_touchdown_delay``
-        # seconds, so brief joystick-center crossings don't kick off a
-        # FORCE_TOUCHDOWN. ENGAGING bypasses this debounce — see
+        # seconds, so brief joystick-center crossings don't kick off
+        # the stop transition. ENGAGING bypasses this debounce — see
         # ``update`` for why.
         self._cmd_zero_elapsed = 0.0
 
@@ -435,15 +443,16 @@ class Engine:
             controller_dt=cfg.controller_dt,
         )
 
-    def _build_transition(self) -> TransitionController:
+    def _build_disengagement(self) -> DisengagementController:
         cfg = self._config
-        return TransitionController(
+        return DisengagementController(
             nominal_stance=self._nominal,
-            recenter_swing_time=cfg.recenter_swing_time,
             swing_clearance=cfg.step_height,
             swing_width=cfg.swing_width,
             controller_dt=cfg.controller_dt,
-            touchdown_settle_time=cfg.touchdown_settle_time,
+            max_foot_speed=cfg.max_foot_speed,
+            min_swing_time=cfg.min_swing_time,
+            max_swing_time=cfg.max_swing_time,
         )
 
     def _build_engagement(self) -> EngagementController:
@@ -482,7 +491,7 @@ class Engine:
     ) -> None:
         """Adopt a new nominal stance as the engine's standing pose.
 
-        Rebuilds the transition / engagement controllers (each caches
+        Rebuilds the disengagement / engagement controllers (each caches
         its own snapshot of the nominal stance) and the per-leg
         ``LegContext`` map (the strategy reads ``leg.nominal_stance``
         from there), so subsequent ENGAGING / GAIT / STOPPING cycles
@@ -493,7 +502,7 @@ class Engine:
             n: dataclasses.replace(self._legs[n], nominal_stance=self._nominal[n])
             for n in LEG_NAMES
         }
-        self._transition = self._build_transition()
+        self._disengagement = self._build_disengagement()
         self._engagement = self._build_engagement()
         self._applied_height = applied_height
 
@@ -638,22 +647,30 @@ class Engine:
                 # Bail straight to STOPPING — no debounce. The debounce
                 # exists to ride out brief joystick-through-zero
                 # crossings mid-gait without aborting; ENGAGING is a
-                # transient half cycle whose body velocity has barely
-                # ramped, so a zero here is far more likely a deliberate
-                # release than a stick artefact. Ticking ENGAGING at
-                # zero cmd also misbehaves visually: the live AEP
-                # collapses to NOMINAL and swing legs lift-off-from-
-                # NOMINAL retract back to where they started instead of
-                # touching down where the engagement was carrying them.
+                # transient ramp state whose body velocity is either
+                # still climbing or has only just saturated, so a zero
+                # here is far more likely a deliberate release than a
+                # stick artefact. Ticking ENGAGING at zero cmd also
+                # misbehaves visually: the live AEP collapses to NOMINAL
+                # and swing legs lift-off-from-NOMINAL retract back to
+                # where they started instead of touching down where the
+                # engagement was carrying them.
                 self._state = EngineState.STOPPING
                 swing_flags = {n: not self._last_stance[n] for n in LEG_NAMES}
-                self._transition.begin(self._last_targets, swing_flags)
-                return self._tick_transition(dt)
+                self._disengagement.begin(
+                    self._last_targets,
+                    swing_flags,
+                    phase_offsets=self._strategy.phase_offsets,
+                    duty_factor=self._strategy.duty_factor,
+                    master_phase=self._clock.master,
+                )
+                return self._tick_disengagement(dt)
             out = self._tick_engagement(dt, v_body_xy, omega_z)
             if self._engagement.state is EngagementState.DONE:
-                # Hand off to GAIT: seed the master clock at the
-                # engagement's exit phase so the strategy continues
-                # from the right point of the cycle on the next tick.
+                # Hand off to GAIT. Engagement covers a full master
+                # cycle, so the handoff phase wraps to 0 — GAIT picks
+                # up at the start of the next cycle with every leg
+                # already on its strategy-prescribed curve.
                 self._clock.reset(self._engagement.exit_master)
                 self._state = EngineState.GAIT
             return out
@@ -665,15 +682,21 @@ class Engine:
                 # the controller wants the opposite (True = airborne),
                 # so invert here.
                 swing_flags = {n: not self._last_stance[n] for n in LEG_NAMES}
-                self._transition.begin(self._last_targets, swing_flags)
-                return self._tick_transition(dt)
+                self._disengagement.begin(
+                    self._last_targets,
+                    swing_flags,
+                    phase_offsets=self._strategy.phase_offsets,
+                    duty_factor=self._strategy.duty_factor,
+                    master_phase=self._clock.master,
+                )
+                return self._tick_disengagement(dt)
             return self._tick_gait(dt, v_body_xy, omega_z)
 
-        # STOPPING: run the transition ladder to completion. A non-zero
-        # cmd arriving mid-stop is honoured only after the transition
-        # finishes; the README is explicit about this.
-        out = self._tick_transition(dt)
-        if self._transition.state is TransitionState.STAND:
+        # STOPPING: run the disengagement queue to completion. A
+        # non-zero cmd arriving mid-stop is honoured only after the
+        # queue drains; the README is explicit about this.
+        out = self._tick_disengagement(dt)
+        if self._disengagement.state is DisengagementState.STAND:
             self._state = EngineState.STAND
         return out
 
@@ -776,11 +799,11 @@ class Engine:
             sy *= scale
         return (sx, sy, 0.0)
 
-    def _tick_transition(self, dt: float) -> dict[str, LegOutput]:
-        # Map "in swing during transition" to "not stance" so that if
-        # the engine drops back to STAND mid-transition it carries the
+    def _tick_disengagement(self, dt: float) -> dict[str, LegOutput]:
+        # Map "in swing during disengagement" to "not stance" so that
+        # if the engine drops back to STAND mid-drain it carries the
         # right grounded flags forward.
-        out = self._transition.update(dt)
+        out = self._disengagement.update(dt)
         self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
         self._last_stance = {n: out[n].stance for n in LEG_NAMES}
         return out

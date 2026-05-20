@@ -68,4 +68,4 @@ Full definitions in `docs/leg-phases.md`. Do not introduce new synonyms.
       - **stance** — also called *support*, *retraction*.
       - **swing** — also called *transfer*, *protraction*.
 
-- Broader principle: prefer documentation formats equally readable to humans and AI agents (prose, bulleted lists, definition pairs).
+- Broader principle: prefer documentation formats equally readable to humans and AI agents (bulleted lists, definition pairs). Keep comments succinct.

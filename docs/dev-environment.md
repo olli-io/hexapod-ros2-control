@@ -35,7 +35,7 @@ No native ROS2 install needed.
 ./hexa --dev
 ```
 
-Builds `hexapod-dev:jazzy` (takes a few minutes the first time), then drops
+Builds `hexa-dev:jazzy` (takes a few minutes the first time), then drops
 you at a shell inside `/workspace` (the repo, bind-mounted). ROS2 is already
 sourced for you.
 

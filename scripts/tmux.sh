@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open a tmux session that runs sim (left pane) and teleop (right pane)
-# inside the shared hexapod-dev container.
+# inside the shared hexa-dev container.
 #   ./scripts/tmux.sh            -> attach panes to the existing dev container
 #   ./scripts/tmux.sh --clean    -> kill+rebuild the container first, then start
 set -euo pipefail
@@ -29,7 +29,7 @@ if ! command -v tmux >/dev/null 2>&1; then
     exit 1
 fi
 
-SESSION="hexapod-dev"
+SESSION="hexa-dev"
 WINDOW="hexapod"
 
 # With --clean, tear down any existing session so the rebuild actually happens.

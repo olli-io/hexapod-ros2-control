@@ -1,30 +1,15 @@
 # hexa_control wire values.
 #
-# control_node clamps incoming /cmd_vel to the velocity caps loaded at
-# startup from hexa_gait/config/gait.yaml (via hexa_gait.load_velocity_caps)
-# and republishes the result on /gait/params at 50 Hz. The active gait
-# selection is multiplexed onto GaitParams.gait_name.
+# control_node clamps /cmd_vel against the caps in hexa_gait/config/gait.yaml,
+# runs a first-order body-velocity filter (BodyVelocityLimiter), and
+# republishes on /gait/params at 50 Hz. /cmd_gait selects the active
+# gait (validated against tripod/ripple/wave).
 #
-# Gait selection lifecycle: ``default_gait`` is what control publishes
-# on cold start; teleop's D-pad cycler publishes a new name on
-# /cmd_gait (transient_local QoS so a late control node still picks up
-# the latest selection), which control validates against the
-# tripod/ripple/wave set and stores as the active gait.
-#
-# The walk-cycle knobs (cycle_time, duty_factor, step_height, stride_length)
-# live in hexa_gait/config/gait.yaml — control no longer owns them.
-# cycle_time is derived inside the engine each tick from the commanded
-# velocity, configured stride_length, and the active strategy's
-# duty_factor.
-#
-# Body-velocity acceleration limits bound the time derivative of the
-# published (v_x, v_y, omega_z) so envelope-unwind jumps,
-# joystick releases, gait-cap changes on /cmd_gait, and Nav2 stops
-# can't produce step jumps at /gait/params. Applied AFTER
-# scale_to_envelope and BEFORE publishing — the limiter intentionally
-# allows brief excursions outside the static envelope window during
-# ramp-down; it is not a hard safety limit. Tuned on sim.
+# Tau values are time constants for the post-envelope filter — chosen
+# over a fixed accel cap because a single response time generalises
+# across gaits (tripod and wave have ~3× different cycle times) and
+# composes cleanly with the engagement smoothstep.
 
 default_gait: "tripod"
-max_linear_accel: 0.5    # m/s^2 — bounds |Δ(v_x, v_y)| as a vector
-max_angular_accel: 2.0   # rad/s^2 — bounds |Δomega_z|
+tau_linear: 0.25    # s — first-order time constant on (v_x, v_y)
+tau_angular: 0.40   # s — first-order time constant on omega_z
