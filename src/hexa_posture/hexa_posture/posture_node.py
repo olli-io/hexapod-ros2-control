@@ -7,12 +7,12 @@ in the user pose, clamps to the static safety envelope, and publishes
 the result on `/body/pose_target` for the IK node to consume.
 
 The gait state gates the whole stack: posture is only meaningful when
-the engine is in `stand`, `engaging`, `gait`, or `stopping` — i.e.
-when the legs are at (or transitioning around) the nominal stance
-footprint. In `folded`, `initialize`, or `folding` the foot targets
-come from a separate ladder and composing a body-pose offset onto
-them would be nonsense; the node emits IDENTITY in those states
-regardless of user input.
+the legs are at (or transitioning around) the nominal stance
+footprint — `stand`, `engaging`, `gait`, the pause trio (`pausing`,
+`paused`, `resuming`), and `reseating`. In `folded`, `initialize`, or
+`folding` the foot targets come from a separate ladder and composing
+a body-pose offset onto them would be nonsense; the node emits
+IDENTITY in those states regardless of user input.
 
 The animation stack is built from the ``enabled_animations`` parameter
 (string list of layer names, in order). Default is the standard
@@ -40,12 +40,13 @@ CMD_VEL_ZERO_TOL = 1e-4
 # nonsense, at worst unsafe. Posture publishes IDENTITY in those
 # states regardless of user input.
 #
-# `reseating` is included so the persistent height offset (pose.z)
-# continues to be applied to the IK while the gait engine walks the
-# feet to the new nominal stance — the body stays lifted throughout
-# the ladder.
+# `reseating` and the pause trio (`pausing`, `paused`, `resuming`) are
+# included so the persistent body pose (especially height) continues
+# to be applied while the gait engine soft-releases or walks the feet
+# to a new nominal stance — pause should affect only the legs, not
+# snap the body back to IDENTITY.
 POSTURE_ACTIVE_STATES: frozenset[str] = frozenset(
-    {"stand", "engaging", "gait", "stopping", "reseating"}
+    {"stand", "engaging", "gait", "pausing", "paused", "resuming", "reseating"}
 )
 
 DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")

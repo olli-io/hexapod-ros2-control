@@ -90,7 +90,8 @@ def _engine_config() -> EngineConfig:
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        forced_touchdown_delay=0.0,
+        pause_debounce_delay=0.0,
+        pause_to_reseat_delay=10.0,
         max_foot_speed=0.333,
         max_swing_time=0.6,
         init_pair_swing_time=PAIR_TIME,
@@ -99,9 +100,10 @@ def _engine_config() -> EngineConfig:
         init_place_feet_clearance=PLACE_FEET_CLEARANCE,
         # Reseat knobs (unused by these tests — Engine is constructed
         # without leg_specs/reseat_geometry).
-        reseat_settle_delay=0.1,
+        reseat_pose_settle_delay=0.1,
         reseat_height_change_threshold=0.001,
         reseat_pair_swing_time=0.1,
+        reseat_pair_dwell_time=0.0,
         reseat_swing_clearance=0.02,
     )
 
@@ -377,22 +379,22 @@ def test_engine_can_re_initialize_after_fold():
     assert engine.state is EngineState.STAND
 
 
-def test_start_fold_from_stopping_is_a_noop():
-    # Mid-stop the engine is recovering from a forced touchdown — a
-    # fold press during the transition must be ignored so the recover
-    # ladder finishes cleanly.
+def test_start_fold_from_pausing_is_a_noop():
+    # Mid-pause the engine is lowering the airborne legs — a fold press
+    # during the transition must be ignored so the pause / paused flow
+    # finishes cleanly.
     engine = _engine()
     _drive_to_stand(engine)
-    # Drive into GAIT, then release the stick so the debounce expires
-    # and the engine enters STOPPING. forced_touchdown_delay=0 in this
-    # config so the first cmd_zero tick is enough.
+    # Drive into GAIT, then release the stick. pause_debounce_delay=0
+    # in this config so the first cmd_zero tick is enough to enter
+    # PAUSING.
     engine.update(dt=0.02, v_body_xy=(0.1, 0.0), omega_z=0.0)
     # Walk several ticks of GAIT, then drop to zero.
     for _ in range(5):
         engine.update(dt=0.02, v_body_xy=(0.1, 0.0), omega_z=0.0)
     engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
-    # The engine should now be STOPPING (or already STAND if recenter
-    # finished in one tick).
-    if engine.state is EngineState.STOPPING:
+    # The engine should now be PAUSING (or PAUSED if every airborne leg
+    # landed in one tick).
+    if engine.state is EngineState.PAUSING:
         assert engine.start_fold() is False
-        assert engine.state is EngineState.STOPPING
+        assert engine.state is EngineState.PAUSING

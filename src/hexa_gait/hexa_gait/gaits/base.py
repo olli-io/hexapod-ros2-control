@@ -2,14 +2,14 @@
 
 A ``Strategy`` is a pure function ``(phase, stride_params, leg) -> foot_target``.
 It carries no state, performs no I/O, and reads no clocks. The engine
-owns the phase clock and per-leg disengagement state; strategies only
-see what they need to evaluate a single tick.
+owns the phase clock and per-leg pause / engagement state; strategies
+only see what they need to evaluate a single tick.
 
 ``swing_arc`` packages the two quartic-Bezier swing curves from
 ``trajectory`` into a single ``phase_in_swing`` -> ``foot_target``
 helper, reused by both the normal swing-phase evaluation and the
-``DisengagementController`` group-swing drain. Keeping the curve
-evaluation here avoids duplicating the C++-derived trajectory logic.
+``PauseController`` Z-only descents. Keeping the curve evaluation here
+avoids duplicating the C++-derived trajectory logic.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def swing_arc(
     The C1 lift-off velocity defaults to the analytical continuation of
     a constant-velocity stance, ``-stride / swing_time``, where stride
     is ``target - swing_origin``. Pass ``swing_origin_velocity=(0,0,0)``
-    for a rest-to-rest move (the disengagement controller's group swings).
+    for a rest-to-rest move (the pause controller's Z descents).
 
     ``swing_target_velocity`` overrides the touchdown velocity, which by
     default equals the lift-off velocity (``-stride / swing_time``). The

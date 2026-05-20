@@ -13,9 +13,11 @@ this is complete scaffolding and not only a dev solution.
 Dockerfile               # image definition: jazzy-desktop + ros_gz + ros2_control + dev user
 docker/entrypoint.sh     # sources /opt/ros/jazzy/setup.bash, then install/setup.bash if built
 docker-compose.yml       # mounts workspace, X11 socket, host network for DDS
-hexa                     # top-level host dispatcher (e.g. --dev forwards to scripts/dev.sh)
+hexa                     # top-level host dispatcher (--dev, --tmux, kill)
 pod                      # in-container workspace CLI (build / sim / teleop)
-scripts/dev.sh           # xhost + docker compose run
+scripts/dev.sh           # ensure single long-lived dev container, then docker exec into it
+scripts/kill.sh          # stop and remove the dev container
+scripts/tmux.sh          # tmux session with sim + teleop sharing one container
 .dockerignore            # keeps build/, install/, .git/ out of the build context
 ```
 
@@ -35,18 +37,36 @@ No native ROS2 install needed.
 ./hexa --dev
 ```
 
-Builds `hexa-dev:jazzy` (takes a few minutes the first time), then drops
-you at a shell inside `/workspace` (the repo, bind-mounted). ROS2 is already
-sourced for you.
+Builds the `hexa-dev` image (takes a few minutes the first time), creates a
+long-lived `hexa-dev` container, and drops you at a shell inside `/workspace`
+(the repo, bind-mounted). ROS2 is already sourced for you. Subsequent
+`./hexa --dev` invocations `docker exec` into the same container instead of
+spawning a new one.
+
+To tear it down: `./hexa kill`. To rebuild from scratch (after Dockerfile
+edits): `./hexa --dev --clean`, which kills the container, rebuilds the
+image, runs `pod build`, then drops you into a shell.
 
 ## Daily loop
 
-Inside the container:
+Inside the container, use the `pod` CLI:
 
 ```
-colcon build --symlink-install
-source install/setup.bash       # already done for you in new shells
-ros2 launch hexa_bringup sim.launch.py
+pod build                       # colcon build --symlink-install
+pod sim                         # ros2 launch hexa_bringup sim.launch.py
+pod teleop                      # ros2 launch hexa_teleop teleop.launch.py
+```
+
+Extra args are forwarded, e.g. `pod build --packages-select hexa_kinematics`.
+`install/setup.bash` is already sourced in new shells.
+
+For the common sim + teleop pair, `./hexa --tmux` opens a tmux session with
+both panes attached to the same dev container (`vert` stacks the split).
+
+To build and run the full test suite in one shot:
+
+```
+./hexa --dev --test             # runs `pod build`, then colcon test
 ```
 
 Outside the container, on the host, the same workspace files are visible —
@@ -84,10 +104,14 @@ When the Pimoroni Servo 2040 is connected:
 1. Plug it in; confirm with `lsusb` on the host. Note the device path
    (typically `/dev/ttyACM0`).
 2. Uncomment the `devices:` block in `docker-compose.yml`.
-3. Rebuild: `docker compose build`.
+3. Rebuild from scratch: `./hexa --dev --clean`.
 
 `usbutils` is already installed in the image, so `lsusb` inside the container
 works once the device is mapped in.
+
+A controller plugged into the host is exposed via `/dev/input/event*`;
+`scripts/dev.sh` forwards the host's `input` group GID so `joy_node` inside
+the container can read it without root.
 
 ## Cross-build for the Raspberry Pi 3
 
@@ -101,10 +125,10 @@ development on a workstation.
 - **`cannot open display`** — `xhost +local:docker` on the host. The wrapper
   attempts this but silently ignores failures.
 - **Files in `build/` / `install/` owned by root** — your host UID/GID didn't
-  match what was baked into the image. Rebuild while passing the right IDs:
-  `UID=$(id -u) GID=$(id -g) docker compose build`. The `hexa --dev`
-  wrapper does this for you; the issue only appears if you call
-  `docker compose` directly.
+  match what was baked into the image. Rebuild from scratch with
+  `./hexa --dev --clean`, which forwards `UID`/`GID`/`INPUT_GID` into the
+  build. The issue only appears if you call `docker compose` directly
+  without those env vars set.
 - **`ros2 topic list` empty across containers** — check `ROS_DOMAIN_ID` is the
   same in both, and that no host firewall is dropping DDS multicast on
   loopback.

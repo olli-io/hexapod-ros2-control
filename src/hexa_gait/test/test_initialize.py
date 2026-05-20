@@ -92,7 +92,8 @@ def _engine_config() -> EngineConfig:
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        forced_touchdown_delay=0.0,
+        pause_debounce_delay=0.0,
+        pause_to_reseat_delay=10.0,
         max_foot_speed=0.333,
         max_swing_time=0.6,
         init_pair_swing_time=PAIR_TIME,
@@ -101,9 +102,10 @@ def _engine_config() -> EngineConfig:
         init_place_feet_clearance=PLACE_FEET_CLEARANCE,
         # Reseat knobs (unused by these tests — Engine is constructed
         # without leg_specs/reseat_geometry).
-        reseat_settle_delay=0.1,
+        reseat_pose_settle_delay=0.1,
         reseat_height_change_threshold=0.001,
         reseat_pair_swing_time=0.1,
+        reseat_pair_dwell_time=0.0,
         reseat_swing_clearance=0.02,
     )
 

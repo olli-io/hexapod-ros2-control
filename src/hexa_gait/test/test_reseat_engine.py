@@ -45,16 +45,18 @@ def _config() -> EngineConfig:
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        forced_touchdown_delay=0.0,
+        pause_debounce_delay=0.0,
+        pause_to_reseat_delay=10.0,
         max_foot_speed=0.333,
         max_swing_time=0.6,
         init_pair_swing_time=PAIR_TIME,
         init_lift_body_time=LIFT_TIME,
         init_swing_clearance=0.01,
         init_place_feet_clearance=0.001,
-        reseat_settle_delay=SETTLE_DELAY,
+        reseat_pose_settle_delay=SETTLE_DELAY,
         reseat_height_change_threshold=0.001,
         reseat_pair_swing_time=RESEAT_PAIR_TIME,
+        reseat_pair_dwell_time=0.0,
         reseat_swing_clearance=0.02,
     )
 
@@ -155,8 +157,8 @@ def test_height_change_resets_settle_timer():
     engine = _engine()
     _drive_to_stand(engine)
     for i in range(10):
-        # Slew height upward by 5 mm per tick — each call exceeds the
-        # 1 mm change threshold, so the settle timer never accumulates.
+        # Slew height upward by 5 mm per tick — well above the
+        # float-noise epsilon, so the settle timer never accumulates.
         engine.set_target_height(0.005 * (i + 1))
         engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
     assert engine.state is EngineState.STAND
@@ -168,6 +170,36 @@ def test_height_change_resets_settle_timer():
         if engine.state is not EngineState.STAND:
             break
     assert engine.state in (EngineState.RESEATING, EngineState.STAND)
+
+
+def test_held_dpad_at_one_mm_per_tick_does_not_fire_mid_press():
+    # Regression: the teleop integrates pose.z at 0.05 m/s and
+    # publishes at 50 Hz, so a held D-pad slews the target by exactly
+    # 1 mm per tick. That used to sit right on the YAML dead-band
+    # (``reseat_height_change_threshold = 0.001``) and the settle
+    # timer accrued anyway, firing reseat mid-press. The fix uses a
+    # tighter float-noise epsilon inside set_target_height so the
+    # timer reliably resets on every per-tick D-pad step.
+    engine = _engine()
+    _drive_to_stand(engine)
+    # Simulate the held D-pad for well past the settle delay.
+    dt = 0.02
+    ticks = int(round((SETTLE_DELAY + 0.10) / dt))
+    z = 0.0
+    for _ in range(ticks):
+        z += 0.001
+        engine.set_target_height(z)
+        engine.update(dt=dt, v_body_xy=(0.0, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.STAND, (
+        "reseat fired while D-pad was still held"
+    )
+    # Release: stop slewing, ride out the settle window — now it should fire.
+    for _ in range(ticks):
+        engine.set_target_height(z)
+        engine.update(dt=dt, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        if engine.state is EngineState.RESEATING:
+            break
+    assert engine.state is EngineState.RESEATING
 
 
 def test_cmd_vel_during_reseat_is_held_until_done():

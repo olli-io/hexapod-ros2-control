@@ -51,7 +51,8 @@ def _config(
     stride_length: float = 0.10,
     min_swing_time: float = 0.25,
     max_cycle_time: float = 2.0,
-    forced_touchdown_delay: float = 0.0,
+    pause_debounce_delay: float = 0.0,
+    pause_to_reseat_delay: float = 0.2,
 ) -> EngineConfig:
     # min_swing_time=0.25, β=0.5 (tripod) → min_cycle_time = 0.5 s, same
     # as the pre-refactor default. Other gait factors derive their own
@@ -64,7 +65,8 @@ def _config(
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        forced_touchdown_delay=forced_touchdown_delay,
+        pause_debounce_delay=pause_debounce_delay,
+        pause_to_reseat_delay=pause_to_reseat_delay,
         max_foot_speed=0.333,
         max_swing_time=0.6,
         # Compact INITIALIZE timings: 3*0.04 + 0.04 = 0.16 s. Keeps the
@@ -78,9 +80,10 @@ def _config(
         # Reseat knobs (used only by tests that opt in by passing
         # leg_specs + reseat_geometry to the Engine). The tests below
         # construct Engine without those, so these values are inert.
-        reseat_settle_delay=0.1,
+        reseat_pose_settle_delay=0.1,
         reseat_height_change_threshold=0.001,
         reseat_pair_swing_time=0.04,
+        reseat_pair_dwell_time=0.0,
         reseat_swing_clearance=0.01,
     )
 
@@ -320,32 +323,32 @@ def test_engaging_to_gait_at_exit_master():
     assert engine._clock.master == pytest.approx(0.02, abs=1e-9)
 
 
-def test_engaging_to_stopping_on_zero_cmd():
-    # cmd zeros mid-engagement: bail out to STOPPING via the
-    # DisengagementController on the very first zero tick, regardless of
-    # forced_touchdown_delay. The debounce exists for joystick
+def test_engaging_to_pausing_on_zero_cmd():
+    # cmd zeros mid-engagement: bail out to PAUSING via the
+    # PauseController on the very first zero tick, regardless of
+    # pause_debounce_delay. The debounce exists for joystick
     # zero-crossings during GAIT; ENGAGING is a transient state whose
     # body velocity has barely ramped, and ticking it at zero cmd would
     # snap mid-flight swing legs back to NOMINAL (AEP collapses to
     # NOMINAL when stride is zero).
     spy = _SpyStrategy()
-    engine = _engine(spy, config=_config(forced_touchdown_delay=0.8))
+    engine = _engine(spy, config=_config(pause_debounce_delay=0.8))
     _drive_past_initialize(engine)
     engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
     assert engine.state is EngineState.ENGAGING
     engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
-    assert engine.state is EngineState.STOPPING
+    assert engine.state is EngineState.PAUSING
 
 
 def test_brief_zero_cmd_under_debounce_stays_in_gait():
     # Right-joystick passing through center sends cmd_vel to zero for a
     # handful of ticks before swinging back to the new yaw direction.
-    # With forced_touchdown_delay set, those zero ticks must not trip
-    # the stop transition — the engine has to keep ticking GAIT so the
+    # With pause_debounce_delay set, those zero ticks must not trip
+    # the pause transition — the engine has to keep ticking GAIT so the
     # cycle resumes seamlessly when cmd_vel returns.
     spy = _SpyStrategy()
     engine = _engine(
-        spy, config=_config(forced_touchdown_delay=0.15)
+        spy, config=_config(pause_debounce_delay=0.15)
     )
     _drive_to_gait(engine, v_body_xy=(0.0, 0.0), omega_z=0.5)
     assert engine.state is EngineState.GAIT
@@ -362,12 +365,12 @@ def test_brief_zero_cmd_under_debounce_stays_in_gait():
     assert engine.state is EngineState.GAIT
 
 
-def test_sustained_zero_cmd_past_debounce_enters_stopping():
+def test_sustained_zero_cmd_past_debounce_enters_pausing():
     # If cmd_vel really does stay zero, the debounce expires and the
-    # engine commits to STOPPING as before.
+    # engine commits to PAUSING as before.
     spy = _SpyStrategy()
     engine = _engine(
-        spy, config=_config(forced_touchdown_delay=0.10)
+        spy, config=_config(pause_debounce_delay=0.10)
     )
     _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
     assert engine.state is EngineState.GAIT
@@ -379,12 +382,12 @@ def test_sustained_zero_cmd_past_debounce_enters_stopping():
 
     # The 6th zero tick puts elapsed at 0.12 s ≥ 0.10 s ⇒ engine
     # leaves GAIT. With every leg already at nominal (stride was zero
-    # during the debounce ticks) the stop transition completes inside
-    # the same tick it begins, so the engine can be observed in either
-    # STOPPING (just entered) or STAND (already drained).
+    # during the debounce ticks) the pause controller has no airborne
+    # legs to lower, so it flips to PAUSED immediately. Accept either
+    # PAUSING (just entered, still on the same tick) or PAUSED.
     for _ in range(2):
         engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
-    assert engine.state in (EngineState.STOPPING, EngineState.STAND)
+    assert engine.state in (EngineState.PAUSING, EngineState.PAUSED)
 
 
 def test_debounce_resets_on_nonzero_cmd():
@@ -393,7 +396,7 @@ def test_debounce_resets_on_nonzero_cmd():
     # from the previous one.
     spy = _SpyStrategy()
     engine = _engine(
-        spy, config=_config(forced_touchdown_delay=0.10)
+        spy, config=_config(pause_debounce_delay=0.10)
     )
     _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
 

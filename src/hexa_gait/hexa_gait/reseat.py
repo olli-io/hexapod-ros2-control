@@ -1,24 +1,39 @@
-"""Reseat ladder: standing → standing at a different body height.
+"""Reseat ladder: arbitrary current foot positions → a target stance.
 
-After the user lifts or lowers the chassis via the D-pad in posture
-mode (``/body/pose.z`` non-zero), the gait engine's standing-pose joint
-configuration drifts away from default. The tibia leans more,
-the femur drops nearly horizontal, the stance footprint expands. Until
-the user releases the D-pad and the height stabilises, that's harmless
-— posture-mode IK is happy to extend the legs to wherever the foot
-target lands.
+Used by two engine paths, with the same ladder mechanics in both:
 
-Once the height has been stable for ``settle_delay`` seconds, the
-``ReseatController`` walks each foot pair in turn to a new nominal
-position that restores the YAML-defined standing pose joint angles at
-the *current* body height. The pair order mirrors
-``InitializeController.PLACE_FEET`` so the visual ladder matches the
-cold-start sequence.
+* **Posture-height change.** After the user lifts or lowers the chassis
+  via the D-pad (``/body/pose.z`` non-zero), the gait engine's
+  standing-pose joint configuration drifts away from the YAML default.
+  Once the height has been stable for ``settle_delay`` seconds, the
+  engine kicks off a reseat with a target stance computed by
+  ``reseat_nominal_stance`` — the body-frame foot positions that
+  restore the default joint angles at the *current* body height.
+* **Paused → standing cleanup.** After ``PauseController`` settles, the
+  airborne legs sit at their (lowered) PEP XY rather than the nominal
+  footprint. Holding the release past ``pause_to_reseat_delay`` runs a
+  reseat back to the unchanged nominal stance so the robot looks
+  visually settled.
+
+In both cases the ladder consumes whatever foot positions the engine
+hands it via ``current_stance`` — the previous nominal, post-pause
+lowered XY, mid-engagement carry-over, anywhere. The pair order
+mirrors ``InitializeController.PLACE_FEET`` so the visual ladder
+matches the cold-start sequence.
+
+Each pair swings both legs together for one fixed ``pair_swing_time``.
+The two legs in a pair may have very different XY distances to cover
+(post-pause lowering can leave one leg near nominal and its mirror
+half a stride away), but they share ``phase`` and ``pair_swing_time``
+so they arrive at their targets at the same instant. The swing arc
+lifts straight up via ``swing_clearance`` and interpolates XY linearly
+between origin and target — no body-Y lateral curve, so the geometry
+is direction-agnostic.
 
 The body lift itself is owned by posture (``pose.z``); this controller
 only repositions the feet. After the ladder completes, the engine
-commits the new nominal stance and any subsequent walking happens at
-the new posture.
+commits the new nominal stance (height-change case) or just returns to
+STAND (paused-cleanup case).
 
 Pure-Python module — no rclpy import. Both ``reseat_nominal_stance``
 and ``ReseatController`` are unit-testable standalone, matching the
@@ -37,7 +52,7 @@ from hexa_kinematics.leg_ik import forward_kinematics
 from .clock import LEG_NAMES
 from .gaits.base import identity_y_sign, swing_arc
 from .initialize import PAIR_ORDER
-from .disengagement import LegOutput
+from .pause import LegOutput
 
 
 __all__ = [
@@ -175,16 +190,41 @@ def reseat_nominal_stance(
 
 
 class ReseatController:
-    """PLACE_FEET-style ladder: three sequential pairs swing to new nominal.
+    """Three sequential pairs swing from wherever they are to ``target_stance``.
 
-    Mirrors ``InitializeController._tick_place_feet`` directly — same
-    pair order, same swing-arc parameters, same rest-to-rest endpoint
-    velocities. Difference: no LIFT_BODY phase. The body is already
-    standing; the reseat only repositions the feet.
+    The caller supplies the actual current foot positions per leg — no
+    assumption of a previous nominal footprint. Each pair's swing
+    origin is snapshotted at the moment the pair becomes active (from
+    the running per-leg position), so legs that have already been
+    placed by an earlier pair launch their next move from the placed
+    position, while legs waiting their turn hold their construction-
+    time start.
 
-    Stateful per leg (each leg remembers its current foot position so
-    non-active legs hold), which doesn't fit the pure strategy
-    contract — same justification as ``InitializeController``.
+    Pair mechanics:
+      * Pair order matches ``InitializeController.PLACE_FEET``.
+      * Both legs in a pair share the same ``pair_swing_time`` and
+        ``phase`` and snap to their targets together when the window
+        ends. Asymmetric XY travel distances produce simultaneous
+        arrival.
+      * The swing arc lifts vertically by ``swing_clearance`` and
+        interpolates XY linearly along the (origin → target) chord —
+        no body-Y lateral curve. The motion is direction-agnostic; it
+        works for radially-outward reseats (post height-change) just
+        as well as off-radial cleanups (post-pause).
+      * Endpoint velocities are pinned to zero so each leg sets down
+        gently — same rest-to-rest pattern as
+        ``InitializeController.PLACE_FEET``.
+      * After each pair snaps the ladder holds for ``pair_dwell_time``
+        seconds (every leg still, stance=True, phase=0) before the
+        next pair lifts. No dwell before the first pair or after the
+        last — only between.
+
+    Inactive legs hold their last reported position. ``done`` flips
+    True once the final pair has snapped to its targets.
+
+    Stateful per leg (each leg remembers its position so non-active
+    legs hold), which doesn't fit the pure strategy contract — same
+    justification as ``InitializeController``.
     """
 
     def __init__(
@@ -192,8 +232,8 @@ class ReseatController:
         current_stance: Mapping[str, Vec3],
         target_stance: Mapping[str, Vec3],
         pair_swing_time: float,
+        pair_dwell_time: float,
         swing_clearance: float,
-        swing_width: float,
         controller_dt: float,
     ) -> None:
         missing = set(LEG_NAMES) - set(current_stance)
@@ -204,22 +244,40 @@ class ReseatController:
             raise ValueError(f"target_stance missing legs: {sorted(missing)}")
         if pair_swing_time <= 0.0:
             raise ValueError(f"pair_swing_time must be positive; got {pair_swing_time}")
+        if pair_dwell_time < 0.0:
+            raise ValueError(f"pair_dwell_time must be non-negative; got {pair_dwell_time}")
 
-        self._current: dict[str, Vec3] = {
-            n: tuple(current_stance[n]) for n in LEG_NAMES  # type: ignore[misc]
-        }
         self._target: dict[str, Vec3] = {
             n: tuple(target_stance[n]) for n in LEG_NAMES  # type: ignore[misc]
         }
         self._pair_swing_time = pair_swing_time
+        self._pair_dwell_time = pair_dwell_time
         self._swing_clearance = swing_clearance
-        self._swing_width = swing_width
         self._controller_dt = controller_dt
 
-        self._positions: dict[str, Vec3] = dict(self._current)
+        # Running foot position per leg. Updated every tick for the
+        # active pair (along their swing arc) and held constant for
+        # all other legs. Seeded from ``current_stance``.
+        self._positions: dict[str, Vec3] = {
+            n: tuple(current_stance[n]) for n in LEG_NAMES  # type: ignore[misc]
+        }
+        # Snapshot of the active pair's swing origins. Captured when a
+        # pair becomes active so the arc parameters stay constant for
+        # the full pair window even though ``_positions`` is rewritten
+        # every tick.
+        self._pair_origin: dict[str, Vec3] = {}
         self._pair_idx = 0
         self._t_in_pair = 0.0
+        # Countdown while the ladder is holding between two pair
+        # swings. Zero outside the dwell window; set to
+        # ``pair_dwell_time`` the instant a pair snaps to its targets
+        # and counted down each tick. ``_seed_pair_origin`` for the
+        # next pair runs when this drops to zero, so the just-settled
+        # pair's final positions become the next-pair seeding origin
+        # without race.
+        self._dwell_remaining = 0.0
         self._done = False
+        self._seed_pair_origin()
 
     @property
     def done(self) -> bool:
@@ -232,38 +290,62 @@ class ReseatController:
                 for n in LEG_NAMES
             }
 
+        if self._dwell_remaining > 0.0:
+            # Held between two pair swings: every foot stays put. The
+            # just-settled pair sits on its new target; the rest hold
+            # their previous positions. Seed the next pair's origins
+            # on the tick the dwell expires so the next ``update``
+            # call starts the swing fresh.
+            self._dwell_remaining -= dt
+            if self._dwell_remaining <= 0.0:
+                self._dwell_remaining = 0.0
+                self._seed_pair_origin()
+            return {
+                n: LegOutput(foot_target=self._positions[n], phase=0.0, stance=True)
+                for n in LEG_NAMES
+            }
+
         self._t_in_pair += dt
         phase = self._t_in_pair / self._pair_swing_time
         active = PAIR_ORDER[self._pair_idx]
 
         out: dict[str, LegOutput] = {}
         if phase >= 1.0:
-            # Snap the active pair to their targets and advance.
+            # Snap both active legs to their targets simultaneously —
+            # the shared pair window guarantees identical arrival even
+            # if their XY distances differ. Advance the ladder.
             for name in active:
                 self._positions[name] = self._target[name]
             self._pair_idx += 1
             self._t_in_pair = 0.0
             if self._pair_idx >= len(PAIR_ORDER):
                 self._done = True
+            elif self._pair_dwell_time > 0.0:
+                # Hold before the next pair lifts. Seeding the next
+                # pair's swing origin is deferred to dwell expiry.
+                self._dwell_remaining = self._pair_dwell_time
+            else:
+                self._seed_pair_origin()
             for name in LEG_NAMES:
                 out[name] = LegOutput(
                     foot_target=self._positions[name], phase=0.0, stance=True
                 )
             return out
 
-        # Mid-pair: active legs follow a rest-to-rest swing arc.
-        # Endpoint velocities pinned to zero so each leg sets down
-        # gently (same pattern as InitializeController.PLACE_FEET).
+        # Mid-pair: both active legs follow a rest-to-rest swing arc
+        # from their pair-start origin to their target. ``swing_width``
+        # is hardcoded to zero so the curve is a vertical lift over a
+        # linear XY chord — direction-agnostic.
         for name in LEG_NAMES:
             if name in active:
-                origin = self._current[name]
+                origin = self._pair_origin[name]
                 target = self._target[name]
                 point = swing_arc(
                     phase_in_swing=phase,
                     swing_origin=origin,
                     target=target,
                     swing_clearance=self._swing_clearance,
-                    swing_width=self._swing_width,
+                    swing_width=0.0,
                     identity_y_sign=identity_y_sign(target),
                     swing_time=self._pair_swing_time,
                     controller_dt=self._controller_dt,
@@ -277,3 +359,9 @@ class ReseatController:
                     foot_target=self._positions[name], phase=0.0, stance=True
                 )
         return out
+
+    def _seed_pair_origin(self) -> None:
+        if self._pair_idx >= len(PAIR_ORDER):
+            return
+        active = PAIR_ORDER[self._pair_idx]
+        self._pair_origin = {name: self._positions[name] for name in active}

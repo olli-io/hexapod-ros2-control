@@ -32,11 +32,10 @@ The ``InitializeController`` runs an orchestrated startup sequence:
 
 The controller is stateful per leg (each leg remembers its current
 position so non-active legs can hold), which does not fit the strategy
-contract of pure ``(phase, stride, leg) → target``. Modelled on
-``DisengagementController``: an enum-driven ladder with ``update(dt)``
-emitting one ``LegOutput`` per leg per tick. Differs in that the
-INITIALIZE sequence is a fixed PLACE_FEET → LIFT_BODY → DONE script,
-not a dynamic group queue.
+contract of pure ``(phase, stride, leg) → target``. An enum-driven
+ladder with ``update(dt)`` emitting one ``LegOutput`` per leg per
+tick — same shape as the other state-machine controllers (pause,
+reseat, fold) in this package.
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ from typing import Mapping
 
 from .clock import LEG_NAMES
 from .gaits.base import identity_y_sign, swing_arc
-from .disengagement import LegOutput
+from .pause import LegOutput
 
 
 __all__ = [
@@ -191,9 +190,9 @@ class InitializeController:
 
         # Mid-pair: active legs follow a rest-to-rest swing arc from
         # their initial_stance entry to the ground target. Endpoint
-        # velocities pinned to zero (same pattern as the disengagement
-        # controller's group swings) so each leg sets down gently
-        # rather than at steady-state stance velocity.
+        # velocities pinned to zero (same pattern as the pause
+        # controller's descents) so each leg sets down gently rather
+        # than at steady-state stance velocity.
         for name in LEG_NAMES:
             if name in active:
                 origin = self._initial[name]

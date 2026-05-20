@@ -1,4 +1,4 @@
-"""Stand -> Gait engagement: one full cycle with per-leg first swing.
+"""Stand -> Gait engagement and Paused -> Gait resume.
 
 The standard tripod / wave / ripple strategies assume the engine has
 already been ticking — they compute foot targets from PEP and AEP
@@ -7,8 +7,22 @@ STAND, every foot is at NOMINAL, so on the first GAIT tick the
 strategy would demand a position jump to PEP (swing legs) or AEP
 (stance legs), and the body's stance feet would yank the body forward.
 
-The ENGAGING engine state runs one full master cycle (master 0 → 1)
-through this controller. Each leg passes through three per-leg states:
+The same per-leg state machine handles two entry points:
+
+- **engage mode** (``begin``) — STAND → GAIT. Runs one full master
+  cycle 0 → 1; smoothstep envelope ramps body velocity from zero;
+  hands off at master = 1.0 (≡ 0.0 in the modular clock).
+- **resume mode** (``begin_resume``) — PAUSED → GAIT. Runs from the
+  paused ``master_phase`` until every leg has completed its first
+  post-resume swing (i.e. crossed into GAIT_LIKE). No smoothstep — the
+  upstream ``BodyVelocityLimiter`` already ramps ``cmd_vel`` from zero,
+  and the body velocity matches ``cmd_vel`` directly. The previously-
+  airborne legs swing from their lowered positions (snapshot at pause
+  time) up to the live AEP, merging with the strategy curve at
+  touchdown. Previously-stance legs integrate stance until their phase
+  wraps to 0, then swing the same way.
+
+Each leg passes through three per-leg states:
 
 - **INITIAL_STANCE** — leg is on the ground and has not yet started
   its first swing. Only initial-stance legs (offset ≥ swing_end) start
@@ -32,12 +46,18 @@ through this controller. Each leg passes through three per-leg states:
   boundary is exact: both branches evaluate the same strategy at the
   same phase with the same stride.
 
-Engagement ends at master = 1.0 (≡ 0.0 in the modular clock). By that
-point every leg has finished its first swing from NOMINAL and sits on
-its GAIT-expected curve, so the handoff carries no position step.
+In engage mode, engagement ends at master = 1.0 (≡ 0.0 in the modular
+clock). By that point every leg has finished its first swing from
+NOMINAL and sits on its GAIT-expected curve, so the handoff carries no
+position step.
 
-Body-velocity envelope
-======================
+In resume mode, the controller ends once every leg has crossed into
+GAIT_LIKE (entered the strategy-driven branch). The engine reseats the
+gait clock from ``exit_master`` so GAIT continues from the resumed
+phase.
+
+Body-velocity envelope (engage mode only)
+=========================================
 
 ``v_body(t) = cmd_vel(t) · smoothstep(τ)`` with ``τ = master / W``,
 where ``W`` is the **earliest first-touchdown master** across all legs:
@@ -52,7 +72,8 @@ envelope is pinned at 1.0 for the remainder of the cycle.
 
 ``cmd_vel`` is read every tick, so a varying input is shadowed
 continuously — no snapshot. Mid-engagement ``cmd_vel → 0`` bails to
-STOPPING via the engine and hands off to the ``DisengagementController``.
+PAUSING via the engine and hands off to the ``PauseController``.
+Resume mode disables the envelope (held at 1.0).
 
 Composition with the upstream body-velocity filter
 ==================================================
@@ -72,7 +93,7 @@ from typing import Mapping
 
 from .clock import LEG_NAMES
 from .gaits.base import LegContext, Strategy, StrideParams, identity_y_sign, swing_arc
-from .disengagement import LegOutput
+from .pause import LegOutput
 
 
 __all__ = [
@@ -140,8 +161,12 @@ class EngagementController:
         self._controller_dt = controller_dt
 
         self._state = EngagementState.IDLE
+        # "engage" — STAND → GAIT (full master cycle, smoothstep envelope).
+        # "resume" — PAUSED → GAIT (per-leg first-swing completion, no
+        # envelope, seeded from paused master and last_targets).
+        self._mode: str = "engage"
 
-        # Per-strategy state, populated in begin().
+        # Per-strategy state, populated in begin() / begin_resume().
         self._strategy: Strategy | None = None
         self._leg_contexts: dict[str, LegContext] = {}
         self._is_initial_swing: dict[str, bool] = {n: False for n in LEG_NAMES}
@@ -149,13 +174,15 @@ class EngagementController:
         self._first_touchdown_master: dict[str, float] = {n: 0.0 for n in LEG_NAMES}
         # Horizon at which the smoothstep envelope saturates. Set to the
         # earliest first touchdown across legs so every post-touchdown
-        # leg sees v_body = v_cmd.
+        # leg sees v_body = v_cmd. Unused in resume mode.
         self._smoothstep_window = 1.0
 
-        # Live engagement state, evolved by update(). ``_master`` is
-        # clamped to ``[0, 1]`` inclusive; the upper end is the engine's
-        # GAIT handoff point (handed off as 0.0 via the ``exit_master``
-        # property, since the clock is modular).
+        # Live engagement state, evolved by update(). In engage mode
+        # ``_master`` is clamped to ``[0, 1]`` inclusive; the upper end is
+        # the engine's GAIT handoff point (handed off as 0.0 via the
+        # ``exit_master`` property, since the clock is modular). In resume
+        # mode the clamp is removed — ``_master`` can exceed 1.0 while
+        # the slowest leg finishes its first post-resume swing.
         self._master = 0.0
         self._v_body_x = 0.0
         self._v_body_y = 0.0
@@ -163,6 +190,12 @@ class EngagementController:
         self._foot_position: dict[str, Vec3] = dict(self._nominal)
         self._lift_off_position: dict[str, Vec3] = dict(self._nominal)
         self._has_lifted_off: dict[str, bool] = {n: False for n in LEG_NAMES}
+        # Resume-mode end condition: True when a leg has crossed into its
+        # GAIT_LIKE branch at least once since ``begin_resume`` was called.
+        # Unused in engage mode (which terminates on master >= 1.0).
+        self._has_completed_first_swing: dict[str, bool] = {
+            n: False for n in LEG_NAMES
+        }
 
     @property
     def state(self) -> EngagementState:
@@ -172,10 +205,18 @@ class EngagementController:
     def exit_master(self) -> float:
         """Master phase to seed the engine clock with on GAIT handoff.
 
-        Engagement covers one full cycle (internal master clamp at 1.0).
-        Master is modular, so the handoff phase wraps to 0.0 — GAIT
-        picks up at the start of the next cycle.
+        In engage mode the controller covers one full cycle (internal
+        master clamp at 1.0), so the modular handoff phase is 0.0 —
+        GAIT picks up at the start of the next cycle.
+
+        In resume mode the controller terminates once every leg has
+        completed its first post-resume swing. The internal master sits
+        somewhere in ``[master_phase, master_phase + 1]``; the handoff
+        phase is ``_master % 1.0`` so GAIT continues from the resumed
+        cycle position.
         """
+        if self._mode == "resume":
+            return self._master % 1.0
         return 0.0
 
     @property
@@ -217,6 +258,7 @@ class EngagementController:
                 f" controller duty_factor ({self._duty_factor})"
             )
 
+        self._mode = "engage"
         self._strategy = strategy
         self._leg_contexts = dict(leg_contexts)
         offsets = strategy.phase_offsets.offsets
@@ -265,6 +307,90 @@ class EngagementController:
         # their lift-off snapshot is already correct. Initial-stance
         # legs snapshot when they cross INITIAL_STANCE -> INITIAL_SWING.
         self._has_lifted_off = {n: is_initial_swing[n] for n in LEG_NAMES}
+        self._has_completed_first_swing = {n: False for n in LEG_NAMES}
+
+        self._state = EngagementState.ENGAGING
+
+    def begin_resume(
+        self,
+        strategy: Strategy,
+        leg_contexts: Mapping[str, LegContext],
+        last_targets: Mapping[str, Vec3],
+        prev_swing_flags: Mapping[str, bool],
+        master_phase: float,
+    ) -> None:
+        """Arm the engagement from a PAUSED start.
+
+        Seeds the per-leg state machine to resume the gait from the
+        paused ``master_phase``. Previously-airborne legs (``prev_swing_
+        flags[n] == True``) are treated as INITIAL_SWING legs whose
+        lift-off snapshot is the lowered foot position; their merge arc
+        sweeps from there back up to the live AEP. Previously-stance
+        legs are INITIAL_STANCE: they integrate stance from the paused
+        position until their phase wraps to 0, then swing through one
+        normal swing window. The smoothstep envelope is disabled —
+        ``BodyVelocityLimiter`` in ``hexa_control`` already ramps
+        ``cmd_vel`` from zero on the PAUSED → RESUMING edge.
+        """
+        missing = set(LEG_NAMES) - set(leg_contexts)
+        if missing:
+            raise ValueError(f"leg_contexts missing legs: {sorted(missing)}")
+        missing = set(LEG_NAMES) - set(last_targets)
+        if missing:
+            raise ValueError(f"last_targets missing legs: {sorted(missing)}")
+        if strategy.duty_factor != self._duty_factor:
+            raise ValueError(
+                f"strategy duty_factor ({strategy.duty_factor}) does not match"
+                f" controller duty_factor ({self._duty_factor})"
+            )
+        if not (0.0 <= master_phase < 1.0):
+            raise ValueError(f"master_phase must be in [0, 1); got {master_phase}")
+
+        self._mode = "resume"
+        self._strategy = strategy
+        self._leg_contexts = dict(leg_contexts)
+        offsets = strategy.phase_offsets.offsets
+
+        is_initial_swing: dict[str, bool] = {}
+        first_lift_off: dict[str, float] = {}
+        first_touchdown: dict[str, float] = {}
+        lift_off_position: dict[str, Vec3] = dict(self._nominal)
+        has_lifted_off: dict[str, bool] = {}
+
+        for name in LEG_NAMES:
+            phase = (master_phase + offsets[name]) % 1.0
+            if prev_swing_flags.get(name, False):
+                # Was airborne: merge arc starts now from the lowered
+                # position, touches down when the cycle reaches swing_end.
+                is_initial_swing[name] = True
+                first_lift_off[name] = master_phase
+                first_touchdown[name] = master_phase + max(
+                    0.0, self._swing_end - phase
+                )
+                lift_off_position[name] = tuple(last_targets[name])  # type: ignore[assignment]
+                has_lifted_off[name] = True
+            else:
+                # Was stance: integrate stance until phase wraps to 0
+                # (master += 1 - phase), then swing through one swing
+                # window.
+                is_initial_swing[name] = False
+                first_lift_off[name] = master_phase + (1.0 - phase)
+                first_touchdown[name] = first_lift_off[name] + self._swing_end
+                has_lifted_off[name] = False
+
+        self._is_initial_swing = is_initial_swing
+        self._first_lift_off_master = first_lift_off
+        self._first_touchdown_master = first_touchdown
+        self._smoothstep_window = 1.0  # unused in resume mode
+
+        self._master = master_phase
+        self._v_body_x = 0.0
+        self._v_body_y = 0.0
+        self._omega = 0.0
+        self._foot_position = {n: tuple(last_targets[n]) for n in LEG_NAMES}  # type: ignore[misc]
+        self._lift_off_position = lift_off_position
+        self._has_lifted_off = has_lifted_off
+        self._has_completed_first_swing = {n: False for n in LEG_NAMES}
 
         self._state = EngagementState.ENGAGING
 
@@ -295,19 +421,30 @@ class EngagementController:
         cycle_time = self._derive_cycle_time(max_cmd_leg_v)
         stance_time = cycle_time * self._duty_factor
 
-        # 2) Advance master phase using the commanded cycle_time. The
-        # clock is the same one GAIT will use; engagement just stops
-        # advancing it past master = 1.0.
+        # 2) Advance master phase using the commanded cycle_time. In
+        # engage mode the clock clamps at master = 1.0 (the GAIT handoff
+        # point). In resume mode the clock advances freely — the
+        # controller terminates on per-leg "first swing complete" flags,
+        # not a master horizon.
         if cycle_time > 0.0:
-            self._master = min(self._master + dt / cycle_time, 1.0)
+            advanced = self._master + dt / cycle_time
+            if self._mode == "engage":
+                self._master = min(advanced, 1.0)
+            else:
+                self._master = advanced
 
-        # 3) Body velocity follows the smoothstep envelope of cmd_vel
-        # until master >= smoothstep_window, after which the envelope
-        # holds at 1.0 for the remainder of the cycle. The envelope's
-        # vanishing derivative at τ = 1 keeps body acceleration C1
-        # across the saturation point as well as the STAND / ENGAGING /
-        # GAIT boundaries.
-        if self._smoothstep_window > 0.0 and self._master < self._smoothstep_window:
+        # 3) Body velocity. In engage mode it follows the smoothstep
+        # envelope of cmd_vel until master >= smoothstep_window, after
+        # which the envelope holds at 1.0. The envelope's vanishing
+        # derivative at τ = 1 keeps body acceleration C1 across the
+        # saturation point and the STAND / ENGAGING / GAIT boundaries.
+        # In resume mode the envelope is pinned to 1.0 — BodyVelocityLimiter
+        # in hexa_control already smoothed the PAUSED → RESUMING edge.
+        if (
+            self._mode == "engage"
+            and self._smoothstep_window > 0.0
+            and self._master < self._smoothstep_window
+        ):
             tau = self._master / self._smoothstep_window
             envelope = _smoothstep(tau)
         else:
@@ -359,6 +496,7 @@ class EngagementController:
                 self._foot_position[name] = foot
                 in_stance = phase >= self._swing_end
                 out[name] = LegOutput(foot_target=foot, phase=phase, stance=in_stance)
+                self._has_completed_first_swing[name] = True
             elif self._master >= first_lift_off:
                 # INITIAL_SWING: arc from the leg's lift-off snapshot to
                 # the *live* AEP. Initial-stance legs snapshot here on
@@ -429,8 +567,12 @@ class EngagementController:
                     stance=True,
                 )
 
-        if self._master >= 1.0:
-            self._state = EngagementState.DONE
+        if self._mode == "engage":
+            if self._master >= 1.0:
+                self._state = EngagementState.DONE
+        else:
+            if all(self._has_completed_first_swing.values()):
+                self._state = EngagementState.DONE
 
         return out
 

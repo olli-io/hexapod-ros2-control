@@ -189,8 +189,8 @@ def _controller(**overrides) -> ReseatController:
         current_stance=_stance(),
         target_stance=_shifted_stance(0.02),
         pair_swing_time=0.1,
+        pair_dwell_time=0.0,
         swing_clearance=0.02,
-        swing_width=0.0,
         controller_dt=0.02,
     )
     args.update(overrides)
@@ -280,3 +280,78 @@ def test_missing_legs_raises():
 def test_nonpositive_pair_swing_time_raises():
     with pytest.raises(ValueError, match="pair_swing_time"):
         _controller(pair_swing_time=0.0)
+
+
+def test_negative_pair_dwell_time_raises():
+    with pytest.raises(ValueError, match="pair_dwell_time"):
+        _controller(pair_dwell_time=-0.01)
+
+
+def test_dwell_between_pairs_holds_all_legs():
+    # pair_swing_time=0.1 with dt=0.02 ⇒ pair completes after the
+    # 5th tick (phase = 5 * 0.02 / 0.1 = 1.0). Then a 0.06 s dwell
+    # ⇒ 3 dwell ticks (0.02 × 3 = 0.06, hitting zero on the 3rd).
+    pair_swing_time = 0.1
+    pair_dwell_time = 0.06
+    dt = 0.02
+    target = _shifted_stance(0.02)
+    current = _stance()
+    ctrl = _controller(
+        target_stance=target,
+        pair_swing_time=pair_swing_time,
+        pair_dwell_time=pair_dwell_time,
+    )
+
+    # Tick through pair 1 to completion.
+    for _ in range(5):
+        out = ctrl.update(dt=dt)
+    first_pair = PAIR_ORDER[0]
+    second_pair = PAIR_ORDER[1]
+    for name in first_pair:
+        assert out[name].foot_target == pytest.approx(target[name], abs=1e-9)
+
+    # Dwell window: every leg holds, all stance, no progress on pair 2.
+    held_positions = {n: out[n].foot_target for n in LEG_NAMES}
+    for _ in range(3):
+        out = ctrl.update(dt=dt)
+        assert ctrl.done is False
+        for name in LEG_NAMES:
+            assert out[name].foot_target == pytest.approx(held_positions[name], abs=1e-12)
+            assert out[name].stance is True
+            assert out[name].phase == 0.0
+
+    # Next tick: pair 2 lifts off — its legs start swinging.
+    out = ctrl.update(dt=dt)
+    for name in second_pair:
+        assert out[name].stance is False
+        # Mid-arc target should differ from both held position and final target.
+        assert out[name].foot_target != held_positions[name]
+    # Non-active legs (pair 1 + pair 3) still hold.
+    for name in LEG_NAMES:
+        if name in second_pair:
+            continue
+        assert out[name].foot_target == pytest.approx(held_positions[name], abs=1e-12)
+        assert out[name].stance is True
+
+
+def test_no_dwell_after_final_pair():
+    # The ladder must flip ``done`` on the same tick the last pair
+    # snaps — no trailing dwell. With pair_swing_time=0.1, dt=0.02,
+    # and pair_dwell_time=0.06 the timing per pair is 5 swing ticks
+    # + 3 dwell ticks. Three pairs: 5 + 3 + 5 + 3 + 5 = 21 ticks to
+    # the final snap; ``done`` should be True on that tick, not the
+    # 24th.
+    ctrl = _controller(
+        pair_swing_time=0.1,
+        pair_dwell_time=0.06,
+    )
+    for tick in range(1, 25):
+        out = ctrl.update(dt=0.02)
+        if ctrl.done:
+            assert tick == 21
+            # All legs must be at target the instant done flips.
+            target = _shifted_stance(0.02)
+            for name in LEG_NAMES:
+                assert out[name].foot_target == pytest.approx(target[name], abs=1e-9)
+            return
+    raise AssertionError("ladder did not complete within 24 ticks")
