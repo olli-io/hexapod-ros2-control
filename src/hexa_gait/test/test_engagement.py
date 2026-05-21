@@ -432,6 +432,56 @@ def test_engagement_reaches_done(strategy_cls):
     assert ctrl.state is EngagementState.DONE
 
 
+def test_wave_engagement_gait_like_stance_world_invariant_under_velocity_step():
+    # The engagement controller's GAIT_LIKE branch must integrate stance
+    # legs against the internal body velocity — not rebuild them from
+    # the closed-form stance Bezier. Drive a wave engagement far enough
+    # that several legs sit in GAIT_LIKE stance, then step v_cmd. Each
+    # such leg's world-frame foot position must hold across the step.
+    ctrl = _controller(duty_factor=Wave.duty_factor)
+    _begin(ctrl, Wave)
+
+    v_x = 0.10
+    dt = 0.005
+    body_x = 0.0
+    body_y = 0.0
+    # Drive to master ≈ 0.7. With wave's first_touchdown masters at
+    # 1/6, 1/3, 1/2, 2/3, ..., by master 0.7 four legs have already
+    # entered GAIT_LIKE (r_rear, l_middle, r_front, l_rear).
+    out = None
+    while ctrl.state is not EngagementState.DONE and ctrl._master < 0.7:
+        out = ctrl.update(dt=dt, v_cmd_xy=(v_x, 0.0), omega_cmd=0.0)
+        # Internal body velocity has saturated to v_x by master ≥ 1/6.
+        body_x += ctrl.v_body[0] * dt
+        body_y += ctrl.v_body[1] * dt
+
+    assert out is not None
+    before: dict[str, tuple[float, float]] = {}
+    for name in LEG_NAMES:
+        if out[name].stance:
+            before[name] = (
+                body_x + out[name].foot_target[0],
+                body_y + out[name].foot_target[1],
+            )
+    assert len(before) >= 3, f"expected ≥3 stance legs, got {len(before)}"
+
+    v_new = (0.05, 0.05)
+    out = ctrl.update(dt=dt, v_cmd_xy=v_new, omega_cmd=0.0)
+    body_x += ctrl.v_body[0] * dt
+    body_y += ctrl.v_body[1] * dt
+
+    for name, (wx_before, wy_before) in before.items():
+        if not out[name].stance:
+            continue
+        wx_after = body_x + out[name].foot_target[0]
+        wy_after = body_y + out[name].foot_target[1]
+        dx = abs(wx_after - wx_before)
+        dy = abs(wy_after - wy_before)
+        # 1 mm tolerance, same as the engine-side test.
+        assert dx < 1e-3, f"{name} world dx={dx*1000:.2f} mm"
+        assert dy < 1e-3, f"{name} world dy={dy*1000:.2f} mm"
+
+
 @pytest.mark.parametrize("strategy_cls", [Ripple, Wave])
 def test_legs_enter_stance_after_first_touchdown(strategy_cls):
     # After each leg's first touchdown master it transitions to

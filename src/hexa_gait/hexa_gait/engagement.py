@@ -36,15 +36,18 @@ Each leg passes through three per-leg states:
   their integrated position. The swing arc retargets to the *live* AEP
   each tick (based on the current ``v_cmd``) so the touchdown matches
   steady-state stance velocity.
-- **GAIT_LIKE** — leg has completed its first swing. From here on the
-  controller calls ``strategy.foot_target(phase, stride, leg)`` with the
-  current ``v_cmd``, matching what the GAIT engine state will do. This
-  is the only branch active for a leg after master ≥ first touchdown,
-  so a leg that would normally do a second swing within one cycle (e.g.
-  ripple's ``l_front`` between master 5/6 and 1.0) follows the strategy
-  for that second swing too. Continuity at the engagement → GAIT
-  boundary is exact: both branches evaluate the same strategy at the
-  same phase with the same stride.
+- **GAIT_LIKE** — leg has completed its first swing. Mirrors what the
+  GAIT engine state does: swing legs follow the strategy's swing curve
+  (with the current ``v_cmd``-derived stride); stance legs integrate
+  the internal body velocity from their current body-frame position.
+  Stance is therefore history-dependent rather than rebuilt from
+  instantaneous stride. A leg that would do a second swing within one
+  cycle (e.g. ripple's ``l_front`` between master 5/6 and 1.0) follows
+  the strategy for that second swing too. Continuity at the engagement
+  → GAIT boundary is exact: both sides use the same split, so the
+  engine seeds its own ``StanceIntegrator`` from the engagement
+  controller's last per-leg foot positions and integration continues
+  uninterrupted across master = 1.0.
 
 In engage mode, engagement ends at master = 1.0 (≡ 0.0 in the modular
 clock). By that point every leg has finished its first swing from
@@ -472,29 +475,41 @@ class EngagementController:
             first_touchdown = self._first_touchdown_master[name]
 
             if self._master >= first_touchdown:
-                # GAIT_LIKE: defer to the strategy at the current phase
-                # and cmd-derived stride. By construction the smoothstep
-                # has saturated by ``first_touchdown`` for every leg
-                # (its definition is ``min(first_touchdown)``), so the
-                # foot the strategy returns matches what the integrated
-                # stance / Bezier swing would produce — the engagement
-                # → GAIT handoff is the same expression evaluated either
-                # side of master = 1.0.
-                vx_cmd, vy_cmd = cmd_leg_v[name]
-                stride_vec = self._stride_vector(vx_cmd, vy_cmd, stance_time)
-                stride = StrideParams(
-                    stride_vector=stride_vec,
-                    cycle_time=cycle_time,
-                    duty_factor=self._duty_factor,
-                    swing_clearance=self._swing_clearance,
-                    swing_width=self._swing_width,
-                    controller_dt=self._controller_dt,
-                )
-                foot = self._strategy.foot_target(
-                    phase, stride, self._leg_contexts[name]
-                )
-                self._foot_position[name] = foot
+                # GAIT_LIKE: swing legs follow the strategy's swing
+                # curve; stance legs integrate the internal body
+                # velocity from their current body-frame position. The
+                # split mirrors what GAIT itself does, so the engagement
+                # → GAIT handoff is consistent: stance is history-
+                # dependent on both sides of master = 1.0. Under steady
+                # cmd_vel (smoothstep saturated by first_touchdown by
+                # construction) the integration reproduces the closed-
+                # form stance Bezier; under varying cmd_vel it removes
+                # the slip the closed form would otherwise inject.
                 in_stance = phase >= self._swing_end
+                if in_stance:
+                    vx_body, vy_body = body_leg_v[name]
+                    fp = self._foot_position[name]
+                    self._foot_position[name] = (
+                        fp[0] - vx_body * dt,
+                        fp[1] - vy_body * dt,
+                        fp[2],
+                    )
+                    foot = self._foot_position[name]
+                else:
+                    vx_cmd, vy_cmd = cmd_leg_v[name]
+                    stride_vec = self._stride_vector(vx_cmd, vy_cmd, stance_time)
+                    stride = StrideParams(
+                        stride_vector=stride_vec,
+                        cycle_time=cycle_time,
+                        duty_factor=self._duty_factor,
+                        swing_clearance=self._swing_clearance,
+                        swing_width=self._swing_width,
+                        controller_dt=self._controller_dt,
+                    )
+                    foot = self._strategy.foot_target(
+                        phase, stride, self._leg_contexts[name]
+                    )
+                    self._foot_position[name] = foot
                 out[name] = LegOutput(foot_target=foot, phase=phase, stance=in_stance)
                 self._has_completed_first_swing[name] = True
             elif self._master >= first_lift_off:

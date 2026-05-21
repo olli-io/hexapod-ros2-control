@@ -567,3 +567,262 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     v_fast = 10.0
     out_cycle = engine._derive_cycle_time(v_fast)
     assert out_cycle == pytest.approx(expected_min_cycle)
+
+
+# ---- Stance integrator: world-frame foot invariance ---------------------
+#
+# Wave (β = 5/6) spreads its five stance legs across stance phases
+# s ∈ {0, 1/5, …, 4/5}. A velocity change mid-stance must not shift any
+# stance foot in the world frame — otherwise the IK pulls loaded feet
+# across the ground. Tripod (β = 0.5, three stance legs lockstep) hides
+# this; wave is the strict test.
+
+
+def _wave_engine() -> Engine:
+    return Engine(
+        config=_config(),
+        strategy=Wave(),
+        nominal_stance=_nominal_stance(),
+        initial_stance=_initial_stance(),
+        coxa_to_bottom=0.02,
+        leg_contexts=_leg_contexts(),
+    )
+
+
+def test_wave_stance_world_invariant_at_constant_velocity():
+    # Sanity check: under constant velocity each stance leg's world
+    # position holds across its stance window. Confirms the integrator
+    # is the closed-form's equivalent at constant v.
+    engine = _wave_engine()
+    v_x = 0.05
+    _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
+
+    dt = 0.005
+    body_x = 0.0
+    last_world: dict[str, tuple[float, float] | None] = {n: None for n in LEG_NAMES}
+    prev_stance: dict[str, bool] = {n: False for n in LEG_NAMES}
+
+    for _ in range(800):
+        out = engine.update(dt=dt, v_body_xy=(v_x, 0.0), omega_z=0.0)
+        body_x += v_x * dt
+        for name in LEG_NAMES:
+            if not out[name].stance:
+                last_world[name] = None
+                prev_stance[name] = False
+                continue
+            wx = body_x + out[name].foot_target[0]
+            wy = out[name].foot_target[1]
+            if prev_stance[name] and last_world[name] is not None:
+                dx = abs(wx - last_world[name][0])
+                dy = abs(wy - last_world[name][1])
+                assert dx < 1e-6, f"{name} world drift dx={dx}"
+                assert dy < 1e-6, f"{name} world drift dy={dy}"
+            last_world[name] = (wx, wy)
+            prev_stance[name] = True
+
+
+def test_wave_mid_stance_velocity_step_keeps_feet_planted():
+    # The headline test: at a mixed stance-phase moment on wave, step
+    # the commanded velocity from (0.10, 0) to (0.05, 0.05). Every leg
+    # that stays in stance across the step must hold its world-frame
+    # position. Pre-fix this would have produced a ~25 mm step for the
+    # legs at the extreme stance phases (s ≈ 0 and s ≈ 4/5).
+    engine = _wave_engine()
+    v_x = 0.10
+    _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
+
+    dt = 0.005
+    body_x = 0.0
+    body_y = 0.0
+    out = None
+    # Tick into a steady-state stance window so phases have spread.
+    for _ in range(60):
+        out = engine.update(dt=dt, v_body_xy=(v_x, 0.0), omega_z=0.0)
+        body_x += v_x * dt
+
+    assert out is not None
+    before: dict[str, tuple[float, float]] = {}
+    for name in LEG_NAMES:
+        if out[name].stance:
+            before[name] = (
+                body_x + out[name].foot_target[0],
+                body_y + out[name].foot_target[1],
+            )
+    assert len(before) >= 4, f"expected ≥4 stance legs, got {len(before)}"
+
+    # Single-tick velocity step. The integrator must shift each stance
+    # foot's body-frame target by exactly -v_new·dt so the world frame
+    # position is preserved.
+    v_new = (0.05, 0.05)
+    out = engine.update(dt=dt, v_body_xy=v_new, omega_z=0.0)
+    body_x += v_new[0] * dt
+    body_y += v_new[1] * dt
+
+    for name, (wx_before, wy_before) in before.items():
+        if not out[name].stance:
+            # Leg may have flipped to swing on this tick; skip.
+            continue
+        wx_after = body_x + out[name].foot_target[0]
+        wy_after = body_y + out[name].foot_target[1]
+        dx = abs(wx_after - wx_before)
+        dy = abs(wy_after - wy_before)
+        # 1 mm tolerance — well above the integrator's exact arithmetic,
+        # well below the ≥25 mm slip the closed form would inject.
+        assert dx < 1e-3, f"{name} world dx={dx*1000:.2f} mm"
+        assert dy < 1e-3, f"{name} world dy={dy*1000:.2f} mm"
+
+
+def test_engagement_to_gait_seed_world_invariant_under_velocity_step():
+    # Drive through engagement → GAIT, then step velocity on the first
+    # GAIT cycle while legs are still in their initial stance window.
+    # Proves the seed at handoff carries the correct world-locked
+    # anchors (not the strategy's closed-form stance target, which
+    # would already differ from the engagement controller's integrated
+    # position).
+    engine = _wave_engine()
+    v_x = 0.10
+    _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.GAIT
+
+    dt = 0.005
+    # The engine returned out of _drive_to_gait at the handoff tick;
+    # the body's world position at that moment is unknown to us.
+    # Track from here forward.
+    body_x = 0.0
+    body_y = 0.0
+    # One steady-state GAIT tick to populate _last_targets / outputs.
+    out = engine.update(dt=dt, v_body_xy=(v_x, 0.0), omega_z=0.0)
+    body_x += v_x * dt
+
+    before: dict[str, tuple[float, float]] = {}
+    for name in LEG_NAMES:
+        if out[name].stance:
+            before[name] = (
+                body_x + out[name].foot_target[0],
+                body_y + out[name].foot_target[1],
+            )
+    assert len(before) >= 4
+
+    v_new = (0.05, 0.05)
+    out = engine.update(dt=dt, v_body_xy=v_new, omega_z=0.0)
+    body_x += v_new[0] * dt
+    body_y += v_new[1] * dt
+
+    for name, (wx_before, wy_before) in before.items():
+        if not out[name].stance:
+            continue
+        wx_after = body_x + out[name].foot_target[0]
+        wy_after = body_y + out[name].foot_target[1]
+        dx = abs(wx_after - wx_before)
+        dy = abs(wy_after - wy_before)
+        assert dx < 1e-3, f"{name} world dx={dx*1000:.2f} mm"
+        assert dy < 1e-3, f"{name} world dy={dy*1000:.2f} mm"
+
+
+# ---- Swing planner: body-frame foot continuity under mid-swing velocity step
+#
+# The stance integrator world-locks loaded feet. The symmetric airborne
+# requirement is that the swing leg's body-frame trajectory does not
+# discontinuously jump when v_y or ω_z is introduced on top of a steady
+# v_x. Pre-fix the strategy rebuilt PEP/AEP from the live stride each
+# tick, so a mid-swing v_y step shifted the swing foot in body frame by
+# a fraction of Δstride — visible on wave (β = 5/6, one airborne leg,
+# stance_time ≈ 5× tripod's) and a known source of foot tip slipping.
+
+
+def test_wave_mid_swing_velocity_step_keeps_swing_foot_continuous():
+    engine = _wave_engine()
+    v_x = 0.10
+    _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
+
+    dt = 0.005
+    # Tick into steady-state until a leg is mid-swing (phase well inside
+    # [0, 1 − β)). Wave has one airborne leg at a time, so we scan all
+    # six and pick whichever is far enough into its swing window that a
+    # single-tick velocity step is clearly mid-arc.
+    swing_name: str | None = None
+    last_out = None
+    for _ in range(400):
+        last_out = engine.update(dt=dt, v_body_xy=(v_x, 0.0), omega_z=0.0)
+        for n in LEG_NAMES:
+            # Mid-swing window: phase ∈ (0.04, 0.12) on wave's [0, 1/6)
+            # swing — past the lift-off endpoint, before touchdown.
+            if not last_out[n].stance and 0.04 < last_out[n].phase < 0.12:
+                swing_name = n
+                break
+        if swing_name is not None:
+            break
+    assert swing_name is not None, "no leg landed mid-swing inside scan window"
+    assert last_out is not None
+
+    pos_before = last_out[swing_name].foot_target
+
+    # Single-tick velocity step: add v_y and ω_z on top of steady v_x.
+    # The body-frame swing foot must shift by at most the latched arc's
+    # own per-tick progression (≪ 1 mm at dt = 5 ms on wave) — pre-fix
+    # the rebuilt PEP/AEP would have jumped this by O(Δv · stance_time)
+    # = O(0.05 · 1 s) · 0.5 = O(25 mm) in y, plus an ω_z contribution.
+    out = engine.update(dt=dt, v_body_xy=(v_x, 0.05), omega_z=0.3)
+    # Sanity: the leg we were tracking must still be in swing.
+    assert not out[swing_name].stance
+
+    pos_after = out[swing_name].foot_target
+    dx = abs(pos_after[0] - pos_before[0])
+    dy = abs(pos_after[1] - pos_before[1])
+    dz = abs(pos_after[2] - pos_before[2])
+    # Latched-arc per-tick motion is bounded by the foot's body-frame
+    # swing velocity ~ |stride| / swing_time = stride_length ≈ 0.10 m /
+    # min_swing_time 0.25 s = 0.4 m/s. dt = 5 ms ⇒ ≤ 2 mm/tick. 3 mm
+    # leaves headroom for the Bezier's mid-arc curvature.
+    assert dx < 3.0e-3, f"swing dx={dx*1000:.2f} mm"
+    assert dy < 3.0e-3, f"swing dy={dy*1000:.2f} mm"
+    assert dz < 3.0e-3, f"swing dz={dz*1000:.2f} mm"
+
+
+def test_wave_swing_liftoff_velocity_matches_body_velocity():
+    # Wave's β = 5/6 means the default ``swing_origin_velocity =
+    # -stride/swing_time`` resolves to -5·v_leg, a 5× velocity step at
+    # lift-off. The SwingPlanner overrides this with -v_leg so swing
+    # launches at the stance-frame velocity. Sampling the foot tip a
+    # few ticks past lift-off measures the primary Bezier's endpoint
+    # velocity directly.
+    engine = _wave_engine()
+    cmd_v = 0.10
+    _drive_to_gait(engine, v_body_xy=(cmd_v, 0.0), omega_z=0.0)
+    dt = 0.001
+
+    # Find a fresh lift-off and trace the airborne leg's x position
+    # over the first ~20 swing ticks. Skip the leg whose lift-off
+    # happens at the engagement→GAIT handoff (origin = engagement's
+    # mid-swing position, not -0.5·stride) — only steady-state GAIT
+    # lift-offs use the integrator's PEP as the swing origin.
+    prev_stance: dict[str, bool] = {n: True for n in LEG_NAMES}
+    trace: list[float] = []
+    tracked: str | None = None
+    # First pass: let the engagement-mid-swing leg complete its swing
+    # so subsequent lift-offs are pure GAIT.
+    for _ in range(int(2.0 / dt)):
+        out = engine.update(dt=dt, v_body_xy=(cmd_v, 0.0), omega_z=0.0)
+        if tracked is None:
+            for n in LEG_NAMES:
+                if prev_stance[n] and not out[n].stance:
+                    tracked = n
+                    trace.append(out[n].foot_target[0])
+                    break
+        elif not out[tracked].stance:
+            trace.append(out[tracked].foot_target[0])
+            if len(trace) >= 20:
+                break
+        else:
+            # Tracked leg already touched down — restart search.
+            tracked = None
+            trace.clear()
+        for n in LEG_NAMES:
+            prev_stance[n] = out[n].stance
+
+    assert tracked is not None and len(trace) >= 20, "no clean lift-off seen"
+    # Sample dB/dt at the lift-off endpoint of the primary Bezier:
+    # average finite difference over the first ~15 ticks, well inside
+    # phase_in_swing ≪ 0.5. Pre-fix this would be ≈ -5·cmd_v = -0.50.
+    v_liftoff = (trace[15] - trace[1]) / (14 * dt)
+    assert v_liftoff == pytest.approx(-cmd_v, abs=2.0e-2)

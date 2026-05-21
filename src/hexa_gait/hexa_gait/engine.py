@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
@@ -73,7 +73,7 @@ from .clock import GaitClock
 from .engagement import EngagementController, EngagementState
 from .fold import FoldController
 from .gaits import STRATEGIES
-from .gaits.base import LegContext, Strategy, StrideParams
+from .gaits.base import LegContext, Strategy, StrideParams, identity_y_sign, swing_arc
 from .initialize import InitializeController
 from .pause import LegOutput, PauseController, PauseState
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
@@ -93,6 +93,8 @@ __all__ = [
     "EngineConfig",
     "EngineState",
     "LegOutput",
+    "StanceIntegrator",
+    "SwingPlanner",
     "build_leg_contexts",
     "initial_stance_from_yaml",
     "nominal_stance_from_yaml",
@@ -246,6 +248,195 @@ def initial_stance_from_yaml(geometry_yaml: str | Path) -> dict[str, Vec3]:
     }
 
 
+@dataclass
+class StanceIntegrator:
+    """Per-leg body-frame stance target as an integral from touchdown.
+
+    The standard strategies rebuild PEP/AEP from the current stride each
+    tick, so a velocity change that does not coincide with lift-off
+    snaps every stance leg by ``(0.5 − s) · (stride_new − stride_old)``
+    in the body frame — a non-uniform shear across legs at different
+    stance phases. For tripod this is masked (β = 0.5, all stance legs
+    share s); for wave and ripple it is visible foot scrubbing.
+
+    The fix: at each leg's touchdown the body-frame foot position is
+    captured as the world-locked anchor, and every subsequent stance
+    tick decrements that anchor by ``v_leg · dt``. Stance is then
+    history-dependent (touchdown anchor + integrated body translation)
+    rather than rebuilt from instantaneous stride. Swing keeps using
+    the strategy's swing curve — it is a body-frame planning curve and
+    is unaffected by the slip.
+
+    Under constant velocity the integrator reproduces the closed-form
+    stance Bezier exactly (the Bezier's nodes are colinear and evenly
+    spaced, so it degenerates to a linear interpolation).
+    """
+
+    leg_names: tuple[str, ...]
+    anchor: dict[str, Vec3] = field(default_factory=dict)
+    is_stance: dict[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for n in self.leg_names:
+            self.anchor.setdefault(n, (0.0, 0.0, 0.0))
+            self.is_stance.setdefault(n, False)
+
+    def seed(
+        self,
+        last_targets: Mapping[str, Vec3],
+        last_stance: Mapping[str, bool],
+    ) -> None:
+        """Capture current body-frame foot positions as stance anchors.
+
+        Called at every entry to GAIT so legs that arrive mid-stance
+        (from ENGAGING or RESUMING) integrate from their current
+        position rather than waiting for their next swing.
+        """
+        for n in self.leg_names:
+            self.anchor[n] = tuple(last_targets[n])  # type: ignore[assignment]
+            self.is_stance[n] = bool(last_stance[n])
+
+    def step(
+        self,
+        name: str,
+        in_stance: bool,
+        swing_target: Vec3,
+        v_leg: tuple[float, float],
+        dt: float,
+    ) -> Vec3 | None:
+        """Advance the integrator one tick for a leg.
+
+        Returns the integrated body-frame target if the leg is in
+        stance, else ``None`` (the caller falls back to the strategy's
+        swing curve). On the swing → stance edge, ``swing_target`` is
+        adopted as the new anchor and returned unchanged for this tick
+        — integration begins on the following tick.
+        """
+        if not in_stance:
+            self.is_stance[name] = False
+            return None
+        if not self.is_stance[name]:
+            self.anchor[name] = tuple(swing_target)  # type: ignore[assignment]
+            self.is_stance[name] = True
+            return self.anchor[name]
+        a = self.anchor[name]
+        self.anchor[name] = (a[0] - v_leg[0] * dt, a[1] - v_leg[1] * dt, a[2])
+        return self.anchor[name]
+
+    def reset(self) -> None:
+        for n in self.leg_names:
+            self.is_stance[n] = False
+
+
+@dataclass
+class SwingPlanner:
+    """Per-leg latched swing plan, captured at lift-off and held until touchdown.
+
+    The standard strategies rebuild PEP/AEP from the live stride each
+    tick, so a mid-swing velocity change re-evaluates the quartic Bezier
+    against a moved swing_origin and target — the airborne foot snaps in
+    body frame by a fraction of ``Δstride``. Tripod hides this because
+    ``stance_time = min_swing_time`` keeps strides short and there are
+    three concurrent swing legs; wave (β = 5/6) has ``stance_time = 5 ·
+    min_swing_time`` so the shift is ~5× larger, and only one leg is
+    airborne to bear the discontinuity. The result is a visible body-
+    frame jump on the swing foot whenever the operator introduces ``v_y``
+    or ``ω_z`` on top of a steady ``v_x``.
+
+    The fix mirrors ``StanceIntegrator`` on the swing side: at lift-off
+    capture
+      * ``origin``       — the foot's actual body-frame position (= the
+        last stance integrator anchor), giving C0 continuity into swing
+        even when the preceding stance integrated a varying velocity;
+      * ``target``       — the live AEP (``nominal + 0.5 · stride``);
+      * ``v_leg``        — used as both ``swing_origin_velocity`` and
+        ``swing_target_velocity`` so the swing arc launches and lands at
+        the stance-frame velocity ``-v_leg``. The default
+        ``-stride / swing_time = -v_leg · β / (1−β)`` is correct only at
+        β = 0.5; for ripple it is 2× and for wave 5× too fast, producing
+        a body-frame velocity step at every lift-off and touchdown that
+        scrubs the loaded stance feet;
+      * ``swing_time`` and ``identity_y_sign`` — held alongside so the
+        Bezier control nodes stay fixed for the full swing.
+    During swing the engine evaluates ``swing_arc`` from these latched
+    values; at touchdown the integrator's new anchor is ``target`` (so
+    swing → stance is exact), and the planner releases the leg.
+
+    Engagement and resume each run their own swing planning, so the
+    planner is reset on every entry to GAIT — a leg that arrives
+    mid-swing (engagement → GAIT handoff) is then treated as a fresh
+    lift-off on its next swing tick, capturing the engagement's last
+    body-frame position as the new origin.
+    """
+
+    leg_names: tuple[str, ...]
+    origin: dict[str, Vec3] = field(default_factory=dict)
+    target: dict[str, Vec3] = field(default_factory=dict)
+    v_leg: dict[str, tuple[float, float]] = field(default_factory=dict)
+    swing_time: dict[str, float] = field(default_factory=dict)
+    identity_y_sign: dict[str, int] = field(default_factory=dict)
+    is_swing: dict[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for n in self.leg_names:
+            self.origin.setdefault(n, (0.0, 0.0, 0.0))
+            self.target.setdefault(n, (0.0, 0.0, 0.0))
+            self.v_leg.setdefault(n, (0.0, 0.0))
+            self.swing_time.setdefault(n, 0.0)
+            self.identity_y_sign.setdefault(n, 1)
+            self.is_swing.setdefault(n, False)
+
+    def liftoff(
+        self,
+        name: str,
+        origin: Vec3,
+        target: Vec3,
+        v_leg: tuple[float, float],
+        swing_time: float,
+        identity_y_sign_val: int,
+    ) -> None:
+        self.origin[name] = tuple(origin)  # type: ignore[assignment]
+        self.target[name] = tuple(target)  # type: ignore[assignment]
+        self.v_leg[name] = (float(v_leg[0]), float(v_leg[1]))
+        self.swing_time[name] = float(swing_time)
+        self.identity_y_sign[name] = int(identity_y_sign_val)
+        self.is_swing[name] = True
+
+    def touchdown(self, name: str) -> None:
+        self.is_swing[name] = False
+
+    def evaluate(
+        self,
+        name: str,
+        phase_in_swing: float,
+        swing_clearance: float,
+        swing_width: float,
+        controller_dt: float,
+    ) -> Vec3:
+        vx, vy = self.v_leg[name]
+        # Stance-frame foot velocity is -v_leg; pass it as both endpoints
+        # so the Bezier's C1 nodes match the stance-frame velocity at
+        # lift-off (origin) and touchdown (target). Defaults derived from
+        # ``-stride/swing_time`` only match this at β = 0.5.
+        v_match = (-vx, -vy, 0.0)
+        return swing_arc(
+            phase_in_swing=phase_in_swing,
+            swing_origin=self.origin[name],
+            target=self.target[name],
+            swing_clearance=swing_clearance,
+            swing_width=swing_width,
+            identity_y_sign=self.identity_y_sign[name],
+            swing_time=self.swing_time[name],
+            controller_dt=controller_dt,
+            swing_origin_velocity=v_match,
+            swing_target_velocity=v_match,
+        )
+
+    def reset(self) -> None:
+        for n in self.leg_names:
+            self.is_swing[n] = False
+
+
 class Engine:
     """Per-tick gait engine.
 
@@ -296,6 +487,8 @@ class Engine:
         self._reseat_geometry: ReseatGeometry | None = reseat_geometry
 
         self._clock = GaitClock(strategy.phase_offsets)
+        self._stance = StanceIntegrator(tuple(LEG_NAMES))
+        self._swing = SwingPlanner(tuple(LEG_NAMES))
         self._pause = self._build_pause()
         self._engagement = self._build_engagement()
         self._initialize = self._build_initialize()
@@ -725,6 +918,12 @@ class Engine:
                 # up at the start of the next cycle with every leg
                 # already on its strategy-prescribed curve.
                 self._clock.reset(self._engagement.exit_master)
+                self._stance.seed(self._last_targets, self._last_stance)
+                # Engagement runs its own swing planning; clear the GAIT
+                # SwingPlanner so any leg still airborne at handoff trips
+                # a fresh lift-off (origin = engagement's last body-frame
+                # foot position) on its next swing tick.
+                self._swing.reset()
                 self._state = EngineState.GAIT
             return out
 
@@ -770,6 +969,7 @@ class Engine:
         out = self._tick_resume(dt, v_body_xy, omega_z)
         if self._engagement.state is EngagementState.DONE:
             self._clock.reset(self._engagement.exit_master)
+            self._stance.seed(self._last_targets, self._last_stance)
             self._state = EngineState.GAIT
         return out
 
@@ -814,6 +1014,7 @@ class Engine:
 
         duty_factor = self._strategy.duty_factor
         stride_length = self._config.stride_length
+        swing_end = 1.0 - duty_factor
 
         leg_velocities = self._per_leg_planar_velocity(v_body_xy, omega_z)
         max_leg_v = max(
@@ -823,6 +1024,7 @@ class Engine:
 
         cycle_time = self._derive_cycle_time(max_leg_v)
         stance_time = cycle_time * duty_factor
+        swing_time = cycle_time * swing_end
 
         self._clock.advance(dt, cycle_time)
         phases = self._clock.phases()
@@ -840,8 +1042,82 @@ class Engine:
                 swing_width=self._config.swing_width,
                 controller_dt=self._config.controller_dt,
             )
-            target = self._strategy.foot_target(phases[name], stride, leg)
+            # Strategy is still evaluated unconditionally so test spies
+            # and any future strategy-internal bookkeeping see every
+            # tick. The result is consumed only as a fallback for stance
+            # legs that have never lifted off under the SwingPlanner
+            # (e.g. the very first GAIT tick after engagement, where the
+            # touchdown edge — and therefore the integrator anchor —
+            # comes from the engagement controller's seeded state, not
+            # from our latched swing target).
+            strategy_target = self._strategy.foot_target(phases[name], stride, leg)
             stance = phases[name] >= (1.0 - duty_factor)
+
+            if stance:
+                if self._swing.is_swing[name]:
+                    # Touchdown edge: adopt the latched swing target as
+                    # the new stance anchor. The latched target is the
+                    # AEP the swing arc was actually steering toward, so
+                    # swing → stance is C0-exact even when v_leg varied
+                    # during the airborne phase.
+                    touchdown_anchor = self._swing.target[name]
+                    self._swing.touchdown(name)
+                else:
+                    touchdown_anchor = strategy_target
+                integrated = self._stance.step(
+                    name=name,
+                    in_stance=True,
+                    swing_target=touchdown_anchor,
+                    v_leg=(v_x, v_y),
+                    dt=dt,
+                )
+                # in_stance=True always returns a position.
+                assert integrated is not None
+                target = integrated
+            else:
+                if not self._swing.is_swing[name]:
+                    # Lift-off edge: capture origin from the foot's
+                    # actual current position (= last stance anchor),
+                    # target from the live AEP, and velocities from the
+                    # current v_leg. Held for the remainder of the
+                    # swing so mid-swing velocity changes do not move
+                    # the airborne foot in body frame.
+                    nominal = self._nominal[name]
+                    aep = (
+                        nominal[0] + 0.5 * stride_vec[0],
+                        nominal[1] + 0.5 * stride_vec[1],
+                        nominal[2] + 0.5 * stride_vec[2],
+                    )
+                    self._swing.liftoff(
+                        name=name,
+                        origin=self._last_targets[name],
+                        target=aep,
+                        v_leg=(v_x, v_y),
+                        swing_time=max(swing_time, 1.0e-9),
+                        identity_y_sign_val=identity_y_sign(nominal),
+                    )
+                phase_in_swing = (
+                    phases[name] / swing_end if swing_end > 0.0 else 0.0
+                )
+                target = self._swing.evaluate(
+                    name=name,
+                    phase_in_swing=phase_in_swing,
+                    swing_clearance=self._config.step_height,
+                    swing_width=self._config.swing_width,
+                    controller_dt=self._config.controller_dt,
+                )
+                # Keep the stance integrator's per-leg flag in sync so
+                # the next stance entry trips its own touchdown edge
+                # (StanceIntegrator.step with in_stance=False just clears
+                # the flag and returns None).
+                self._stance.step(
+                    name=name,
+                    in_stance=False,
+                    swing_target=target,
+                    v_leg=(v_x, v_y),
+                    dt=dt,
+                )
+
             out[name] = LegOutput(foot_target=target, phase=phases[name], stance=stance)
 
         self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
@@ -909,6 +1185,11 @@ class Engine:
             n: not self._last_stance[n] for n in LEG_NAMES
         }
         self._pause.begin(self._last_targets, self._last_swing_flags)
+        self._stance.reset()
+        # PauseController owns the airborne legs from here; clear the
+        # GAIT SwingPlanner so a subsequent RESUMING → GAIT does not see
+        # a stale "is_swing" flag from before the pause.
+        self._swing.reset()
         self._state = EngineState.PAUSING
 
     def _enter_resuming(self) -> None:
