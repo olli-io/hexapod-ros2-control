@@ -60,7 +60,8 @@ def _load_config(
         axis_dpad_y=int(raw["axis_dpad_y"]),
         dpad_up_sign=float(raw["dpad_up_sign"]),
         dpad_right_sign=float(raw["dpad_right_sign"]),
-        mode_toggle_button=int(raw["mode_toggle_button"]),
+        gait_mode_button=int(raw["gait_mode_button"]),
+        posture_mode_button=int(raw["posture_mode_button"]),
         init_button=int(raw["init_button"]),
         record_button=int(raw["record_button"]),
         yaw_left_button=int(raw["yaw_left_button"]),
@@ -122,7 +123,8 @@ class TeleopJoyNode(Node):
         )
         self._state = JoyState(
             mode=initial_mode,
-            prev_toggle=False,
+            prev_gait_mode=False,
+            prev_posture_mode=False,
             current_gait_idx=self._cfg.gait_cycle.index(default_gait),
         )
         # Active gait — the most-recently-published-and-accepted gait

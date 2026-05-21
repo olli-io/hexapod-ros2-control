@@ -1,8 +1,10 @@
 """Launch the 8BitDo Pro 2 joystick teleop.
 
-Brings up the standard ``joy_node`` (publishing ``sensor_msgs/Joy`` on
+Brings up our ``joy_publisher`` (publishing ``sensor_msgs/Joy`` on
 ``/joy``) and ``teleop_joy``, which reads ``/joy`` and publishes
-``/cmd_vel`` + ``/body/pose``.
+``/cmd_vel`` + ``/body/pose``. ``joy_publisher`` replaces upstream
+``joy_node`` so the controller can be unplugged / replugged mid-session
+and recovers without restarting any ROS process.
 
 Pass ``joy_config_file:=/path/to/file.yaml`` to override the default
 config installed alongside this package.
@@ -30,14 +32,18 @@ def generate_launch_description():
     )
 
     joy_node = Node(
-        package="joy",
-        executable="joy_node",
+        package="hexa_teleop",
+        executable="joy_publisher",
         name="joy_node",
         output="screen",
         parameters=[{
-            # /dev/input/jsN selector — bump if multiple joysticks are
-            # attached. 0 is the default but stated here for clarity.
-            "device_id": 0,
+            # Empty => auto-discover the first /dev/input/jsN. Linux
+            # renumbers jsN on replug (a controller that was js0 can
+            # come back as js1), so pinning a number is brittle.
+            # Override with a literal path (e.g. "/dev/input/js2") if
+            # multiple controllers are attached and one must be picked
+            # deterministically.
+            "device_path": "",
             # Small driver-level deadzone to nuke stick noise at the
             # source — keeps released-stick axes pinned to exact zero so
             # downstream cmd_vel doesn't flicker around the gait engine's
@@ -48,6 +54,10 @@ def generate_launch_description():
             # producing fresh /cmd_vel + /body/pose even when the
             # sticks are idle.
             "autorepeat_rate": 50.0,
+            # Poll /dev/input/jsN at this period while the controller
+            # is unplugged. 1 s is the longest a user should wait
+            # between replugging and the node picking the device up.
+            "scan_period_s": 1.0,
         }],
     )
 

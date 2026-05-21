@@ -121,12 +121,15 @@ class ControlNode(Node):
         cap_summary = ", ".join(
             f"{n}={v:.2f}" for n, v in sorted(self._caps.linear_max_by_gait.items())
         )
+        bias_summary = ", ".join(
+            f"{n}={v:.2f}" for n, v in sorted(self._caps.yaw_bias_by_gait.items())
+        )
         self.get_logger().info(
             f"control_node up: default_gait={self._cfg.default_gait}, "
             f"caps from {gait_yaml}: "
             f"linear_max=({cap_summary}) m/s, "
             f"angular_z_max={self._caps.angular_max:.2f} rad/s, "
-            f"yaw_bias={self._caps.yaw_bias:.2f}, "
+            f"yaw_bias=({bias_summary}), "
             f"vmax_ramp_time_linear={self._cfg.vmax_ramp_time_linear:.2f} s, "
             f"vmax_ramp_time_angular={self._cfg.vmax_ramp_time_angular:.2f} s, "
             f"accel_linear[{self._active_gait}]="
@@ -179,7 +182,7 @@ class ControlNode(Node):
             self._leg_mounts,
             self._caps.linear_max(self._active_gait),
             self._caps.angular_max,
-            self._caps.yaw_bias,
+            self._caps.yaw_bias(self._active_gait),
         )
         v_x, v_y, omega_z = self._limiter.step((v_x, v_y, omega_z), self._dt)
         out = GaitParams()

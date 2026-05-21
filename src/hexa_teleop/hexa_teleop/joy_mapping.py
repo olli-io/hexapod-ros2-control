@@ -21,8 +21,12 @@ posture, yaw rate in gait). This is intentional — tilting while
 walking isn't exposed at the teleop layer, and the walking yaw rate
 needs a continuous axis rather than a button.
 
-A rising edge on the mode-toggle button flips the mode. Holding the
-button does not retoggle; the user must release and press again.
+Mode selection uses two dedicated buttons: a rising edge on the
+``gait_mode_button`` sets the mode to ``gait``; a rising edge on the
+``posture_mode_button`` sets the mode to ``posture``. Pressing the
+button for the mode that is already active is a no-op (``mode_changed``
+stays false). Holding either button does not re-fire; the user must
+release and press again.
 
 Axis sign convention follows joy_node defaults: stick pushed
 forward / left is positive — same as REP-103 body frame
@@ -108,7 +112,8 @@ class JoyConfig:
     axis_dpad_y: int
     dpad_up_sign: float
     dpad_right_sign: float
-    mode_toggle_button: int
+    gait_mode_button: int
+    posture_mode_button: int
     init_button: int
     record_button: int
     yaw_left_button: int
@@ -141,7 +146,8 @@ class JoyConfig:
 @dataclass
 class JoyState:
     mode: str = POSTURE
-    prev_toggle: bool = False
+    prev_gait_mode: bool = False
+    prev_posture_mode: bool = False
     prev_init: bool = False
     prev_record: bool = False
     yaw_current: float = 0.0
@@ -238,11 +244,24 @@ def map_joy(
     state: JoyState,
     dt: float,
 ) -> JoyOutput:
-    pressed = _read_button(buttons, cfg.mode_toggle_button)
-    mode_changed = pressed and not state.prev_toggle
-    if mode_changed:
-        state.mode = GAIT if state.mode == POSTURE else POSTURE
-    state.prev_toggle = pressed
+    # Mode buttons: rising edge on gait_mode_button selects GAIT;
+    # rising edge on posture_mode_button selects POSTURE. Pressing the
+    # button for the already-active mode is a no-op. Held buttons don't
+    # repeat — the user must release and press again. If both edges
+    # land on the same tick, posture wins (safer fallback).
+    gait_pressed = _read_button(buttons, cfg.gait_mode_button)
+    posture_pressed = _read_button(buttons, cfg.posture_mode_button)
+    gait_edge = gait_pressed and not state.prev_gait_mode
+    posture_edge = posture_pressed and not state.prev_posture_mode
+    state.prev_gait_mode = gait_pressed
+    state.prev_posture_mode = posture_pressed
+    mode_changed = False
+    if posture_edge and state.mode != POSTURE:
+        state.mode = POSTURE
+        mode_changed = True
+    elif gait_edge and state.mode != GAIT:
+        state.mode = GAIT
+        mode_changed = True
 
     # Start button: one-shot rising-edge trigger with two-press
     # semantics when the chassis is in a non-default posture.

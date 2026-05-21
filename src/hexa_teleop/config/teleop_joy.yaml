@@ -8,7 +8,7 @@
 # Press Start + X while powering the controller on to enter X-input
 # mode.
 
-initial_mode: posture # "posture" (default, safe) or "gait"
+initial_mode: gait # "gait" (default) or "posture"
 
 deadband: 0.1 # absolute stick magnitude below this is treated as zero
 
@@ -19,9 +19,13 @@ axis:
   right_x: 3
   right_y: 4
 
-# Button index that toggles posture <-> gait on rising edge.
+# Mode-select buttons. Rising edge on ``gait_mode_button`` switches
+# into gait mode; rising edge on ``posture_mode_button`` switches into
+# posture mode. Pressing the button for the already-active mode is a
+# no-op. Holding either does not repeat — release and press again.
 # 0=A, 1=B, 2=X, 3=Y on 8BitDo Pro 2 in X-input mode.
-mode_toggle_button: 3 # Y
+gait_mode_button: 0 # A
+posture_mode_button: 3 # Y
 
 # Button that toggles FOLDED ↔ STAND on rising edge AND snaps the
 # posture height back to zero when the chassis is currently lifted /

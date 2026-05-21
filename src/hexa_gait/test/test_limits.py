@@ -85,11 +85,37 @@ def test_angular_max_passes_through_raw(tmp_path):
     assert math.isclose(caps.angular_max, 1.5)
 
 
-def test_yaw_bias_passes_through_raw(tmp_path):
-    # yaw_bias is the cut-split knob consumed by scale_to_envelope.
+def test_yaw_bias_anchors_at_tripod_and_eases_with_duty(tmp_path):
+    # yaw_bias is per-gait, easing back toward neutral as β grows:
+    #   yaw_bias_eff(β) = 0.5 + (yaw_bias_yaml − 0.5) · (1.5 − β)
+    # The YAML value anchors at tripod (β=0.5); slower gaits sit closer
+    # to neutral because their smaller linear_max can't absorb an
+    # aggressive cut on top of the gait's intrinsic slowness.
     path = _write_yaml(tmp_path, yaw_bias=0.6)
     caps = load_velocity_caps(path)
-    assert math.isclose(caps.yaw_bias, 0.6)
+    assert math.isclose(caps.yaw_bias("tripod"), 0.60, rel_tol=1e-9)
+    # ripple β=2/3 → 0.5 + 0.1 · (1.5 − 2/3) = 0.5833
+    assert math.isclose(caps.yaw_bias("ripple"), 0.5 + 0.1 * (1.5 - 2.0 / 3.0), rel_tol=1e-9)
+    # wave   β=5/6 → 0.5 + 0.1 · (1.5 − 5/6) = 0.5667
+    assert math.isclose(caps.yaw_bias("wave"), 0.5 + 0.1 * (1.5 - 5.0 / 6.0), rel_tol=1e-9)
+    # Strict monotone: deviation shrinks as duty grows.
+    dev = lambda name: caps.yaw_bias(name) - 0.5
+    assert dev("tripod") > dev("ripple") > dev("wave") > 0.0
+
+
+def test_yaw_bias_uniform_when_yaml_is_neutral(tmp_path):
+    # yaw_bias_yaml = 0.5 ⇒ no deviation ⇒ every gait stays at 0.5.
+    path = _write_yaml(tmp_path, yaw_bias=0.5)
+    caps = load_velocity_caps(path)
+    for name in ("tripod", "ripple", "wave"):
+        assert math.isclose(caps.yaw_bias(name), 0.5, rel_tol=1e-9)
+
+
+def test_yaw_bias_unknown_gait_raises(tmp_path):
+    path = _write_yaml(tmp_path)
+    caps = load_velocity_caps(path)
+    with pytest.raises(KeyError):
+        caps.yaw_bias("gallop")
 
 
 def test_missing_angular_z_max_raises(tmp_path):
@@ -276,7 +302,7 @@ def test_scale_uses_per_gait_linear_max(tmp_path):
         _MOUNTS,
         caps.linear_max("wave"),
         caps.angular_max,
-        caps.yaw_bias,
+        caps.yaw_bias("wave"),
     )
     # 0.40 was tripod's cap; wave cap is 0.08, so the input gets scaled
     # to 0.08 (no yaw → max leg speed = |v_x|, bias is irrelevant).

@@ -42,6 +42,16 @@ behaviour where both components scale by the same factor. The trade is
 explicit: the commanded translation:yaw ratio is not preserved when
 the cut kicks in.
 
+The effective bias is **per-gait**, easing back toward neutral as
+duty factor grows:
+``yaw_bias_eff(β) = 0.5 + (yaw_bias − 0.5) · (1.5 − β)``. The YAML
+value anchors at tripod (β=0.5); slower gaits (ripple β=2/3 → 0.583,
+wave β=5/6 → 0.567) sit closer to neutral. The motivation is that the
+slower a gait runs, the smaller its ``linear_max`` already is —
+pushing more of the envelope cut onto translation on top of that is
+too aggressive. Tripod, with the most headroom in both directions,
+can afford the strongest yaw priority.
+
 Pure-python; ``rclpy``-free so the helper is unit-testable standalone
 and importable from both teleop and control without ROS overhead.
 """
@@ -60,22 +70,24 @@ from .gaits import STRATEGIES
 
 @dataclass(frozen=True)
 class VelocityCaps:
-    """Per-gait linear caps, a shared angular cap, and the yaw bias.
+    """Per-gait linear caps, per-gait yaw bias, and a shared angular cap.
 
-    Callers look up by gait name via ``linear_max(name)``; the dict is
-    keyed by the same strings the gait registry uses (``STRATEGIES``).
-    Unknown names raise ``KeyError`` deliberately — a typo at the
-    control layer should fail fast rather than silently fall back to
-    the wrong cap. ``yaw_bias`` is shared across gaits and feeds
-    ``scale_to_envelope``.
+    Callers look up by gait name via ``linear_max(name)`` /
+    ``yaw_bias(name)``; both dicts are keyed by the same strings the
+    gait registry uses (``STRATEGIES``). Unknown names raise
+    ``KeyError`` deliberately — a typo at the control layer should fail
+    fast rather than silently fall back to the wrong cap.
     """
 
     linear_max_by_gait: Mapping[str, float]
+    yaw_bias_by_gait: Mapping[str, float]
     angular_max: float
-    yaw_bias: float
 
     def linear_max(self, gait: str) -> float:
         return self.linear_max_by_gait[gait]
+
+    def yaw_bias(self, gait: str) -> float:
+        return self.yaw_bias_by_gait[gait]
 
 
 def load_velocity_caps(gait_yaml: str | Path) -> VelocityCaps:
@@ -98,15 +110,17 @@ def load_velocity_caps(gait_yaml: str | Path) -> VelocityCaps:
     yaw_bias = float(raw["yaw_bias"])
 
     linear_max_by_gait: dict[str, float] = {}
+    yaw_bias_by_gait: dict[str, float] = {}
     for name, factory in STRATEGIES.items():
         duty = float(factory().duty_factor)
         linear_max_by_gait[name] = (
             stride_length * (1.0 - duty) / (min_swing_time * duty)
         )
+        yaw_bias_by_gait[name] = 0.5 + (yaw_bias - 0.5) * (1.5 - duty)
     return VelocityCaps(
         linear_max_by_gait=linear_max_by_gait,
+        yaw_bias_by_gait=yaw_bias_by_gait,
         angular_max=angular_max,
-        yaw_bias=yaw_bias,
     )
 
 

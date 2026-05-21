@@ -46,6 +46,33 @@ class AnimationContext:
     phase-locked animations should fall back to a free-running sine
     on ``t`` or skip themselves."""
 
+    gait_name: str | None = None
+    """Active gait strategy name (e.g. ``"tripod"``, ``"ripple"``),
+    sniffed from ``/gait/params`` by the posture node. ``None`` until
+    a params message has been seen. Animations that are only safe
+    under a specific gait (e.g. ``GaitBounce`` is too aggressive for
+    overlapping gaits) gate themselves on this field."""
+
+    support_centroid_xy: tuple[float, float] | None = None
+    """Low-pass-filtered XY centroid of the current support polygon
+    in the body frame (metres), derived from /legs/targets in the
+    posture node. ``None`` until the first /legs/targets message is
+    received. The filtering lives in the node so animations stay
+    stateless; animations that don't need it ignore the field."""
+
+    swing_lift_z: float | None = None
+    """Max foot lift above ground (metres) across all legs in swing,
+    derived from /legs/targets in the posture node. Computed as
+    ``max(foot.z for swing legs) − mean(foot.z for stance legs)``,
+    clamped ``≥ 0``. ``None`` until /legs/targets has been observed
+    with a usable stance polygon.
+
+    Drives the gait-synced vertical bounce. Naturally tracks the
+    swinging foot closest to its arc apex: for overlapping gaits
+    (ripple, surf) the max picks the higher of the two airborne
+    legs, so the bounce follows the main wave and ignores the
+    fractional ``half-phase`` leg lagging or leading behind it."""
+
 
 class Animation(Protocol):
     def __call__(self, ctx: AnimationContext) -> BodyPose: ...

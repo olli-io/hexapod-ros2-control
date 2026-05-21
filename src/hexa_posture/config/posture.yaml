@@ -1,0 +1,61 @@
+# hexa_posture node parameters. See hexa_posture/README.md for what
+# each animation does — this file just lists the runtime knobs.
+#
+# Units: m, s. Strength/gain are dimensionless.
+
+posture_node:
+  ros__parameters:
+    # Animation stack composed bottom-up by the posture node. Each
+    # entry must be a key in posture_node._ANIMATION_FACTORIES.
+    # Order matters only for layers that aren't commutative; the
+    # current set composes via pose.add and is order-invariant.
+    enabled_animations:
+      - still
+      - gait_sway
+      - gait_bounce
+
+    # GaitSway: feedforward XY translation tracking the live
+    # support-polygon centroid. Suppresses the rocking mode that
+    # four-foot stances (tetrapod, ripple, surf) excite. Tripod and
+    # wave self-attenuate (their centroids sit near body origin).
+    #
+    # gain — physical feedforward gain. 1.0 is the sweet spot for
+    # CoG-on-centroid; deviating from 1.0 trades cancellation for
+    # less chassis travel.
+    gait_sway_gain: 1.0
+    # strength — user-facing attenuator in [0, 1]. Multiplies gain
+    # before the centroid is applied. Start conservative at 0.5;
+    # raise toward 1.0 once the wobble suppression is dialled in.
+    gait_sway_strength: 0.5
+
+    # GaitBounce: gait-synced vertical lift. Tracks the max foot
+    # swing lift across all legs so the body rides up with the
+    # swinging feet — body is at rest when a leg lands (AEP), at
+    # peak when the highest swinging foot is at its swing apex.
+    # For ripple/surf the max picks whichever airborne leg is
+    # closest to its apex, so the bounce follows the main wave and
+    # ignores the half-phase overlap.
+    #
+    # arc_height — max body lift (m) at swing apex. Body Z spans
+    # [0, arc_height] over the gait cycle. Composes additively with
+    # other Z animations (Breathing) and the user pose; keep
+    # conservative so it stays inside the PoseLimits.z envelope.
+    gait_bounce_arc_height: 0.02
+    # step_height_ref — reference foot swing apex (m) used to
+    # normalise the lift signal. Mirror hexa_gait/config/gait.yaml's
+    # step_height so arc_height continues to represent the actual
+    # peak body lift in metres.
+    gait_bounce_step_height_ref: 0.06
+
+    # Time constant (s) for the first-order low-pass on the support
+    # centroid. Smooths out the step at swing-pair handover so the
+    # sway itself doesn't re-excite the rocking mode.
+    support_centroid_tau: 0.1
+
+    # Time constant (s) for the first-order low-pass on the swing
+    # lift signal driving GaitBounce. Rounds off the slope kink at
+    # leg handover in overlapping gaits (ripple, surf) where the
+    # max-across-legs switches between two arcs. Keep small (a few
+    # percent of the typical sub-cycle period) so the body bounce
+    # doesn't visibly lag the feet.
+    swing_lift_tau: 0.04

@@ -25,6 +25,7 @@ setup(
     entry_points={
         "console_scripts": [
             "teleop_joy = hexa_teleop.teleop_joy:main",
+            "joy_publisher = hexa_teleop.joy_publisher:main",
         ],
     },
 )

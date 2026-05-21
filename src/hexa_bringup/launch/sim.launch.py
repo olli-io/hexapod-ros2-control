@@ -59,11 +59,14 @@ def generate_launch_description():
         parameters=common_params,
     )
 
+    posture_config = PathJoinSubstitution([
+        FindPackageShare("hexa_posture"), "config", "posture.yaml",
+    ])
     posture_node = Node(
         package="hexa_posture",
         executable="posture_node",
         output="screen",
-        parameters=common_params + [{"enabled_animations": ["still"]}],
+        parameters=common_params + [posture_config],
     )
 
     control_node = Node(

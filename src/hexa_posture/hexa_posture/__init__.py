@@ -1,4 +1,12 @@
-from .animations import Animation, AnimationContext, Breathing, Stack, Still
+from .animations import (
+    Animation,
+    AnimationContext,
+    Breathing,
+    GaitBounce,
+    GaitSway,
+    Stack,
+    Still,
+)
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp, scale
 
 __all__ = [
@@ -6,6 +14,8 @@ __all__ = [
     "AnimationContext",
     "BodyPose",
     "Breathing",
+    "GaitBounce",
+    "GaitSway",
     "IDENTITY",
     "PoseLimits",
     "Stack",

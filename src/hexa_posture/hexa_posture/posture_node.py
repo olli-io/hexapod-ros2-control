@@ -24,10 +24,19 @@ gait-induced body motion.
 import rclpy
 from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
+from hexa_interfaces.msg import GaitParams, LegTargets
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .animations import Animation, AnimationContext, Breathing, Stack, Still
+from .animations import (
+    Animation,
+    AnimationContext,
+    Breathing,
+    GaitBounce,
+    GaitSway,
+    Stack,
+    Still,
+)
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp
 
 PUBLISH_RATE_HZ = 50.0
@@ -50,20 +59,46 @@ POSTURE_ACTIVE_STATES: frozenset[str] = frozenset(
 )
 
 DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")
+# Minimum stance legs needed to define a meaningful support polygon.
+# During swing transitions the count can momentarily dip; we hold the
+# previous centroid rather than emit a noisy value.
+MIN_STANCE_FOR_CENTROID = 3
 _ANIMATION_FACTORIES: dict[str, type[Animation]] = {
     "still": Still,
     "breathing": Breathing,
+    "gait_sway": GaitSway,
+    "gait_bounce": GaitBounce,
 }
 
 
-def _build_animation_stack(names: list[str]) -> Stack:
+def _build_animation_stack(
+    names: list[str],
+    *,
+    gait_sway_gain: float = 1.0,
+    gait_sway_strength: float = 0.5,
+    gait_bounce_arc_height: float = 0.02,
+    gait_bounce_step_height_ref: float = 0.06,
+) -> Stack:
     unknown = [n for n in names if n not in _ANIMATION_FACTORIES]
     if unknown:
         raise ValueError(
             f"unknown animation(s) {unknown!r}; "
             f"available: {sorted(_ANIMATION_FACTORIES)}"
         )
-    return Stack(layers=tuple(_ANIMATION_FACTORIES[n]() for n in names))
+    overrides: dict[str, Animation] = {
+        "gait_sway": GaitSway(
+            gain=gait_sway_gain, strength=gait_sway_strength
+        ),
+        "gait_bounce": GaitBounce(
+            arc_height=gait_bounce_arc_height,
+            step_height_ref=gait_bounce_step_height_ref,
+        ),
+    }
+    layers = tuple(
+        overrides[n] if n in overrides else _ANIMATION_FACTORIES[n]()
+        for n in names
+    )
+    return Stack(layers=layers)
 
 
 def _twist_is_zero(t: Twist) -> bool:
@@ -79,6 +114,101 @@ def _twist_is_zero(t: Twist) -> bool:
 
 def _msg_to_pose(m: BodyPoseMsg) -> BodyPose:
     return BodyPose(x=m.x, y=m.y, z=m.z, roll=m.roll, pitch=m.pitch, yaw=m.yaw)
+
+
+def _lpf_step_xy(
+    prev: tuple[float, float] | None,
+    raw: tuple[float, float] | None,
+    tau: float,
+    dt: float,
+) -> tuple[float, float] | None:
+    """One first-order low-pass step on an XY signal.
+
+    Pulled out as a free function so the filter math is unit-testable
+    without spinning a ROS node. ``prev=None`` seeds the filter from
+    ``raw`` (no startup transient from (0, 0)); ``raw=None`` holds the
+    previous output (mid-swing-transition behaviour).
+    """
+    if raw is None:
+        return prev
+    if prev is None:
+        return raw
+    denom = tau + dt
+    alpha = dt / denom if denom > 0.0 else 1.0
+    px, py = prev
+    rx, ry = raw
+    return (px + alpha * (rx - px), py + alpha * (ry - py))
+
+
+def _lpf_step_scalar(
+    prev: float | None,
+    raw: float | None,
+    tau: float,
+    dt: float,
+) -> float | None:
+    """One first-order low-pass step on a scalar signal.
+
+    Same seeding and hold-on-None semantics as ``_lpf_step_xy`` —
+    ``prev=None`` adopts ``raw`` so there's no startup ramp from 0,
+    ``raw=None`` holds the previous value across degenerate frames.
+    """
+    if raw is None:
+        return prev
+    if prev is None:
+        return raw
+    denom = tau + dt
+    alpha = dt / denom if denom > 0.0 else 1.0
+    return prev + alpha * (raw - prev)
+
+
+def _stance_centroid_xy(msg: LegTargets) -> tuple[float, float] | None:
+    """Mean of foot_target.{x,y} over legs flagged stance=True.
+
+    Returns ``None`` when fewer than ``MIN_STANCE_FOR_CENTROID`` legs
+    are in stance — the polygon is degenerate during swing transitions
+    and a noisy centroid would re-excite the rocking mode we are trying
+    to suppress.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    for leg in msg.legs:
+        if leg.stance:
+            xs.append(leg.foot_target.x)
+            ys.append(leg.foot_target.y)
+    if len(xs) < MIN_STANCE_FOR_CENTROID:
+        return None
+    n = float(len(xs))
+    return (sum(xs) / n, sum(ys) / n)
+
+
+def _max_swing_lift_z(msg: LegTargets) -> float | None:
+    """Max foot lift (m) above the stance polygon's mean Z.
+
+    Computed as ``max(foot.z for swing legs) − mean(foot.z for stance
+    legs)``, clamped ``≥ 0``. Returns ``None`` when the stance polygon
+    is degenerate (``< MIN_STANCE_FOR_CENTROID`` legs in stance) so the
+    caller can hold the previous value rather than emit a noisy zero
+    mid-transition.
+
+    When no leg is in swing the result is ``0.0`` — semantically
+    distinct from ``None`` (the signal is observed and quiet, not
+    missing). ``GaitBounce`` treats that as the body's resting
+    altitude.
+    """
+    stance_zs: list[float] = []
+    swing_zs: list[float] = []
+    for leg in msg.legs:
+        if leg.stance:
+            stance_zs.append(leg.foot_target.z)
+        else:
+            swing_zs.append(leg.foot_target.z)
+    if len(stance_zs) < MIN_STANCE_FOR_CENTROID:
+        return None
+    if not swing_zs:
+        return 0.0
+    ground = sum(stance_zs) / len(stance_zs)
+    lift = max(swing_zs) - ground
+    return lift if lift > 0.0 else 0.0
 
 
 def _pose_to_msg(p: BodyPose, now_msg) -> BodyPoseMsg:
@@ -105,14 +235,73 @@ class PostureNode(Node):
         # Cold-start default: until /gait/state arrives the engine could
         # still be in FOLDED, so play it safe and emit IDENTITY.
         self._gait_state: str | None = None
+        # Active gait strategy name from /gait/params. Held None until
+        # the first params message lands; animations that gate on a
+        # specific gait (e.g. GaitBounce → tripod-only) treat that as
+        # "unknown" and stay silent.
+        self._gait_name: str | None = None
+        # Filtered support-polygon centroid in body-frame XY. Held at
+        # None until the first /legs/targets arrives so GaitSway (and
+        # any other consumer) can tell "no data yet" from "centred".
+        self._support_centroid_xy: tuple[float, float] | None = None
+        self._latest_raw_centroid: tuple[float, float] | None = None
+        # Filtered max foot-lift signal (m). None until /legs/targets
+        # is seen with a usable stance polygon; held through
+        # degenerate transitions so GaitBounce sees a continuous
+        # signal. Filtering smooths the slope kink at swing-leg
+        # handover in overlapping gaits (ripple, surf) where the
+        # max-across-legs switches between two arcs.
+        self._swing_lift_z: float | None = None
+        self._latest_raw_swing_lift: float | None = None
+        self._last_tick_ns: int | None = None
 
         self.declare_parameter("enabled_animations", list(DEFAULT_ANIMATIONS))
+        self.declare_parameter("gait_sway_gain", 1.0)
+        self.declare_parameter("gait_sway_strength", 0.5)
+        self.declare_parameter("gait_bounce_arc_height", 0.02)
+        self.declare_parameter("gait_bounce_step_height_ref", 0.06)
+        self.declare_parameter("support_centroid_tau", 0.1)
+        self.declare_parameter("swing_lift_tau", 0.04)
         enabled = list(
             self.get_parameter("enabled_animations")
             .get_parameter_value()
             .string_array_value
         ) or list(DEFAULT_ANIMATIONS)
-        self._animations = _build_animation_stack(enabled)
+        gait_sway_gain = (
+            self.get_parameter("gait_sway_gain").get_parameter_value().double_value
+        )
+        gait_sway_strength = (
+            self.get_parameter("gait_sway_strength")
+            .get_parameter_value()
+            .double_value
+        )
+        gait_bounce_arc_height = (
+            self.get_parameter("gait_bounce_arc_height")
+            .get_parameter_value()
+            .double_value
+        )
+        gait_bounce_step_height_ref = (
+            self.get_parameter("gait_bounce_step_height_ref")
+            .get_parameter_value()
+            .double_value
+        )
+        self._centroid_tau = (
+            self.get_parameter("support_centroid_tau")
+            .get_parameter_value()
+            .double_value
+        )
+        self._swing_lift_tau = (
+            self.get_parameter("swing_lift_tau")
+            .get_parameter_value()
+            .double_value
+        )
+        self._animations = _build_animation_stack(
+            enabled,
+            gait_sway_gain=gait_sway_gain,
+            gait_sway_strength=gait_sway_strength,
+            gait_bounce_arc_height=gait_bounce_arc_height,
+            gait_bounce_step_height_ref=gait_bounce_step_height_ref,
+        )
         self.get_logger().info(f"animations enabled: {enabled}")
         self._limits = PoseLimits()
 
@@ -124,6 +313,12 @@ class PostureNode(Node):
         )
         self._sub_gait_state = self.create_subscription(
             String, "/gait/state", self._on_gait_state, 10
+        )
+        self._sub_gait_params = self.create_subscription(
+            GaitParams, "/gait/params", self._on_gait_params, 10
+        )
+        self._sub_targets = self.create_subscription(
+            LegTargets, "/legs/targets", self._on_leg_targets, 10
         )
         self._pub_target = self.create_publisher(BodyPoseMsg, "/body/pose_target", 10)
 
@@ -138,8 +333,52 @@ class PostureNode(Node):
     def _on_gait_state(self, msg: String) -> None:
         self._gait_state = msg.data
 
+    def _on_gait_params(self, msg: GaitParams) -> None:
+        # Only the name matters here — velocity fields belong to the
+        # gait chain. Empty string means "unset"; keep the previous
+        # value so a stray default-constructed message doesn't blank
+        # the gate.
+        if msg.gait_name:
+            self._gait_name = msg.gait_name
+
+    def _on_leg_targets(self, msg: LegTargets) -> None:
+        raw = _stance_centroid_xy(msg)
+        if raw is not None:
+            self._latest_raw_centroid = raw
+        lift = _max_swing_lift_z(msg)
+        if lift is not None:
+            self._latest_raw_swing_lift = lift
+
+    def _step_filters(self, dt: float) -> None:
+        """Advance the first-order low-passes toward their latest raw
+        samples. Called from ``_tick`` so the time step is driven by
+        the node's actual cadence, not the /legs/targets rate. Both
+        filters hold the previous value when the underlying frame is
+        degenerate (None), so consumers never see a transient zero
+        mid-handover."""
+        self._support_centroid_xy = _lpf_step_xy(
+            self._support_centroid_xy,
+            self._latest_raw_centroid,
+            self._centroid_tau,
+            dt,
+        )
+        self._swing_lift_z = _lpf_step_scalar(
+            self._swing_lift_z,
+            self._latest_raw_swing_lift,
+            self._swing_lift_tau,
+            dt,
+        )
+
     def _tick(self) -> None:
         now = self.get_clock().now()
+        now_ns = now.nanoseconds
+        if self._last_tick_ns is None:
+            dt = 1.0 / PUBLISH_RATE_HZ
+        else:
+            dt = max((now_ns - self._last_tick_ns) * 1e-9, 0.0)
+        self._last_tick_ns = now_ns
+        self._step_filters(dt)
+
         if self._gait_state not in POSTURE_ACTIVE_STATES:
             # Engine is FOLDED / INITIALIZE / FOLDING (or no state seen
             # yet): the legs aren't at nominal stance, so applying any
@@ -148,8 +387,14 @@ class PostureNode(Node):
             # state in which posture is meaningful.
             self._pub_target.publish(_pose_to_msg(IDENTITY, now.to_msg()))
             return
-        t = now.nanoseconds * 1e-9
-        ctx = AnimationContext(t=t, walking=self._walking)
+        t = now_ns * 1e-9
+        ctx = AnimationContext(
+            t=t,
+            walking=self._walking,
+            gait_name=self._gait_name,
+            support_centroid_xy=self._support_centroid_xy,
+            swing_lift_z=self._swing_lift_z,
+        )
         animated = self._animations(ctx)
         target = clamp(add(self._user_pose, animated), self._limits)
         self._pub_target.publish(_pose_to_msg(target, now.to_msg()))

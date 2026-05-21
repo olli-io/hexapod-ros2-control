@@ -21,11 +21,36 @@ Power the controller on in **X-input mode**: hold `Start + X` until the
 LEDs flash, then plug in via USB-C.
 
 Inside the dev container — uncomment the `/dev/input` block in
-`docker-compose.yaml` before `./hexa --dev` so `joy_node` can see
-the device.
+`docker-compose.yaml` before `./hexa --dev` so the joy publisher can
+see the device.
 
 - Launch the sim (separate terminal): `ros2 launch hexa_bringup sim.launch.py`
 - Launch teleop: `ros2 launch hexa_teleop teleop.launch.py`
+
+## Joy publisher / hot-plug
+
+`joy_publisher.py` reads `/dev/input/jsN` directly and publishes
+`sensor_msgs/Joy` on `/joy`. It replaces upstream `joy_node` so the
+controller can be unplugged and plugged back in at any point — the
+node closes the dead fd, polls `/dev/input/` once per `scan_period_s`
+(default 1 s), and re-opens as soon as the device reappears. No ROS
+process restart. The controller may also be absent at launch — the
+node logs and waits for it. While the device is gone the node still
+publishes an empty `Joy` at `autorepeat_rate`, which `joy_mapping`
+resolves to the safe all-zero state.
+
+Device selection is auto-discovery: the lowest-numbered
+`/dev/input/jsN` present is opened. Linux renumbers `jsN` on replug
+(a controller that was `js0` can come back as `js1`), so a pinned
+number would be brittle in exactly the use case this node was written
+for. Set `device_path:=/dev/input/jsN` to override when multiple
+controllers are attached.
+
+Upstream `joy_node` nominally supports hot-plug via SDL2 + udev, but
+udev events don't propagate reliably into the dev container — that's
+the gap this node fills. The Joy layout matches what `joy_node` would
+have produced for the same device, so `teleop_joy` and downstream
+consumers are unchanged.
 
 Controller mapping:
 
@@ -37,12 +62,13 @@ Controller mapping:
 - **D-pad up / down (posture mode)** — integrates a persistent body-height offset (`pose.z`) while held, clamped to `posture.height.[min,max]_m`. Unlike the other posture axes the height **persists** across D-pad release and a mode toggle into gait, so the robot keeps walking at the lifted/lowered chassis height.
 - **D-pad left / right** — cycles the active gait through `gait_cycle` (`wave → ripple → tetrapod → surf → tripod` by default). D-right advances toward the more dynamic end of the list, D-left toward the more stable end. The switch is only published to `/cmd_gait` when the gait engine reports `stand` (`/gait/state`); presses mid-walk advance the local cursor but no switch lands on the wire until the engine returns to STAND. Works in both posture and gait modes.
 - **Select button (posture mode)** — snapshots the current effective body pose (joystick contribution + previously recorded baseline) on rising edge into a persistent baseline. The robot then holds that pose when the joystick is released; subsequent stick input is added on top of the baseline and clamped per-axis, so re-pushing a stick that's already at its limit has no further effect. The baseline bleeds through into gait mode (the robot walks at the recorded body offset). Inactive in gait mode.
-- **Y button** — toggles posture ↔ gait on rising edge.
+- **A button** — switches into gait mode on rising edge. No-op if already in gait mode.
+- **Y button** — switches into posture mode on rising edge. No-op if already in posture mode.
 - **Start button** — single-shot trigger for the gait engine's fold / initialize cycle, with a two-press safety: if any posture state is non-default (recorded baseline, integrated height, or eased yaw outside a small tolerance) the first press arms a **smooth revert** back to default (time constant `posture.revert_tau_s`, default 0.5 s) and **does not** publish `/gait/initialize`; the next press once the revert has settled fires init as usual. Pressing Select mid-revert cancels it (the user is recording a fresh baseline). Held Start presses don't repeat — release and press again.
 
-The node starts in **posture** mode (safer: no walking). The axis
-indices, deadband, posture translation limits, and toggle button live in
-`config/teleop_joy.yaml` — override at launch with
+The node starts in **gait** mode. The axis
+indices, deadband, posture translation limits, and mode-select buttons
+live in `config/teleop_joy.yaml` — override at launch with
 `joy_config_file:=/path/to/file.yaml`.
 
 Gait-mode stick scaling — the linear and angular velocity caps applied

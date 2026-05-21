@@ -16,7 +16,8 @@ def _cfg(**overrides) -> JoyConfig:
         axis_dpad_y=7,
         dpad_up_sign=1.0,
         dpad_right_sign=1.0,
-        mode_toggle_button=3,
+        gait_mode_button=0,
+        posture_mode_button=3,
         init_button=7,
         record_button=6,
         yaw_left_button=4,
@@ -60,14 +61,16 @@ def _axes(
 
 
 def _buttons(
-    toggle: bool = False,
+    gait_mode: bool = False,
+    posture_mode: bool = False,
     init: bool = False,
     record: bool = False,
     yaw_left: bool = False,
     yaw_right: bool = False,
 ) -> tuple[int, ...]:
     out = [0] * 11
-    out[3] = int(toggle)
+    out[0] = int(gait_mode)
+    out[3] = int(posture_mode)
     out[4] = int(yaw_left)
     out[5] = int(yaw_right)
     out[6] = int(record)
@@ -177,36 +180,64 @@ def test_deadband_applied_before_scaling():
     assert out.linear_x == 0.0
 
 
-def test_mode_toggle_flips_on_rising_edge():
+def test_gait_button_selects_gait_mode_on_rising_edge():
     cfg = _cfg()
-    state = JoyState(mode=POSTURE, prev_toggle=False)
+    state = JoyState(mode=POSTURE)
 
-    out = map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    out = map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
     assert out.mode_changed is True
     assert state.mode == GAIT
 
-    out = map_joy(_axes(), _buttons(toggle=False), cfg, state, DT)
+    out = map_joy(_axes(), _buttons(gait_mode=False), cfg, state, DT)
     assert out.mode_changed is False
     assert state.mode == GAIT
 
 
-def test_holding_toggle_does_not_retoggle():
+def test_posture_button_selects_posture_mode_on_rising_edge():
     cfg = _cfg()
-    state = JoyState(mode=POSTURE, prev_toggle=False)
+    state = JoyState(mode=GAIT)
 
-    # Initial press: flip
-    map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    out = map_joy(_axes(), _buttons(posture_mode=True), cfg, state, DT)
+    assert out.mode_changed is True
+    assert state.mode == POSTURE
+
+    out = map_joy(_axes(), _buttons(posture_mode=False), cfg, state, DT)
+    assert out.mode_changed is False
+    assert state.mode == POSTURE
+
+
+def test_mode_button_for_active_mode_is_noop():
+    cfg = _cfg()
+    state = JoyState(mode=GAIT)
+
+    out = map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
+    assert out.mode_changed is False
     assert state.mode == GAIT
 
-    # Held: must NOT flip again
+    state.mode = POSTURE
+    state.prev_posture_mode = False
+    out = map_joy(_axes(), _buttons(posture_mode=True), cfg, state, DT)
+    assert out.mode_changed is False
+    assert state.mode == POSTURE
+
+
+def test_holding_mode_button_does_not_retrigger():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+
+    # Initial press: switch to gait
+    map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
+    assert state.mode == GAIT
+
+    # Held: must NOT re-fire
     for _ in range(10):
-        out = map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+        out = map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
         assert out.mode_changed is False
         assert state.mode == GAIT
 
-    # Release then press again: flip back
-    map_joy(_axes(), _buttons(toggle=False), cfg, state, DT)
-    out = map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    # Release the gait button, then press posture: switch back
+    map_joy(_axes(), _buttons(gait_mode=False), cfg, state, DT)
+    out = map_joy(_axes(), _buttons(posture_mode=True), cfg, state, DT)
     assert out.mode_changed is True
     assert state.mode == POSTURE
 
@@ -521,12 +552,12 @@ def test_height_clamps_at_min():
     assert math.isclose(state.height_current, cfg.posture_height_min)
 
 
-def test_mode_toggle_preserves_height():
+def test_mode_switch_preserves_height():
     # The whole point of height: it must survive a POSTURE → GAIT
-    # toggle so the robot walks at the lifted posture.
+    # switch so the robot walks at the lifted posture.
     cfg = _cfg()
     state = JoyState(mode=POSTURE, height_current=0.03)
-    out = map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    out = map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
     assert state.mode == GAIT
     assert math.isclose(state.height_current, 0.03)
     assert math.isclose(out.pose_z, 0.03)
@@ -725,9 +756,9 @@ def test_recorded_pose_bleeds_through_to_gait_mode():
         state,
         DT,
     )
-    # Release record, then toggle to GAIT.
+    # Release record, then switch to GAIT.
     map_joy(_axes(), _buttons(), cfg, state, DT)
-    out = map_joy(_axes(right_x=1.0, right_y=1.0), _buttons(toggle=True), cfg, state, DT)
+    out = map_joy(_axes(right_x=1.0, right_y=1.0), _buttons(gait_mode=True), cfg, state, DT)
     assert state.mode == GAIT
     # Recorded posture bleeds through, sticks drive linear velocity.
     assert math.isclose(out.pose_x, cfg.posture_x_max)
@@ -826,16 +857,16 @@ def test_select_during_revert_cancels_it():
     assert math.isclose(state.recorded_roll, cfg.posture_roll_max)
 
 
-def test_revert_runs_across_mode_toggle():
-    # A revert armed in POSTURE mode keeps decaying after a toggle to
+def test_revert_runs_across_mode_switch():
+    # A revert armed in POSTURE mode keeps decaying after a switch to
     # GAIT — the persistent baseline bleeds through into gait mode by
     # design, so the revert must keep running there too.
     cfg = _cfg()
     state = JoyState(mode=POSTURE, recorded_roll=0.1)
     map_joy(_axes(), _buttons(init=True), cfg, state, DT)
     assert state.reverting is True
-    # Toggle to GAIT and tick the revert to completion there.
-    map_joy(_axes(), _buttons(toggle=True), cfg, state, DT)
+    # Switch to GAIT and tick the revert to completion there.
+    map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
     assert state.mode == GAIT
     for _ in range(250):
         map_joy(_axes(), _buttons(), cfg, state, DT)
