@@ -1,6 +1,6 @@
 # Joystick teleop config — 8BitDo Pro 2 in X-input mode.
 #
-# Axis / button indices match sensor_msgs/Joy as published by joy_node
+
 # on Linux (xpad driver). Joy convention: stick pushed forward / left
 # is positive, matching the REP-103 body frame (+x forward, +y left)
 # so mapping is unit-gain.

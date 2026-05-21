@@ -72,7 +72,7 @@ default_gait: tripod
 # from β plus the shared metachronal table for ripple/wave.
 gaits:
   tripod:
-    duty_factor: 0.5    # alternating 3+3, fastest of the three
+    duty_factor: 0.5 # alternating 3+3, fastest of the three
   ripple:
     duty_factor: 0.6667 # 2/3 — two legs in swing, 4 on the ground
   wave:
@@ -113,11 +113,11 @@ reseat:
   # Seconds per mirroring pair during the reseat swing. Matches
   # initialize.pair_swing_time so the two ladders feel visually
   # symmetric.
-  pair_swing_time: 0.3
+  pair_swing_time: 0.25
   # Seconds the ladder dwells between successive pair swings so each
   # pair visibly arrives before the next lifts off. No dwell before
   # the first pair or after the last; only between.
-  pair_dwell_time: 0.15
+  pair_dwell_time: 0.1
   # Swing-arc clearance (m) above the standing footprint mid-swing.
   # Smaller than initialize.swing_clearance because feet come off a
   # planted standing pose, not from above the body.

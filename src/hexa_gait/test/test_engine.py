@@ -547,11 +547,23 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     # The engine derives min_cycle_time = min_swing_time / (1 − β),
     # then clamps cycle_time = stride / (v * β). Verify both the floor
     # and the divisor track the active strategy.
+    from hexa_gait.gaits.base import derive_cycle_time
+
     spy = _SpyStrategy()
     engine = _engine(spy, config=_config(stride_length=0.10, min_swing_time=0.25))
     _drive_past_initialize(engine)
     assert engine.set_strategy(name) is True
+    cfg = engine._config
     expected_min_cycle = 0.25 / (1.0 - expected_duty)
+
+    def cycle_time(max_leg_v: float) -> float:
+        return derive_cycle_time(
+            max_leg_v,
+            cfg.stride_length,
+            expected_duty,
+            expected_min_cycle,
+            cfg.max_cycle_time,
+        )
 
     # Slow command well under saturation: cycle_time ~= stride/(v*β).
     # Use v small enough that all gaits stay below their min_cycle
@@ -559,14 +571,12 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     v_small = 0.01
     raw = 0.10 / (v_small * expected_duty)
     assert raw > expected_min_cycle
-    out_cycle = engine._derive_cycle_time(v_small)
     # raw should be clamped to max_cycle_time = 2.0
-    assert out_cycle == pytest.approx(2.0)
+    assert cycle_time(v_small) == pytest.approx(2.0)
 
     # Fast command above saturation: cycle_time clamped to min_cycle.
     v_fast = 10.0
-    out_cycle = engine._derive_cycle_time(v_fast)
-    assert out_cycle == pytest.approx(expected_min_cycle)
+    assert cycle_time(v_fast) == pytest.approx(expected_min_cycle)
 
 
 # ---- Stance integrator: world-frame foot invariance ---------------------

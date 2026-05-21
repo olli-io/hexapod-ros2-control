@@ -73,7 +73,17 @@ from .clock import GaitClock
 from .engagement import EngagementController, EngagementState
 from .fold import FoldController
 from .gaits import STRATEGIES
-from .gaits.base import LegContext, Strategy, StrideParams, identity_y_sign, swing_arc
+from .gaits.base import (
+    LegContext,
+    Strategy,
+    StrideParams,
+    derive_cycle_time,
+    identity_y_sign,
+    live_aep,
+    per_leg_planar_velocity,
+    stride_vector,
+    swing_arc,
+)
 from .initialize import InitializeController
 from .pause import LegOutput, PauseController, PauseState
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
@@ -803,8 +813,7 @@ class Engine:
             # debounce timer keeps ticking so a cmd_vel that arrives
             # mid-sequence is honoured by ENGAGING right after STAND.
             out = self._initialize.update(dt)
-            self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-            self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+            self._capture_state(out)
             if self._initialize.done:
                 self._state = EngineState.STAND
                 self._last_targets = dict(self._nominal)
@@ -820,8 +829,7 @@ class Engine:
             # operator presses start again.
             assert self._fold is not None
             out = self._fold.update(dt)
-            self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-            self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+            self._capture_state(out)
             if self._fold.done:
                 self._state = EngineState.FOLDED
                 self._last_targets = dict(self._initial)
@@ -936,7 +944,7 @@ class Engine:
         if self._state is EngineState.PAUSING:
             if not cmd_zero:
                 self._enter_resuming()
-                return self._tick_resume(dt, v_body_xy, omega_z)
+                return self._tick_engagement(dt, v_body_xy, omega_z)
             out = self._tick_pause(dt)
             if self._pause.state is PauseState.PAUSED:
                 self._state = EngineState.PAUSED
@@ -946,7 +954,7 @@ class Engine:
         if self._state is EngineState.PAUSED:
             if not cmd_zero:
                 self._enter_resuming()
-                return self._tick_resume(dt, v_body_xy, omega_z)
+                return self._tick_engagement(dt, v_body_xy, omega_z)
             self._paused_elapsed += dt
             if self._paused_elapsed >= self._config.pause_to_reseat_delay:
                 # Reseat the legs back to the current nominal footprint.
@@ -966,7 +974,7 @@ class Engine:
         if cmd_zero:
             self._enter_pausing()
             return self._tick_pause(dt)
-        out = self._tick_resume(dt, v_body_xy, omega_z)
+        out = self._tick_engagement(dt, v_body_xy, omega_z)
         if self._engagement.state is EngagementState.DONE:
             self._clock.reset(self._engagement.exit_master)
             self._stance.seed(self._last_targets, self._last_stance)
@@ -1016,13 +1024,25 @@ class Engine:
         stride_length = self._config.stride_length
         swing_end = 1.0 - duty_factor
 
-        leg_velocities = self._per_leg_planar_velocity(v_body_xy, omega_z)
+        leg_velocities = per_leg_planar_velocity(self._legs, v_body_xy, omega_z)
         max_leg_v = max(
             (math.hypot(vx, vy) for vx, vy in leg_velocities.values()),
             default=0.0,
         )
 
-        cycle_time = self._derive_cycle_time(max_leg_v)
+        cfg = self._config
+        min_cycle_time = (
+            cfg.min_swing_time / (1.0 - duty_factor)
+            if duty_factor < 1.0
+            else cfg.max_cycle_time
+        )
+        cycle_time = derive_cycle_time(
+            max_leg_v,
+            cfg.stride_length,
+            duty_factor,
+            min_cycle_time,
+            cfg.max_cycle_time,
+        )
         stance_time = cycle_time * duty_factor
         swing_time = cycle_time * swing_end
 
@@ -1033,7 +1053,7 @@ class Engine:
         for name in LEG_NAMES:
             leg = self._legs[name]
             v_x, v_y = leg_velocities[name]
-            stride_vec = self._stride_vector(v_x, v_y, stance_time, stride_length)
+            stride_vec = stride_vector(v_x, v_y, stance_time, stride_length)
             stride = StrideParams(
                 stride_vector=stride_vec,
                 cycle_time=cycle_time,
@@ -1083,11 +1103,7 @@ class Engine:
                     # swing so mid-swing velocity changes do not move
                     # the airborne foot in body frame.
                     nominal = self._nominal[name]
-                    aep = (
-                        nominal[0] + 0.5 * stride_vec[0],
-                        nominal[1] + 0.5 * stride_vec[1],
-                        nominal[2] + 0.5 * stride_vec[2],
-                    )
+                    aep = live_aep(nominal, stride_vec)
                     self._swing.liftoff(
                         name=name,
                         origin=self._last_targets[name],
@@ -1120,56 +1136,8 @@ class Engine:
 
             out[name] = LegOutput(foot_target=target, phase=phases[name], stance=stance)
 
-        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        self._capture_state(out)
         return out
-
-    def _derive_cycle_time(self, max_leg_v: float) -> float:
-        """Pick cycle_time so the fastest leg's stride equals stride_length.
-
-        Clamped to ``[min_cycle_time, max_cycle_time]`` where the lower
-        bound is derived from the strategy's duty factor:
-        ``min_cycle_time = min_swing_time / (1 − β)``. That keeps the
-        swing-phase foot velocity bounded as β shrinks (tripod) or
-        grows (wave). At zero ``max_leg_v`` the raw quotient diverges,
-        so we clamp to the slow end — the resulting stride is zero
-        anyway because every ``v_leg`` is zero.
-        """
-        cfg = self._config
-        beta = self._strategy.duty_factor
-        min_cycle_time = (
-            cfg.min_swing_time / (1.0 - beta) if beta < 1.0 else cfg.max_cycle_time
-        )
-        if max_leg_v <= 0.0:
-            return cfg.max_cycle_time
-        raw = cfg.stride_length / (max_leg_v * beta)
-        if raw < min_cycle_time:
-            return min_cycle_time
-        if raw > cfg.max_cycle_time:
-            return cfg.max_cycle_time
-        return raw
-
-    def _stride_vector(
-        self,
-        v_x: float,
-        v_y: float,
-        stance_time: float,
-        stride_length: float,
-    ) -> Vec3:
-        """Per-leg stride displacement, magnitude-clamped to stride_length.
-
-        The clamp matters only when ``max_leg_v`` exceeds the implied
-        ceiling (``min_cycle_time`` has clipped ``cycle_time``); below
-        saturation the raw stride is already ``≤ stride_length``.
-        """
-        sx = v_x * stance_time
-        sy = v_y * stance_time
-        magnitude = math.hypot(sx, sy)
-        if magnitude > stride_length and magnitude > 0.0:
-            scale = stride_length / magnitude
-            sx *= scale
-            sy *= scale
-        return (sx, sy, 0.0)
 
     def _enter_pausing(self) -> None:
         """Capture swing flags and seed the PauseController.
@@ -1214,19 +1182,7 @@ class Engine:
 
     def _tick_pause(self, dt: float) -> dict[str, LegOutput]:
         out = self._pause.update(dt)
-        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
-        return out
-
-    def _tick_resume(
-        self,
-        dt: float,
-        v_body_xy: tuple[float, float],
-        omega_z: float,
-    ) -> dict[str, LegOutput]:
-        out = self._engagement.update(dt, v_body_xy, omega_z)
-        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        self._capture_state(out)
         return out
 
     def _emit_held(self) -> dict[str, LegOutput]:
@@ -1238,8 +1194,7 @@ class Engine:
     def _tick_reseat(self, dt: float) -> dict[str, LegOutput]:
         assert self._reseat is not None
         out = self._reseat.update(dt)
-        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        self._capture_state(out)
         if self._reseat.done:
             self._commit_new_nominal(
                 self._reseat_target_stance, self._reseat_target_height
@@ -1254,31 +1209,11 @@ class Engine:
     def _tick_fold(self, dt: float) -> dict[str, LegOutput]:
         assert self._fold is not None
         out = self._fold.update(dt)
-        self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
-        self._last_stance = {n: out[n].stance for n in LEG_NAMES}
+        self._capture_state(out)
         if self._fold.done:
             self._state = EngineState.FOLDED
             self._last_targets = dict(self._initial)
             self._last_stance = {n: True for n in LEG_NAMES}
-        return out
-
-    def _per_leg_planar_velocity(
-        self,
-        v_body_xy: tuple[float, float],
-        omega_z: float,
-    ) -> dict[str, tuple[float, float]]:
-        """Linear cmd plus tangential yaw contribution at each hip.
-
-        ``v_leg = v_body + omega × r``, evaluated in the body frame.
-        Returned in the same order as ``LEG_NAMES`` so downstream code
-        can take a single ``max`` over the speeds.
-        """
-        out: dict[str, tuple[float, float]] = {}
-        for name in LEG_NAMES:
-            r_x, r_y, _ = self._legs[name].mount_xyz
-            v_x = v_body_xy[0] - omega_z * r_y
-            v_y = v_body_xy[1] + omega_z * r_x
-            out[name] = (v_x, v_y)
         return out
 
     def _tick_engagement(
@@ -1287,10 +1222,28 @@ class Engine:
         v_body_xy: tuple[float, float],
         omega_z: float,
     ) -> dict[str, LegOutput]:
+        """Drive the EngagementController one tick.
+
+        Shared by ENGAGING and RESUMING — the engage / resume distinction
+        is internal to ``EngagementController`` and is set by
+        ``begin()`` vs ``begin_resume()``. The engine just forwards the
+        commanded velocity each tick and snapshots the result.
+        """
         out = self._engagement.update(dt, v_body_xy, omega_z)
+        self._capture_state(out)
+        return out
+
+    def _capture_state(self, out: Mapping[str, LegOutput]) -> None:
+        """Snapshot per-leg foot targets and stance flags into ``_last_*``.
+
+        The ``_last_targets`` / ``_last_stance`` maps feed the next
+        tick's continuity (StanceIntegrator seeding, PauseController
+        airborne snapshot, RESUMING's lift-off positions). Every
+        controller's per-tick output flows through here so the
+        bookkeeping cannot drift from the emitted trajectory.
+        """
         self._last_targets = {n: out[n].foot_target for n in LEG_NAMES}
         self._last_stance = {n: out[n].stance for n in LEG_NAMES}
-        return out
 
 
 def build_leg_contexts(

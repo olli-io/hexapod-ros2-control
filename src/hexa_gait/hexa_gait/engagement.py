@@ -95,7 +95,17 @@ from enum import Enum
 from typing import Mapping
 
 from .clock import LEG_NAMES
-from .gaits.base import LegContext, Strategy, StrideParams, identity_y_sign, swing_arc
+from .gaits.base import (
+    LegContext,
+    Strategy,
+    StrideParams,
+    derive_cycle_time,
+    identity_y_sign,
+    live_aep,
+    per_leg_planar_velocity,
+    stride_vector,
+    swing_arc,
+)
 from .pause import LegOutput
 
 
@@ -208,19 +218,14 @@ class EngagementController:
     def exit_master(self) -> float:
         """Master phase to seed the engine clock with on GAIT handoff.
 
-        In engage mode the controller covers one full cycle (internal
-        master clamp at 1.0), so the modular handoff phase is 0.0 —
-        GAIT picks up at the start of the next cycle.
-
-        In resume mode the controller terminates once every leg has
-        completed its first post-resume swing. The internal master sits
-        somewhere in ``[master_phase, master_phase + 1]``; the handoff
-        phase is ``_master % 1.0`` so GAIT continues from the resumed
-        cycle position.
+        Modular wraparound: in engage mode ``_master`` clamps to 1.0 at
+        DONE so ``_master % 1.0 == 0.0`` — GAIT picks up at the start
+        of the next cycle. In resume mode ``_master`` sits somewhere in
+        ``[master_phase, master_phase + 1]`` at DONE so the wraparound
+        yields the resumed cycle position. Both branches collapse to
+        the same expression because the wraparound contract is the same.
         """
-        if self._mode == "resume":
-            return self._master % 1.0
-        return 0.0
+        return self._master % 1.0
 
     @property
     def v_body(self) -> tuple[float, float, float]:
@@ -411,17 +416,20 @@ class EngagementController:
         # velocity*. ``cycle_time`` derivation must use the same input
         # GAIT uses so the clock advances coherently across the
         # engagement / GAIT boundary.
-        cmd_leg_v: dict[str, tuple[float, float]] = {}
-        max_cmd_leg_v = 0.0
-        for name in LEG_NAMES:
-            r_x, r_y, _ = self._leg_contexts[name].mount_xyz
-            vx = v_cmd_xy[0] - omega_cmd * r_y
-            vy = v_cmd_xy[1] + omega_cmd * r_x
-            cmd_leg_v[name] = (vx, vy)
-            speed = math.hypot(vx, vy)
-            if speed > max_cmd_leg_v:
-                max_cmd_leg_v = speed
-        cycle_time = self._derive_cycle_time(max_cmd_leg_v)
+        cmd_leg_v = per_leg_planar_velocity(
+            self._leg_contexts, v_cmd_xy, omega_cmd
+        )
+        max_cmd_leg_v = max(
+            (math.hypot(vx, vy) for vx, vy in cmd_leg_v.values()),
+            default=0.0,
+        )
+        cycle_time = derive_cycle_time(
+            max_cmd_leg_v,
+            self._stride_length,
+            self._duty_factor,
+            self._min_cycle_time,
+            self._max_cycle_time,
+        )
         stance_time = cycle_time * self._duty_factor
 
         # 2) Advance master phase using the commanded cycle_time. In
@@ -459,12 +467,11 @@ class EngagementController:
         # 4) Per-leg planar velocity at the *internal* body velocity.
         # Used by INITIAL_STANCE foot integration and by the swing
         # arc's target-velocity argument.
-        body_leg_v: dict[str, tuple[float, float]] = {}
-        for name in LEG_NAMES:
-            r_x, r_y, _ = self._leg_contexts[name].mount_xyz
-            vx = self._v_body_x - self._omega * r_y
-            vy = self._v_body_y + self._omega * r_x
-            body_leg_v[name] = (vx, vy)
+        body_leg_v = per_leg_planar_velocity(
+            self._leg_contexts,
+            (self._v_body_x, self._v_body_y),
+            self._omega,
+        )
 
         # 5) Per-leg output.
         offsets = self._strategy.phase_offsets.offsets
@@ -497,7 +504,9 @@ class EngagementController:
                     foot = self._foot_position[name]
                 else:
                     vx_cmd, vy_cmd = cmd_leg_v[name]
-                    stride_vec = self._stride_vector(vx_cmd, vy_cmd, stance_time)
+                    stride_vec = stride_vector(
+                        vx_cmd, vy_cmd, stance_time, self._stride_length
+                    )
                     stride = StrideParams(
                         stride_vector=stride_vec,
                         cycle_time=cycle_time,
@@ -522,13 +531,11 @@ class EngagementController:
                     self._has_lifted_off[name] = True
 
                 vx_cmd, vy_cmd = cmd_leg_v[name]
-                stride_vec = self._stride_vector(vx_cmd, vy_cmd, stance_time)
-                nominal = self._nominal[name]
-                aep = (
-                    nominal[0] + 0.5 * stride_vec[0],
-                    nominal[1] + 0.5 * stride_vec[1],
-                    nominal[2] + 0.5 * stride_vec[2],
+                stride_vec = stride_vector(
+                    vx_cmd, vy_cmd, stance_time, self._stride_length
                 )
+                nominal = self._nominal[name]
+                aep = live_aep(nominal, stride_vec)
 
                 leg_swing_master = self._master - first_lift_off
                 leg_swing_duration_master = first_touchdown - first_lift_off
@@ -590,34 +597,6 @@ class EngagementController:
                 self._state = EngagementState.DONE
 
         return out
-
-    def _derive_cycle_time(self, max_leg_v: float) -> float:
-        """Same v -> cycle_time relation as ``Engine._derive_cycle_time``.
-
-        Duplicated here so the engagement is self-contained; the engine
-        keeps its own copy for GAIT ticks. Any future change must be
-        mirrored in both places.
-        """
-        if max_leg_v <= 0.0:
-            return self._max_cycle_time
-        raw = self._stride_length / (max_leg_v * self._duty_factor)
-        if raw < self._min_cycle_time:
-            return self._min_cycle_time
-        if raw > self._max_cycle_time:
-            return self._max_cycle_time
-        return raw
-
-    def _stride_vector(
-        self, v_x: float, v_y: float, stance_time: float
-    ) -> Vec3:
-        sx = v_x * stance_time
-        sy = v_y * stance_time
-        magnitude = math.hypot(sx, sy)
-        if magnitude > self._stride_length and magnitude > 0.0:
-            scale = self._stride_length / magnitude
-            sx *= scale
-            sy *= scale
-        return (sx, sy, 0.0)
 
     def _emit_nominal_stance(self) -> dict[str, LegOutput]:
         return {

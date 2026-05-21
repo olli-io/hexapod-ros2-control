@@ -14,8 +14,9 @@ avoids duplicating the C++-derived trajectory logic.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Mapping, Protocol
 
 import numpy as np
 
@@ -31,7 +32,11 @@ __all__ = [
     "LegContext",
     "Strategy",
     "StrideParams",
+    "derive_cycle_time",
     "identity_y_sign",
+    "live_aep",
+    "per_leg_planar_velocity",
+    "stride_vector",
     "swing_arc",
 ]
 
@@ -82,6 +87,91 @@ class Strategy(Protocol):
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext
     ) -> Vec3: ...
+
+
+def per_leg_planar_velocity(
+    leg_contexts: Mapping[str, "LegContext"],
+    v_body_xy: tuple[float, float],
+    omega_z: float,
+) -> dict[str, tuple[float, float]]:
+    """Linear cmd plus tangential yaw contribution at each hip.
+
+    ``v_leg = v_body + omega × r``, evaluated in the body frame for
+    every leg in ``leg_contexts``. The mapping's iteration order is
+    preserved in the returned dict, so callers that need a deterministic
+    iteration (e.g. for ``max`` over per-leg speeds) can pass an ordered
+    ``LegContext`` map.
+    """
+    out: dict[str, tuple[float, float]] = {}
+    for name, leg in leg_contexts.items():
+        r_x, r_y, _ = leg.mount_xyz
+        v_x = v_body_xy[0] - omega_z * r_y
+        v_y = v_body_xy[1] + omega_z * r_x
+        out[name] = (v_x, v_y)
+    return out
+
+
+def stride_vector(
+    v_x: float,
+    v_y: float,
+    stance_time: float,
+    stride_length: float,
+) -> Vec3:
+    """Per-leg stride displacement, magnitude-clamped to ``stride_length``.
+
+    The clamp matters only when ``max_leg_v`` exceeds the implied
+    ceiling — i.e. when ``min_cycle_time`` has clipped ``cycle_time``;
+    below saturation the raw stride is already ``≤ stride_length``.
+    """
+    sx = v_x * stance_time
+    sy = v_y * stance_time
+    magnitude = math.hypot(sx, sy)
+    if magnitude > stride_length and magnitude > 0.0:
+        scale = stride_length / magnitude
+        sx *= scale
+        sy *= scale
+    return (sx, sy, 0.0)
+
+
+def derive_cycle_time(
+    max_leg_v: float,
+    stride_length: float,
+    duty_factor: float,
+    min_cycle_time: float,
+    max_cycle_time: float,
+) -> float:
+    """Pick ``cycle_time`` so the fastest leg's stride equals ``stride_length``.
+
+    Clamped to ``[min_cycle_time, max_cycle_time]``. The lower bound is
+    duty-factor-dependent in the caller — for the standard strategies
+    it is derived as ``min_swing_time / (1 − β)`` so the swing-phase
+    foot velocity stays bounded as β grows (wave) or shrinks (tripod).
+    At zero ``max_leg_v`` the raw quotient diverges, so we clamp to the
+    slow end — the resulting stride is zero anyway because every
+    ``v_leg`` is zero.
+    """
+    if max_leg_v <= 0.0:
+        return max_cycle_time
+    raw = stride_length / (max_leg_v * duty_factor)
+    if raw < min_cycle_time:
+        return min_cycle_time
+    if raw > max_cycle_time:
+        return max_cycle_time
+    return raw
+
+
+def live_aep(nominal: Vec3, stride_vec: Vec3) -> Vec3:
+    """Touchdown target in the body frame: ``nominal + ½ · stride_vec``.
+
+    The strategies' AEP at the live stride. Sibling of the PEP
+    ``nominal − ½ · stride_vec``; the swing arc steers from PEP at
+    lift-off to AEP at touchdown.
+    """
+    return (
+        nominal[0] + 0.5 * stride_vec[0],
+        nominal[1] + 0.5 * stride_vec[1],
+        nominal[2] + 0.5 * stride_vec[2],
+    )
 
 
 def identity_y_sign(nominal_stance: Vec3) -> int:
