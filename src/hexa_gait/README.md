@@ -8,15 +8,21 @@ intentionally unaware of `/body/pose_target`; gait strategies stay pure
 functions of `(phase, params) → foot_target`.
 
 Designed around a strategy pattern so additional gaits drop in cleanly:
-- `gaits/tripod.py` — alternating 3+3 (β = 0.5, fast, default).
-- `gaits/ripple.py` — metachronal pair, two legs in swing (β = 2/3,
+- `gaits/tripod.py`   — alternating 3+3 (β = 0.5, fast, default).
+- `gaits/surf.py`     — metachronal, 2.5 legs in swing on average
+  (β = 7/12, between tripod and ripple).
+- `gaits/tetrapod.py` — three diagonal pairs (β = 2/3, paired siblings
+  of ripple).
+- `gaits/ripple.py`   — metachronal pair, two legs in swing (β = 2/3,
   medium).
-- `gaits/wave.py`   — one leg in swing at a time (β = 5/6, max
+- `gaits/wave.py`     — one leg in swing at a time (β = 5/6, max
   stability).
 
-Ripple and wave share the metachronal phase-offset table; they differ
-only in duty factor. The strategy registry in `gaits/__init__.py`
-exposes them by name (`STRATEGIES["tripod" | "ripple" | "wave"]`).
+Ripple, wave, and surf share the metachronal phase-offset table; they
+differ only in duty factor. Tripod and tetrapod use their own paired
+tables. The strategy registry in `gaits/__init__.py` exposes all five
+by name (`STRATEGIES["tripod" | "surf" | "tetrapod" | "ripple" |
+"wave"]`).
 Switching at runtime is strict: `Engine.set_strategy(name)` only swaps
 in `STAND` and returns `False` otherwise. The teleop's D-pad cycler
 publishes the chosen name on `/cmd_gait`; `hexa_control` multiplexes
@@ -33,10 +39,11 @@ Outputs:
 The engine is stateful (it owns the phase clock) but the gait strategies
 themselves are pure functions of `(phase, params) → foot_target`.
 
-All walk-cycle knobs (`stride_length`, `min_swing_time`,
-`max_cycle_time`, per-gait `duty_factor`, `step_height`, ...) live in
-`config/gait.yaml` — they are not on the wire. `duty_factor` is
-per-gait under the `gaits:` block; the engine reads it from the active
+Gait-agnostic walk-cycle knobs (`stride_length`, `min_swing_time`,
+`max_cycle_time`, `step_height`, ...) live in `config/gait.yaml` —
+they are not on the wire. Per-gait `duty_factor` (β) is a class
+attribute on each strategy in `hexa_gait/hexa_gait/gaits/` — the
+single source of truth — and the engine reads it from the active
 strategy each tick. The engine derives `min_cycle_time = min_swing_time /
 (1 − β)` per gait so the swing-phase foot velocity ceiling is shared.
 

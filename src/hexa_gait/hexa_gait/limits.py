@@ -55,17 +55,19 @@ from typing import Mapping
 
 import yaml
 
+from .gaits import STRATEGIES
+
 
 @dataclass(frozen=True)
 class VelocityCaps:
     """Per-gait linear caps, a shared angular cap, and the yaw bias.
 
     Callers look up by gait name via ``linear_max(name)``; the dict is
-    keyed by the same strings the gait registry uses ("tripod",
-    "ripple", "wave"). Unknown names raise ``KeyError`` deliberately —
-    a typo at the control layer should fail fast rather than silently
-    fall back to the wrong cap. ``yaw_bias`` is shared across gaits and
-    feeds ``scale_to_envelope``.
+    keyed by the same strings the gait registry uses (``STRATEGIES``).
+    Unknown names raise ``KeyError`` deliberately — a typo at the
+    control layer should fail fast rather than silently fall back to
+    the wrong cap. ``yaw_bias`` is shared across gaits and feeds
+    ``scale_to_envelope``.
     """
 
     linear_max_by_gait: Mapping[str, float]
@@ -77,6 +79,15 @@ class VelocityCaps:
 
 
 def load_velocity_caps(gait_yaml: str | Path) -> VelocityCaps:
+    """Build per-gait caps from ``gait.yaml`` and the strategy registry.
+
+    Duty factor is **not** in YAML — it lives on each strategy class in
+    ``hexa_gait/gaits/`` and is the single source of truth. We enumerate
+    ``STRATEGIES`` here so a new gait shows up in the caps map as soon
+    as its strategy class is registered; ``gait.yaml`` only contributes
+    the gait-agnostic knobs (``stride_length``, ``min_swing_time``,
+    ``angular_z_max``, ``yaw_bias``).
+    """
     path = Path(gait_yaml)
     with path.open() as f:
         raw = yaml.safe_load(f)
@@ -87,9 +98,9 @@ def load_velocity_caps(gait_yaml: str | Path) -> VelocityCaps:
     yaw_bias = float(raw["yaw_bias"])
 
     linear_max_by_gait: dict[str, float] = {}
-    for name, body in raw["gaits"].items():
-        duty = float(body["duty_factor"])
-        linear_max_by_gait[str(name)] = (
+    for name, factory in STRATEGIES.items():
+        duty = float(factory().duty_factor)
+        linear_max_by_gait[name] = (
             stride_length * (1.0 - duty) / (min_swing_time * duty)
         )
     return VelocityCaps(

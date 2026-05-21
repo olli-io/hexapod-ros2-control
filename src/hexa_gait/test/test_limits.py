@@ -8,6 +8,9 @@ from hexa_gait.limits import VelocityCaps, load_velocity_caps, scale_to_envelope
 
 
 def _write_yaml(tmp_path: Path, **overrides) -> Path:
+    # Duty factors are sourced from the strategy classes in
+    # ``hexa_gait.gaits``, not YAML. The YAML only carries the
+    # gait-agnostic knobs.
     base = dict(
         stride_length=0.12,
         min_swing_time=0.30,
@@ -20,11 +23,6 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
         max_swing_time=0.6,
         angular_z_max=1.0,
         yaw_bias=0.75,
-        gaits={
-            "tripod": {"duty_factor": 0.5},
-            "ripple": {"duty_factor": 2.0 / 3.0},
-            "wave": {"duty_factor": 5.0 / 6.0},
-        },
     )
     base.update(overrides)
     path = tmp_path / "gait.yaml"
@@ -99,7 +97,6 @@ def test_missing_angular_z_max_raises(tmp_path):
         "stride_length": 0.12,
         "min_swing_time": 0.30,
         "yaw_bias": 0.75,
-        "gaits": {"tripod": {"duty_factor": 0.5}},
     }
     path = tmp_path / "gait.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -112,7 +109,6 @@ def test_missing_yaw_bias_raises(tmp_path):
         "stride_length": 0.12,
         "min_swing_time": 0.30,
         "angular_z_max": 1.0,
-        "gaits": {"tripod": {"duty_factor": 0.5}},
     }
     path = tmp_path / "gait.yaml"
     path.write_text(yaml.safe_dump(raw))

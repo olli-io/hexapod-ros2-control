@@ -75,10 +75,12 @@ axis_dpad_x: 6
 dpad_right_sign: 1.0
 
 # Gait cycler. Order is D-right-toward-more-dynamic (wave → ripple →
-# tripod) so a single D-right from the slowest gait gets a faster one.
-# Must be a subset of hexa_gait's STRATEGIES; default_gait must be in
-# the list and is the slot the cycler starts at on cold start.
-gait_cycle: [wave, ripple, tripod]
+# tetrapod → surf → tripod) so a single D-right from the slowest gait
+# gets a faster one. Ripple and tetrapod share β = 2/3 — they swap
+# choreography, not speed, but stay adjacent so a single press picks
+# either. Must be a subset of hexa_gait's STRATEGIES; default_gait must
+# be in the list and is the slot the cycler starts at on cold start.
+gait_cycle: [wave, ripple, tetrapod, surf, tripod]
 default_gait: tripod
 
 # Shoulder buttons that yaw the body in posture mode. L1 yaws left
