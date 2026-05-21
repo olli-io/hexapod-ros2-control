@@ -1,113 +1,69 @@
-# hexa_gait engine knobs — sole source of truth.
-#
-# The engine reads every walk-cycle parameter here at startup. None of
-# them are on the wire any more: hexa_control publishes only velocity
-# (linear_x / linear_y / angular_z) on /gait/params, and the engine
-# derives the appropriate cycle_time per tick from velocity and the
-# values below.
-#
-# Velocity → cycle_time relationship (computed each tick in the engine):
-#
-#   v_max_leg = max( |v_leg| for all 6 legs )
-#                  where v_leg combines linear_xy with omega_z × r_leg
-#   β         = active strategy's duty_factor
-#   min_cycle = min_swing_time / (1 − β)        # per-gait, derived
-#   cycle_time = clip( stride_length / (v_max_leg × β),
-#                      min_cycle, max_cycle_time )
-#
-# Stride magnitude per leg is then v_leg × cycle_time × β, bounded at
-# stride_length so saturated commands never exceed the joint-limit-safe
-# footprint defined by stride_length.
-#
-# Implied per-leg velocity ceiling (per gait): stride_length × (1 − β)
-# / (min_swing_time × β). Tripod (β=0.5) sets the highest ceiling and
-# is the anchor the teleop/control velocity caps use.
+# hexa_gait engine parameters. See hexa_gait/README.md for engine
+# behavior — this file describes the knobs themselves, not how the
+# engine consumes them.
 #
 # Units: m, s, rad.
 
-# Design per-leg stride magnitude (m). The maximum body-frame displacement
-# a foot covers between AEP and PEP in one stance. Tuned to give joint-
-# limit margin: lower stride_length → tighter joint use, more headroom
-# against geometry.yaml limits, but slower v_max.
+# Design per-leg stride magnitude (m): the maximum body-frame
+# displacement a foot covers between AEP and PEP in one stance.
+# Lower stride_length → tighter joint use, more headroom against
+# geometry.yaml limits, lower v_max.
 stride_length: 0.10
 
-# Minimum swing-phase duration (s). The real physical constraint at
-# the speed ceiling is on foot velocity during swing — independent of
-# duty factor. Engine derives min_cycle_time = min_swing_time / (1 − β)
-# per gait, so tripod (β=0.5) gets min_cycle_time = 0.6 s while wave
-# (β=5/6) gets 1.8 s at the same min_swing_time.
+# Minimum swing-phase duration (s). Floors per-gait min_cycle_time at
+# min_swing_time / (1 − β), so the swing-phase foot velocity ceiling
+# is shared across gaits.
 min_swing_time: 0.30
 
-# Slowest cycle. Below the v this implies, cycle_time stops growing and
-# stride shrinks instead — keeps slow walking visually brisk.
+# Slowest cycle time (s). At velocities below the value this implies,
+# stride shrinks instead of cycle stretching further.
 max_cycle_time: 2.0
 
+# Swing-arc apex clearance (m) above the higher of origin_z / target_z.
 step_height: 0.045
+
+# Lateral swing offset (m). 0 keeps swings purely fore/aft.
 swing_width: 0.0
+
+# Engine tick period (s).
 controller_dt: 0.02
+
+# Magnitude below which a cmd_vel component is treated as zero.
 cmd_zero_tol: 1e-4
 
-# PAUSING adaptive-timing knobs. On GAIT → PAUSING (or ENGAGING →
-# PAUSING) the airborne legs lower straight down to ``nominal.z`` over
-# a per-leg duration of
-#
-#   clamp(distance_z / max_foot_speed, min_swing_time, max_swing_time)
-#
-# so a leg that paused near the floor lands quickly while a leg high up
-# in its swing descends over a longer window at bounded foot speed.
-# Stance legs do not move during PAUSING. The gait clock (master phase
-# and per-leg phase) is preserved across PAUSING / PAUSED so the
-# operator can re-engage mid-cycle without losing rhythm.
-#
-# Default ``max_foot_speed = stride_length / min_swing_time`` matches
-# the fastest gait's per-leg velocity ceiling.
+# Bound on per-leg foot speed (m/s) for adaptive-duration swings
+# (PAUSING descent, disengagement drain). Default matches the fastest
+# gait's per-leg velocity ceiling, stride_length / min_swing_time.
 max_foot_speed: 0.333
+
+# Upper clamp (s) on adaptive swing duration; pairs with min_swing_time
+# as the lower clamp.
 max_swing_time: 0.6
 
-# Debounce on cmd_vel → 0 before the engine commits to the pause
-# transition. Without this, the brief zero crossing the joystick produces
-# when it swings through center triggers PAUSING on every yaw reversal.
-# While the window counts down the engine keeps ticking the active
-# state (GAIT or ENGAGING) at zero stride — legs lift in place — so a
-# stick that re-engages before it expires picks the gait back up
-# without any reset sequence.
+# Debounce (s) on cmd_vel → 0 before the engine commits to PAUSING.
+# Wider window = fewer spurious pauses on joystick zero crossings.
 pause_debounce_delay: 0.8
 
-# PAUSED → RESEATING dwell. Once the engine has been in PAUSED (every
-# previously-airborne leg has landed at nominal.z, stance legs holding)
-# for this long with no cmd_vel, the engine kicks off RESEATING back
-# to the nominal footprint so the operator sees the robot settle to a
-# known pose. Re-engaging within this window snaps straight back into
-# GAIT via RESUMING with the gait clock intact.
+# Dwell (s) in PAUSED before the engine kicks off RESEATING back to
+# the nominal footprint.
 pause_to_reseat_delay: 1.5
 
-# Maximum body yaw rate (rad/s). Explicit knob rather than
-# geometry-derived: the implicit ceiling from the gait is
-# v_max / r_outer ≈ 3.96 rad/s for current values, so this cap leaves
-# plenty of headroom and trades reach for predictable feel.
-# Loaded by hexa_gait.limits.load_velocity_caps and consumed by both
-# hexa_teleop (stick scaling) and hexa_control (/cmd_vel clamp).
+# Maximum body yaw rate (rad/s). Explicit knob (not geometry-derived):
+# the geometric ceiling from leg radii is well above what feels
+# comfortable, so this trades reach for tunable feel.
 angular_z_max: 3.00
 
-# Yaw bias used when scale_to_envelope has to cut a combined
-# linear+angular command to fit the per-leg velocity envelope. The
-# reduction is split between translation and yaw in the ratio
-# yaw_bias : (1 − yaw_bias) — translation absorbs the larger fraction,
-# so the resulting motion keeps more of the commanded yaw. 0.5 is the
-# unbiased baseline (translation and yaw cut equally); values above 0.5
-# bias the cut toward keeping yaw. At full v_x + full angular_z_max:
-#   0.50 → (50% v, 50% ω)   (no bias)
-#   0.75 → (25% v, 75% ω)   (current setting)
-#   1.00 → ( 0% v, 100% ω)  (pure yaw priority)
-# The commanded translation:yaw ratio is not preserved when this kicks
-# in — the trade is direction fidelity for yaw responsiveness at the
-# extremes.
+# Fraction of an envelope-overrun cut allocated to yaw vs translation
+# in scale_to_envelope. 0.5 cuts both equally (direction preserved);
+# >0.5 preserves more yaw at the cost of translation; 1.0 is pure
+# yaw priority. Trade-off is direction fidelity for yaw responsiveness
+# at the extremes.
 yaw_bias: 0.6
 
 # Default gait at engine startup. Must be a key in the ``gaits`` block
-# below. The control node uses the same key (its own ``default_gait``)
-# to seed /gait/params.gait_name on cold start, and the teleop's D-pad
-# cycler walks through the list in ``gaits.cycle``.
+# below. hexa_control seeds /gait/params.gait_name from its own
+# ``default_gait`` on cold start; the teleop D-pad cycler walks through
+# the list in ``gaits.cycle``.
 default_gait: tripod
 
 # Per-gait knobs. Each entry is a separate strategy in
@@ -116,26 +72,13 @@ default_gait: tripod
 # from β plus the shared metachronal table for ripple/wave.
 gaits:
   tripod:
-    duty_factor: 0.5 # alternating 3+3, fastest of the three
+    duty_factor: 0.5    # alternating 3+3, fastest of the three
   ripple:
     duty_factor: 0.6667 # 2/3 — two legs in swing, 4 on the ground
   wave:
     duty_factor: 0.8333 # 5/6 — one leg in swing, 5 on the ground
 
-# Cold-start (INITIALIZE) ladder. Runs once at engine startup to bridge
-# the folded initial_pose (legs tucked above body, chassis on its belly)
-# to the standing pose:
-#   PLACE_FEET  — three sequential mirroring pairs swing one at a time
-#                 from the folded foot position onto the standing
-#                 footprint at ground level. Pair order is fixed in
-#                 initialize.py (middle pair, then each diagonal) to
-#                 keep the body's CoM near centre.
-#   LIFT_BODY   — all six feet stay at standing XY; body-frame z ramps
-#                 via smoothstep from -coxa_to_bottom to nominal.z
-#                 (world frame: feet pressed down, body lifts).
-# The ladder is non-preemptible — cmd_vel arriving mid-sequence is held
-# until the engine transitions to STAND, mirroring STOPPING's
-# commit-to-completion contract.
+# Cold-start (INITIALIZE) ladder timing.
 initialize:
   # Seconds per mirroring pair during PLACE_FEET. Three pairs ⇒ total
   # PLACE_FEET ≈ 3 * pair_swing_time.
@@ -148,62 +91,34 @@ initialize:
   swing_clearance: 0.04
   # Body-frame offset (m) from the floor (with body on belly) of the
   # IK target at the end of each PLACE_FEET swing. Must clear the foot
-  # collision sphere, not just the IK target: the URDF puts the IK
-  # target at the bottom of the foot sphere only when the tibia is
-  # vertical (see hexapod.urdf.xacro foot link comment). At the
-  # PLACE_FEET endpose the tibia is partially folded (~50° below
-  # horizontal for the current standing footprint), so the sphere
-  # bottom sits up to ~foot_radius below the IK target. A value below
-  # ~foot_radius lets the sphere penetrate the floor and Gazebo
-  # contact resolution lifts the chassis off its belly before
-  # LIFT_BODY starts. ~foot_radius (geometry.yaml foot.radius = 0.01)
-  # leaves a small real-clearance margin.
+  # collision sphere (~foot_radius below the IK target at the
+  # PLACE_FEET endpose), otherwise Gazebo contact resolution lifts the
+  # chassis off its belly before LIFT_BODY starts. ~foot_radius
+  # (geometry.yaml foot.radius = 0.01) leaves a small real-clearance
+  # margin.
   place_feet_clearance: 0.012
 
-# RESEAT ladder. Drives feet from whatever positions the engine hands
-# the controller (post-pause lowered XY, previous nominal, etc.) to a
-# target stance. Triggered from two engine paths:
-#  * STAND, once the user-commanded body height (pose.z on /body/pose)
-#    has been stable for settle_delay seconds AND differs from the
-#    height the current nominal stance was computed at — target is the
-#    new nominal that restores the YAML-defined standing-pose joint
-#    angles at the new body height (body lift itself is owned by pose.z).
-#  * PAUSED, after pause_to_reseat_delay — target is the unchanged
-#    nominal stance, cleaning up post-pause lowered foot positions.
-# Three sequential mirroring pairs (same order as initialize.PLACE_FEET:
-# middle, then each diagonal) swing simultaneously to their targets
-# regardless of per-leg travel distance. Non-preemptible (commit-to-
-# completion, like INITIALIZE / FOLDING).
+# RESEAT ladder timing.
 reseat:
-  # Seconds the target pose.z must stay unchanged before reseat fires,
-  # measured from the moment the user lets go of the D-pad. Distinct
-  # from ``pause_to_reseat_delay`` above — that delay covers the
-  # PAUSED → RESEATING cleanup driven by the gait engine, this one
-  # covers the STAND → RESEATING path driven by posture height edits.
-  # Bigger = less twitchy on intermediate D-pad releases. Small enough
-  # that the user doesn't sit waiting after letting go.
+  # Seconds the target pose.z must stay unchanged before the
+  # STAND → RESEATING path fires after a height edit. Distinct from
+  # ``pause_to_reseat_delay`` above, which gates the PAUSED → RESEATING
+  # path. Bigger = less twitchy on intermediate D-pad releases.
   pose_settle_delay: 0.5
-  # Dead-band (m) for "target differs from applied enough to reseat".
-  # 1 mm is comfortably above the float-arithmetic noise on the
-  # joystick → integrator → topic round-trip, so a small drifted pose
-  # doesn't trigger a fresh ladder. The settle timer itself is driven
-  # by a tighter float-noise epsilon inside the engine — see
-  # ``_HEIGHT_NOISE_EPSILON`` in engine.py.
+  # Dead-band (m) on |target_z − applied_z| for the STAND → RESEATING
+  # trigger. Above the float-arithmetic noise on the joystick →
+  # integrator → topic round-trip; tighter epsilons inside the engine
+  # drive the settle timer.
   height_change_threshold: 0.001
   # Seconds per mirroring pair during the reseat swing. Matches
   # initialize.pair_swing_time so the two ladders feel visually
   # symmetric.
   pair_swing_time: 0.3
-  # Seconds the ladder holds between successive pair swings. During
-  # the dwell every foot sits still (the just-settled pair on its new
-  # target, the rest on their held positions) so each pair visibly
-  # arrives before the next lifts off — without this the next pair
-  # lifts on the same tick the previous one snaps and the ladder
-  # reads as one continuous motion. No dwell before the first pair
-  # or after the last; only between.
+  # Seconds the ladder dwells between successive pair swings so each
+  # pair visibly arrives before the next lifts off. No dwell before
+  # the first pair or after the last; only between.
   pair_dwell_time: 0.15
-  # Swing-arc clearance (m) above the standing footprint while a pair
-  # is mid-swing. Feet are coming off a planted standing pose, so the
-  # arc only needs to clear ground noise and the apex margin used by
-  # the rest of the engine.
+  # Swing-arc clearance (m) above the standing footprint mid-swing.
+  # Smaller than initialize.swing_clearance because feet come off a
+  # planted standing pose, not from above the body.
   swing_clearance: 0.025

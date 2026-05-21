@@ -102,9 +102,9 @@ startup; there are no duplicate knobs in the teleop or control YAML.
 See `hexa_gait/hexa_gait/limits.py` for the helper API.
 
 Command-velocity smoothing is **not** done here. `hexa_control` runs
-a first-order `BodyVelocityLimiter` between `scale_to_envelope` and
-the `/gait/params` publish, so the velocity arriving here is already
-filtered. The engagement smoothstep (`engagement.py`) still owns the
+a vectorial rate-cap `BodyVelocityLimiter` between `scale_to_envelope`
+and the `/gait/params` publish, so the velocity arriving here is
+already acceleration-bounded. The engagement smoothstep (`engagement.py`) still owns the
 geometric `STAND → GAIT` foot handoff: it runs one full master cycle
 during which each leg performs its single first swing from NOMINAL,
 landing at the strategy's expected position by `master = 1.0`. The two

@@ -22,20 +22,25 @@ Run with::
     ros2 launch hexa_bringup sim.launch.py
 """
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    enable_foot_paint = LaunchConfiguration("enable_foot_paint")
+
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
                 FindPackageShare("hexa_simulation"), "launch", "sim.launch.py",
             ])
-        )
+        ),
+        launch_arguments={
+            "enable_foot_paint": enable_foot_paint,
+        }.items(),
     )
 
     common_params = [{"use_sim_time": True}]
@@ -76,6 +81,12 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            "enable_foot_paint", default_value="false",
+            description="Dev: bridge per-foot contact sensors and launch "
+                        "the foot_paint node (RViz + Gazebo slip trails). "
+                        "Forwarded to hexa_simulation sim.launch.py.",
+        ),
         sim,
         ik_node,
         joint_command_bridge,

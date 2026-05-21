@@ -43,6 +43,11 @@
        Foot contact. mu1/mu2 high enough that stance feet bite the ground
        and the body doesn't slide. kp/kd are typical defaults for rigid
        contact at ~0.1 m foot scale.
+
+       The <sensor type="contact"> blocks emit gz.msgs.Contacts on
+       /contact/<foot> whenever the foot is touching another collider.
+       Each Contacts message carries world-frame contact points, which
+       the foot_paint dev node consumes to draw slip trails.
        =================================================================== -->
   <xacro:macro name="foot_contact" params="link">
     <gazebo reference="${link}">
@@ -50,6 +55,18 @@
       <mu2>2.0</mu2>
       <kp>1.0e6</kp>
       <kd>10.0</kd>
+      <!-- The <topic> override is dropped because sdformat's URDF
+           converter ignores it; the sensor publishes on its default
+           /world/<world>/model/<model>/link/<link>/sensor/<sensor>/contact
+           name. ros_gz_bridge remaps it to /contact/<foot> via
+           hexa_simulation/config/contact_bridge.yaml. -->
+      <sensor name="${link}_contact" type="contact">
+        <update_rate>100</update_rate>
+        <always_on>true</always_on>
+        <contact>
+          <collision>${link}_collision</collision>
+        </contact>
+      </sensor>
     </gazebo>
   </xacro:macro>
 
@@ -59,6 +76,26 @@
   <xacro:foot_contact link="r_front_foot"/>
   <xacro:foot_contact link="r_middle_foot"/>
   <xacro:foot_contact link="r_rear_foot"/>
+
+  <!-- ===================================================================
+       Preserve the foot-tibia fixed joints. sdformat-urdf lumps fixed
+       joints by default, which would merge each foot link into its
+       parent tibia and drop the per-link contact sensor declared above.
+       Keeping the joint preserves the foot as its own SDF link, so the
+       <gazebo reference="..._foot"> sensor block lands somewhere real.
+       =================================================================== -->
+  <xacro:macro name="preserve_foot_joint" params="joint">
+    <gazebo reference="${joint}">
+      <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:preserve_foot_joint joint="l_front_foot_joint"/>
+  <xacro:preserve_foot_joint joint="l_middle_foot_joint"/>
+  <xacro:preserve_foot_joint joint="l_rear_foot_joint"/>
+  <xacro:preserve_foot_joint joint="r_front_foot_joint"/>
+  <xacro:preserve_foot_joint joint="r_middle_foot_joint"/>
+  <xacro:preserve_foot_joint joint="r_rear_foot_joint"/>
 
   <!-- ===================================================================
        gz_ros2_control system plugin: hosts the ros2_control controller

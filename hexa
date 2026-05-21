@@ -14,7 +14,8 @@ Commands:
   --dev [--clean] [args...]   Drop into the ROS2 Jazzy dev container (forwards args to the container).
                               --clean tears down the existing container, rebuilds the image,
                               and runs 'pod build' before opening the shell.
-  --tmux [--clean] [vert]     Open a tmux session with sim and teleop sharing one dev container.
+  --tmux [--clean] [vert]     Open a tmux session with two panes sharing one dev container:
+                              pane 0 runs sim + teleop together, pane 1 is an idle 'hexa --dev' shell.
                               Default split is side-by-side; pass 'vert' to stack the panes.
                               --clean rebuilds the container first.
   kill                        Stop and remove the dev container.

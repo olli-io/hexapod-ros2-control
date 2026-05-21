@@ -1,25 +1,19 @@
-# hexa_control wire values.
-#
-# control_node clamps /cmd_vel against the caps in hexa_gait/config/gait.yaml,
-# runs a first-order body-velocity filter (BodyVelocityLimiter), and
-# republishes on /gait/params at 50 Hz. /cmd_gait selects the active
-# gait (validated against tripod/ripple/wave).
-#
-# Tau values are time constants for the post-envelope filter — chosen
-# over a fixed accel cap because a single response time generalises
-# across gaits (tripod and wave have ~3× different cycle times) and
-# composes cleanly with the engagement smoothstep.
+# hexa_control wire values. See src/hexa_control/README.md for node
+# behaviour and the rationale behind these knobs.
 
 default_gait: "tripod"
-tau_linear: 0.25    # s — first-order time constant on (v_x, v_y)
-tau_angular: 0.40   # s — first-order time constant on omega_z
 
-# Snap-to-target thresholds. The exponential filter only approaches the
-# target asymptotically, so a release-from-walking would otherwise leave
-# a tail well above the gait engine's cmd_zero_tol (1e-4) for over a
-# second. During that tail GAIT keeps re-evaluating with a shrinking
-# stride and swing legs drift toward nominal before STOPPING ever fires.
-# Snapping kills only the bottom of the tail; decel above the threshold
-# stays smooth.
-snap_tol_linear: 1.0e-3   # m/s
-snap_tol_angular: 1.0e-3  # rad/s
+# Seconds for the body to ramp from rest to the active gait's
+# linear_max (equivalently, from linear_max to rest, or half a full
+# reversal). Lower = snappier response, more chance of stance-foot
+# slip during reversals; higher = softer, more sluggish.
+vmax_ramp_time_linear: 0.8 # s
+
+# Seconds for yaw to ramp from rest to angular_max.
+vmax_ramp_time_angular: 1 # s
+
+# Sub-tick float dribble at the end of a ramp gets snapped to zero so
+# the gait engine sees an exact zero crossing (cmd_zero_tol in
+# hexa_gait/config/gait.yaml).
+snap_tol_linear: 1e-4 # m/s
+snap_tol_angular: 1e-4 # rad/s

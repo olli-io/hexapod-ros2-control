@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Open a tmux session that runs sim (left pane) and teleop (right pane)
-# inside the shared hexa-dev container.
+# Open a tmux session that runs sim+teleop together in one pane and an idle
+# `hexa --dev` shell in the other, both sharing the hexa-dev container.
 #   ./scripts/tmux.sh            -> attach panes to the existing dev container
 #   ./scripts/tmux.sh --clean    -> kill+rebuild the container first, then start
 set -euo pipefail
@@ -11,11 +11,13 @@ cd "${REPO_ROOT}"
 clean=0
 run_tests=0
 split_flag="-v"
+sim_args=()
 for arg in "$@"; do
     case "${arg}" in
-        --clean)      clean=1 ;;
-        --test)       run_tests=1 ;;
-        --horizontal) split_flag="-h" ;;
+        --clean)         clean=1 ;;
+        --test)          run_tests=1 ;;
+        --horizontal)    split_flag="-h" ;;
+        --withFootPaint) sim_args+=("${arg}") ;;
         *)
             echo "Unknown argument: ${arg}" >&2
             exit 1
@@ -57,13 +59,15 @@ fi
 # don't race on the first-time `docker compose up --build`.
 "${REPO_ROOT}/scripts/dev.sh" true
 
-# Pane 0 (left): drop into the dev container and launch sim.
+# Pane 0 (left): drop into the dev container, launch sim in the background,
+# then start teleop in the same shell once /clock is up. Use `pod sim` rather
+# than the `sim` alias so shorthand flags like --withFootPaint are translated.
+sim_cmd="pod sim${sim_args[*]:+ ${sim_args[*]}}"
 tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/hexa --dev"
-tmux send-keys -t "${SESSION}:${WINDOW}.0" "sim" Enter
+tmux send-keys -t "${SESSION}:${WINDOW}.0" \
+    "${sim_cmd} & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; teleop" Enter
 
-# Pane 1 (right/below): attach, wait for /clock, then launch teleop.
+# Pane 1 (right/below): idle dev shell for ad-hoc commands.
 tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/hexa --dev"
-tmux send-keys -t "${SESSION}:${WINDOW}.1" \
-    "echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; teleop" Enter
 
 exec tmux attach-session -t "${SESSION}"

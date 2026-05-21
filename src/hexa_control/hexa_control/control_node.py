@@ -1,10 +1,13 @@
 """Velocity shaping pass-through.
 
 Subscribes to ``/cmd_vel``, runs it through ``scale_to_envelope`` and
-the ``BodyVelocityLimiter`` first-order filter, and republishes as
+the ``BodyVelocityLimiter`` rate-cap slew, and republishes as
 ``GaitParams`` on ``/gait/params`` at 50 Hz. ``/cmd_gait`` multiplexes
-the active gait name (validated against tripod/ripple/wave).
-The filter resets to zero on edges leaving the walking set
+the active gait name (validated against tripod/ripple/wave); on every
+gait switch the limiter's ``accel_linear`` is recomputed from
+``linear_max(gait) / vmax_ramp_time_linear`` so the ramp time stays
+constant across gaits despite the per-gait velocity ceiling.
+The limiter resets to zero on edges leaving the walking set
 (``{engaging, gait}``) so each STAND → ENGAGING starts clean.
 """
 
@@ -37,8 +40,8 @@ _WALKING_STATES: frozenset[str] = frozenset({"engaging", "gait"})
 @dataclass(frozen=True)
 class ControlConfig:
     default_gait: str
-    tau_linear: float
-    tau_angular: float
+    vmax_ramp_time_linear: float
+    vmax_ramp_time_angular: float
     snap_tol_linear: float
     snap_tol_angular: float
 
@@ -52,14 +55,22 @@ def _load_config(path: Path) -> ControlConfig:
             f"default_gait={name!r} not in STRATEGIES "
             f"({sorted(STRATEGIES)})"
         )
-    tau_linear = float(raw["tau_linear"])
-    tau_angular = float(raw["tau_angular"])
-    snap_tol_linear = float(raw.get("snap_tol_linear", 1.0e-3))
-    snap_tol_angular = float(raw.get("snap_tol_angular", 1.0e-3))
+    vmax_ramp_time_linear = float(raw["vmax_ramp_time_linear"])
+    vmax_ramp_time_angular = float(raw["vmax_ramp_time_angular"])
+    if vmax_ramp_time_linear <= 0.0:
+        raise ValueError(
+            f"vmax_ramp_time_linear must be positive, got {vmax_ramp_time_linear}"
+        )
+    if vmax_ramp_time_angular <= 0.0:
+        raise ValueError(
+            f"vmax_ramp_time_angular must be positive, got {vmax_ramp_time_angular}"
+        )
+    snap_tol_linear = float(raw.get("snap_tol_linear", 1.0e-4))
+    snap_tol_angular = float(raw.get("snap_tol_angular", 1.0e-4))
     return ControlConfig(
         default_gait=name,
-        tau_linear=tau_linear,
-        tau_angular=tau_angular,
+        vmax_ramp_time_linear=vmax_ramp_time_linear,
+        vmax_ramp_time_angular=vmax_ramp_time_angular,
         snap_tol_linear=snap_tol_linear,
         snap_tol_angular=snap_tol_angular,
     )
@@ -86,8 +97,8 @@ class ControlNode(Node):
         self._latest: Twist = Twist()  # zero-initialized
         self._active_gait: str = self._cfg.default_gait
         self._limiter = BodyVelocityLimiter(
-            tau_linear=self._cfg.tau_linear,
-            tau_angular=self._cfg.tau_angular,
+            accel_linear=self._accel_linear_for(self._active_gait),
+            accel_angular=self._accel_angular(),
             snap_tol_linear=self._cfg.snap_tol_linear,
             snap_tol_angular=self._cfg.snap_tol_angular,
         )
@@ -116,9 +127,18 @@ class ControlNode(Node):
             f"linear_max=({cap_summary}) m/s, "
             f"angular_z_max={self._caps.angular_max:.2f} rad/s, "
             f"yaw_bias={self._caps.yaw_bias:.2f}, "
-            f"tau_linear={self._cfg.tau_linear:.2f} s, "
-            f"tau_angular={self._cfg.tau_angular:.2f} s"
+            f"vmax_ramp_time_linear={self._cfg.vmax_ramp_time_linear:.2f} s, "
+            f"vmax_ramp_time_angular={self._cfg.vmax_ramp_time_angular:.2f} s, "
+            f"accel_linear[{self._active_gait}]="
+            f"{self._limiter.accel_linear:.3f} m/s^2, "
+            f"accel_angular={self._limiter.accel_angular:.3f} rad/s^2"
         )
+
+    def _accel_linear_for(self, gait: str) -> float:
+        return self._caps.linear_max(gait) / self._cfg.vmax_ramp_time_linear
+
+    def _accel_angular(self) -> float:
+        return self._caps.angular_max / self._cfg.vmax_ramp_time_angular
 
     def _on_vel(self, msg: Twist) -> None:
         self._latest = msg
@@ -133,8 +153,13 @@ class ControlNode(Node):
             return
         if name == self._active_gait:
             return
-        self.get_logger().info(f"/cmd_gait switching active gait to {name!r}")
         self._active_gait = name
+        new_accel = self._accel_linear_for(name)
+        self._limiter.accel_linear = new_accel
+        self.get_logger().info(
+            f"/cmd_gait switching active gait to {name!r} "
+            f"(accel_linear={new_accel:.3f} m/s^2)"
+        )
 
     def _on_state(self, msg: String) -> None:
         new_state = msg.data

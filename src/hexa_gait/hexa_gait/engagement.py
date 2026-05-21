@@ -78,11 +78,11 @@ Resume mode disables the envelope (held at 1.0).
 Composition with the upstream body-velocity filter
 ==================================================
 
-``hexa_control`` runs a first-order ``BodyVelocityLimiter`` on the
-output of ``scale_to_envelope``, so the ``cmd_vel`` reaching this
-controller is already smoothed. The filter resets to zero on edges that
-leave the walking set, so ``begin()`` always sees a zero-velocity
-upstream state.
+``hexa_control`` runs a vectorial rate-cap ``BodyVelocityLimiter`` on
+the output of ``scale_to_envelope``, so the ``cmd_vel`` reaching this
+controller is already acceleration-bounded. The limiter resets to zero
+on edges that leave the walking set, so ``begin()`` always sees a
+zero-velocity upstream state.
 """
 
 from __future__ import annotations
