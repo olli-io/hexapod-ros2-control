@@ -1,3 +1,8 @@
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
+# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
+# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
+# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.
+
 # hexa_gait engine parameters. See hexa_gait/README.md for engine
 # behavior — this file describes the knobs themselves, not how the
 # engine consumes them.
@@ -37,14 +42,24 @@ swing_width: 0.0
 
 # ─── Cycle timing ───────────────────────────────────────────────────
 
-# Minimum swing-phase duration (s). Floors per-gait min_cycle_time at
-# min_swing_time / (1 − β), so the swing-phase foot velocity ceiling
-# is shared across gaits.
+# Swing-phase duration bounds (s). Both anchor per-gait cycle-time
+# bounds through the same β-scaling:
+#     min_cycle_time(β) = min_swing_time / (1 − β)
+#     max_cycle_time(β) = max_swing_time / (1 − β)
+# The maximum velocity envelope is a combination of stride_length and 
+# swing_time. Max_swing_time is a slow-end clamp: when swing time
+# would rise above it, velocity will start regulating via shorter
+# stride lenght.
+#
+# DUE TO HOW GAIT FOOT PLACEMENT WORKING DURING LINEAR REVERSALS OF
+# DIRECTION, THESE SHOULD BE KEPT FAIRLY CLOSE TOGETHER ( max should
+# be maximum 25% higher than min_swing_time )
+#
+# Values below anchor at tripod (β=0.5):
+# min_cycle = 0.60 s, max_cycle = 1.00 s; ripple (β=2/3) gets 0.90 /
+# 1.50 s; wave (β=5/6) gets 1.80 / 3.00 s.
 min_swing_time: 0.30
-
-# Slowest cycle time (s). At velocities below the value this implies,
-# stride shrinks instead of cycle stretching further.
-max_cycle_time: 3.0
+max_swing_time: 0.4
 
 # ─── Velocity envelope ──────────────────────────────────────────────
 
@@ -70,16 +85,14 @@ angular_z_max: 3.00
 # natural for you.
 yaw_bias: 0.6
 
-# ─── Adaptive swings ────────────────────────────────────────────────
+# ─── PAUSING descent ────────────────────────────────────────────────
 
-# Bound on per-leg foot speed (m/s) for adaptive-duration swings
-# (PAUSING descent, disengagement drain). Default matches the fastest
-# gait's per-leg velocity ceiling, stride_length / min_swing_time.
-max_foot_speed: 0.333
-
-# Upper clamp (s) on adaptive swing duration; pairs with min_swing_time
-# as the lower clamp.
-max_swing_time: 1.2
+# Upper clamp (s) on the PAUSING / disengagement descent that lowers
+# previously-airborne feet straight down to the ground. Lower bound is
+# min_swing_time; per-leg duration scales with the Z drop using the
+# fastest gait's per-leg foot-velocity ceiling
+# (stride_length / min_swing_time, derived in code — not a knob).
+max_reset_time: 1.2
 
 # ─── Pause state machine ────────────────────────────────────────────
 
@@ -137,3 +150,8 @@ reseat:
   # Smaller than initialize.swing_clearance because feet come off a
   # planted standing pose, not from above the body.
   swing_clearance: 0.025
+
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
+# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
+# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
+# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.

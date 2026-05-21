@@ -48,15 +48,14 @@ def _load_engine_config(path: Path) -> tuple[EngineConfig, str]:
     cfg = EngineConfig(
         stride_length=float(raw["stride_length"]),
         min_swing_time=float(raw["min_swing_time"]),
-        max_cycle_time=float(raw["max_cycle_time"]),
+        max_swing_time=float(raw["max_swing_time"]),
         step_height=float(raw["step_height"]),
         swing_width=float(raw["swing_width"]),
         controller_dt=float(raw["controller_dt"]),
         cmd_zero_tol=float(raw["cmd_zero_tol"]),
         pause_debounce_delay=float(raw["pause_debounce_delay"]),
         pause_to_reseat_delay=float(raw["pause_to_reseat_delay"]),
-        max_foot_speed=float(raw["max_foot_speed"]),
-        max_swing_time=float(raw["max_swing_time"]),
+        max_reset_time=float(raw["max_reset_time"]),
         init_pair_swing_time=float(init_cfg["pair_swing_time"]),
         init_lift_body_time=float(init_cfg["lift_body_time"]),
         init_swing_clearance=float(init_cfg["swing_clearance"]),
@@ -157,7 +156,7 @@ class GaitNode(Node):
             f"gait_node up: strategy={default_gait}, "
             f"stride_length={self._cfg.stride_length:.3f} m, "
             f"min_swing_time={self._cfg.min_swing_time:.2f} s, "
-            f"max_cycle_time={self._cfg.max_cycle_time:.2f} s, "
+            f"max_swing_time={self._cfg.max_swing_time:.2f} s, "
             f"step_height={self._cfg.step_height:.3f} m"
         )
 

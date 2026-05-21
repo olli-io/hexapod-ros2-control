@@ -14,13 +14,12 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
     base = dict(
         stride_length=0.12,
         min_swing_time=0.30,
-        max_cycle_time=2.0,
+        max_swing_time=1.0,
         step_height=0.035,
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        max_foot_speed=0.333,
-        max_swing_time=0.6,
+        max_reset_time=0.6,
         angular_z_max=1.0,
         yaw_bias=0.75,
     )

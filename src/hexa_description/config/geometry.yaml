@@ -1,3 +1,8 @@
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
+# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
+# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
+# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.
+
 # Hexapod geometry — body, leg, and foot dimensions, per-leg mounts,
 # per-joint-type servo limits, and startup pose. See
 # src/hexa_description/README.md for how the URDF consumes these.
@@ -92,3 +97,8 @@ initial_pose:
     above_horizontal_deg: 100 # femur tucked steeply above horizontal
   tibia:
     interior_deg: 40 # knee folded tight
+
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
+# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
+# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
+# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.

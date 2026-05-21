@@ -40,12 +40,14 @@ The engine is stateful (it owns the phase clock) but the gait strategies
 themselves are pure functions of `(phase, params) → foot_target`.
 
 Gait-agnostic walk-cycle knobs (`stride_length`, `min_swing_time`,
-`max_cycle_time`, `step_height`, ...) live in `config/gait.yaml` —
+`max_swing_time`, `step_height`, ...) live in `config/gait.yaml` —
 they are not on the wire. Per-gait `duty_factor` (β) is a class
 attribute on each strategy in `hexa_gait/hexa_gait/gaits/` — the
 single source of truth — and the engine reads it from the active
-strategy each tick. The engine derives `min_cycle_time = min_swing_time /
-(1 − β)` per gait so the swing-phase foot velocity ceiling is shared.
+strategy each tick. The engine derives both cycle-time bounds per
+gait as `swing_time / (1 − β)`, so the swing-phase foot-velocity
+envelope is shared across gaits; only the cycle stretches to
+accommodate β.
 
 See [`docs/leg-phases.md`](../../docs/leg-phases.md) for the shared
 vocabulary (stance, swing, AEP, PEP, duty factor, support polygon) used
@@ -59,8 +61,10 @@ each GAIT tick from the commanded velocity and a fixed
 
 - For each leg, compute `v_leg = v_body + ω_z × r_leg`.
 - `max_leg_v = max( |v_leg| for all 6 legs )`.
-- `β = active strategy's duty_factor`; `min_cycle = min_swing_time / (1 − β)`.
-- `cycle_time = clip( stride_length / (max_leg_v × β), min_cycle, max_cycle_time )`.
+- `β = active strategy's duty_factor`;
+  `min_cycle = min_swing_time / (1 − β)`,
+  `max_cycle = max_swing_time / (1 − β)`.
+- `cycle_time = clip( stride_length / (max_leg_v × β), min_cycle, max_cycle )`.
 - Per-leg `stride_vector = v_leg × cycle_time × β`, with the magnitude
   further clamped to `stride_length` so saturated commands never push
   past the joint-limit-safe footprint.
@@ -69,7 +73,7 @@ Faster commands therefore *cycle faster at constant stride* instead of
 taking *bigger steps at constant cycle*. The implied per-leg velocity
 ceiling per gait is `stride_length × (1 − β) / (min_swing_time × β)`;
 tripod sits at the high end of this curve. Below the velocity that
-implies `max_cycle_time`, the cycle stops dragging out — stride shrinks
+implies `max_cycle`, the cycle stops dragging out — stride shrinks
 linearly instead.
 
 ## Velocity caps for upstream nodes
@@ -189,8 +193,9 @@ The queue is built at the moment the engine enters STOPPING:
    nominal is dropped (no twitch).
 
 Each group's swings then run in parallel, rest-to-rest, with per-leg
-adaptive duration `clamp(distance_xy / max_foot_speed, min_swing_time,
-max_swing_time)`. The apex is the higher of `origin_z` and `target_z +
+adaptive duration `clamp(distance_xy / descent_speed, min_swing_time,
+max_reset_time)` (where `descent_speed = stride_length / min_swing_time`
+is derived in code). The apex is the higher of `origin_z` and `target_z +
 step_height`: a grounded leg lifts the full clearance; an airborne leg
 already above that height descends with no extra bounce; an airborne
 leg near the floor gets a partial lift to the same apex. Both endpoint
@@ -205,10 +210,10 @@ Once the queue is drained the controller emits the nominal stance with
 Per-gait stop-time bound (at `min_swing_time = 0.3 s`, all legs near
 nominal):
 
-- **Tripod** (β=0.5, two offset groups) — ≤ 2 × `max_swing_time`.
+- **Tripod** (β=0.5, two offset groups) — ≤ 2 × `max_reset_time`.
 - **Ripple** (β=2/3, up to five groups after merging the swing
-  overlap) — ≤ 5 × `max_swing_time`.
-- **Wave** (β=5/6, six groups) — ≤ 6 × `max_swing_time`.
+  overlap) — ≤ 5 × `max_reset_time`.
+- **Wave** (β=5/6, six groups) — ≤ 6 × `max_reset_time`.
 
 ### Stability
 

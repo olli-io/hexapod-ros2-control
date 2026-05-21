@@ -43,10 +43,12 @@ locking the engine.
 ``cycle_time`` is not configured directly. The engine derives it each
 GAIT tick from the commanded velocity, ``stride_length``, and the
 active strategy's ``duty_factor`` (β): faster commands ⇒ shorter cycles
-at constant stride. The lower bound comes from a global
-``min_swing_time`` — the real physical constraint is on swing-phase
-foot velocity, not cycle time, so the per-gait floor is derived as
-``min_swing_time / (1 − β)``. ``max_cycle_time`` is a visual slow-end
+at constant stride. Both bounds come from swing-phase knobs that scale
+with β so the swing-phase foot-velocity envelope is the same across
+gaits — only the cycle stretches to accommodate β:
+``min_cycle_time = min_swing_time / (1 − β)`` is the physical floor
+(per-leg foot velocity ceiling = ``stride_length / min_swing_time``);
+``max_cycle_time = max_swing_time / (1 − β)`` is a visual slow-end
 clamp so the gait stays brisk at zero command.
 
 The nominal-stance helper ``nominal_stance_from_yaml`` reuses
@@ -143,15 +145,16 @@ class EngineConfig:
     """Engine-internal knobs, sourced entirely from
     ``hexa_gait/config/gait.yaml``. None of these are on the wire.
 
-    ``stride_length`` and ``min_swing_time`` / ``max_cycle_time`` define
+    ``stride_length`` and ``min_swing_time`` / ``max_swing_time`` define
     the velocity → cycle_time relationship the engine applies each
     GAIT tick. ``duty_factor`` lives on the active ``Strategy`` (so it
-    can change with the gait); the engine reads it from there.
+    can change with the gait); the engine reads it from there and
+    scales both swing-time bounds into per-gait cycle-time bounds.
     """
 
     stride_length: float
     min_swing_time: float
-    max_cycle_time: float
+    max_swing_time: float
     step_height: float
     swing_width: float
     controller_dt: float
@@ -163,12 +166,13 @@ class EngineConfig:
     # this long with no cmd_vel, the reseat ladder walks the feet back
     # to the nominal footprint so the operator sees the robot settle.
     pause_to_reseat_delay: float
-    # PAUSING adaptive-timing knobs. ``max_foot_speed`` is the body-frame
-    # vertical foot-speed cap (m/s) used to derive each descent's
-    # duration as ``distance_z / max_foot_speed``, clamped to
-    # ``[min_swing_time, max_swing_time]``.
-    max_foot_speed: float
-    max_swing_time: float
+    # PAUSING / disengagement descent clamp. Each previously-airborne
+    # foot's straight-down lowering duration is
+    # ``distance_z / (stride_length / min_swing_time)``, clamped to
+    # ``[min_swing_time, max_reset_time]``. The descent-speed reference
+    # is derived in code from the fastest gait's per-leg foot-velocity
+    # ceiling so pause descents stay consistent with walking feel.
+    max_reset_time: float
     # INITIALIZE cold-start knobs. ``init_pair_swing_time`` is the
     # per-pair duration during PLACE_FEET; ``init_lift_body_time`` is
     # the LIFT_BODY z-ramp duration; ``init_swing_clearance`` is the
@@ -256,6 +260,21 @@ def initial_stance_from_yaml(geometry_yaml: str | Path) -> dict[str, Vec3]:
         n: leg_to_body(forward_kinematics(angles_per_leg[n], legs[n]), legs[n])
         for n in LEG_NAMES
     }
+
+
+def _cycle_time_bounds(cfg: "EngineConfig", beta: float) -> tuple[float, float]:
+    """Per-gait cycle-time bounds derived from swing-phase bounds.
+
+    Both ends scale by the same ``1 / (1 − β)`` factor so the swing-phase
+    foot-velocity envelope is gait-agnostic; only the cycle stretches as
+    β grows. At ``β = 1`` (degenerate "all stance") both bounds collapse
+    to a single sentinel — gait engines should never reach this, but the
+    branch keeps the helper total.
+    """
+    if beta >= 1.0:
+        return cfg.max_swing_time, cfg.max_swing_time
+    scale = 1.0 / (1.0 - beta)
+    return cfg.min_swing_time * scale, cfg.max_swing_time * scale
 
 
 @dataclass
@@ -456,7 +475,7 @@ class Engine:
     publisher's behaviour exactly. ``cycle_time`` is derived per-tick
     from the commanded velocity, ``stride_length``, the active
     strategy's ``duty_factor``, and the engine's
-    ``min_swing_time`` / ``max_cycle_time`` bounds.
+    ``min_swing_time`` / ``max_swing_time`` bounds.
     """
 
     def __init__(
@@ -707,25 +726,24 @@ class Engine:
             swing_clearance=cfg.step_height,
             swing_width=cfg.swing_width,
             controller_dt=cfg.controller_dt,
-            max_foot_speed=cfg.max_foot_speed,
-            min_swing_time=cfg.min_swing_time,
-            max_swing_time=cfg.max_swing_time,
+            descent_speed=cfg.stride_length / cfg.min_swing_time,
+            min_reset_time=cfg.min_swing_time,
+            max_reset_time=cfg.max_reset_time,
         )
 
     def _build_engagement(self) -> EngagementController:
         cfg = self._config
         beta = self._strategy.duty_factor
-        # Per-gait min_cycle_time = min_swing_time / (1 − β). Wave's
-        # short swing window means a much larger min_cycle than
-        # tripod's at the same min_swing_time.
-        min_cycle_time = (
-            cfg.min_swing_time / (1.0 - beta) if beta < 1.0 else cfg.max_cycle_time
-        )
+        # Per-gait cycle-time bounds derived from the gait-agnostic
+        # swing-phase bounds. β scales both ends the same way so the
+        # swing-phase foot-velocity envelope is identical across gaits;
+        # only the cycle stretches as β grows (wave) or shrinks (tripod).
+        min_cycle_time, max_cycle_time = _cycle_time_bounds(cfg, beta)
         return EngagementController(
             nominal_stance=self._nominal,
             stride_length=cfg.stride_length,
             min_cycle_time=min_cycle_time,
-            max_cycle_time=cfg.max_cycle_time,
+            max_cycle_time=max_cycle_time,
             duty_factor=beta,
             swing_clearance=cfg.step_height,
             swing_width=cfg.swing_width,
@@ -1031,17 +1049,13 @@ class Engine:
         )
 
         cfg = self._config
-        min_cycle_time = (
-            cfg.min_swing_time / (1.0 - duty_factor)
-            if duty_factor < 1.0
-            else cfg.max_cycle_time
-        )
+        min_cycle_time, max_cycle_time = _cycle_time_bounds(cfg, duty_factor)
         cycle_time = derive_cycle_time(
             max_leg_v,
             cfg.stride_length,
             duty_factor,
             min_cycle_time,
-            cfg.max_cycle_time,
+            max_cycle_time,
         )
         stance_time = cycle_time * duty_factor
         swing_time = cycle_time * swing_end

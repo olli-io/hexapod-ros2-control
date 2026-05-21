@@ -50,25 +50,25 @@ def _config(
     *,
     stride_length: float = 0.10,
     min_swing_time: float = 0.25,
-    max_cycle_time: float = 2.0,
+    max_swing_time: float = 1.0,
     pause_debounce_delay: float = 0.0,
     pause_to_reseat_delay: float = 0.2,
 ) -> EngineConfig:
-    # min_swing_time=0.25, β=0.5 (tripod) → min_cycle_time = 0.5 s, same
-    # as the pre-refactor default. Other gait factors derive their own
-    # floor from min_swing_time / (1 − β).
+    # min_swing_time=0.25, β=0.5 (tripod) → min_cycle_time = 0.5 s; same
+    # for max_swing_time=1.0 → max_cycle_time = 2.0 s (matches the
+    # pre-refactor flat scalar). Other gait factors derive their own
+    # bounds from swing_time / (1 − β).
     return EngineConfig(
         stride_length=stride_length,
         min_swing_time=min_swing_time,
-        max_cycle_time=max_cycle_time,
+        max_swing_time=max_swing_time,
         step_height=0.03,
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
         pause_debounce_delay=pause_debounce_delay,
         pause_to_reseat_delay=pause_to_reseat_delay,
-        max_foot_speed=0.333,
-        max_swing_time=0.6,
+        max_reset_time=0.6,
         # Compact INITIALIZE timings: 3*0.04 + 0.04 = 0.16 s. Keeps the
         # cold-start ladder short enough that drive-past-initialize
         # finishes in well under 20 ticks at dt=0.02. test_initialize.py
@@ -544,7 +544,7 @@ def test_set_strategy_same_name_is_no_op():
     [("tripod", 0.5), ("ripple", 2.0 / 3.0), ("wave", 5.0 / 6.0)],
 )
 def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
-    # The engine derives min_cycle_time = min_swing_time / (1 − β),
+    # The engine derives min/max cycle_time = swing_time / (1 − β),
     # then clamps cycle_time = stride / (v * β). Verify both the floor
     # and the divisor track the active strategy.
     from hexa_gait.gaits.base import derive_cycle_time
@@ -555,6 +555,7 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     assert engine.set_strategy(name) is True
     cfg = engine._config
     expected_min_cycle = 0.25 / (1.0 - expected_duty)
+    expected_max_cycle = cfg.max_swing_time / (1.0 - expected_duty)
 
     def cycle_time(max_leg_v: float) -> float:
         return derive_cycle_time(
@@ -562,17 +563,16 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
             cfg.stride_length,
             expected_duty,
             expected_min_cycle,
-            cfg.max_cycle_time,
+            expected_max_cycle,
         )
 
     # Slow command well under saturation: cycle_time ~= stride/(v*β).
-    # Use v small enough that all gaits stay below their min_cycle
-    # floor; the engine should report the floor.
-    v_small = 0.01
+    # Use v small enough that the raw quotient exceeds every gait's
+    # max_cycle floor; the engine should clamp to that per-gait max.
+    v_small = 0.001
     raw = 0.10 / (v_small * expected_duty)
-    assert raw > expected_min_cycle
-    # raw should be clamped to max_cycle_time = 2.0
-    assert cycle_time(v_small) == pytest.approx(2.0)
+    assert raw > expected_max_cycle
+    assert cycle_time(v_small) == pytest.approx(expected_max_cycle)
 
     # Fast command above saturation: cycle_time clamped to min_cycle.
     v_fast = 10.0

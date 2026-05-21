@@ -9,7 +9,10 @@ Sequence:
 1. **LOWERING** — the controller lowers each currently-airborne leg
    straight down to ``nominal.z`` (XY frozen). Stance legs do not move.
    Per-leg duration scales with the Z drop: ``clamp(distance_z /
-   max_foot_speed, min_swing_time, max_swing_time)``.
+   descent_speed, min_reset_time, max_reset_time)``. The engine derives
+   ``descent_speed`` from ``stride_length / min_swing_time`` so the
+   pause descent runs at the fastest gait's per-leg foot-velocity
+   ceiling.
 2. **PAUSED** — once every descent has landed, the controller holds
    each foot at its current position. The engine ticks its own
    ``pause_to_reseat_delay`` while in this state; on cmd_vel non-zero
@@ -90,29 +93,29 @@ class PauseController:
         swing_clearance: float,
         swing_width: float,
         controller_dt: float,
-        max_foot_speed: float,
-        min_swing_time: float,
-        max_swing_time: float,
+        descent_speed: float,
+        min_reset_time: float,
+        max_reset_time: float,
     ) -> None:
         missing = set(LEG_NAMES) - set(nominal_stance)
         if missing:
             raise ValueError(f"nominal_stance missing legs: {sorted(missing)}")
-        if max_foot_speed <= 0.0:
-            raise ValueError(f"max_foot_speed must be positive; got {max_foot_speed}")
-        if min_swing_time <= 0.0:
-            raise ValueError(f"min_swing_time must be positive; got {min_swing_time}")
-        if max_swing_time < min_swing_time:
+        if descent_speed <= 0.0:
+            raise ValueError(f"descent_speed must be positive; got {descent_speed}")
+        if min_reset_time <= 0.0:
+            raise ValueError(f"min_reset_time must be positive; got {min_reset_time}")
+        if max_reset_time < min_reset_time:
             raise ValueError(
-                f"max_swing_time {max_swing_time} < min_swing_time {min_swing_time}"
+                f"max_reset_time {max_reset_time} < min_reset_time {min_reset_time}"
             )
 
         self._nominal: dict[str, Vec3] = {n: tuple(nominal_stance[n]) for n in LEG_NAMES}  # type: ignore[misc]
         self._swing_clearance = swing_clearance
         self._swing_width = swing_width
         self._controller_dt = controller_dt
-        self._max_foot_speed = max_foot_speed
-        self._min_swing_time = min_swing_time
-        self._max_swing_time = max_swing_time
+        self._descent_speed = descent_speed
+        self._min_reset_time = min_reset_time
+        self._max_reset_time = max_reset_time
 
         self._state = PauseState.PAUSED
         self._positions: dict[str, Vec3] = dict(self._nominal)
@@ -204,11 +207,11 @@ class PauseController:
         }
 
     def _adaptive_descent_time(self, distance_z: float) -> float:
-        raw = distance_z / self._max_foot_speed
-        if raw < self._min_swing_time:
-            return self._min_swing_time
-        if raw > self._max_swing_time:
-            return self._max_swing_time
+        raw = distance_z / self._descent_speed
+        if raw < self._min_reset_time:
+            return self._min_reset_time
+        if raw > self._max_reset_time:
+            return self._max_reset_time
         return raw
 
     def _descent_point(self, descent: _LegDescent) -> Vec3:
