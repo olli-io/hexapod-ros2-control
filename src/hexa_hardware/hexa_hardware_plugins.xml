@@ -1,0 +1,10 @@
+<library path="hexa_hardware">
+  <class name="hexa_hardware/HexaHardware"
+         type="hexa_hardware::HexaHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control SystemInterface that drives 18 hobby servos through
+      a UART-attached Chica-protocol board (e.g. Pimoroni Servo 2040).
+    </description>
+  </class>
+</library>

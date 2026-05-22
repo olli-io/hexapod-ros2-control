@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_hardware</name>
+  <version>0.0.1</version>
+  <description>ros2_control SystemInterface plugin that drives the hexapod's
+  18 leg servos via a UART link to an open servo controller board
+  (Pimoroni Servo 2040, RP2040 etc.) speaking the "Chica" binary
+  protocol. Real-robot counterpart to hexa_simulation.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>ament_index_cpp</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>sensor_msgs</depend>
+  <depend>yaml-cpp</depend>
+
+  <exec_depend>hexa_description</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <hardware_interface plugin="${prefix}/hexa_hardware_plugins.xml"/>
+  </export>
+</package>

@@ -1,0 +1,214 @@
+# Servo2040 (Chica-protocol board) wiring + calibration.
+#
+# Servo pins 1..18 match the Servo2040 silkscreen; pin 0 is unused.
+# Non-servo pins (relay, aux ADCs) use board-specific numbering.
+# Keep each leg's three joints on consecutive pins so `write()`
+# collapses to six SET frames per cycle.
+#
+# Calibration uses two measured endpoints in the servo's own frame:
+#   us_at_plus_45  — pulse width at +π/4 from mechanical center
+#   us_at_minus_45 — pulse width at -π/4 from mechanical center
+# Center pulse and signed slope are derived from these; swap the two
+# values to express a reversed mount.
+#
+# `joint_position` (coxa/femur/tibia) selects the matching entry in
+# `deg_at_center`: the joint angle (degrees, per-joint convention from
+# hexa_description/config/geometry.yaml) when the servo is at center.
+# Defaults (0 / 35 / 68) match geometry.yaml for an ideal build.
+#
+# `min_us` / `max_us` are the hard electrical clamp. Joint travel
+# limits in radian space live in geometry.yaml.
+
+serial:
+  device: /dev/ttyACM0
+  baud: 115200 # ignored on Servo2040 USB-CDC; honoured for true-UART builds.
+  get_period_ticks: 10 # poll aux every Nth read() (100 Hz read → 10 Hz aux)
+
+relay:
+  pin: 24 # digital out; high = servo rail energised
+
+aux:
+  # GET-only pins
+  battery_voltage: {pin: 26, scale: 0.00366} # 14-bit → volts; tune to divider
+  battery_current: {pin: 27, scale: 0.00098} # 14-bit → amps; tune to shunt
+
+# Joint angle at servo center:
+#   coxa  — deg from radial (0 = leg straight out from hip)
+#   femur — above_horizontal_deg (positive raises the knee)
+#   tibia — interior_deg (180 = fully extended)
+deg_at_center:
+  coxa: 0.0
+  femur: 35.0
+  tibia: 68.0
+
+joints:
+  # Defaults: 1000 µs at -π/4, 2000 µs at +π/4 (1500 µs center,
+  # ≈636 µs/rad). Replace with measured values.
+  # Left front
+  l_front_coxa_joint:
+    {
+      pin: 1,
+      joint_position: coxa,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  l_front_femur_joint:
+    {
+      pin: 2,
+      joint_position: femur,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  l_front_tibia_joint:
+    {
+      pin: 3,
+      joint_position: tibia,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  # Left middle
+  l_middle_coxa_joint:
+    {
+      pin: 4,
+      joint_position: coxa,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  l_middle_femur_joint:
+    {
+      pin: 5,
+      joint_position: femur,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  l_middle_tibia_joint:
+    {
+      pin: 6,
+      joint_position: tibia,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  # Left rear
+  l_rear_coxa_joint:
+    {
+      pin: 7,
+      joint_position: coxa,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  l_rear_femur_joint:
+    {
+      pin: 8,
+      joint_position: femur,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  l_rear_tibia_joint:
+    {
+      pin: 9,
+      joint_position: tibia,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  # Right front
+  r_front_coxa_joint:
+    {
+      pin: 10,
+      joint_position: coxa,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  r_front_femur_joint:
+    {
+      pin: 11,
+      joint_position: femur,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  r_front_tibia_joint:
+    {
+      pin: 12,
+      joint_position: tibia,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  # Right middle
+  r_middle_coxa_joint:
+    {
+      pin: 13,
+      joint_position: coxa,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  r_middle_femur_joint:
+    {
+      pin: 14,
+      joint_position: femur,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  r_middle_tibia_joint:
+    {
+      pin: 15,
+      joint_position: tibia,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  # Right rear
+  r_rear_coxa_joint:
+    {
+      pin: 16,
+      joint_position: coxa,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  r_rear_femur_joint:
+    {
+      pin: 17,
+      joint_position: femur,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }
+  r_rear_tibia_joint:
+    {
+      pin: 18,
+      joint_position: tibia,
+      us_at_plus_45: 2000,
+      us_at_minus_45: 1000,
+      min_us: 500,
+      max_us: 2500,
+    }

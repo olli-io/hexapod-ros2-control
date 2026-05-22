@@ -1,0 +1,42 @@
+# ros2_control controller manager + controller config for the real hexapod.
+#
+# Loaded by ros2_control_node (controller_manager package) in
+# hexa_bringup/launch/robot.launch.py. Mirrors hexa_simulation's
+# ros2_controllers.yaml except that use_sim_time is false and the
+# update_rate is the same 100 Hz cycle the gait/IK stack publishes at.
+#
+# Joint names mirror the URDF macro instantiations: {side}_{name}_{seg}_joint
+# where side ∈ {l, r}, name ∈ {front, middle, rear}, seg ∈ {coxa, femur, tibia}.
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+    use_sim_time: false
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_group_position_controller:
+      type: position_controllers/JointGroupPositionController
+
+joint_group_position_controller:
+  ros__parameters:
+    joints:
+      - l_front_coxa_joint
+      - l_front_femur_joint
+      - l_front_tibia_joint
+      - l_middle_coxa_joint
+      - l_middle_femur_joint
+      - l_middle_tibia_joint
+      - l_rear_coxa_joint
+      - l_rear_femur_joint
+      - l_rear_tibia_joint
+      - r_front_coxa_joint
+      - r_front_femur_joint
+      - r_front_tibia_joint
+      - r_middle_coxa_joint
+      - r_middle_femur_joint
+      - r_middle_tibia_joint
+      - r_rear_coxa_joint
+      - r_rear_femur_joint
+      - r_rear_tibia_joint
