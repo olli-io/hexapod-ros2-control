@@ -354,10 +354,13 @@ def map_joy(
     record_edge = record_pressed and not state.prev_record
     state.prev_record = record_pressed
 
-    lx = _read_axis(axes, cfg.axis_left_x, cfg.deadband)
-    ly = _read_axis(axes, cfg.axis_left_y, cfg.deadband)
-    rx = _read_axis(axes, cfg.axis_right_x, cfg.deadband)
-    ry = _read_axis(axes, cfg.axis_right_y, cfg.deadband)
+    # Driver reports sticks inverted relative to the joy_node default,
+    # so flip all four to recover the REP-103 convention (stick
+    # forward / left → positive) the rest of this module assumes.
+    lx = -_read_axis(axes, cfg.axis_left_x, cfg.deadband)
+    ly = -_read_axis(axes, cfg.axis_left_y, cfg.deadband)
+    rx = -_read_axis(axes, cfg.axis_right_x, cfg.deadband)
+    ry = -_read_axis(axes, cfg.axis_right_y, cfg.deadband)
 
     # D-pad Y: integrate body-height offset while held (POSTURE only).
     # No deadband — joy_node reports the D-pad as a clean ±1 / 0 axis.
