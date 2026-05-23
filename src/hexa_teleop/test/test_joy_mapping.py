@@ -4,8 +4,11 @@ from hexa_teleop import (
     ANIMATION,
     GAIT,
     POSTURE,
+    BaseConfig,
     JoyConfig,
     JoyState,
+    ModeConfig,
+    PostureConfig,
     apply_deadband,
     map_joy,
 )
@@ -14,44 +17,174 @@ from hexa_teleop import (
 DT = 0.02  # matches teleop_joy.PUBLISH_RATE_HZ = 50 Hz
 
 
+# Default test fixture bindings — mirror the YAML defaults so a bare
+# ``_cfg()`` yields the same mapping behavior the production node uses.
+_DEFAULT_BASE_BUTTONS = {
+    "a": 0,
+    "b": 1,
+    "x": 2,
+    "y": 3,
+    "l1": 4,
+    "r1": 5,
+    "select": 6,
+    "start": 7,
+}
+_DEFAULT_BASE_AXES = {
+    "left_stick_x": 0,
+    "left_stick_y": 1,
+    "l2": 2,
+    "right_stick_x": 3,
+    "right_stick_y": 4,
+    "r2": 5,
+    "dpad_x": 6,
+    "dpad_y": 7,
+}
+# Tests historically set ``dpad_up_sign=1.0`` and ``dpad_right_sign=1.0``
+# (and assumed sticks were not inverted). Match that baseline: no
+# axis_sign entries means everything defaults to +1.0.
+_DEFAULT_AXIS_SIGNS: dict[str, float] = {}
+_DEFAULT_BASE_BINDINGS = {
+    "a": "gait_mode",
+    "b": "animation_mode",
+    "x": "",
+    "y": "posture_mode",
+    "start": "init",
+    "select": "record",
+}
+_DEFAULT_GAIT_BINDINGS = {
+    "l1": "",
+    "r1": "",
+    "l2": "",
+    "r2": "",
+    "dpad_up": "",
+    "dpad_down": "",
+    "dpad_left": "gait_prev",
+    "dpad_right": "gait_next",
+    "left_stick_x": "drive_yaw",
+    "left_stick_y": "",
+    "right_stick_x": "drive_y",
+    "right_stick_y": "drive_x",
+}
+_DEFAULT_POSTURE_BINDINGS = {
+    "l1": "yaw_left",
+    "r1": "yaw_right",
+    "l2": "wiggle_left",
+    "r2": "wiggle_right",
+    "dpad_up": "height_up",
+    "dpad_down": "height_down",
+    "dpad_left": "gait_prev",
+    "dpad_right": "gait_next",
+    "left_stick_x": "tilt_roll",
+    "left_stick_y": "tilt_pitch",
+    "right_stick_x": "pose_y",
+    "right_stick_y": "pose_x",
+}
+_DEFAULT_ANIMATION_BINDINGS = {
+    "l1": "",
+    "r1": "",
+    "l2": "",
+    "r2": "",
+    "dpad_up": "animation_vertical_body_roll",
+    "dpad_down": "animation_body_roll_3d",
+    "dpad_left": "animation_horizontal_body_roll",
+    "dpad_right": "",
+    "left_stick_x": "drive_yaw",
+    "left_stick_y": "",
+    "right_stick_x": "drive_y",
+    "right_stick_y": "drive_x",
+}
+
+
+# Legacy flat overrides accepted by ``_cfg`` get folded into the nested
+# config at construction time. Lets test bodies keep writing
+# ``_cfg(posture_roll_max=0.10)`` without knowing the new layout.
+_LEGACY_BASE: dict[str, str] = {
+    "deadband": "deadband",
+    "wiggle_trigger_threshold": "trigger_threshold",
+}
+_LEGACY_POSTURE: dict[str, str] = {
+    "posture_x_max": "x_max",
+    "posture_y_max": "y_max",
+    "posture_roll_max": "roll_max",
+    "posture_pitch_max": "pitch_max",
+    "posture_yaw_max": "yaw_max",
+    "posture_yaw_tau": "yaw_tau",
+    "posture_revert_tau": "revert_tau",
+    "posture_wiggle_pivot_forward_m": "wiggle_pivot_forward_m",
+    "posture_height_max": "height_max",
+    "posture_height_min": "height_min",
+    "posture_height_rate": "height_rate",
+}
+_LEGACY_AXIS_SIGN: dict[str, str] = {
+    # The old "dpad_up_sign" / "dpad_right_sign" map onto axis_signs
+    # for the two D-pad axes.
+    "dpad_up_sign": "dpad_y",
+    "dpad_right_sign": "dpad_x",
+}
+
+
 def _cfg(**overrides) -> JoyConfig:
-    base = dict(
-        axis_left_x=0,
-        axis_left_y=1,
-        axis_right_x=3,
-        axis_right_y=4,
-        axis_dpad_x=6,
-        axis_dpad_y=7,
-        dpad_up_sign=1.0,
-        dpad_right_sign=1.0,
-        gait_mode_button=0,
-        posture_mode_button=3,
-        animation_mode_button=1,
-        init_button=7,
-        record_button=6,
-        yaw_left_button=4,
-        yaw_right_button=5,
-        wiggle_left_trigger_axis=2,
-        wiggle_right_trigger_axis=5,
-        wiggle_trigger_threshold=0.5,
-        deadband=0.1,
-        gait_linear_max=0.4,
-        gait_angular_z_max=1.0,
-        posture_x_max=0.05,
-        posture_y_max=0.05,
-        posture_roll_max=math.radians(15.0),
-        posture_pitch_max=math.radians(15.0),
-        posture_yaw_max=math.radians(20.0),
-        posture_yaw_tau=0.10,
-        posture_revert_tau=0.50,
-        posture_wiggle_pivot_forward_m=0.06,
-        posture_height_max=0.04,
-        posture_height_min=-0.04,
-        posture_height_rate=0.05,
-        gait_cycle=("wave", "ripple", "tripod"),
+    base_kwargs = {
+        "deadband": 0.1,
+        "trigger_threshold": 0.5,
+    }
+    posture_kwargs = {
+        "x_max": 0.05,
+        "y_max": 0.05,
+        "roll_max": math.radians(15.0),
+        "pitch_max": math.radians(15.0),
+        "yaw_max": math.radians(20.0),
+        "yaw_tau": 0.10,
+        "revert_tau": 0.50,
+        "wiggle_pivot_forward_m": 0.06,
+        "height_max": 0.04,
+        "height_min": -0.04,
+        "height_rate": 0.05,
+    }
+    axis_signs = dict(_DEFAULT_AXIS_SIGNS)
+    base_bindings = dict(_DEFAULT_BASE_BINDINGS)
+    gait_bindings = dict(_DEFAULT_GAIT_BINDINGS)
+    posture_bindings = dict(_DEFAULT_POSTURE_BINDINGS)
+    animation_bindings = dict(_DEFAULT_ANIMATION_BINDINGS)
+    top_level = {
+        "gait_cycle": ("wave", "ripple", "tripod"),
+        "gait_linear_max": 0.4,
+        "gait_angular_z_max": 1.0,
+    }
+
+    for key, value in overrides.items():
+        if key in _LEGACY_BASE:
+            base_kwargs[_LEGACY_BASE[key]] = value
+        elif key in _LEGACY_POSTURE:
+            posture_kwargs[_LEGACY_POSTURE[key]] = value
+        elif key in _LEGACY_AXIS_SIGN:
+            axis_signs[_LEGACY_AXIS_SIGN[key]] = value
+        elif key in top_level:
+            top_level[key] = value
+        elif key == "base_bindings":
+            base_bindings.update(value)
+        elif key == "gait_bindings":
+            gait_bindings.update(value)
+        elif key == "posture_bindings":
+            posture_bindings.update(value)
+        elif key == "animation_bindings":
+            animation_bindings.update(value)
+        else:
+            raise TypeError(f"_cfg: unknown override {key!r}")
+
+    return JoyConfig(
+        base=BaseConfig(
+            button_index=dict(_DEFAULT_BASE_BUTTONS),
+            axis_index=dict(_DEFAULT_BASE_AXES),
+            axis_sign=axis_signs,
+            bindings=base_bindings,
+            **base_kwargs,
+        ),
+        gait=ModeConfig(bindings=gait_bindings),
+        posture=PostureConfig(bindings=posture_bindings, **posture_kwargs),
+        animation=ModeConfig(bindings=animation_bindings),
+        **top_level,
     )
-    base.update(overrides)
-    return JoyConfig(**base)
 
 
 def _axes(
@@ -103,8 +236,8 @@ def test_posture_right_stick_maps_to_body_xy_scaled():
     state = JoyState(mode=POSTURE)
     out = map_joy(_axes(right_x=1.0, right_y=1.0), _buttons(), cfg, state, DT)
     # stick forward (right_y=+1) -> body +x; stick left (right_x=+1) -> body +y
-    assert math.isclose(out.pose_x, cfg.posture_x_max)
-    assert math.isclose(out.pose_y, cfg.posture_y_max)
+    assert math.isclose(out.pose_x, cfg.posture.x_max)
+    assert math.isclose(out.pose_y, cfg.posture.y_max)
     # right stick alone leaves tilt at zero
     assert out.pose_roll == 0.0
     assert out.pose_pitch == 0.0
@@ -121,7 +254,7 @@ def test_posture_left_stick_x_drives_roll():
     out = map_joy(_axes(left_x=1.0), _buttons(), cfg, state, DT)
     # stick left (left_x=+1) -> body tilts left (left side dips),
     # which is negative roll about +x.
-    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
+    assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
     assert out.pose_pitch == 0.0
     assert out.pose_x == 0.0
     assert out.pose_y == 0.0
@@ -134,7 +267,7 @@ def test_posture_left_stick_y_drives_pitch():
     out = map_joy(_axes(left_y=1.0), _buttons(), cfg, state, DT)
     # stick forward (left_y=+1) -> body tilts forward (front dips),
     # which is positive pitch about +y.
-    assert math.isclose(out.pose_pitch, cfg.posture_pitch_max)
+    assert math.isclose(out.pose_pitch, cfg.posture.pitch_max)
     assert out.pose_roll == 0.0
     assert out.pose_x == 0.0
     assert out.pose_y == 0.0
@@ -150,10 +283,10 @@ def test_posture_both_sticks_apply_simultaneously():
         state,
         DT,
     )
-    assert math.isclose(out.pose_x, cfg.posture_x_max)
-    assert math.isclose(out.pose_y, cfg.posture_y_max)
-    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
-    assert math.isclose(out.pose_pitch, cfg.posture_pitch_max)
+    assert math.isclose(out.pose_x, cfg.posture.x_max)
+    assert math.isclose(out.pose_y, cfg.posture.y_max)
+    assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
+    assert math.isclose(out.pose_pitch, cfg.posture.pitch_max)
 
 
 def test_gait_left_stick_x_drives_angular_z():
@@ -308,13 +441,13 @@ def test_posture_yaw_button_eases_toward_max():
     state = JoyState(mode=POSTURE)
 
     out = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
-    assert 0.0 < out.pose_yaw < cfg.posture_yaw_max
-    assert math.isclose(out.pose_yaw, cfg.posture_yaw_max * 0.18126, abs_tol=1e-4)
+    assert 0.0 < out.pose_yaw < cfg.posture.yaw_max
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max * 0.18126, abs_tol=1e-4)
 
     # Saturate by holding for several time constants.
     for _ in range(200):
         out = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
-    assert math.isclose(out.pose_yaw, cfg.posture_yaw_max, rel_tol=1e-6)
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
 
 
 def test_posture_yaw_right_button_is_negative():
@@ -322,20 +455,20 @@ def test_posture_yaw_right_button_is_negative():
     state = JoyState(mode=POSTURE)
     for _ in range(200):
         out = map_joy(_axes(), _buttons(yaw_right=True), cfg, state, DT)
-    assert math.isclose(out.pose_yaw, -cfg.posture_yaw_max, rel_tol=1e-6)
+    assert math.isclose(out.pose_yaw, -cfg.posture.yaw_max, rel_tol=1e-6)
 
 
 def test_posture_yaw_both_buttons_cancel_to_zero():
     cfg = _cfg()
-    state = JoyState(mode=POSTURE, yaw_current=cfg.posture_yaw_max)
+    state = JoyState(mode=POSTURE, yaw_current=cfg.posture.yaw_max)
     # Both pressed -> target 0; output eases down from saturated state.
     out = map_joy(_axes(), _buttons(yaw_left=True, yaw_right=True), cfg, state, DT)
-    assert 0.0 < out.pose_yaw < cfg.posture_yaw_max
+    assert 0.0 < out.pose_yaw < cfg.posture.yaw_max
 
 
 def test_posture_yaw_eases_back_to_zero_on_release():
     cfg = _cfg()
-    state = JoyState(mode=POSTURE, yaw_current=cfg.posture_yaw_max)
+    state = JoyState(mode=POSTURE, yaw_current=cfg.posture.yaw_max)
     for _ in range(200):
         out = map_joy(_axes(), _buttons(), cfg, state, DT)
     assert math.isclose(out.pose_yaw, 0.0, abs_tol=1e-6)
@@ -345,12 +478,12 @@ def test_posture_yaw_inactive_in_gait_mode():
     # Pressing yaw buttons in gait mode must not produce a /body/pose
     # yaw offset — output stays at zero regardless of yaw state.
     cfg = _cfg()
-    state = JoyState(mode=GAIT, yaw_current=cfg.posture_yaw_max)
+    state = JoyState(mode=GAIT, yaw_current=cfg.posture.yaw_max)
     out = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
     assert out.pose_yaw == 0.0
     # And the held state bleeds off so a mode flip back to posture
     # doesn't resurrect a stale offset.
-    assert state.yaw_current < cfg.posture_yaw_max
+    assert state.yaw_current < cfg.posture.yaw_max
 
 
 # ---- Wiggle (L2 / R2) ----------------------------------------------------
@@ -373,11 +506,11 @@ def test_wiggle_lt_saturates_yaw_and_translates():
     state = JoyState(mode=POSTURE)
     for _ in range(400):
         out = map_joy(_press_lt(), _buttons(), cfg, state, DT)
-    px = cfg.posture_wiggle_pivot_forward_m
-    assert math.isclose(out.pose_yaw, cfg.posture_yaw_max, rel_tol=1e-6)
+    px = cfg.posture.wiggle_pivot_forward_m
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
     assert math.isclose(state.wiggle_amount, 1.0, rel_tol=1e-6)
-    assert math.isclose(out.pose_x, px * (1.0 - math.cos(cfg.posture_yaw_max)))
-    assert math.isclose(out.pose_y, -px * math.sin(cfg.posture_yaw_max))
+    assert math.isclose(out.pose_x, px * (1.0 - math.cos(cfg.posture.yaw_max)))
+    assert math.isclose(out.pose_y, -px * math.sin(cfg.posture.yaw_max))
 
 
 def test_wiggle_rt_mirrors_lt():
@@ -385,13 +518,13 @@ def test_wiggle_rt_mirrors_lt():
     state = JoyState(mode=POSTURE)
     for _ in range(400):
         out = map_joy(_press_rt(), _buttons(), cfg, state, DT)
-    px = cfg.posture_wiggle_pivot_forward_m
-    assert math.isclose(out.pose_yaw, -cfg.posture_yaw_max, rel_tol=1e-6)
+    px = cfg.posture.wiggle_pivot_forward_m
+    assert math.isclose(out.pose_yaw, -cfg.posture.yaw_max, rel_tol=1e-6)
     # sin is odd, (1 - cos) is even, so x bob is the same direction
     # regardless of which trigger is held — the front always rolls
     # forward a hair as the rear swings.
-    assert math.isclose(out.pose_x, px * (1.0 - math.cos(cfg.posture_yaw_max)))
-    assert math.isclose(out.pose_y, -px * math.sin(-cfg.posture_yaw_max))
+    assert math.isclose(out.pose_x, px * (1.0 - math.cos(cfg.posture.yaw_max)))
+    assert math.isclose(out.pose_y, -px * math.sin(-cfg.posture.yaw_max))
 
 
 def test_wiggle_pivot_point_stays_stationary_during_ramp():
@@ -400,7 +533,7 @@ def test_wiggle_pivot_point_stays_stationary_during_ramp():
     # noise from its starting position.
     cfg = _cfg()
     state = JoyState(mode=POSTURE)
-    px = cfg.posture_wiggle_pivot_forward_m
+    px = cfg.posture.wiggle_pivot_forward_m
     for _ in range(50):
         out = map_joy(_press_lt(), _buttons(), cfg, state, DT)
         # Apply body offset to body-frame point (px, 0): rotate by
@@ -428,17 +561,17 @@ def test_wiggle_l1_plus_lt_does_not_stack_yaw():
     state = JoyState(mode=POSTURE)
     for _ in range(400):
         out = map_joy(_press_lt(), _buttons(yaw_left=True), cfg, state, DT)
-    assert math.isclose(out.pose_yaw, cfg.posture_yaw_max, rel_tol=1e-6)
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
     assert math.isclose(state.wiggle_amount, 1.0, rel_tol=1e-6)
-    px = cfg.posture_wiggle_pivot_forward_m
-    assert math.isclose(out.pose_y, -px * math.sin(cfg.posture_yaw_max))
+    px = cfg.posture.wiggle_pivot_forward_m
+    assert math.isclose(out.pose_y, -px * math.sin(cfg.posture.yaw_max))
 
 
 def test_wiggle_eases_back_on_release():
     cfg = _cfg()
     state = JoyState(
         mode=POSTURE,
-        yaw_current=cfg.posture_yaw_max,
+        yaw_current=cfg.posture.yaw_max,
         wiggle_amount=1.0,
     )
     for _ in range(400):
@@ -454,13 +587,13 @@ def test_wiggle_inactive_in_gait_mode_but_state_bleeds():
     # the wiggle_amount state should ease toward zero so a flip back
     # to posture doesn't resurrect the wiggle.
     cfg = _cfg()
-    state = JoyState(mode=GAIT, yaw_current=cfg.posture_yaw_max, wiggle_amount=1.0)
+    state = JoyState(mode=GAIT, yaw_current=cfg.posture.yaw_max, wiggle_amount=1.0)
     out = map_joy(_press_lt(), _buttons(), cfg, state, DT)
     assert out.pose_x == 0.0
     assert out.pose_y == 0.0
     assert out.pose_yaw == 0.0
     assert state.wiggle_amount < 1.0
-    assert state.yaw_current < cfg.posture_yaw_max
+    assert state.yaw_current < cfg.posture.yaw_max
 
 
 def test_wiggle_trigger_threshold_respected():
@@ -489,8 +622,8 @@ def test_dpad_up_held_in_posture_integrates_height_up():
     # 0.05 m, which the clamp pins to posture_height_max = 0.04.
     for _ in range(50):
         out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
-    assert math.isclose(state.height_current, cfg.posture_height_max)
-    assert math.isclose(out.pose_z, cfg.posture_height_max)
+    assert math.isclose(state.height_current, cfg.posture.height_max)
+    assert math.isclose(out.pose_z, cfg.posture.height_max)
 
 
 def test_dpad_down_held_in_posture_integrates_height_down():
@@ -498,8 +631,8 @@ def test_dpad_down_held_in_posture_integrates_height_down():
     state = JoyState(mode=POSTURE)
     for _ in range(50):
         out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
-    assert math.isclose(state.height_current, cfg.posture_height_min)
-    assert math.isclose(out.pose_z, cfg.posture_height_min)
+    assert math.isclose(state.height_current, cfg.posture.height_min)
+    assert math.isclose(out.pose_z, cfg.posture.height_min)
 
 
 def test_dpad_release_holds_height():
@@ -547,18 +680,18 @@ def test_height_clamps_at_max():
     # Once the integrator pins to max, additional held ticks do not
     # accumulate.
     cfg = _cfg()
-    state = JoyState(mode=POSTURE, height_current=cfg.posture_height_max)
+    state = JoyState(mode=POSTURE, height_current=cfg.posture.height_max)
     for _ in range(50):
         map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
-    assert math.isclose(state.height_current, cfg.posture_height_max)
+    assert math.isclose(state.height_current, cfg.posture.height_max)
 
 
 def test_height_clamps_at_min():
     cfg = _cfg()
-    state = JoyState(mode=POSTURE, height_current=cfg.posture_height_min)
+    state = JoyState(mode=POSTURE, height_current=cfg.posture.height_min)
     for _ in range(50):
         map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
-    assert math.isclose(state.height_current, cfg.posture_height_min)
+    assert math.isclose(state.height_current, cfg.posture.height_min)
 
 
 def test_mode_switch_preserves_height():
@@ -597,7 +730,7 @@ def test_start_at_nonzero_height_arms_smooth_revert():
     assert out.init_request is False
     assert state.reverting is True
     # One tick of decay at tau=0.5s, dt=0.02s: exp(-0.04) ≈ 0.9608.
-    expected = 0.03 * math.exp(-DT / cfg.posture_revert_tau)
+    expected = 0.03 * math.exp(-DT / cfg.posture.revert_tau)
     assert math.isclose(state.height_current, expected, rel_tol=1e-9)
 
 
@@ -662,11 +795,11 @@ def test_select_in_posture_records_current_joystick_pose():
     cfg = _cfg()
     state = JoyState(mode=POSTURE)
     map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
-    assert math.isclose(state.recorded_roll, -cfg.posture_roll_max)
+    assert math.isclose(state.recorded_roll, -cfg.posture.roll_max)
     # Release stick AND release Select: output should still be at the
     # recorded tilt.
     out = map_joy(_axes(), _buttons(), cfg, state, DT)
-    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
+    assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
 
 
 def test_recorded_pose_plus_stick_clamps_at_limit():
@@ -680,7 +813,7 @@ def test_recorded_pose_plus_stick_clamps_at_limit():
     # Release record button so a future press would re-record; keep
     # the stick pushed.
     out = map_joy(_axes(left_x=1.0), _buttons(), cfg, state, DT)
-    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
+    assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
 
 
 def test_recorded_pose_plus_opposite_stick_unwinds():
@@ -721,7 +854,7 @@ def test_select_folds_yaw_current_into_recorded_yaw():
     for _ in range(400):
         map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
     yaw_before = state.yaw_current
-    assert math.isclose(yaw_before, cfg.posture_yaw_max, rel_tol=1e-6)
+    assert math.isclose(yaw_before, cfg.posture.yaw_max, rel_tol=1e-6)
     out = map_joy(_axes(), _buttons(record=True, yaw_left=True), cfg, state, DT)
     assert math.isclose(state.recorded_yaw, yaw_before, rel_tol=1e-6)
     assert state.yaw_current == 0.0
@@ -729,10 +862,10 @@ def test_select_folds_yaw_current_into_recorded_yaw():
     # On the next tick the still-held L1 eases yaw_current back from 0
     # so the live state is alive again. The recorded baseline stops it
     # from accumulating past the cap.
-    alpha = 1.0 - math.exp(-DT / cfg.posture_yaw_tau)
+    alpha = 1.0 - math.exp(-DT / cfg.posture.yaw_tau)
     out2 = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
-    assert math.isclose(state.yaw_current, alpha * cfg.posture_yaw_max, rel_tol=1e-6)
-    assert math.isclose(out2.pose_yaw, cfg.posture_yaw_max, rel_tol=1e-6)
+    assert math.isclose(state.yaw_current, alpha * cfg.posture.yaw_max, rel_tol=1e-6)
+    assert math.isclose(out2.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
 
 
 def test_select_in_gait_mode_is_noop():
@@ -770,10 +903,10 @@ def test_recorded_pose_bleeds_through_to_gait_mode():
     out = map_joy(_axes(right_x=1.0, right_y=1.0), _buttons(gait_mode=True), cfg, state, DT)
     assert state.mode == GAIT
     # Recorded posture bleeds through, sticks drive linear velocity.
-    assert math.isclose(out.pose_x, cfg.posture_x_max)
-    assert math.isclose(out.pose_y, cfg.posture_y_max)
-    assert math.isclose(out.pose_roll, -cfg.posture_roll_max)
-    assert math.isclose(out.pose_pitch, cfg.posture_pitch_max)
+    assert math.isclose(out.pose_x, cfg.posture.x_max)
+    assert math.isclose(out.pose_y, cfg.posture.y_max)
+    assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
+    assert math.isclose(out.pose_pitch, cfg.posture.pitch_max)
     assert math.isclose(out.linear_x, cfg.gait_linear_max)
     assert math.isclose(out.linear_y, cfg.gait_linear_max)
 
@@ -801,7 +934,7 @@ def test_start_with_recorded_pose_arms_revert_and_suppresses_init():
     assert state.reverting is True
     # One tick of decay leaves the baseline slightly reduced but
     # nowhere near zero.
-    decay = math.exp(-DT / cfg.posture_revert_tau)
+    decay = math.exp(-DT / cfg.posture.revert_tau)
     assert math.isclose(state.recorded_roll, pre_recorded_roll * decay, rel_tol=1e-9)
     assert math.isclose(state.height_current, pre_height * decay, rel_tol=1e-9)
 
@@ -863,7 +996,7 @@ def test_select_during_revert_cancels_it():
     assert state.reverting is False
     # The fold-in clamped to +roll_max (existing baseline + stick
     # contribution both push positive past the cap).
-    assert math.isclose(state.recorded_roll, cfg.posture_roll_max)
+    assert math.isclose(state.recorded_roll, cfg.posture.roll_max)
 
 
 def test_revert_runs_across_mode_switch():
@@ -892,7 +1025,7 @@ def test_select_rising_edge_only():
     # First tick at full left roll: records.
     map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
     recorded_after_first = state.recorded_roll
-    assert math.isclose(recorded_after_first, -cfg.posture_roll_max)
+    assert math.isclose(recorded_after_first, -cfg.posture.roll_max)
     # Hold Select for many more ticks with the stick at full left.
     # Without rising-edge gating, recorded_roll would saturate by
     # repeated folding — but the per-axis clamp at record time pins it
@@ -1066,3 +1199,211 @@ def test_animation_mode_dpad_down_outside_animation_mode_is_inert():
     out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
     assert out.animation_name is None
     assert state.animation_name == ""
+
+
+# ---- Binding flexibility (portability across controllers) ------------------
+
+
+def test_wiggle_bound_to_face_button_ramps_like_a_trigger():
+    # Rebind wiggle_left to L1 (a button) instead of L2 (a trigger
+    # axis). The mapping must accept the polymorphic binding and read
+    # the button state directly.
+    cfg = _cfg(posture_bindings={
+        "l1": "wiggle_left",
+        "r1": "wiggle_right",
+        "l2": "",
+        "r2": "",
+    })
+    state = JoyState(mode=POSTURE)
+    # Press L1 by setting button index 4 (the default for "l1") high.
+    pressed = [0] * 11
+    pressed[4] = 1
+    for _ in range(400):
+        out = map_joy(_axes(), tuple(pressed), cfg, state, DT)
+    px = cfg.posture.wiggle_pivot_forward_m
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
+    assert math.isclose(state.wiggle_amount, 1.0, rel_tol=1e-6)
+    assert math.isclose(out.pose_x, px * (1.0 - math.cos(cfg.posture.yaw_max)))
+    assert math.isclose(out.pose_y, -px * math.sin(cfg.posture.yaw_max))
+
+
+def test_height_bound_to_shoulder_buttons_integrates():
+    # Rebind height_up / height_down to R1 / L1, clear the D-pad
+    # default so the shoulder buttons are the only path.
+    cfg = _cfg(posture_bindings={
+        "r1": "height_up",
+        "l1": "height_down",
+        "dpad_up": "",
+        "dpad_down": "",
+    })
+    state = JoyState(mode=POSTURE)
+    pressed_r1 = [0] * 11
+    pressed_r1[5] = 1  # R1
+    pressed_l1 = [0] * 11
+    pressed_l1[4] = 1  # L1
+    # Hold R1 long enough to saturate at the height_max clamp.
+    for _ in range(50):
+        out = map_joy(_axes(), tuple(pressed_r1), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture.height_max)
+    assert math.isclose(out.pose_z, cfg.posture.height_max)
+    # Release and verify height is held.
+    for _ in range(20):
+        out = map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture.height_max)
+    # Hold L1: height drives back down to the min clamp.
+    for _ in range(100):
+        out = map_joy(_axes(), tuple(pressed_l1), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture.height_min)
+
+
+def test_gait_cycler_works_when_bound_to_face_buttons():
+    # Rebind gait_prev to X. The cycler must fire on each rising edge
+    # regardless of whether the binding is a D-pad direction or a
+    # plain button.
+    cfg = _cfg(
+        # Clear the default dpad_left / dpad_right -> gait_prev/_next
+        # bindings in every mode so X is the only path. (Same function
+        # bound to different keys across sections would otherwise be a
+        # cross-section conflict.)
+        gait_bindings={"dpad_left": "", "dpad_right": ""},
+        posture_bindings={"dpad_left": "", "dpad_right": ""},
+        animation_bindings={"dpad_left": "", "dpad_right": ""},
+        base_bindings={
+            "a": "gait_mode",
+            "b": "animation_mode",
+            "x": "gait_prev",
+            "y": "posture_mode",
+            "start": "init",
+            "select": "record",
+        },
+    )
+    # X-as-gait_prev is mode-agnostic (base.bindings), so cycling fires
+    # in POSTURE too.
+    state = JoyState(mode=POSTURE, current_gait_idx=2)
+    pressed_x = [0] * 11
+    pressed_x[2] = 1
+    out = map_joy(_axes(), tuple(pressed_x), cfg, state, DT)
+    # gait_prev advances backward: idx 2 -> 1 -> "ripple".
+    assert out.gait_select == "ripple"
+    assert state.current_gait_idx == 1
+    # Held: no re-trigger.
+    out = map_joy(_axes(), tuple(pressed_x), cfg, state, DT)
+    assert out.gait_select is None
+
+
+# ---- Loader validation ------------------------------------------------------
+
+
+def test_loader_rejects_unknown_function():
+    # Importing the loader here (not at module top) keeps the bulk of
+    # the test file independent of the ROS-glue module's rclpy import.
+    from hexa_teleop import validate_bindings as _validate_bindings
+    from hexa_teleop import BASE_FUNCTIONS
+
+    import pytest
+    with pytest.raises(ValueError, match="unknown function 'not_a_function'"):
+        _validate_bindings(
+            "base",
+            {"a": "not_a_function"},
+            base_buttons={"a"},
+            base_axes=set(),
+            allowed_functions=BASE_FUNCTIONS,
+        )
+
+
+def test_loader_rejects_unknown_key():
+    from hexa_teleop import validate_bindings as _validate_bindings
+    from hexa_teleop import BASE_FUNCTIONS
+
+    import pytest
+    with pytest.raises(ValueError, match="unknown key 'mystery_button'"):
+        _validate_bindings(
+            "base",
+            {"mystery_button": "gait_mode"},
+            base_buttons={"a"},
+            base_axes=set(),
+            allowed_functions=BASE_FUNCTIONS,
+        )
+
+
+def test_loader_rejects_axis_class_on_button_key():
+    from hexa_teleop import validate_bindings as _validate_bindings
+    from hexa_teleop import AXIS_CLASS_FUNCTIONS, BUTTON_CLASS_FUNCTIONS
+
+    import pytest
+    with pytest.raises(ValueError, match="axis-class function"):
+        _validate_bindings(
+            "gait",
+            {"a": "drive_x"},
+            base_buttons={"a"},
+            base_axes={"right_stick_x"},
+            allowed_functions=AXIS_CLASS_FUNCTIONS | BUTTON_CLASS_FUNCTIONS,
+        )
+
+
+def test_loader_rejects_button_class_on_stick_axis():
+    from hexa_teleop import validate_bindings as _validate_bindings
+    from hexa_teleop import AXIS_CLASS_FUNCTIONS, BUTTON_CLASS_FUNCTIONS
+
+    import pytest
+    with pytest.raises(ValueError, match="button-class function"):
+        _validate_bindings(
+            "gait",
+            {"left_stick_x": "yaw_left"},
+            base_buttons={"l1"},
+            base_axes={"left_stick_x"},
+            allowed_functions=AXIS_CLASS_FUNCTIONS | BUTTON_CLASS_FUNCTIONS,
+        )
+
+
+def test_loader_accepts_button_class_on_trigger_axis():
+    # L2/R2 are analog axes used as binary triggers — wiggle_left must
+    # be bindable to "l2" without tripping the stick-axis check.
+    from hexa_teleop import validate_bindings as _validate_bindings
+    from hexa_teleop import AXIS_CLASS_FUNCTIONS, BUTTON_CLASS_FUNCTIONS
+
+    _validate_bindings(
+        "posture",
+        {"l2": "wiggle_left"},
+        base_buttons={"l1"},
+        base_axes={"l2"},
+        allowed_functions=AXIS_CLASS_FUNCTIONS | BUTTON_CLASS_FUNCTIONS,
+    )
+
+
+def test_loader_rejects_duplicate_function_in_section():
+    from hexa_teleop import validate_bindings as _validate_bindings
+    from hexa_teleop import AXIS_CLASS_FUNCTIONS, BUTTON_CLASS_FUNCTIONS
+
+    import pytest
+    with pytest.raises(ValueError, match="bound to both 'l1' and 'r1'"):
+        _validate_bindings(
+            "posture",
+            {"l1": "yaw_left", "r1": "yaw_left"},
+            base_buttons={"l1", "r1"},
+            base_axes=set(),
+            allowed_functions=AXIS_CLASS_FUNCTIONS | BUTTON_CLASS_FUNCTIONS,
+        )
+
+
+def test_loader_rejects_cross_section_conflict():
+    from hexa_teleop import cross_section_function_check as _cross_section_function_check
+
+    import pytest
+    with pytest.raises(ValueError, match="different keys across sections"):
+        _cross_section_function_check({
+            "gait": {"dpad_left": "gait_prev"},
+            "posture": {"l1": "gait_prev"},
+        })
+
+
+def test_loader_accepts_identical_cross_section_duplicates():
+    # The common case: dpad_left bound to gait_prev in both gait and
+    # posture sections. This is how today's YAML expresses
+    # "cycling works in either mode" — it must NOT raise.
+    from hexa_teleop import cross_section_function_check as _cross_section_function_check
+
+    _cross_section_function_check({
+        "gait": {"dpad_left": "gait_prev", "dpad_right": "gait_next"},
+        "posture": {"dpad_left": "gait_prev", "dpad_right": "gait_next"},
+    })

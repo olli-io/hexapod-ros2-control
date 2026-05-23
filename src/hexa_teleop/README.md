@@ -52,23 +52,55 @@ the gap this node fills. The Joy layout matches what `joy_node` would
 have produced for the same device, so `teleop_joy` and downstream
 consumers are unchanged.
 
-Controller mapping:
+## Keybind-driven configuration
 
-- **Right stick** — body translation (posture mode) or linear velocity (gait mode). Stick forward → body `+x`; stick left → body `+y`.
-- **Left stick (posture mode)** — body tilt toward the stick direction. Stick forward → pitch forward (front dips); stick left → roll left (left side dips).
-- **Left stick X (gait mode)** — yaw rate.
-- **L1 / R1 (posture mode)** — body yaw about `+z`. L1 yaws left (CCW from above), R1 yaws right. The buttons are binary, so the output is eased through a first-order low-pass (time constant `posture.yaw_tau_s`, default ~0.1 s) and saturates at `posture.yaw_max_deg` while held. Both buttons pressed cancel to zero. Inactive in gait mode.
-- **L2 / R2 (posture mode)** — "wiggle". Same yaw as L1 / R1 (shared target — L1 + L2 does not double up) plus a body translation that holds a point `posture.wiggle_pivot_forward_m` ahead of body centre stationary, so the rear swings while the front stays planted. Triggers are read as analog axes and thresholded at `wiggle_trigger_threshold` (default 0.5 of the joy_node Xbox-style trigger range). Translation eases through the same low-pass as yaw so engaging the wiggle mid-L1-hold doesn't snap. Inactive in gait mode.
-- **D-pad up / down (posture mode)** — integrates a persistent body-height offset (`pose.z`) while held, clamped to `posture.height.[min,max]_m`. Unlike the other posture axes the height **persists** across D-pad release and a mode toggle into gait, so the robot keeps walking at the lifted/lowered chassis height.
-- **D-pad left / right** — cycles the active gait through `gait_cycle` (`wave → ripple → tetrapod → surf → tripod` by default). D-right advances toward the more dynamic end of the list, D-left toward the more stable end. The switch is only published to `/cmd_gait` when the gait engine reports `stand` (`/gait/state`); presses mid-walk advance the local cursor but no switch lands on the wire until the engine returns to STAND. Works in both posture and gait modes.
-- **Select button (posture mode)** — snapshots the current effective body pose (joystick contribution + previously recorded baseline) on rising edge into a persistent baseline. The robot then holds that pose when the joystick is released; subsequent stick input is added on top of the baseline and clamped per-axis, so re-pushing a stick that's already at its limit has no further effect. The baseline bleeds through into gait mode (the robot walks at the recorded body offset). Inactive in gait mode.
-- **A button** — switches into gait mode on rising edge. No-op if already in gait mode.
-- **Y button** — switches into posture mode on rising edge. No-op if already in posture mode.
-- **Start button** — single-shot trigger for the gait engine's fold / initialize cycle, with a two-press safety: if any posture state is non-default (recorded baseline, integrated height, or eased yaw outside a small tolerance) the first press arms a **smooth revert** back to default (time constant `posture.revert_tau_s`, default 0.5 s) and **does not** publish `/gait/initialize`; the next press once the revert has settled fires init as usual. Pressing Select mid-revert cancels it (the user is recording a fresh baseline). Held Start presses don't repeat — release and press again.
+`config/teleop_joy.yaml` is split into four sections:
 
-The node starts in **gait** mode. The axis
-indices, deadband, posture translation limits, and mode-select buttons
-live in `config/teleop_joy.yaml` — override at launch with
+- **base** — controller hardware identity. `buttons` and `axes` map
+  named physical keys (`a`, `l1`, `dpad_x`, `left_stick_x`, …) to the
+  Linux joystick API indices the driver reports. `axis_signs` flip a
+  driver that reports stick-right / dpad-right as `-1` back to the
+  REP-103 convention. `bindings` here assigns the mode-agnostic
+  functions (mode toggles, init, record). Edit this block — and only
+  this block — to support a different controller.
+- **gait**, **posture**, **animation** — per-mode `bindings`. Each
+  section enumerates the shoulder buttons, D-pad directions
+  (`dpad_up`, `dpad_down`, `dpad_left`, `dpad_right` are exposed as
+  virtual button names derived from the bound D-pad axes), and stick
+  axes, and assigns each a function name (or `""` for unbound).
+  `posture` also carries the mode's scalar limits (translation /
+  tilt / yaw maxima, low-pass time constants, height range).
+
+The loader validates every binding at startup: unknown function
+names, unknown keys, button-class functions bound to stick axes (or
+vice versa), and cross-section conflicts (the same function bound to
+different keys in different sections) all raise. Identical duplicates
+across sections — e.g. `dpad_left: gait_prev` in both `gait.bindings`
+and `posture.bindings` — are allowed.
+
+Function namespace (assignable in YAML):
+
+- **base** — `gait_mode`, `posture_mode`, `animation_mode`, `init`, `record`.
+- **button-class** — `yaw_left`, `yaw_right`, `wiggle_left`, `wiggle_right`, `height_up`, `height_down`, `gait_prev`, `gait_next`, `animation_vertical_body_roll`, `animation_horizontal_body_roll`, `animation_body_roll_3d`. Bindable to any button or D-pad direction. `wiggle_left` / `wiggle_right` are polymorphic: bound to a trigger axis (`l2` / `r2`), they're thresholded against `base.trigger_threshold`; bound to a face button, they read the button directly.
+- **axis-class** — `drive_x`, `drive_y`, `drive_yaw` (gait `/cmd_vel`), `pose_x`, `pose_y` (posture translation), `tilt_roll`, `tilt_pitch` (posture body tilt). Bindable only to stick axes.
+
+## Default behavior (8BitDo Pro 2)
+
+The shipped YAML reproduces the previous mapping:
+
+- **Right stick** — `pose_x` / `pose_y` in posture, `drive_x` / `drive_y` in gait and animation. Stick forward → body `+x`; stick left → body `+y`.
+- **Left stick (posture)** — `tilt_roll` / `tilt_pitch`. Stick forward → pitch forward (front dips); stick left → roll left (left side dips).
+- **Left stick X (gait, animation)** — `drive_yaw`.
+- **L1 / R1 (posture)** — `yaw_left` / `yaw_right` body yaw, eased through `posture.yaw_tau_s` (default ~0.1 s), saturates at `posture.yaw_max_deg` while held. Both buttons cancel to zero. Inactive in other modes.
+- **L2 / R2 (posture)** — `wiggle_left` / `wiggle_right`. Same yaw target as L1 / R1 (shared) plus a body translation that holds a point `posture.wiggle_pivot_forward_m` ahead of body centre stationary. Triggers thresholded at `base.trigger_threshold`. Inactive in other modes.
+- **D-pad up / down (posture)** — `height_up` / `height_down` integrate a persistent body-height offset (`pose.z`) while held, clamped to `posture.height.[min,max]_m`. Height **persists** across release and a mode toggle into gait, so the robot keeps walking at the lifted/lowered chassis height.
+- **D-pad up / down / left (animation)** — `animation_vertical_body_roll`, `animation_body_roll_3d`, `animation_horizontal_body_roll`. Each rising edge publishes the corresponding `/animation/mode`.
+- **D-pad left / right (gait, posture)** — `gait_prev` / `gait_next` cycle the active gait through `gait_cycle` (`wave → ripple → tetrapod → surf → tripod` by default). The switch is only published to `/cmd_gait` when the gait engine reports `stand`; presses mid-walk advance the local cursor but no switch lands on the wire until the engine returns to STAND.
+- **Select (posture)** — `record`. Snapshots the current effective body pose on rising edge into a persistent baseline. The robot holds that pose when the joystick is released; subsequent stick input adds on top and clamps per-axis, so re-pushing a stick that's already at its limit has no further effect. The baseline bleeds through into gait mode.
+- **A** — `gait_mode`. **Y** — `posture_mode`. **B** — `animation_mode` (toggles GAIT ↔ ANIMATION).
+- **Start** — `init`. Single-shot trigger for the gait engine's fold / initialize cycle, with a two-press safety: if any posture state is non-default, the first press arms a **smooth revert** back to default (time constant `posture.revert_tau_s`, default 0.25 s) and **does not** publish `/gait/initialize`; the next press once the revert has settled fires init as usual. Pressing Select mid-revert cancels it. Held presses don't repeat — release and press again.
+
+The node starts in **gait** mode. Override the config at launch with
 `joy_config_file:=/path/to/file.yaml`.
 
 Gait-mode stick scaling — the linear and angular velocity caps applied

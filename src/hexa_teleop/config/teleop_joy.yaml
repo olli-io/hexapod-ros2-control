@@ -1,66 +1,130 @@
 # Joystick teleop config — 8BitDo Pro 2, X-input mode (Start+X at power on).
+#
+# Each section enumerates a controller's physical keys and binds each
+# one to a *function name* (or "" for unbound). The function namespace
+# is fixed in code (see joy_mapping.ALL_FUNCTIONS); the loader rejects
+# unknown names. Controller hardware identity (button/axis indices,
+# sign conventions, trigger threshold) lives in ``base`` only — swap
+# controllers by editing that block.
 
-initial_mode: gait # "gait" or "posture"
-deadband: 0.1
-
-# Stick axes (joy_node Joy.axes indices).
-axis:
-  left_x: 0
-  left_y: 1
-  right_x: 3
-  right_y: 4
-
-# Mode buttons (rising-edge; held = no repeat). 0=A, 1=B, 2=X, 3=Y.
-gait_mode_button: 0 # A
-posture_mode_button: 3 # Y
-animation_mode_button: 1 # B — toggles GAIT ↔ ANIMATION
-
-# Start: fold/init toggle; first press also snaps a lifted height to zero.
-init_button: 7 # Start
-
-# Select: in POSTURE, folds current live input into a persistent baseline.
-record_button: 6 # Select
-
-# D-pad Y: POSTURE integrates body height; ANIMATION uses D-up/D-down to
-# select animation. Sign is -1.0 because the driver reports up as -1.0.
-axis_dpad_y: 7
-dpad_up_sign: -1.0
-
-# D-pad X: cycles ``gait_cycle``; in ANIMATION, D-left selects
-# horizontal_body_roll. Sign is -1.0 because the driver reports right as -1.0.
-axis_dpad_x: 6
-dpad_right_sign: -1.0
-
-# Slowest → fastest. Must be a subset of hexa_gait's STRATEGIES.
-gait_cycle: [wave, ripple, tetrapod, surf, tripod]
+initial_mode: gait              # "gait" | "posture" | "animation"
+gait_cycle: [wave, ripple, tetrapod, surf, tripod]  # slowest → fastest
 default_gait: tripod
 
-# L1/R1: body yaw in POSTURE.
-yaw_left_button: 4 # L1 (LB)
-yaw_right_button: 5 # R1 (RB)
+base:
+  deadband: 0.1                 # stick deadband applied after sign norm
+  trigger_threshold: 0.5        # analog triggers used as binary; press = axis < this
 
-# L2/R2: "wiggle" gesture (shared yaw + rear-swing translation).
-# Triggers are analog axes (rest=+1.0, pressed=-1.0); treated as binary.
-wiggle_left_trigger_axis: 2 # LT (L2)
-wiggle_right_trigger_axis: 5 # RT (R2)
-wiggle_trigger_threshold: 0.5
+  # Linux joystick API indices — sensor_msgs/Joy.buttons[] and Joy.axes[].
+  # Edit these two blocks (and ``axis_signs`` below) to support a
+  # different controller.
+  buttons:
+    a: 0
+    b: 1
+    x: 2
+    y: 3
+    l1: 4
+    r1: 5
+    select: 6
+    start: 7
+  axes:
+    left_stick_x: 0
+    left_stick_y: 1
+    l2: 2                       # analog trigger (rest=+1.0, pressed=-1.0)
+    right_stick_x: 3
+    right_stick_y: 4
+    r2: 5                       # analog trigger
+    dpad_x: 6
+    dpad_y: 7
 
-# Gait-mode stick scaling comes from hexa_gait/config/gait.yaml
-# (per-gait linear cap + angular_z_max). No knobs here.
+  # Per-axis sign so a driver that reports the opposite direction can
+  # be normalised. After the sign: stick forward → +1, stick left → +1,
+  # dpad-up → +1, dpad-right → +1 (REP-103 body frame). Missing entries
+  # default to +1.0.
+  axis_signs:
+    left_stick_x: -1.0
+    left_stick_y: -1.0
+    right_stick_x: -1.0
+    right_stick_y: -1.0
+    dpad_x: -1.0
+    dpad_y: -1.0
 
-# Posture mode: right stick → translation, left stick → tilt, L1/R1 → yaw.
+  # Mode-agnostic bindings. Functions:
+  #   gait_mode | posture_mode | animation_mode | init | record
+  bindings:
+    a: gait_mode
+    b: animation_mode
+    x: ""
+    y: posture_mode
+    start: init
+    select: record
+
+gait:
+  # Functions allowed on button-class keys (l1/r1/l2/r2/dpad_*):
+  #   yaw_left | yaw_right | wiggle_left | wiggle_right |
+  #   height_up | height_down | gait_prev | gait_next |
+  #   animation_vertical_body_roll | animation_horizontal_body_roll |
+  #   animation_body_roll_3d
+  # Functions allowed on axis-class keys (sticks):
+  #   drive_x | drive_y | drive_yaw | pose_x | pose_y | tilt_roll | tilt_pitch
+  bindings:
+    l1: ""
+    r1: ""
+    l2: ""
+    r2: ""
+    dpad_up: ""
+    dpad_down: ""
+    dpad_left: gait_prev
+    dpad_right: gait_next
+    left_stick_x: drive_yaw
+    left_stick_y: ""
+    right_stick_x: drive_y
+    right_stick_y: drive_x
+
 posture:
-  x_max: 0.035 # m
-  y_max: 0.035 # m
+  bindings:
+    l1: yaw_left
+    r1: yaw_right
+    l2: wiggle_left
+    r2: wiggle_right
+    dpad_up: height_up
+    dpad_down: height_down
+    dpad_left: gait_prev
+    dpad_right: gait_next
+    left_stick_x: tilt_roll
+    left_stick_y: tilt_pitch
+    right_stick_x: pose_y
+    right_stick_y: pose_x
+
+  # Posture-mode scalar limits.
+  x_max: 0.035                  # m
+  y_max: 0.035                  # m
   roll_max_deg: 12.0
   pitch_max_deg: 12.0
   yaw_max_deg: 20.0
-  yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle amount
-  revert_tau_s: 0.25 # low-pass for Start-button revert
-  wiggle_pivot_forward_m: 0.06 # forward pivot point for the wiggle
-
-  # D-pad-driven body height. Persists across D-pad release and into GAIT.
+  yaw_tau_s: 0.10               # low-pass for L1/R1 yaw and L2/R2 wiggle
+  revert_tau_s: 0.25            # low-pass for Start-button revert
+  wiggle_pivot_forward_m: 0.06  # forward pivot point for the wiggle
   height:
     max_m: 0.04
     min_m: -0.04
     rate_m_per_s: 0.05
+
+animation:
+  bindings:
+    l1: ""
+    r1: ""
+    l2: ""
+    r2: ""
+    dpad_up: animation_vertical_body_roll
+    dpad_down: animation_body_roll_3d
+    dpad_left: animation_horizontal_body_roll
+    dpad_right: ""
+    left_stick_x: drive_yaw
+    left_stick_y: ""
+    right_stick_x: drive_y
+    right_stick_y: drive_x
+
+# Gait-mode stick scaling (linear and angular caps) comes from
+# hexa_gait/config/gait.yaml; the teleop node loads it at startup and
+# swaps in the active gait's cap whenever /cmd_gait updates.

@@ -32,10 +32,64 @@ from std_msgs.msg import Empty, String
 
 from hexa_gait import VelocityCaps, load_velocity_caps
 
-from .joy_mapping import ANIMATION, GAIT, POSTURE, JoyConfig, JoyState, map_joy
+from .joy_mapping import (
+    ANIMATION,
+    AXIS_CLASS_FUNCTIONS,
+    BASE_FUNCTIONS,
+    BUTTON_CLASS_FUNCTIONS,
+    GAIT,
+    POSTURE,
+    BaseConfig,
+    JoyConfig,
+    JoyState,
+    ModeConfig,
+    PostureConfig,
+    cross_section_function_check,
+    map_joy,
+    validate_bindings,
+)
 
 PUBLISH_RATE_HZ = 50.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
+
+
+def _parse_base(raw: dict, /) -> BaseConfig:
+    base_raw = raw["base"]
+    button_index = {str(k): int(v) for k, v in base_raw["buttons"].items()}
+    axis_index = {str(k): int(v) for k, v in base_raw["axes"].items()}
+    axis_sign = {
+        str(k): float(v) for k, v in base_raw.get("axis_signs", {}).items()
+    }
+    bindings = {str(k): str(v) for k, v in base_raw["bindings"].items()}
+    validate_bindings(
+        "base",
+        bindings,
+        base_buttons=set(button_index),
+        base_axes=set(axis_index),
+        allowed_functions=BASE_FUNCTIONS,
+    )
+    return BaseConfig(
+        deadband=float(base_raw["deadband"]),
+        trigger_threshold=float(base_raw["trigger_threshold"]),
+        button_index=button_index,
+        axis_index=axis_index,
+        axis_sign=axis_sign,
+        bindings=bindings,
+    )
+
+
+def _parse_mode_bindings(
+    section: str, raw_section: dict, base: BaseConfig
+) -> dict[str, str]:
+    bindings = {str(k): str(v) for k, v in raw_section["bindings"].items()}
+    validate_bindings(
+        section,
+        bindings,
+        base_buttons=set(base.button_index),
+        base_axes=set(base.axis_index),
+        allowed_functions=BUTTON_CLASS_FUNCTIONS | AXIS_CLASS_FUNCTIONS,
+    )
+    return bindings
 
 
 def _load_config(
@@ -44,55 +98,55 @@ def _load_config(
     with path.open() as f:
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml)
-    height = raw["posture"]["height"]
+
     gait_cycle = tuple(str(n) for n in raw["gait_cycle"])
     default_gait = str(raw["default_gait"])
     if default_gait not in gait_cycle:
         raise ValueError(
             f"default_gait={default_gait!r} must be in gait_cycle={list(gait_cycle)}"
         )
+
+    base = _parse_base(raw)
+    gait_bindings = _parse_mode_bindings("gait", raw["gait"], base)
+    posture_raw = raw["posture"]
+    posture_bindings = _parse_mode_bindings("posture", posture_raw, base)
+    animation_bindings = _parse_mode_bindings(
+        "animation", raw["animation"], base
+    )
+    cross_section_function_check({
+        "gait": gait_bindings,
+        "posture": posture_bindings,
+        "animation": animation_bindings,
+    })
+
+    height = posture_raw["height"]
+    posture_cfg = PostureConfig(
+        bindings=posture_bindings,
+        x_max=float(posture_raw["x_max"]),
+        y_max=float(posture_raw["y_max"]),
+        roll_max=math.radians(float(posture_raw["roll_max_deg"])),
+        pitch_max=math.radians(float(posture_raw["pitch_max_deg"])),
+        yaw_max=math.radians(float(posture_raw["yaw_max_deg"])),
+        yaw_tau=float(posture_raw["yaw_tau_s"]),
+        revert_tau=float(posture_raw["revert_tau_s"]),
+        wiggle_pivot_forward_m=float(posture_raw["wiggle_pivot_forward_m"]),
+        height_max=float(height["max_m"]),
+        height_min=float(height["min_m"]),
+        height_rate=float(height["rate_m_per_s"]),
+    )
+
     cfg = JoyConfig(
-        axis_left_x=int(raw["axis"]["left_x"]),
-        axis_left_y=int(raw["axis"]["left_y"]),
-        axis_right_x=int(raw["axis"]["right_x"]),
-        axis_right_y=int(raw["axis"]["right_y"]),
-        axis_dpad_x=int(raw["axis_dpad_x"]),
-        axis_dpad_y=int(raw["axis_dpad_y"]),
-        dpad_up_sign=float(raw["dpad_up_sign"]),
-        dpad_right_sign=float(raw["dpad_right_sign"]),
-        gait_mode_button=int(raw["gait_mode_button"]),
-        posture_mode_button=int(raw["posture_mode_button"]),
-        animation_mode_button=int(raw["animation_mode_button"]),
-        init_button=int(raw["init_button"]),
-        record_button=int(raw["record_button"]),
-        yaw_left_button=int(raw["yaw_left_button"]),
-        yaw_right_button=int(raw["yaw_right_button"]),
-        wiggle_left_trigger_axis=int(raw["wiggle_left_trigger_axis"]),
-        wiggle_right_trigger_axis=int(raw["wiggle_right_trigger_axis"]),
-        wiggle_trigger_threshold=float(raw["wiggle_trigger_threshold"]),
-        deadband=float(raw["deadband"]),
+        base=base,
+        gait=ModeConfig(bindings=gait_bindings),
+        posture=posture_cfg,
+        animation=ModeConfig(bindings=animation_bindings),
+        gait_cycle=gait_cycle,
         # Seed with the default gait's cap; the node swaps this in via
-        # dataclasses.replace whenever a /cmd_gait publish lands (each
-        # gait has its own per-leg velocity ceiling — slower gaits have
-        # smaller caps so stick scaling reflects the gait's actual
-        # capacity rather than tripod's).
+        # dataclasses.replace whenever a /cmd_gait publish lands.
         gait_linear_max=caps.linear_max(default_gait),
         gait_angular_z_max=caps.angular_max,
-        posture_x_max=float(raw["posture"]["x_max"]),
-        posture_y_max=float(raw["posture"]["y_max"]),
-        posture_roll_max=math.radians(float(raw["posture"]["roll_max_deg"])),
-        posture_pitch_max=math.radians(float(raw["posture"]["pitch_max_deg"])),
-        posture_yaw_max=math.radians(float(raw["posture"]["yaw_max_deg"])),
-        posture_yaw_tau=float(raw["posture"]["yaw_tau_s"]),
-        posture_revert_tau=float(raw["posture"]["revert_tau_s"]),
-        posture_wiggle_pivot_forward_m=float(
-            raw["posture"]["wiggle_pivot_forward_m"]
-        ),
-        posture_height_max=float(height["max_m"]),
-        posture_height_min=float(height["min_m"]),
-        posture_height_rate=float(height["rate_m_per_s"]),
-        gait_cycle=gait_cycle,
     )
+
     initial_mode = str(raw.get("initial_mode", POSTURE))
     if initial_mode not in (POSTURE, GAIT, ANIMATION):
         raise ValueError(
