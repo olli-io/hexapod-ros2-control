@@ -1,170 +1,66 @@
-# Joystick teleop config — 8BitDo Pro 2 in X-input mode.
-#
+# Joystick teleop config — 8BitDo Pro 2, X-input mode (Start+X at power on).
 
-# on Linux (xpad driver). Joy convention: stick pushed forward / left
-# is positive, matching the REP-103 body frame (+x forward, +y left)
-# so mapping is unit-gain.
-#
-# Press Start + X while powering the controller on to enter X-input
-# mode.
+initial_mode: gait # "gait" or "posture"
+deadband: 0.1
 
-initial_mode: gait # "gait" (default) or "posture"
-
-deadband: 0.1 # absolute stick magnitude below this is treated as zero
-
-# 8BitDo Pro 2 / Xbox-style axis indices in joy_node Joy.axes
+# Stick axes (joy_node Joy.axes indices).
 axis:
   left_x: 0
   left_y: 1
   right_x: 3
   right_y: 4
 
-# Mode-select buttons. Rising edge on ``gait_mode_button`` switches
-# into gait mode; rising edge on ``posture_mode_button`` switches into
-# posture mode. Pressing the button for the already-active mode is a
-# no-op. Holding either does not repeat — release and press again.
-# 0=A, 1=B, 2=X, 3=Y on 8BitDo Pro 2 in X-input mode.
+# Mode buttons (rising-edge; held = no repeat). 0=A, 1=B, 2=X, 3=Y.
 gait_mode_button: 0 # A
 posture_mode_button: 3 # Y
+animation_mode_button: 1 # B — toggles GAIT ↔ ANIMATION
 
-# Animation mode toggle. Rising edge on this button toggles between
-# GAIT and ANIMATION mode (from POSTURE, B-press hops directly into
-# ANIMATION). ANIMATION mode forces the tripod gait on entry; the
-# joysticks still drive /cmd_vel exactly as in GAIT, but the posture
-# stack is swapped for a phase-locked body animation chosen via the
-# D-pad: D-up = vertical_body_roll (z + pitch), D-left =
-# horizontal_body_roll (y + yaw), D-down = both rolls at once
-# (composite stack). D-pad X gait cycling and D-pad Y height
-# integration are suppressed while in ANIMATION mode.
-animation_mode_button: 1 # B
-
-# Button that toggles FOLDED ↔ STAND on rising edge AND snaps the
-# posture height back to zero when the chassis is currently lifted /
-# lowered. Press semantics:
-#
-#   * height != 0 (chassis lifted by D-pad): first press snaps
-#     posture.height to zero and triggers the gait engine's reseat
-#     ladder; does NOT publish /gait/initialize.
-#   * height == 0 in STAND: press folds (STAND → FOLDING → FOLDED) via
-#     /gait/initialize as before.
-#   * height == 0 in FOLDED: press initializes (FOLDED → INITIALIZE →
-#     STAND) via /gait/initialize as before.
-#
-# So a "lifted-then-fold" sequence is two presses: first snaps the
-# height (no fold yet), second folds. Presses in any other engine state
-# are no-ops, so repeat presses mid-walk are harmless. 7 = Start on
-# 8BitDo Pro 2 / Xbox-style controllers in X-input mode.
+# Start: fold/init toggle; first press also snaps a lifted height to zero.
 init_button: 7 # Start
 
-# Record button: rising-edge press in POSTURE mode folds the current
-# live posture input (stick tilt/translation, eased yaw, integrated
-# height) into a persistent baseline on JoyState. The robot then holds
-# that baseline when the joystick is released; subsequent stick input
-# is added on top of the baseline and clamped per-axis, so re-pushing a
-# stick that's already at its limit has no further effect. The baseline
-# bleeds through into GAIT mode just like the D-pad height, so the
-# robot walks at the recorded posture. The Start button resets the full
-# baseline (in addition to the height snap). Inactive in GAIT mode.
-# 6 = Select / Back on 8BitDo Pro 2 / Xbox-style controllers in X-input
-# mode.
+# Select: in POSTURE, folds current live input into a persistent baseline.
 record_button: 6 # Select
 
-# D-pad Y axis on Xbox-style controllers in X-input mode. joy_node
-# reports the D-pad as analog axes, with the up direction reading
-# +1.0 on this build (dpad_up_sign=+1.0). Pressing up integrates
-# posture.height positive (body lifts), pressing down integrates
-# negative (body drops). The axis is read only in POSTURE mode; in
-# GAIT mode the D-pad is inert (the lifted height bleeds through
-# unchanged via /body/pose.z so the robot walks at the lifted
-# posture).
+# D-pad Y: POSTURE integrates body height; ANIMATION uses D-up/D-down to
+# select animation. Sign is -1.0 because the driver reports up as -1.0.
 axis_dpad_y: 7
-dpad_up_sign: 1.0
+dpad_up_sign: -1.0
 
-# D-pad X axis. Rising edges cycle the active gait through
-# ``gait_cycle`` below; D-right advances by +1, D-left by -1. The
-# resulting publish on /cmd_gait is gated on /gait/state == "stand"
-# (the engine's set_strategy is strict about non-STAND switches), but
-# the local index advances on every press so the user can keep cycling
-# past slots the engine rejected.
+# D-pad X: cycles ``gait_cycle``; in ANIMATION, D-left selects
+# horizontal_body_roll. Sign is -1.0 because the driver reports right as -1.0.
 axis_dpad_x: 6
-dpad_right_sign: 1.0
+dpad_right_sign: -1.0
 
-# Gait cycler. Order is D-right-toward-more-dynamic (wave → ripple →
-# tetrapod → surf → tripod) so a single D-right from the slowest gait
-# gets a faster one. Ripple and tetrapod share β = 2/3 — they swap
-# choreography, not speed, but stay adjacent so a single press picks
-# either. Must be a subset of hexa_gait's STRATEGIES; default_gait must
-# be in the list and is the slot the cycler starts at on cold start.
+# Slowest → fastest. Must be a subset of hexa_gait's STRATEGIES.
 gait_cycle: [wave, ripple, tetrapod, surf, tripod]
 default_gait: tripod
 
-# Shoulder buttons that yaw the body in posture mode. L1 yaws left
-# (+yaw about body +z), R1 yaws right (-yaw). Holding past the easing
-# time constant saturates at posture.yaw_max_deg. Both buttons cancel
-# to zero. Inactive in gait mode (use left stick X for walking yaw).
+# L1/R1: body yaw in POSTURE.
 yaw_left_button: 4 # L1 (LB)
 yaw_right_button: 5 # R1 (RB)
 
-# Triggers that drive the "wiggle" gesture in posture mode: same yaw
-# as L1/R1 (shared target — L1+L2 does not double up) plus a body
-# translation that keeps a fixed point posture.wiggle_pivot_forward_m
-# in front of body centre stationary, so the rear of the hexapod
-# swings while the front holds. On 8BitDo Pro 2 / Xbox-style pads in
-# X-input mode the triggers are analog axes (rest = +1.0, fully
-# pressed = -1.0). Treated as binary on/off here: pressed iff the
-# trigger reads below wiggle_trigger_threshold.
+# L2/R2: "wiggle" gesture (shared yaw + rear-swing translation).
+# Triggers are analog axes (rest=+1.0, pressed=-1.0); treated as binary.
 wiggle_left_trigger_axis: 2 # LT (L2)
 wiggle_right_trigger_axis: 5 # RT (R2)
-wiggle_trigger_threshold: 0.5 # axis value below this counts as pressed
+wiggle_trigger_threshold: 0.5
 
-# Gait-mode stick scaling is loaded at startup from
-# hexa_gait/config/gait.yaml via hexa_gait.limits.load_velocity_caps:
-#   * full-stick translation maps to ±linear_max(active_gait) — derived
-#     per-gait as stride_length * (1 − β) / (min_swing_time * β). The
-#     teleop rebuilds the cap whenever a D-pad gait cycle is accepted,
-#     so 100% stick always equals the active gait's actual capacity.
-#   * full-stick yaw maps to ±angular_z_max (explicit rad/s knob)
-# No knobs for those here on purpose — gait.yaml is the single source.
+# Gait-mode stick scaling comes from hexa_gait/config/gait.yaml
+# (per-gait linear cap + angular_z_max). No knobs here.
 
-# Posture mode: right stick -> body translation (x,y) in body frame;
-# left stick -> body tilt toward the stick direction (stick forward
-# pitches the body forward / front dips; stick left rolls the body
-# left / left side dips); L1/R1 -> body yaw about +z.
+# Posture mode: right stick → translation, left stick → tilt, L1/R1 → yaw.
 posture:
-  x_max: 0.035 # m (forward)
-  y_max: 0.035 # m (left)
-  roll_max_deg: 12.0 # deg, converted to rad on load
-  pitch_max_deg: 12.0 # deg, converted to rad on load
-  yaw_max_deg: 20.0 # deg, button-driven saturation about +z
-  # First-order low-pass time constant for the L1/R1 yaw input AND for
-  # the L2/R2 wiggle amount. Smaller = snappier (and harsher on the
-  # body), larger = mushier. At 0.10s the offset reaches ~63% of
-  # yaw_max one tau after a press and is practically saturated within
-  # 0.5s.
-  yaw_tau_s: 0.10
-  # First-order low-pass time constant for the Start-button revert to
-  # default posture. While the revert is active, the persistent height
-  # and recorded baseline (and the eased yaw) decay toward zero with
-  # this time constant instead of snapping. Larger = slower, smoother
-  # return; smaller = closer to the previous instant snap. At 0.50s the
-  # offset is down to ~37% one tau after the press and practically
-  # zeroed within ~2.5s.
-  revert_tau_s: 0.25
-  # Wiggle pivot — distance forward (+x) of body centre. Yaw amplitude
-  # is shared with yaw_max_deg above, so peak side translation at full
-  # wiggle is pivot_forward_m * sin(yaw_max_deg). At the defaults
-  # (0.06 m, 20°) that's ~21 mm sideways and ~3.6 mm forward bob.
-  wiggle_pivot_forward_m: 0.06
+  x_max: 0.035 # m
+  y_max: 0.035 # m
+  roll_max_deg: 12.0
+  pitch_max_deg: 12.0
+  yaw_max_deg: 20.0
+  yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle amount
+  revert_tau_s: 0.25 # low-pass for Start-button revert
+  wiggle_pivot_forward_m: 0.06 # forward pivot point for the wiggle
 
-  # D-pad-driven body-height offset. Integrated while the D-pad is held
-  # in POSTURE mode, clamped to [min_m, max_m], and emitted on
-  # /body/pose.z. Unlike every other posture axis this value PERSISTS
-  # when the D-pad is released and across a mode toggle into GAIT, so
-  # the robot keeps walking at the lifted/lowered posture. The Start
-  # button snaps it back to zero (which also triggers the gait
-  # engine's reseat ladder to restore default joint geometry at the
-  # new body height).
+  # D-pad-driven body height. Persists across D-pad release and into GAIT.
   height:
-    max_m: 0.04 # upper bound on the lift (body up)
-    min_m: -0.04 # lower bound on the drop (body down)
-    rate_m_per_s: 0.05 # integration speed while D-pad held
+    max_m: 0.04
+    min_m: -0.04
+    rate_m_per_s: 0.05
