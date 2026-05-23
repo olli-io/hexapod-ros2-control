@@ -1,4 +1,4 @@
-"""Launch the 8BitDo Pro 2 joystick teleop.
+"""Launch joystick teleop (X-input controller).
 
 Brings up our ``joy_publisher`` (publishing ``sensor_msgs/Joy`` on
 ``/joy``) and ``teleop_joy``, which reads ``/joy`` and publishes

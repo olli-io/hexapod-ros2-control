@@ -1,4 +1,4 @@
-# Joystick teleop config — 8BitDo Pro 2, X-input mode (Start+X at power on).
+# Joystick teleop config — X-input controller (Xbox, 8BitDo, etc.).
 #
 # Each section enumerates a controller's physical keys and binds each
 # one to a *function name* (or "" for unbound). The function namespace

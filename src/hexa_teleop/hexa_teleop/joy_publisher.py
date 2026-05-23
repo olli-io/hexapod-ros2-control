@@ -1,23 +1,13 @@
 """``/dev/input/jsN`` → ``sensor_msgs/Joy`` publisher with hot-plug.
 
-Drop-in replacement for upstream ``joy_node``. The SDL2-backed
-``joy_node`` nominally handles hot-plug via udev events, but those
-events do not propagate reliably into the dev container, so a
-disconnect leaves it holding a dead fd until restart. This node polls
-``/dev/input/`` instead and re-opens the device whenever it returns,
-so unplugging or rebooting the controller mid-session recovers without
-restarting any ROS process.
-
-Wire-compatible with ``joy_node`` for the controllers we care about:
-publishes ``sensor_msgs/Joy`` on ``/joy`` with the axis/button layout
-the Linux joystick API (``/dev/input/jsN``) exposes — which is what
-``joy_node`` + SDL2 forward verbatim for Xbox-style pads (including the
-8BitDo Pro 2 in X-input mode).
-
-While the device is absent the node still publishes ``Joy`` at the
-configured ``autorepeat_rate`` with empty axes and buttons. The
-``joy_mapping`` reader bounds-checks every index, so an empty message
-cleanly resolves to zero stick, no buttons — i.e. the safe idle state.
+Drop-in replacement for upstream ``joy_node`` — wire-compatible Joy
+layout, with reliable hot-plug recovery in the dev container (where
+SDL2's udev path does not propagate). Polls ``/dev/input/`` and
+re-opens the device whenever it returns, so the controller can be
+unplugged or replugged mid-session without restarting any ROS
+process. While the device is absent, ``Joy`` is still published at
+``autorepeat_rate`` with empty axes / buttons — ``joy_mapping``
+bounds-checks every index, so the safe idle state falls out for free.
 """
 
 from __future__ import annotations
@@ -60,14 +50,7 @@ def parse_js_event(buf: bytes) -> tuple[int, int, int, int]:
 
 
 def find_js_devices() -> list[str]:
-    """Return all ``/dev/input/jsN`` paths, sorted by N.
-
-    Linux assigns ``jsN`` numbers dynamically — a controller that came
-    up as ``js0`` first plug-in might come back as ``js1`` after a
-    replug if a different one took ``js0`` in between. So a fixed
-    ``device_id`` is brittle; auto-discovery is the only thing that
-    survives a reconnect.
-    """
+    """Return all ``/dev/input/jsN`` paths, sorted by N."""
     paths = glob.glob("/dev/input/js*")
     def _num(p: str) -> int:
         try:

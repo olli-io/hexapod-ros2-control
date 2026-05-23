@@ -1,97 +1,9 @@
 """Pure mapping from a sensor_msgs/Joy snapshot to high-level commands.
 
-The teleop node is the ROS glue around this module. The functions here
-take plain sequences of axes and buttons (no rclpy types) so the logic
-is unit-testable without spinning a ROS context.
-
-The config is keybind-driven: each YAML section enumerates a controller's
-physical keys (``a``, ``l1``, ``dpad_up``, ``left_stick_x``, …) and
-assigns each one a *function* name (``gait_mode``, ``yaw_left``,
-``tilt_roll``, …) or the empty string for unbound. The mapping code
-asks "which key is bound to function X?" via ``BaseConfig`` /
-``ModeConfig`` lookups; the controller-specific button / axis indices
-and sign conventions live in ``BaseConfig`` so a different controller
-needs only the ``base.buttons`` / ``base.axes`` / ``base.axis_signs``
-block edited.
-
-Mode model:
-
-  * ``posture`` — right stick translates the body in the x-y plane
-    (``pose_x`` / ``pose_y``), the left stick tilts the body toward
-    the direction it is pushed (``tilt_pitch`` forward / ``tilt_roll``
-    sideways), and the L1/R1 shoulder buttons yaw the body about +z
-    (``yaw_left`` / ``yaw_right``). All three inputs apply together.
-    ``/cmd_vel`` is zero so ``hexa_posture`` stays in pose mode.
-  * ``gait`` — left stick X is spin rate (``drive_yaw``), right stick
-    is linear velocity (``drive_x`` / ``drive_y``). ``/body/pose`` is
-    zero so any standing translation/yaw decays back to the nominal
-    stance.
-  * ``animation`` — joysticks behave as in GAIT (drive /cmd_vel) but
-    the posture stack is swapped for a phase-locked body animation.
-    Discrete animation selectors are bound to D-pad directions by
-    default (``animation_vertical_body_roll`` /
-    ``animation_horizontal_body_roll`` / ``animation_body_roll_3d``).
-    Tripod is forced on entry; gait-cycling and height integration are
-    suppressed in this mode. Entered/exited via the ``animation_mode``
-    binding (B button by default).
-
-Mode selection uses dedicated base bindings: a rising edge on the key
-bound to ``gait_mode`` selects GAIT; same for ``posture_mode``;
-``animation_mode`` toggles between GAIT and ANIMATION. Pressing the
-button for the mode that is already active is a no-op (``mode_changed``
-stays false). Holding does not re-fire.
-
-Axis sign convention follows REP-103 body frame: stick forward / left /
-dpad-up is +1 after applying ``base.axis_signs``. Per-axis signs let a
-driver that reports the opposite be normalised in YAML.
-
-The yaw shoulder buttons are binary, so a press would snap the body
-to its limit. The yaw output goes through a first-order low-pass:
-``alpha = 1 - exp(-dt / posture.yaw_tau)``. The state lives on
-``JoyState.yaw_current`` so it persists across calls.
-
-L2/R2 (or whatever ``wiggle_left`` / ``wiggle_right`` is bound to)
-trigger a "wiggle": shared yaw target with L1/R1 plus a body
-translation that holds a configurable point a set distance forward
-of body centre stationary. Translation magnitude per tick:
-
-    pose_x_wiggle = wiggle_amount * px * (1 - cos(yaw_current))
-    pose_y_wiggle = -wiggle_amount * px * sin(yaw_current)
-
-The wiggle binding is polymorphic: if it resolves to an analog axis
-(an Xbox-style trigger in ``base.axes``), the axis is thresholded
-against ``base.trigger_threshold``; if it resolves to a button, the
-button state is used directly. Same dispatch for every button-class
-function — bind ``wiggle_left`` to a face button on a controller
-without triggers and it just works.
-
-**D-pad as virtual buttons**: ``dpad_up`` / ``dpad_down`` /
-``dpad_left`` / ``dpad_right`` are exposed as bindable keys. Their
-state is derived from the bound ``dpad_x`` / ``dpad_y`` axis (sign
-normalised), thresholded at ±0.5. So binding ``dpad_up: height_up``
-and ``dpad_down: height_down`` integrates body height while the D-pad
-is held — and binding the same functions to ``l1`` / ``l2`` lets the
-shoulder buttons do it instead.
-
-A rising-edge press of the **record** binding (Select) in posture
-mode folds the current live posture input into a persistent baseline
-on ``JoyState`` (the six ``recorded_*`` fields), then zeros the
-integrated ``height_current`` and eased ``yaw_current`` so the live
-state can't double-count on the next tick. The output for each
-posture axis is ``clamp(recorded + live, ±axis_max)``, so re-pushing
-a stick that's already at its limit has no further effect. The
-baseline bleeds through into gait mode like the D-pad height does
-(the robot walks at the recorded posture).
-
-The **init** binding (Start) extends today's two-press semantics over
-the recorded baseline as well: if any posture state is non-default,
-the first press arms a smooth revert (``state.reverting``) instead of
-snapping to zero. Each subsequent tick decays ``height_current`` and
-the six ``recorded_*`` toward zero with the ``posture.revert_tau``
-time constant; ``yaw_current`` rides the existing yaw low-pass back
-to zero on its own. ``init_request`` is suppressed during the revert;
-the next press at the now-default state fires init as usual. A
-``record`` press mid-revert cancels the revert.
+Takes plain sequences of axes and buttons (no rclpy types) so the
+logic is unit-testable without spinning a ROS context. The ROS glue
+lives in ``teleop_joy.py``; user-facing behavior is documented in the
+package README.
 """
 
 from __future__ import annotations
@@ -566,9 +478,9 @@ def map_joy(
         state.animation_name = ""
         animation_name_out = ""
     elif prev_mode != ANIMATION and state.mode == ANIMATION:
-        # Entering ANIMATION: force tripod (the new animations are
-        # tripod-only) and start with vertical_body_roll as the
-        # default so the body is visibly animated immediately.
+        # Entering ANIMATION: force tripod (animations are tripod-only)
+        # and start with vertical_body_roll so the body is visibly
+        # animated immediately.
         state.animation_name = "vertical_body_roll"
         animation_name_out = "vertical_body_roll"
         forced_gait = "tripod"

@@ -1,17 +1,12 @@
 """ROS glue for the joystick teleop.
 
 Reads ``sensor_msgs/Joy`` from ``/joy``, maps it via the pure
-``joy_mapping`` library, and publishes:
-
-* ``/cmd_vel`` (``geometry_msgs/Twist``) — body velocity for the gait
-  chain. ``hexa_gait`` is not yet implemented, but ``hexa_posture``
-  listens to ``/cmd_vel`` to switch animation state between idle and
-  walking, so the topic is meaningful today.
-* ``/body/pose`` (``hexa_interfaces/BodyPose``) — body-translation
-  offset for the posture chain.
-
-Both topics publish on a fixed timer; the inactive channel is
-zero-filled so consumers always see a coherent command.
+``joy_mapping`` library, and publishes ``/cmd_vel`` (body velocity for
+the gait chain) and ``/body/pose`` (body-pose offset for the posture
+chain) on a fixed timer. Also publishes ``/cmd_gait``,
+``/animation/mode``, and ``/gait/initialize`` on the appropriate user
+inputs. The inactive channel of cmd_vel / body/pose is zero-filled so
+consumers always see a coherent command.
 """
 
 from __future__ import annotations
@@ -183,16 +178,12 @@ class TeleopJoyNode(Node):
             prev_posture_mode=False,
             current_gait_idx=self._cfg.gait_cycle.index(default_gait),
         )
-        # Active gait — the most-recently-published-and-accepted gait
-        # name. Starts at the YAML default; updated whenever the D-pad
-        # cycler successfully publishes /cmd_gait. The stick scaling cap
-        # in ``self._cfg.gait_linear_max`` is rebuilt on each update so
-        # stick range tracks the gait's actual capacity.
+        # Most-recently-published-and-accepted gait. Stick scaling cap
+        # in ``self._cfg.gait_linear_max`` is rebuilt on every change
+        # so stick range tracks the gait's true capacity.
         self._active_gait: str = default_gait
-        # Latest /gait/state — cached so the publish gate can read it
-        # synchronously inside _tick. Defaults to empty until the first
-        # gait_node message arrives, in which case we conservatively
-        # refuse to publish a switch.
+        # Cached /gait/state for synchronous reads inside _tick. Empty
+        # until gait_node publishes — refuse to switch in that window.
         self._latest_gait_state: str = ""
 
         self.get_logger().info(f"loaded teleop config from {cfg_path}")
@@ -211,31 +202,23 @@ class TeleopJoyNode(Node):
         self._latest_buttons: tuple[int, ...] = ()
 
         self._sub_joy = self.create_subscription(Joy, "/joy", self._on_joy, 10)
-        # /gait/state is published every 50 Hz tick from gait_node; a
-        # plain 10-depth queue is plenty. Cached for synchronous reads
-        # by the D-pad gait-cycle publish gate.
         self._sub_gait_state = self.create_subscription(
             String, "/gait/state", self._on_gait_state, 10
         )
         self._pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
         self._pub_body_pose = self.create_publisher(BodyPoseMsg, "/body/pose", 10)
-        # One-shot trigger fired on rising-edge of the start button.
-        # hexa_gait's gait_node routes this to either
-        # ``Engine.start_initialize`` (FOLDED → INITIALIZE → STAND) or
-        # ``Engine.start_fold`` (STAND → FOLDING → FOLDED) depending on
-        # the engine's current state; a stray press in any other state
-        # is a no-op.
+        # One-shot trigger on rising-edge of the init binding.
+        # hexa_gait routes this to start_initialize (FOLDED → STAND) or
+        # start_fold (STAND → FOLDED); a stray press elsewhere is a no-op.
         self._pub_init = self.create_publisher(Empty, "/gait/initialize", 10)
         # transient_local so a late-starting control node still picks
         # up the latest gait selection; depth 1 because the value
         # changes only on a user press.
         gait_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._pub_cmd_gait = self.create_publisher(String, "/cmd_gait", gait_qos)
-        # Animation-mode selection (sentinel ``""`` = default stack,
-        # ``"none"`` = ANIMATION mode entered but no animation picked,
-        # otherwise the name of the selected animation). transient_local
-        # so a late-starting posture node still sees the current
-        # selection.
+        # Animation-mode selection (``""`` = default stack, otherwise
+        # the name of the selected animation). transient_local so a
+        # late-starting posture node still sees the current selection.
         animation_qos = QoSProfile(
             depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL
         )

@@ -4,25 +4,29 @@ Human-input nodes that publish to `/cmd_vel` (body velocity, consumed
 by `hexa_control`) and `/body/pose` (raw user body pose offset,
 consumed by `hexa_posture`).
 
-- `teleop_joy.py` — wraps `joy_node` (`sensor_msgs/Joy` → `Twist` +
-  `BodyPose`). Axis mapping configurable via YAML — including a
-  modifier (e.g. shoulder button) that switches stick mode between
-  "drive" (`/cmd_vel`) and "pose" (`/body/pose`: yaw, x/y, height,
-  pitch/roll).
-- `teleop_key.py` — terminal keyboard fallback for bench testing.
+- `joy_publisher.py` — reads `/dev/input/jsN` directly and publishes
+  `sensor_msgs/Joy` on `/joy`. Drop-in for upstream `joy_node` with
+  reliable hot-plug recovery in the dev container.
+- `teleop_joy.py` — consumes `/joy` and publishes `/cmd_vel`,
+  `/body/pose`, `/cmd_gait`, `/animation/mode`, and
+  `/gait/initialize`. Mode-switched stick semantics; axis / button
+  mapping fully configurable via YAML.
+- `joy_mapping.py` — pure mapping library (`Joy` snapshot →
+  high-level commands). No `rclpy`; unit-testable standalone.
 
 Intentionally thin: this package exists so the rest of the stack has a
 single, swappable producer of high-level commands. An autonomy node would
 publish the same topics and replace teleop transparently.
 
-## Run it (8BitDo Pro 2)
+## Run it
 
-Power the controller on in **X-input mode**: hold `Start + X` until the
-LEDs flash, then plug in via USB-C.
-
-Inside the dev container — uncomment the `/dev/input` block in
-`docker-compose.yaml` before `./hexa --dev` so the joy publisher can
-see the device.
+Use any X-input controller (Xbox, 8BitDo, etc.). If the controller
+has a mode switch, put it in **X-input mode** (on 8BitDo: hold
+`Start + X` for a few seconds at power-on), then plug in via USB-C.
+Plug timing relative to the dev
+container does not matter — the `/dev/input` bind mount in
+`docker-compose.yaml` propagates new device nodes into the running
+container, and `joy_publisher.py` polls for them.
 
 - Launch the sim (separate terminal): `ros2 launch hexa_bringup sim.launch.py`
 - Launch teleop: `ros2 launch hexa_teleop teleop.launch.py`
@@ -84,9 +88,9 @@ Function namespace (assignable in YAML):
 - **button-class** — `yaw_left`, `yaw_right`, `wiggle_left`, `wiggle_right`, `height_up`, `height_down`, `gait_prev`, `gait_next`, `animation_vertical_body_roll`, `animation_horizontal_body_roll`, `animation_body_roll_3d`. Bindable to any button or D-pad direction. `wiggle_left` / `wiggle_right` are polymorphic: bound to a trigger axis (`l2` / `r2`), they're thresholded against `base.trigger_threshold`; bound to a face button, they read the button directly.
 - **axis-class** — `drive_x`, `drive_y`, `drive_yaw` (gait `/cmd_vel`), `pose_x`, `pose_y` (posture translation), `tilt_roll`, `tilt_pitch` (posture body tilt). Bindable only to stick axes.
 
-## Default behavior (8BitDo Pro 2)
+## Default behavior
 
-The shipped YAML reproduces the previous mapping:
+The shipped YAML:
 
 - **Right stick** — `pose_x` / `pose_y` in posture, `drive_x` / `drive_y` in gait and animation. Stick forward → body `+x`; stick left → body `+y`.
 - **Left stick (posture)** — `tilt_roll` / `tilt_pitch`. Stick forward → pitch forward (front dips); stick left → roll left (left side dips).

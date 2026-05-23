@@ -33,11 +33,22 @@ services:
       - .:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-${HOME}/.Xauthority}:/home/dev/.Xauthority:ro
+      # Joystick passthrough for hexa_teleop (any X-input controller,
+      # e.g. Xbox or 8BitDo). Bind mount with rshared propagation so a
+      # controller plugged in *after* container start becomes visible
+      # inside — Docker's `devices:` snapshots /dev/input at start and
+      # misses hot-plug. Pair with device_cgroup_rules below for
+      # char-device access; group_add covers filesystem perms.
+      - type: bind
+        source: /dev/input
+        target: /dev/input
+        bind:
+          propagation: rshared
+    # Linux input subsystem (major 13: js*, event*). The bind mount
+    # above grants visibility; this grants cgroup permission to read
+    # the char devices.
+    device_cgroup_rules:
+      - 'c 13:* rmw'
     # Uncomment when the Pimoroni Servo 2040 is plugged in:
     # devices:
     #   - "/dev/ttyACM0:/dev/ttyACM0"
-    # Joystick passthrough for hexa_teleop. Uncomment when a controller
-    # (e.g. 8BitDo Pro 2 in X-input mode) is plugged in. The bind exposes
-    # /dev/input/js* and /dev/input/event* to joy_node.
-    devices:
-      - "/dev/input:/dev/input"
