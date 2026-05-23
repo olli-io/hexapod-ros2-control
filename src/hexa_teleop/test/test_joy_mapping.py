@@ -1,6 +1,14 @@
 import math
 
-from hexa_teleop import GAIT, POSTURE, JoyConfig, JoyState, apply_deadband, map_joy
+from hexa_teleop import (
+    ANIMATION,
+    GAIT,
+    POSTURE,
+    JoyConfig,
+    JoyState,
+    apply_deadband,
+    map_joy,
+)
 
 
 DT = 0.02  # matches teleop_joy.PUBLISH_RATE_HZ = 50 Hz
@@ -18,6 +26,7 @@ def _cfg(**overrides) -> JoyConfig:
         dpad_right_sign=1.0,
         gait_mode_button=0,
         posture_mode_button=3,
+        animation_mode_button=1,
         init_button=7,
         record_button=6,
         yaw_left_button=4,
@@ -1003,3 +1012,57 @@ def test_dpad_x_empty_cycle_is_inert():
     state = JoyState(mode=POSTURE, current_gait_idx=0)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
     assert out.gait_select is None
+
+
+# ---- ANIMATION-mode D-pad animation selection -------------------------------
+
+
+def test_animation_mode_dpad_up_selects_vertical_body_roll():
+    cfg = _cfg()
+    state = JoyState(mode=ANIMATION, animation_name="")
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "vertical_body_roll"
+    assert state.animation_name == "vertical_body_roll"
+
+
+def test_animation_mode_dpad_down_selects_body_roll_3d():
+    # D-down picks the body_roll_3d animation — vertical and horizontal
+    # rolls combined with a quarter-cycle phase offset so the motion
+    # traces a circle.
+    cfg = _cfg()
+    state = JoyState(mode=ANIMATION, animation_name="vertical_body_roll")
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "body_roll_3d"
+    assert state.animation_name == "body_roll_3d"
+
+
+def test_animation_mode_dpad_y_rising_edge_only():
+    # Holding D-down must not re-publish on every tick.
+    cfg = _cfg()
+    state = JoyState(mode=ANIMATION, animation_name="vertical_body_roll")
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "body_roll_3d"
+    for _ in range(20):
+        out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+        assert out.animation_name is None
+    # Release then press again → re-fires only if the selection differs;
+    # here the state is already body_roll_3d, so no republish.
+    map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name is None
+    # Toggle through D-up, release, then D-down again — the swap fires.
+    map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
+    map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "body_roll_3d"
+
+
+def test_animation_mode_dpad_down_outside_animation_mode_is_inert():
+    # D-down in POSTURE integrates height, never publishes animation
+    # selection.
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name is None
+    assert state.animation_name == ""

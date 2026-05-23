@@ -4,8 +4,10 @@ from .animations import (
     Breathing,
     GaitBounce,
     GaitSway,
+    HorizontalBodyRoll,
     Stack,
     Still,
+    VerticalBodyRoll,
 )
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp, scale
 
@@ -16,10 +18,12 @@ __all__ = [
     "Breathing",
     "GaitBounce",
     "GaitSway",
+    "HorizontalBodyRoll",
     "IDENTITY",
     "PoseLimits",
     "Stack",
     "Still",
+    "VerticalBodyRoll",
     "add",
     "clamp",
     "scale",

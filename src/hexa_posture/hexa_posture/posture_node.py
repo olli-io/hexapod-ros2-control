@@ -21,21 +21,27 @@ The animation stack is built from the ``enabled_animations`` parameter
 gait-induced body motion.
 """
 
+import math
+
 import rclpy
 from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from hexa_interfaces.msg import GaitParams, LegTargets
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 
 from .animations import (
     Animation,
     AnimationContext,
+    BodyRoll3D,
     Breathing,
     GaitBounce,
     GaitSway,
+    HorizontalBodyRoll,
     Stack,
     Still,
+    VerticalBodyRoll,
 )
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp
 
@@ -59,6 +65,14 @@ POSTURE_ACTIVE_STATES: frozenset[str] = frozenset(
 )
 
 DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")
+# Each entry is the key the teleop layer publishes on /animation/mode. A
+# comma-separated entry composes multiple animations into a single stack
+# (e.g. ``"vertical_body_roll,gait_bounce"`` plays both at once).
+DEFAULT_ANIMATION_MODE_ANIMATIONS: tuple[str, ...] = (
+    "vertical_body_roll",
+    "horizontal_body_roll",
+    "body_roll_3d",
+)
 # Minimum stance legs needed to define a meaningful support polygon.
 # During swing transitions the count can momentarily dip; we hold the
 # previous centroid rather than emit a noisy value.
@@ -68,16 +82,16 @@ _ANIMATION_FACTORIES: dict[str, type[Animation]] = {
     "breathing": Breathing,
     "gait_sway": GaitSway,
     "gait_bounce": GaitBounce,
+    "vertical_body_roll": VerticalBodyRoll,
+    "horizontal_body_roll": HorizontalBodyRoll,
+    "body_roll_3d": BodyRoll3D,
 }
 
 
 def _build_animation_stack(
     names: list[str],
     *,
-    gait_sway_gain: float = 1.0,
-    gait_sway_strength: float = 0.5,
-    gait_bounce_arc_height: float = 0.02,
-    gait_bounce_step_height_ref: float = 0.06,
+    overrides: dict[str, Animation] | None = None,
 ) -> Stack:
     unknown = [n for n in names if n not in _ANIMATION_FACTORIES]
     if unknown:
@@ -85,15 +99,7 @@ def _build_animation_stack(
             f"unknown animation(s) {unknown!r}; "
             f"available: {sorted(_ANIMATION_FACTORIES)}"
         )
-    overrides: dict[str, Animation] = {
-        "gait_sway": GaitSway(
-            gain=gait_sway_gain, strength=gait_sway_strength
-        ),
-        "gait_bounce": GaitBounce(
-            arc_height=gait_bounce_arc_height,
-            step_height_ref=gait_bounce_step_height_ref,
-        ),
-    }
+    overrides = overrides or {}
     layers = tuple(
         overrides[n] if n in overrides else _ANIMATION_FACTORIES[n]()
         for n in names
@@ -253,13 +259,34 @@ class PostureNode(Node):
         # max-across-legs switches between two arcs.
         self._swing_lift_z: float | None = None
         self._latest_raw_swing_lift: float | None = None
+        # Master gait phase in [0, 1), sniffed from /legs/targets.
+        # Held None until the first targets message arrives so
+        # phase-locked animations can stay silent on cold start.
+        self._master_phase: float | None = None
         self._last_tick_ns: int | None = None
 
         self.declare_parameter("enabled_animations", list(DEFAULT_ANIMATIONS))
+        self.declare_parameter(
+            "animation_mode_animations",
+            list(DEFAULT_ANIMATION_MODE_ANIMATIONS),
+        )
         self.declare_parameter("gait_sway_gain", 1.0)
         self.declare_parameter("gait_sway_strength", 0.5)
         self.declare_parameter("gait_bounce_arc_height", 0.02)
         self.declare_parameter("gait_bounce_step_height_ref", 0.06)
+        self.declare_parameter("vertical_body_roll_z_amplitude", 0.02)
+        self.declare_parameter("vertical_body_roll_pitch_amplitude_deg", 10.0)
+        self.declare_parameter("vertical_body_roll_phase_offset", 0.0)
+        self.declare_parameter("horizontal_body_roll_y_amplitude", 0.02)
+        self.declare_parameter("horizontal_body_roll_yaw_amplitude_deg", 10.0)
+        self.declare_parameter("horizontal_body_roll_phase_offset", 0.0)
+        self.declare_parameter("body_roll_3d_z_amplitude", 0.02)
+        self.declare_parameter("body_roll_3d_pitch_amplitude_deg", 10.0)
+        self.declare_parameter("body_roll_3d_y_amplitude", 0.02)
+        self.declare_parameter("body_roll_3d_yaw_amplitude_deg", 10.0)
+        self.declare_parameter("body_roll_3d_horizontal_phase_offset", 0.25)
+        self.declare_parameter("body_roll_3d_pitch_phase_offset", 0.0)
+        self.declare_parameter("body_roll_3d_yaw_phase_offset", 0.0)
         self.declare_parameter("support_centroid_tau", 0.1)
         self.declare_parameter("swing_lift_tau", 0.04)
         enabled = list(
@@ -267,6 +294,11 @@ class PostureNode(Node):
             .get_parameter_value()
             .string_array_value
         ) or list(DEFAULT_ANIMATIONS)
+        animation_mode_names = list(
+            self.get_parameter("animation_mode_animations")
+            .get_parameter_value()
+            .string_array_value
+        ) or list(DEFAULT_ANIMATION_MODE_ANIMATIONS)
         gait_sway_gain = (
             self.get_parameter("gait_sway_gain").get_parameter_value().double_value
         )
@@ -285,6 +317,71 @@ class PostureNode(Node):
             .get_parameter_value()
             .double_value
         )
+        vbr_z = (
+            self.get_parameter("vertical_body_roll_z_amplitude")
+            .get_parameter_value()
+            .double_value
+        )
+        vbr_pitch_rad = math.radians(
+            self.get_parameter("vertical_body_roll_pitch_amplitude_deg")
+            .get_parameter_value()
+            .double_value
+        )
+        vbr_phase = (
+            self.get_parameter("vertical_body_roll_phase_offset")
+            .get_parameter_value()
+            .double_value
+        )
+        hbr_y = (
+            self.get_parameter("horizontal_body_roll_y_amplitude")
+            .get_parameter_value()
+            .double_value
+        )
+        hbr_yaw_rad = math.radians(
+            self.get_parameter("horizontal_body_roll_yaw_amplitude_deg")
+            .get_parameter_value()
+            .double_value
+        )
+        hbr_phase = (
+            self.get_parameter("horizontal_body_roll_phase_offset")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_z = (
+            self.get_parameter("body_roll_3d_z_amplitude")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_pitch_rad = math.radians(
+            self.get_parameter("body_roll_3d_pitch_amplitude_deg")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_y = (
+            self.get_parameter("body_roll_3d_y_amplitude")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_yaw_rad = math.radians(
+            self.get_parameter("body_roll_3d_yaw_amplitude_deg")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_h_phase = (
+            self.get_parameter("body_roll_3d_horizontal_phase_offset")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_pitch_phase = (
+            self.get_parameter("body_roll_3d_pitch_phase_offset")
+            .get_parameter_value()
+            .double_value
+        )
+        br3d_yaw_phase = (
+            self.get_parameter("body_roll_3d_yaw_phase_offset")
+            .get_parameter_value()
+            .double_value
+        )
         self._centroid_tau = (
             self.get_parameter("support_centroid_tau")
             .get_parameter_value()
@@ -295,14 +392,55 @@ class PostureNode(Node):
             .get_parameter_value()
             .double_value
         )
-        self._animations = _build_animation_stack(
-            enabled,
-            gait_sway_gain=gait_sway_gain,
-            gait_sway_strength=gait_sway_strength,
-            gait_bounce_arc_height=gait_bounce_arc_height,
-            gait_bounce_step_height_ref=gait_bounce_step_height_ref,
-        )
+        overrides: dict[str, Animation] = {
+            "gait_sway": GaitSway(
+                gain=gait_sway_gain, strength=gait_sway_strength
+            ),
+            "gait_bounce": GaitBounce(
+                arc_height=gait_bounce_arc_height,
+                step_height_ref=gait_bounce_step_height_ref,
+            ),
+            "vertical_body_roll": VerticalBodyRoll(
+                z_amplitude=vbr_z,
+                pitch_amplitude=vbr_pitch_rad,
+                pitch_phase_offset=vbr_phase,
+            ),
+            "horizontal_body_roll": HorizontalBodyRoll(
+                y_amplitude=hbr_y,
+                yaw_amplitude=hbr_yaw_rad,
+                yaw_phase_offset=hbr_phase,
+            ),
+            "body_roll_3d": BodyRoll3D(
+                z_amplitude=br3d_z,
+                pitch_amplitude=br3d_pitch_rad,
+                y_amplitude=br3d_y,
+                yaw_amplitude=br3d_yaw_rad,
+                horizontal_phase_offset=br3d_h_phase,
+                pitch_phase_offset=br3d_pitch_phase,
+                yaw_phase_offset=br3d_yaw_phase,
+            ),
+        }
+        self._default_stack = _build_animation_stack(enabled, overrides=overrides)
+        # Per-animation stacks for ANIMATION mode: each entry yields a
+        # dedicated stack containing only ``still`` + the named
+        # animation(s), so gait_sway/gait_bounce do not bleed in while
+        # the user is demoing a body animation. Comma-separated entries
+        # compose multiple animations into one stack.
+        self._animation_stacks: dict[str, Stack] = {
+            name: _build_animation_stack(
+                ["still", *(n.strip() for n in name.split(","))],
+                overrides=overrides,
+            )
+            for name in animation_mode_names
+        }
+        # Active animation-mode selection. Empty string means the
+        # default stack is in use; otherwise the value names an entry in
+        # ``_animation_stacks``.
+        self._animation_mode: str = ""
         self.get_logger().info(f"animations enabled: {enabled}")
+        self.get_logger().info(
+            f"animation-mode animations available: {animation_mode_names}"
+        )
         self._limits = PoseLimits()
 
         self._sub_pose = self.create_subscription(
@@ -320,6 +458,15 @@ class PostureNode(Node):
         self._sub_targets = self.create_subscription(
             LegTargets, "/legs/targets", self._on_leg_targets, 10
         )
+        # transient_local so the posture node always picks up the latest
+        # animation-mode selection from teleop even if it starts after
+        # the user has already picked one.
+        animation_qos = QoSProfile(
+            depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self._sub_animation_mode = self.create_subscription(
+            String, "/animation/mode", self._on_animation_mode, animation_qos
+        )
         self._pub_target = self.create_publisher(BodyPoseMsg, "/body/pose_target", 10)
 
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
@@ -332,6 +479,22 @@ class PostureNode(Node):
 
     def _on_gait_state(self, msg: String) -> None:
         self._gait_state = msg.data
+
+    def _on_animation_mode(self, msg: String) -> None:
+        new_mode = msg.data
+        if new_mode and new_mode not in self._animation_stacks:
+            self.get_logger().warn(
+                f"unknown animation mode {new_mode!r}; "
+                f"available: {sorted(self._animation_stacks)}"
+            )
+            return
+        if new_mode == self._animation_mode:
+            return
+        self._animation_mode = new_mode
+        if new_mode:
+            self.get_logger().info(f"animation mode active: {new_mode}")
+        else:
+            self.get_logger().info("animation mode cleared")
 
     def _on_gait_params(self, msg: GaitParams) -> None:
         # Only the name matters here — velocity fields belong to the
@@ -348,6 +511,7 @@ class PostureNode(Node):
         lift = _max_swing_lift_z(msg)
         if lift is not None:
             self._latest_raw_swing_lift = lift
+        self._master_phase = float(msg.master_phase) % 1.0
 
     def _step_filters(self, dt: float) -> None:
         """Advance the first-order low-passes toward their latest raw
@@ -394,8 +558,14 @@ class PostureNode(Node):
             gait_name=self._gait_name,
             support_centroid_xy=self._support_centroid_xy,
             swing_lift_z=self._swing_lift_z,
+            master_phase=self._master_phase,
         )
-        animated = self._animations(ctx)
+        stack = (
+            self._animation_stacks[self._animation_mode]
+            if self._animation_mode
+            else self._default_stack
+        )
+        animated = stack(ctx)
         target = clamp(add(self._user_pose, animated), self._limits)
         self._pub_target.publish(_pose_to_msg(target, now.to_msg()))
 

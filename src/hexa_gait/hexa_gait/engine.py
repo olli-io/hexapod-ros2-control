@@ -577,6 +577,24 @@ class Engine:
         return self._state
 
     @property
+    def master_phase(self) -> float:
+        """Master phase from the gait clock, in ``[0, 1)``.
+
+        ``0`` is lift-off for the reference leg (phase_offset = 0).
+        Exposed for downstream nodes (posture) that need a single shared
+        phase signal rather than reconstructing it from per-leg phases.
+
+        During ENGAGING and RESUMING the engine's ``_clock`` is frozen
+        (only the engagement controller advances), so read the live
+        phase off the controller. ``exit_master`` is the same value the
+        engine seeds ``_clock`` with at the handoff, so continuity
+        across the ENGAGING/RESUMING → GAIT boundary is exact.
+        """
+        if self._state in (EngineState.ENGAGING, EngineState.RESUMING):
+            return self._engagement.exit_master
+        return self._clock.master
+
+    @property
     def strategy_name(self) -> str:
         """Name of the currently-active strategy from the registry.
 

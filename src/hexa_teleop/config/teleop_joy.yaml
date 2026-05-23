@@ -27,6 +27,17 @@ axis:
 gait_mode_button: 0 # A
 posture_mode_button: 3 # Y
 
+# Animation mode toggle. Rising edge on this button toggles between
+# GAIT and ANIMATION mode (from POSTURE, B-press hops directly into
+# ANIMATION). ANIMATION mode forces the tripod gait on entry; the
+# joysticks still drive /cmd_vel exactly as in GAIT, but the posture
+# stack is swapped for a phase-locked body animation chosen via the
+# D-pad: D-up = vertical_body_roll (z + pitch), D-left =
+# horizontal_body_roll (y + yaw), D-down = both rolls at once
+# (composite stack). D-pad X gait cycling and D-pad Y height
+# integration are suppressed while in ANIMATION mode.
+animation_mode_button: 1 # B
+
 # Button that toggles FOLDED ↔ STAND on rising edge AND snaps the
 # posture height back to zero when the chassis is currently lifted /
 # lowered. Press semantics:

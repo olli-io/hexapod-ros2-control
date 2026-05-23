@@ -243,6 +243,7 @@ class GaitNode(Node):
             state.stance = leg.stance
             leg_states.append(state)
         msg.legs = leg_states
+        msg.master_phase = self._engine.master_phase
         self._pub_targets.publish(msg)
         self._pub_state.publish(String(data=self._engine.state.value))
 

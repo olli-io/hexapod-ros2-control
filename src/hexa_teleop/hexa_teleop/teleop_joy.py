@@ -32,7 +32,7 @@ from std_msgs.msg import Empty, String
 
 from hexa_gait import VelocityCaps, load_velocity_caps
 
-from .joy_mapping import GAIT, POSTURE, JoyConfig, JoyState, map_joy
+from .joy_mapping import ANIMATION, GAIT, POSTURE, JoyConfig, JoyState, map_joy
 
 PUBLISH_RATE_HZ = 50.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
@@ -62,6 +62,7 @@ def _load_config(
         dpad_right_sign=float(raw["dpad_right_sign"]),
         gait_mode_button=int(raw["gait_mode_button"]),
         posture_mode_button=int(raw["posture_mode_button"]),
+        animation_mode_button=int(raw["animation_mode_button"]),
         init_button=int(raw["init_button"]),
         record_button=int(raw["record_button"]),
         yaw_left_button=int(raw["yaw_left_button"]),
@@ -93,9 +94,10 @@ def _load_config(
         gait_cycle=gait_cycle,
     )
     initial_mode = str(raw.get("initial_mode", POSTURE))
-    if initial_mode not in (POSTURE, GAIT):
+    if initial_mode not in (POSTURE, GAIT, ANIMATION):
         raise ValueError(
-            f"initial_mode must be {POSTURE!r} or {GAIT!r}, got {initial_mode!r}"
+            f"initial_mode must be one of "
+            f"{POSTURE!r}, {GAIT!r}, {ANIMATION!r}; got {initial_mode!r}"
         )
     return cfg, initial_mode, default_gait, caps
 
@@ -175,6 +177,17 @@ class TeleopJoyNode(Node):
         # changes only on a user press.
         gait_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._pub_cmd_gait = self.create_publisher(String, "/cmd_gait", gait_qos)
+        # Animation-mode selection (sentinel ``""`` = default stack,
+        # ``"none"`` = ANIMATION mode entered but no animation picked,
+        # otherwise the name of the selected animation). transient_local
+        # so a late-starting posture node still sees the current
+        # selection.
+        animation_qos = QoSProfile(
+            depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self._pub_animation_mode = self.create_publisher(
+            String, "/animation/mode", animation_qos
+        )
 
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
 
@@ -198,6 +211,11 @@ class TeleopJoyNode(Node):
         if out.init_request:
             self.get_logger().info("start button pressed — publishing /gait/initialize")
             self._pub_init.publish(Empty())
+        if out.animation_name is not None:
+            self.get_logger().info(
+                f"publishing /animation/mode={out.animation_name!r}"
+            )
+            self._pub_animation_mode.publish(String(data=out.animation_name))
         if out.gait_select is not None:
             # Strict STAND gate so a stale switch never sits on the
             # wire. The JoyState index has already advanced — the next

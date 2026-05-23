@@ -323,6 +323,109 @@ def test_engaging_to_gait_at_exit_master():
     assert engine._clock.master == pytest.approx(0.02, abs=1e-9)
 
 
+def test_master_phase_tracks_engagement_during_engaging():
+    # Posture animations (vertical/horizontal body roll) read master_phase
+    # off /legs/targets. During ENGAGING the engine's _clock is frozen —
+    # only the engagement controller advances. The published master_phase
+    # property must therefore mirror engagement.exit_master, not the
+    # stale clock, otherwise phase-locked animations sit at a constant
+    # phase throughout the engagement cycle.
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    _drive_past_initialize(engine)
+
+    engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.ENGAGING
+
+    last_phase = engine.master_phase
+    assert last_phase == pytest.approx(engine._engagement.exit_master, abs=1e-12)
+    assert engine._clock.master == pytest.approx(0.0, abs=1e-12)
+
+    saw_progress = False
+    for _ in range(80):
+        engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+        if engine.state is not EngineState.ENGAGING:
+            break
+        phase = engine.master_phase
+        assert phase == pytest.approx(engine._engagement.exit_master, abs=1e-12)
+        if phase > last_phase:
+            saw_progress = True
+        last_phase = phase
+    assert saw_progress, "master_phase did not advance during ENGAGING"
+
+
+def test_master_phase_continuous_across_engaging_to_gait_handoff():
+    # The engagement controller seeds _clock with exit_master at handoff,
+    # so the master_phase value the engine publishes on the last ENGAGING
+    # tick and the first GAIT tick (before _clock.advance) must be equal.
+    spy = _SpyStrategy()
+    engine = _engine(spy)
+    _drive_past_initialize(engine)
+
+    prev_phase = 0.0
+    for _ in range(200):
+        engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+        phase = engine.master_phase
+        if engine.state is EngineState.GAIT:
+            # First GAIT tick: _clock was just reset to exit_master (the
+            # modular wrap of the last ENGAGING tick's master_phase) and
+            # then advanced once by dt / cycle_time. The modular wrap is
+            # not a real discontinuity, so measure step mod 1.
+            step = (phase - prev_phase) % 1.0
+            assert step < 0.05, (
+                f"master_phase stepped by {step} across ENGAGING -> GAIT"
+            )
+            return
+        prev_phase = phase
+    raise AssertionError("engine did not reach GAIT within 200 ticks")
+
+
+def test_master_phase_continuous_across_resuming_to_gait_handoff():
+    # Same continuity requirement on the PAUSED -> RESUMING -> GAIT path:
+    # begin_resume() seats the engagement controller from the paused
+    # phase, and the engine seeds _clock with exit_master at the
+    # RESUMING -> GAIT handoff. Posture must see a continuous master_phase
+    # across both legs of the transition.
+    spy = _SpyStrategy()
+    engine = _engine(spy, config=_config(pause_debounce_delay=0.0))
+    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
+
+    # Tick a few GAIT cycles so the paused master_phase is not trivially 0.
+    for _ in range(20):
+        engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+
+    # Park at zero cmd until PAUSED.
+    for _ in range(300):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        if engine.state is EngineState.PAUSED:
+            break
+    assert engine.state is EngineState.PAUSED
+
+    # First non-zero tick enters RESUMING and runs one engagement tick.
+    engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+    assert engine.state is EngineState.RESUMING
+    prev_phase = engine.master_phase
+    assert prev_phase == pytest.approx(engine._engagement.exit_master, abs=1e-12)
+
+    for _ in range(400):
+        engine.update(dt=0.02, v_body_xy=(0.20, 0.0), omega_z=0.0)
+        phase = engine.master_phase
+        if engine.state is EngineState.GAIT:
+            # Wrap-aware step across the handoff. exit_master wraps modulo
+            # 1, and so does _clock.master, so the smallest forward step
+            # is what we want to measure.
+            step = (phase - prev_phase) % 1.0
+            assert step < 0.05, (
+                f"master_phase stepped by {step} across RESUMING -> GAIT"
+            )
+            return
+        assert phase == pytest.approx(
+            engine._engagement.exit_master, abs=1e-12
+        )
+        prev_phase = phase
+    raise AssertionError("engine did not reach GAIT within 400 RESUMING ticks")
+
+
 def test_engaging_to_pausing_on_zero_cmd():
     # cmd zeros mid-engagement: bail out to PAUSING via the
     # PauseController on the very first zero tick, regardless of

@@ -1,4 +1,5 @@
 from .joy_mapping import (
+    ANIMATION,
     GAIT,
     POSTURE,
     JoyConfig,
@@ -9,6 +10,7 @@ from .joy_mapping import (
 )
 
 __all__ = [
+    "ANIMATION",
     "GAIT",
     "JoyConfig",
     "JoyOutput",

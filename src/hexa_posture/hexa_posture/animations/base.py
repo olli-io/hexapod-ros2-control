@@ -46,6 +46,13 @@ class AnimationContext:
     phase-locked animations should fall back to a free-running sine
     on ``t`` or skip themselves."""
 
+    master_phase: float | None = None
+    """Master phase from the gait clock in [0, 1), sniffed from
+    /legs/targets by the posture node. ``0`` is lift-off for the
+    reference leg (phase_offset = 0). ``None`` until the first
+    /legs/targets message has been seen. Phase-locked animations
+    (e.g. ``VerticalBodyRoll``) gate themselves on this field."""
+
     gait_name: str | None = None
     """Active gait strategy name (e.g. ``"tripod"``, ``"ripple"``),
     sniffed from ``/gait/params`` by the posture node. ``None`` until

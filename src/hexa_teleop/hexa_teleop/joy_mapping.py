@@ -100,6 +100,14 @@ from typing import Sequence
 
 POSTURE = "posture"
 GAIT = "gait"
+# Demo mode: joysticks behave as in GAIT (drive /cmd_vel) but the
+# posture stack is swapped for a phase-locked body animation. D-up
+# selects vertical_body_roll, D-left selects horizontal_body_roll, and
+# D-down selects body_roll_3d (the circular combination of the two).
+# Tripod is forced on entry; D-pad X gait cycling and D-pad Y height
+# integration are suppressed in this mode. Entered/exited via a
+# dedicated B button.
+ANIMATION = "animation"
 
 
 @dataclass(frozen=True)
@@ -114,6 +122,7 @@ class JoyConfig:
     dpad_right_sign: float
     gait_mode_button: int
     posture_mode_button: int
+    animation_mode_button: int
     init_button: int
     record_button: int
     yaw_left_button: int
@@ -184,6 +193,20 @@ class JoyState:
     # control-node default at startup and on every accepted publish.
     prev_dpad_x: int = 0
     current_gait_idx: int = 0
+    # D-pad Y rising-edge tracker (normalised by ``dpad_up_sign``). Only
+    # consulted in ANIMATION mode, where rising-edge of D-up selects
+    # ``vertical_body_roll``. POSTURE mode integrates D-pad Y directly,
+    # so the tracker stays at 0 while in POSTURE.
+    prev_dpad_y_int: int = 0
+    # Animation-mode button rising-edge tracker.
+    prev_animation_mode: bool = False
+    # Active animation-mode selection. ``""`` when ANIMATION mode is
+    # not in effect; otherwise the name of the selected animation
+    # (default ``"vertical_body_roll"`` on entry; ``"horizontal_body_roll"``
+    # after a D-left press). Mirrors the value published to
+    # ``/animation/mode`` so the mapping function knows what the
+    # posture node currently has loaded.
+    animation_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -204,6 +227,12 @@ class JoyOutput:
     # engine state (POSTURE/GAIT, STAND/walking) — that lives in the
     # ROS layer so the pure function stays I/O-free.
     gait_select: str | None = None
+    # Populated with the desired ``/animation/mode`` value on the tick
+    # the selection changes; ``None`` on every other tick. ``""``
+    # clears the selection (posture restores the default stack);
+    # otherwise the name of the selected animation. On entering
+    # ANIMATION mode the value defaults to ``"vertical_body_roll"``.
+    animation_name: str | None = None
 
 
 def apply_deadband(value: float, deadband: float) -> float:
@@ -251,17 +280,49 @@ def map_joy(
     # land on the same tick, posture wins (safer fallback).
     gait_pressed = _read_button(buttons, cfg.gait_mode_button)
     posture_pressed = _read_button(buttons, cfg.posture_mode_button)
+    animation_pressed = _read_button(buttons, cfg.animation_mode_button)
     gait_edge = gait_pressed and not state.prev_gait_mode
     posture_edge = posture_pressed and not state.prev_posture_mode
+    animation_edge = animation_pressed and not state.prev_animation_mode
     state.prev_gait_mode = gait_pressed
     state.prev_posture_mode = posture_pressed
+    state.prev_animation_mode = animation_pressed
     mode_changed = False
+    prev_mode = state.mode
     if posture_edge and state.mode != POSTURE:
         state.mode = POSTURE
         mode_changed = True
     elif gait_edge and state.mode != GAIT:
         state.mode = GAIT
         mode_changed = True
+    elif animation_edge:
+        # Rising-edge toggle between GAIT and ANIMATION. From POSTURE,
+        # B-press hops directly into ANIMATION (the user shouldn't have
+        # to A-then-B to demo). From ANIMATION, B-press returns to GAIT.
+        state.mode = GAIT if state.mode == ANIMATION else ANIMATION
+        mode_changed = True
+    # Side effects of leaving / entering ANIMATION mode. Compute the
+    # /animation/mode value and a one-shot ``gait_select`` override
+    # here so the rest of the function (D-pad cycler, output
+    # construction) can read them as locals.
+    animation_name_out: str | None = None
+    forced_gait: str | None = None
+    if prev_mode == ANIMATION and state.mode != ANIMATION:
+        # Leaving ANIMATION: tell posture to restore the default stack.
+        state.animation_name = ""
+        animation_name_out = ""
+    elif prev_mode != ANIMATION and state.mode == ANIMATION:
+        # Entering ANIMATION: force tripod (the new animations are
+        # tripod-only) and start with ``vertical_body_roll`` as the
+        # default so the body is visibly animated immediately. The user
+        # can swap to ``horizontal_body_roll`` with D-left.
+        state.animation_name = "vertical_body_roll"
+        animation_name_out = "vertical_body_roll"
+        forced_gait = "tripod"
+        if cfg.gait_cycle and "tripod" in cfg.gait_cycle:
+            # Realign the D-pad cycler so a later exit + D-pad press
+            # resumes from tripod rather than the stale slot.
+            state.current_gait_idx = cfg.gait_cycle.index("tripod")
 
     # Start button: one-shot rising-edge trigger with two-press
     # semantics when the chassis is in a non-default posture.
@@ -362,28 +423,53 @@ def map_joy(
     rx = -_read_axis(axes, cfg.axis_right_x, cfg.deadband)
     ry = -_read_axis(axes, cfg.axis_right_y, cfg.deadband)
 
-    # D-pad Y: integrate body-height offset while held (POSTURE only).
-    # No deadband — joy_node reports the D-pad as a clean ±1 / 0 axis.
-    # In GAIT mode the integration is suppressed so the user can't
-    # change the chassis height while walking; the already-integrated
-    # height bleeds through unchanged into pose.z.
+    # D-pad Y. Three roles by mode:
+    #   * POSTURE — integrate body-height offset while held. No
+    #     deadband; joy_node reports the D-pad as a clean ±1 / 0 axis.
+    #   * GAIT — inert (already-integrated height bleeds through via
+    #     pose.z so the robot walks at the lifted posture).
+    #   * ANIMATION — rising-edge of D-up selects ``vertical_body_roll``;
+    #     rising-edge of D-down selects ``body_roll_3d`` (vertical and
+    #     horizontal rolls combined with a quarter-cycle phase offset so
+    #     the motion traces a circle).
+    dpad_y_raw = 0.0
+    if 0 <= cfg.axis_dpad_y < len(axes):
+        dpad_y_raw = float(axes[cfg.axis_dpad_y])
+    dpad_y_normalised = cfg.dpad_up_sign * dpad_y_raw
+    if dpad_y_normalised > 0.5:
+        dpad_y_int = 1
+    elif dpad_y_normalised < -0.5:
+        dpad_y_int = -1
+    else:
+        dpad_y_int = 0
     if state.mode == POSTURE:
-        dpad_y = 0.0
-        if 0 <= cfg.axis_dpad_y < len(axes):
-            dpad_y = float(axes[cfg.axis_dpad_y])
         state.height_current += (
-            cfg.dpad_up_sign * dpad_y * cfg.posture_height_rate * dt
+            cfg.dpad_up_sign * dpad_y_raw * cfg.posture_height_rate * dt
         )
         if state.height_current > cfg.posture_height_max:
             state.height_current = cfg.posture_height_max
         elif state.height_current < cfg.posture_height_min:
             state.height_current = cfg.posture_height_min
+    elif state.mode == ANIMATION:
+        if dpad_y_int == 1 and state.prev_dpad_y_int != 1:
+            if state.animation_name != "vertical_body_roll":
+                state.animation_name = "vertical_body_roll"
+                animation_name_out = "vertical_body_roll"
+        elif dpad_y_int == -1 and state.prev_dpad_y_int != -1:
+            if state.animation_name != "body_roll_3d":
+                state.animation_name = "body_roll_3d"
+                animation_name_out = "body_roll_3d"
+    state.prev_dpad_y_int = dpad_y_int
 
-    # D-pad X: rising-edge cycle through ``cfg.gait_cycle``. Direction
-    # is governed by ``dpad_right_sign`` so a flipped joy_node sign can
-    # be normalised in YAML. Works regardless of POSTURE / GAIT mode;
-    # the ROS layer gates the publish on the current engine state.
-    gait_select: str | None = None
+    # D-pad X. Two roles by mode:
+    #   * POSTURE / GAIT — rising-edge cycle through ``cfg.gait_cycle``.
+    #     Direction is governed by ``dpad_right_sign`` so a flipped
+    #     joy_node sign can be normalised in YAML. The ROS layer gates
+    #     the publish on the current engine state.
+    #   * ANIMATION — rising-edge of D-left selects
+    #     ``horizontal_body_roll`` on /animation/mode. Gait cycling is
+    #     suppressed in this mode (tripod was forced on entry).
+    gait_select: str | None = forced_gait
     if cfg.gait_cycle:
         dpad_x_raw = 0.0
         if 0 <= cfg.axis_dpad_x < len(axes):
@@ -399,10 +485,16 @@ def map_joy(
             dpad_x = 0
         signed = int(cfg.dpad_right_sign) * dpad_x
         if signed != 0 and state.prev_dpad_x == 0:
-            state.current_gait_idx = (
-                state.current_gait_idx + signed
-            ) % len(cfg.gait_cycle)
-            gait_select = cfg.gait_cycle[state.current_gait_idx]
+            if state.mode == ANIMATION:
+                if signed < 0:
+                    if state.animation_name != "horizontal_body_roll":
+                        state.animation_name = "horizontal_body_roll"
+                        animation_name_out = "horizontal_body_roll"
+            else:
+                state.current_gait_idx = (
+                    state.current_gait_idx + signed
+                ) % len(cfg.gait_cycle)
+                gait_select = cfg.gait_cycle[state.current_gait_idx]
         state.prev_dpad_x = signed
 
     # L1/R1 (shoulder buttons) and L2/R2 (analog triggers thresholded
@@ -546,6 +638,7 @@ def map_joy(
             mode_changed=mode_changed,
             init_request=init_request,
             gait_select=gait_select,
+            animation_name=animation_name_out,
         )
     # GAIT mode: live posture input is suppressed (sticks drive
     # linear/angular velocity instead), but the recorded baseline
@@ -569,4 +662,5 @@ def map_joy(
         mode_changed=mode_changed,
         init_request=init_request,
         gait_select=gait_select,
+        animation_name=animation_name_out,
     )
