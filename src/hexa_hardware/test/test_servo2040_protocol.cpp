@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "hexa_hardware/servo_bus.hpp"
+#include "hexa_hardware/servo2040_protocol.hpp"
 
 namespace hh = hexa_hardware;
 

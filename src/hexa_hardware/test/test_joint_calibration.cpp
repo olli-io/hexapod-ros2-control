@@ -62,9 +62,13 @@ TEST(LoadHardwareConfig, ParsesYaml) {
   const auto path = std::filesystem::temp_directory_path() / "hexa_hw_test.yaml";
   {
     std::ofstream f(path);
-    f << R"(serial:
+    f << R"(connection:
+  type: uart
   device: /dev/ttyUSB0
   baud: 230400
+parser:
+  type: servo2040
+  get_period_ticks: 5
 relay:
   pin: 7
 aux:
@@ -98,8 +102,11 @@ joints:
 )";
   }
   const auto cfg = hh::load_hardware_config(path.string());
-  EXPECT_EQ(cfg.serial_device, "/dev/ttyUSB0");
-  EXPECT_EQ(cfg.serial_baud, 230400);
+  EXPECT_EQ(cfg.connection.type, "uart");
+  EXPECT_EQ(cfg.connection.device, "/dev/ttyUSB0");
+  EXPECT_EQ(cfg.connection.baud, 230400);
+  EXPECT_EQ(cfg.parser.type, "servo2040");
+  EXPECT_EQ(cfg.parser.get_period_ticks, 5);
   EXPECT_TRUE(cfg.relay_configured);
   EXPECT_EQ(cfg.relay_pin, 7);
   ASSERT_EQ(cfg.aux.count("battery_voltage"), 1u);

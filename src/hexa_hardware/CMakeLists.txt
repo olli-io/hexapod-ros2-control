@@ -20,8 +20,12 @@ find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
-  src/servo_bus.cpp
   src/joint_calibration.cpp
+  src/uart_transport.cpp
+  src/i2c_transport.cpp
+  src/usb_transport.cpp
+  src/servo2040_protocol.cpp
+  src/hardware_factory.cpp
   src/hexa_hardware.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -63,8 +67,11 @@ install(
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
-  ament_add_gtest(test_servo_bus test/test_servo_bus.cpp src/servo_bus.cpp)
-  target_include_directories(test_servo_bus PRIVATE include)
+  ament_add_gtest(test_servo2040_protocol
+    test/test_servo2040_protocol.cpp
+    src/servo2040_protocol.cpp
+  )
+  target_include_directories(test_servo2040_protocol PRIVATE include)
 
   ament_add_gtest(test_joint_calibration
     test/test_joint_calibration.cpp

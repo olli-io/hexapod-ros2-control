@@ -19,9 +19,19 @@
 # `min_us` / `max_us` are the hard electrical clamp. Joint travel
 # limits in radian space live in geometry.yaml.
 
-serial:
+connection:
+  type: uart # uart | i2c | usb — factory picks the concrete Transport.
+  # Host-specific OS device node. Servo2040 USB-CDC usually enumerates as
+  # /dev/ttyACM0 on Linux SBCs, but the path shifts with enumeration order
+  # and true-UART/I²C node names vary per board (RPi /dev/ttyAMA0, Radxa
+  # /dev/ttyS2, …). For stable naming add a udev rule on USB VID/PID and
+  # point this at the resulting /dev/serial/by-id/... symlink. Host pin
+  # muxing belongs in the OS (device-tree overlay, /boot config), not here.
   device: /dev/ttyACM0
   baud: 115200 # ignored on Servo2040 USB-CDC; honoured for true-UART builds.
+
+parser:
+  type: servo2040 # selects the BoardProtocol (currently only servo2040).
   get_period_ticks: 10 # poll aux every Nth read() (100 Hz read → 10 Hz aux)
 
 relay:

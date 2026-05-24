@@ -1,4 +1,4 @@
-# hexa_hardware
+ hexa_hardware
 
 `ros2_control` SystemInterface plugin for the real hexapod: bridges the
 controller manager's joint command/state interfaces and a UART-attached
@@ -17,11 +17,42 @@ The URDF declares `hexa_hardware/HexaHardware` (see
 `hexa_description/urdf/hexapod.urdf.xacro`, the `<xacro:unless
 use_sim>` branch under `<ros2_control>`). The plugin resolves its
 config from this package's own share directory by default; pass
-`<param name="config_path">/abs/path/to/servo2040.yaml</param>` under
+`<param name="config_path">/abs/path/to/hardware.yaml</param>` under
 `<hardware>` to override (e.g. for a test rig with different
 calibration).
 
-## Wire protocol ("Chica")
+## Pluggable transport + protocol
+
+Two seams under one plugin class, both selected from YAML:
+
+- **Transport** (`include/hexa_hardware/transport.hpp`) — byte pipe.
+  Open / close / write / read-with-timeout, nothing more. Concrete:
+  `UartTransport` (POSIX serial, also covers Servo 2040 USB-CDC).
+  Placeholders: `I2cTransport`, `UsbTransport` (raw HID/bulk) — both
+  declared and wired through the factory, both throw on `open()` until
+  someone fills in the body.
+- **BoardProtocol** (`include/hexa_hardware/board_protocol.hpp`) —
+  semantic operations the hardware interface needs: drive consecutive
+  servo pins, drive a digital pin, read auxiliary values. Owns a
+  `Transport&` and the wire framing. Concrete: `Servo2040Protocol`
+  (Chica framing, see below).
+
+The factory (`hardware_factory.hpp`) picks both from
+`config/hardware.yaml`:
+
+    connection:
+      type: uart           # uart | i2c | usb
+      device: /dev/ttyACM0
+      baud: 115200
+    parser:
+      type: servo2040
+      get_period_ticks: 10
+
+Adding a new board is one new `BoardProtocol` subclass plus a branch
+in `make_board_protocol`. Adding a new physical layer is one new
+`Transport` subclass plus a branch in `make_transport`.
+
+## Wire protocol ("Modified Chica")
 
 Half-duplex over a single UART. Byte 0x80 mask discriminates command
 bytes from data bytes:
@@ -56,13 +87,14 @@ as the numerical derivative. Joint state is **not** polled from the
 board.
 
 Non-joint pins (battery voltage, currents, touch) **are** polled via
-GET, rate-limited by `serial.get_period_ticks` so SETs aren't starved.
+GET, rate-limited by `parser.get_period_ticks` so SETs aren't starved.
 Voltage / current are republished on `~/battery_state`
 (`sensor_msgs/BatteryState`) from an internal node.
 
 ## Lifecycle
 
-- `on_configure` — open serial.
+- `on_init` — load config, build Transport + BoardProtocol via factory.
+- `on_configure` — open the Transport.
 - `on_activate` — drive relay pin high (servo rail on), reset commands
   to the current echoed state so the first cycle doesn't snap.
 - `on_deactivate` — drive relay pin low.
@@ -70,9 +102,10 @@ Voltage / current are republished on `~/battery_state`
 
 ## Config
 
-`config/servo2040.yaml` carries:
+`config/hardware.yaml` carries:
 
-- `serial.{device,baud,get_period_ticks}`
+- `connection.{type,device,baud}` — physical layer (`uart` / `i2c` / `usb`)
+- `parser.{type,get_period_ticks}` — board protocol (currently only `servo2040`)
 - `relay.pin` — board pin wired to the servo power relay
 - `aux.{name}.{pin,scale}` — GET-only sensor channels
 - `deg_at_center.{coxa,femur,tibia}` — joint angle at servo center pulse, shared across all six legs, in the intuitive per-joint convention from `hexa_description/config/geometry.yaml` (`coxa.deg`, `femur.above_horizontal_deg`, `tibia.interior_deg`). Defaults mirror that file's `joints:` block (0 / 35 / 68).
@@ -99,6 +132,6 @@ servo2040 backend, pair a PTY with `socat`:
 
     socat -d -d pty,raw,echo=0 pty,raw,echo=0
 
-then point `serial.device` at one end and listen on the other. The
+then point `connection.device` at one end and listen on the other. The
 Servo2040 itself does not care about baud (USB-CDC); a real UART build
 should set it to match the firmware.

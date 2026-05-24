@@ -9,6 +9,8 @@
 #include <rclcpp/logging.hpp>
 #include <stdexcept>
 
+#include "hexa_hardware/hardware_factory.hpp"
+
 namespace hexa_hardware {
 
 namespace {
@@ -39,7 +41,7 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // Config path defaults to this package's installed servo2040.yaml; the
+  // Config path defaults to this package's installed hardware.yaml; the
   // URDF can override via <param name="config_path"> if a robot needs to
   // run against a different calibration (test rig, second build, …).
   std::string config_path;
@@ -49,7 +51,7 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
   } else {
     config_path = (std::filesystem::path(
                        ament_index_cpp::get_package_share_directory("hexa_hardware")) /
-                   "config" / "servo2040.yaml")
+                   "config" / "hardware.yaml")
                       .string();
   }
   try {
@@ -60,13 +62,22 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
   }
 
   // Optional overrides from <hardware> params.
-  if (const auto it = info_.hardware_parameters.find("serial_device");
+  if (const auto it = info_.hardware_parameters.find("connection_device");
       it != info_.hardware_parameters.end()) {
-    config_.serial_device = it->second;
+    config_.connection.device = it->second;
   }
-  if (const auto it = info_.hardware_parameters.find("serial_baud");
+  if (const auto it = info_.hardware_parameters.find("connection_baud");
       it != info_.hardware_parameters.end()) {
-    config_.serial_baud = std::stoi(it->second);
+    config_.connection.baud = std::stoi(it->second);
+  }
+
+  try {
+    transport_ = make_transport(config_);
+    board_ = make_board_protocol(config_, *transport_);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger(kLogger), "Hardware backend init failed: %s",
+                 e.what());
+    return hardware_interface::CallbackReturn::ERROR;
   }
 
   joints_.clear();
@@ -152,9 +163,10 @@ HexaHardware::export_command_interfaces() {
 hardware_interface::CallbackReturn HexaHardware::on_configure(
     const rclcpp_lifecycle::State& /*previous*/) {
   try {
-    bus_.open(config_.serial_device, config_.serial_baud);
+    transport_->open();
   } catch (const std::exception& e) {
-    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Serial open failed: %s", e.what());
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Transport open failed: %s",
+                 e.what());
     return hardware_interface::CallbackReturn::ERROR;
   }
 
@@ -179,7 +191,7 @@ hardware_interface::CallbackReturn HexaHardware::on_activate(
   // Energise the servo rail before any motion command lands.
   if (config_.relay_configured) {
     try {
-      bus_.send_digital(config_.relay_pin, true);
+      board_->send_digital(config_.relay_pin, true);
     } catch (const std::exception& e) {
       RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Relay on failed: %s", e.what());
       return hardware_interface::CallbackReturn::ERROR;
@@ -197,9 +209,9 @@ hardware_interface::CallbackReturn HexaHardware::on_activate(
 
 hardware_interface::CallbackReturn HexaHardware::on_deactivate(
     const rclcpp_lifecycle::State& /*previous*/) {
-  if (config_.relay_configured && bus_.is_open()) {
+  if (config_.relay_configured && transport_ && transport_->is_open()) {
     try {
-      bus_.send_digital(config_.relay_pin, false);
+      board_->send_digital(config_.relay_pin, false);
     } catch (const std::exception& e) {
       RCLCPP_WARN(rclcpp::get_logger(kLogger), "Relay off failed: %s", e.what());
     }
@@ -213,7 +225,7 @@ hardware_interface::CallbackReturn HexaHardware::on_cleanup(
   if (aux_spin_thread_.joinable()) aux_spin_thread_.join();
   battery_pub_.reset();
   aux_node_.reset();
-  bus_.close();
+  if (transport_) transport_->close();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -226,22 +238,23 @@ hardware_interface::return_type HexaHardware::read(
   }
 
   // Aux GETs are rate-limited; the SET path owns the bus most of the time.
-  if (config_.get_period_ticks > 0 &&
-      ++read_tick_ >= config_.get_period_ticks && !config_.aux.empty()) {
+  if (config_.parser.get_period_ticks > 0 &&
+      ++read_tick_ >= config_.parser.get_period_ticks && !config_.aux.empty()) {
     read_tick_ = 0;
 
     const auto v_it = config_.aux.find("battery_voltage");
     const auto i_it = config_.aux.find("battery_current");
-    if (v_it != config_.aux.end() && battery_pub_) {
+    if (v_it != config_.aux.end() && battery_pub_ && board_) {
       std::vector<std::uint16_t> raw;
-      if (bus_.request_get(v_it->second.pin, 1, raw) && raw.size() == 1) {
+      if (board_->read_aux(v_it->second.pin, 1, raw, 50) && raw.size() == 1) {
         sensor_msgs::msg::BatteryState msg;
         msg.header.stamp = aux_node_->now();
         msg.voltage = static_cast<float>(raw[0] * v_it->second.scale);
         msg.current = std::numeric_limits<float>::quiet_NaN();
         if (i_it != config_.aux.end()) {
           std::vector<std::uint16_t> raw_i;
-          if (bus_.request_get(i_it->second.pin, 1, raw_i) && raw_i.size() == 1) {
+          if (board_->read_aux(i_it->second.pin, 1, raw_i, 50) &&
+              raw_i.size() == 1) {
             msg.current = static_cast<float>(raw_i[0] * i_it->second.scale);
           }
         }
@@ -255,7 +268,7 @@ hardware_interface::return_type HexaHardware::read(
 
 hardware_interface::return_type HexaHardware::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-  if (!bus_.is_open() || pin_order_.empty()) {
+  if (!transport_ || !transport_->is_open() || pin_order_.empty()) {
     return hardware_interface::return_type::OK;
   }
   // Walk the pin-sorted index, accumulating into runs of consecutive pins,
@@ -276,7 +289,7 @@ hardware_interface::return_type HexaHardware::write(
       ++k;
     }
     try {
-      bus_.send_set(run_start, batch);
+      board_->send_servo_positions(run_start, batch);
     } catch (const std::exception& e) {
       RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
                             1000, "SET write failed: %s", e.what());

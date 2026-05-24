@@ -49,10 +49,26 @@ struct AuxChannel {
   double scale = 1.0;  // raw 14-bit count * scale = engineering unit
 };
 
-struct HardwareConfig {
-  std::string serial_device = "/dev/ttyACM0";
-  int serial_baud = 115200;
+// Physical-layer settings; the factory reads `type` to pick a concrete
+// Transport. `device`/`baud` are interpreted per-transport (e.g. baud
+// is honoured for true UART, ignored by USB-CDC, irrelevant for I2C).
+struct ConnectionConfig {
+  std::string type = "uart";
+  std::string device = "/dev/ttyACM0";
+  int baud = 115200;
+};
+
+// Board-protocol settings; the factory reads `type` to pick a concrete
+// BoardProtocol. `get_period_ticks` paces auxiliary GETs against the
+// read() cycle and is consumed by HexaHardware, not by the protocol.
+struct ParserConfig {
+  std::string type = "servo2040";
   int get_period_ticks = 10;
+};
+
+struct HardwareConfig {
+  ConnectionConfig connection;
+  ParserConfig parser;
 
   std::uint8_t relay_pin = 0;
   bool relay_configured = false;

@@ -102,11 +102,16 @@ HardwareConfig load_hardware_config(const std::string& path) {
 
   HardwareConfig cfg;
 
-  if (const auto serial = root["serial"]) {
-    if (serial["device"]) cfg.serial_device = serial["device"].as<std::string>();
-    if (serial["baud"]) cfg.serial_baud = serial["baud"].as<int>();
-    if (serial["get_period_ticks"]) {
-      cfg.get_period_ticks = serial["get_period_ticks"].as<int>();
+  if (const auto conn = root["connection"]) {
+    if (conn["type"])   cfg.connection.type   = conn["type"].as<std::string>();
+    if (conn["device"]) cfg.connection.device = conn["device"].as<std::string>();
+    if (conn["baud"])   cfg.connection.baud   = conn["baud"].as<int>();
+  }
+
+  if (const auto parser = root["parser"]) {
+    if (parser["type"]) cfg.parser.type = parser["type"].as<std::string>();
+    if (parser["get_period_ticks"]) {
+      cfg.parser.get_period_ticks = parser["get_period_ticks"].as<int>();
     }
   }
 

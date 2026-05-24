@@ -16,8 +16,9 @@
 #include <rclcpp_lifecycle/state.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 
+#include "hexa_hardware/board_protocol.hpp"
 #include "hexa_hardware/joint_calibration.hpp"
-#include "hexa_hardware/servo_bus.hpp"
+#include "hexa_hardware/transport.hpp"
 
 namespace hexa_hardware {
 
@@ -64,7 +65,10 @@ class HexaHardware : public hardware_interface::SystemInterface {
   std::vector<JointSlot> joints_;
   std::vector<PinEntry> pin_order_;
 
-  ServoBus bus_;
+  // Built once in on_init from cfg.connection / cfg.parser; transport
+  // owns the link, protocol holds a reference into it.
+  std::unique_ptr<Transport> transport_;
+  std::unique_ptr<BoardProtocol> board_;
 
   // Internal node, used solely to publish aux sensor readings (battery,
   // currents). Spun on a private thread so the executor doesn't need to
