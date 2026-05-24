@@ -85,9 +85,16 @@ source install/setup.bash
 
 # Simulated robot (no hardware required)
 ros2 launch hexa_bringup sim.launch.py
-
-# Real robot (RPi 3)
-ros2 launch hexa_bringup robot.launch.py
 ```
+
+For the real robot (RPi 3), build and deploy the production image from the host workstation:
+
+```
+./hexa --prod build              # cross-build ARM64 image, save to .deploy/
+./hexa --prod deploy pi@<host>   # ship the image and start the service (cold)
+ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod engage'   # arm the servos
+```
+
+See [`docs/dev-environment.md`](docs/dev-environment.md) for the full `--prod` lifecycle.
 
 (Exact entrypoints filled in as packages are implemented. See [`docs/dev-environment.md`](docs/dev-environment.md) for the full container story.)

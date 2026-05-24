@@ -18,6 +18,10 @@ Commands:
                               pane 0 runs sim + teleop together, pane 1 is an idle 'hexa --dev' shell.
                               Default split is side-by-side; pass 'vert' to stack the panes.
                               --clean rebuilds the container first.
+  --prod <subcommand> [args]  Cross-build + deploy + operate the production image on the robot.
+                              Subcommands: build, deploy <host>, start, stop, restart, status,
+                              logs [-f], shell, engage, disengage, teleop. Run with no
+                              subcommand for the full list.
   kill                        Stop and remove the dev container.
   -h, --help                  Show this help message.
 EOF
@@ -50,6 +54,9 @@ case "${cmd}" in
         ;;
     --tmux)
         exec "${REPO_ROOT}/scripts/tmux.sh" "$@"
+        ;;
+    --prod)
+        exec "${REPO_ROOT}/scripts/prod.sh" "$@"
         ;;
     kill)
         exec "${REPO_ROOT}/scripts/kill.sh" "$@"

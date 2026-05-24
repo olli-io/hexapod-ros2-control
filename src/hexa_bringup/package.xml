@@ -13,6 +13,7 @@
   <exec_depend>hexa_posture</exec_depend>
   <exec_depend>hexa_control</exec_depend>
   <exec_depend>hexa_gait</exec_depend>
+  <exec_depend>hexa_teleop</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>position_controllers</exec_depend>

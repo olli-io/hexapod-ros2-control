@@ -113,12 +113,53 @@ A controller plugged into the host is exposed via `/dev/input/event*`;
 `scripts/dev.sh` forwards the host's `input` group GID so `joy_node` inside
 the container can read it without root.
 
-## Cross-build for the Raspberry Pi 3
+## Production deployment (`./hexa --prod`)
 
-Not in scope for this scaffolding. The eventual story: a separate
-`Dockerfile.arm64` (or buildx multi-arch) producing the same workspace built
-for `linux/arm64`. The current image is x86_64 only and intended for
-development on a workstation.
+The dev container is x86_64, Gazebo-heavy, and built around a live source
+bind-mount — none of that fits the Pi. The prod path is a separate
+`Dockerfile.prod` cross-built for `linux/arm64`, shipped to the robot as a
+saved image tarball, and run as a long-lived service.
+
+Prerequisites on the workstation:
+
+- `docker buildx` (the `docker-buildx-plugin` apt package, or built into
+  recent Docker Desktop).
+- `qemu-user-static` for the emulator binfmts. On Arch:
+  `sudo pacman -S qemu-user-static qemu-user-static-binfmt`.
+
+Prerequisites on the Pi (Ubuntu Server 24.04, ARM64):
+
+- Docker engine + `docker compose` plugin.
+- The deploy user in the `docker` group; an `input` group set up by the
+  distro (kernel adds it automatically).
+- The Pimoroni Servo 2040 plugged in (`/dev/ttyACM0`) and a joystick if
+  teleop is wanted (`/dev/input/js*`).
+
+Lifecycle:
+
+- `./hexa --prod build` — cross-build the ARM64 image, save it to
+  `.deploy/hexa-prod_<sha>.tar.gz`. The tag and tarball are stamped with
+  `git rev-parse --short HEAD` (with `-dirty` if the tree has changes).
+- `./hexa --prod deploy <user@host>` — `scp` the tarball plus
+  `docker-compose.prod.yaml` and `.env.prod.sample` to `~/hexa-prod/` on
+  the Pi, `docker load`, and `docker compose up -d`. The service comes up
+  **cold**: the hardware component sits at `inactive` and the servo-rail
+  relay stays open — container start does **not** energise the robot.
+- `./hexa --prod engage` (on the Pi, or via `ssh`) — transitions the
+  hardware component to `active` (relay click), then spawns
+  `joint_state_broadcaster` and `joint_group_position_controller`. After
+  this the robot is drivable.
+- `./hexa --prod disengage` — unloads the controllers and drops the
+  hardware back to `inactive`. Relay opens; the robot goes limp.
+- `./hexa --prod {start|stop|restart|status|logs|shell|teleop}` —
+  routine container ops against the local `hexa-prod` service.
+
+The cold-start gate is implemented by passing the
+`hardware_components_initial_state` parameter to `controller_manager` from
+`robot.launch.py` when `engage_on_start:=false`, which is the only
+non-default setting in `prod.launch.py`. No new C++ in `hexa_hardware` —
+the relay still toggles in `on_activate` / `on_deactivate`, and the
+lifecycle state is held back externally.
 
 ## Troubleshooting
 

@@ -1,0 +1,32 @@
+services:
+  prod:
+    image: hexa-prod:latest
+    container_name: hexa-prod
+    hostname: hexa-prod
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    working_dir: /workspace
+    # Supplementary GIDs for the container user. INPUT_GID forwards the Pi's
+    # `input` group so joy_node can read /dev/input/event* (the joystick).
+    group_add:
+      - "${INPUT_GID:-994}"
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+    # Servo 2040 over USB-CDC. SERVO_DEVICE defaults to /dev/ttyACM0 — set it
+    # to a /dev/serial/by-id/... path in .env once the actual device string
+    # is known, so a re-enumerated bus number doesn't break startup.
+    devices:
+      - "${SERVO_DEVICE:-/dev/ttyACM0}:/dev/ttyACM0"
+    # Joystick passthrough (same shape as the dev compose): bind /dev/input
+    # rshared so hot-plugged controllers become visible without restarting
+    # the container; device_cgroup_rules grants char-device access.
+    volumes:
+      - type: bind
+        source: /dev/input
+        target: /dev/input
+        bind:
+          propagation: rshared
+      - ./log:/workspace/log
+    device_cgroup_rules:
+      - 'c 13:* rmw'
