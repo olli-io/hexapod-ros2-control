@@ -9,6 +9,7 @@ from .animations import (
     Still,
     VerticalBodyRoll,
 )
+from .config import load_animation_mode_animations
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp, scale
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "VerticalBodyRoll",
     "add",
     "clamp",
+    "load_animation_mode_animations",
     "scale",
 ]

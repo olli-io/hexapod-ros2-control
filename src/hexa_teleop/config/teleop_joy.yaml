@@ -10,6 +10,9 @@
 initial_mode: gait              # "gait" | "posture" | "animation"
 gait_cycle: [wave, ripple, tetrapod, surf, tripod]  # slowest → fastest
 default_gait: tripod
+# ANIMATION-mode cycler list comes from hexa_posture/config/posture.yaml
+# (``animation_mode_animations``) — single source of truth. Entry into
+# ANIMATION snaps to index 0.
 
 base:
   deadband: 0.1                 # stick deadband applied after sign norm
@@ -63,8 +66,7 @@ gait:
   # Functions allowed on button-class keys (l1/r1/l2/r2/dpad_*):
   #   yaw_left | yaw_right | wiggle_left | wiggle_right |
   #   height_up | height_down | gait_prev | gait_next |
-  #   animation_vertical_body_roll | animation_horizontal_body_roll |
-  #   animation_body_roll_3d
+  #   animation_prev | animation_next
   # Functions allowed on axis-class keys (sticks):
   #   drive_x | drive_y | drive_yaw | pose_x | pose_y | tilt_roll | tilt_pitch
   bindings:
@@ -116,9 +118,9 @@ animation:
     r1: ""
     l2: ""
     r2: ""
-    dpad_up: animation_vertical_body_roll
-    dpad_down: animation_body_roll_3d
-    dpad_left: animation_horizontal_body_roll
+    dpad_up: animation_next
+    dpad_down: animation_prev
+    dpad_left: ""
     dpad_right: ""
     left_stick_x: drive_yaw
     left_stick_y: ""

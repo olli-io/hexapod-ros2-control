@@ -9,7 +9,7 @@ package README.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 POSTURE = "posture"
@@ -34,9 +34,8 @@ BUTTON_CLASS_FUNCTIONS: frozenset[str] = frozenset({
     "height_down",
     "gait_prev",
     "gait_next",
-    "animation_vertical_body_roll",
-    "animation_horizontal_body_roll",
-    "animation_body_roll_3d",
+    "animation_prev",
+    "animation_next",
 })
 AXIS_CLASS_FUNCTIONS: frozenset[str] = frozenset({
     "drive_x",
@@ -50,18 +49,6 @@ AXIS_CLASS_FUNCTIONS: frozenset[str] = frozenset({
 ALL_FUNCTIONS: frozenset[str] = (
     BASE_FUNCTIONS | BUTTON_CLASS_FUNCTIONS | AXIS_CLASS_FUNCTIONS
 )
-
-# Animation selectors fire a /animation/mode publish on rising edge.
-ANIMATION_SELECT_FUNCTIONS: tuple[str, ...] = (
-    "animation_vertical_body_roll",
-    "animation_horizontal_body_roll",
-    "animation_body_roll_3d",
-)
-_ANIMATION_FUNCTION_TO_NAME: dict[str, str] = {
-    "animation_vertical_body_roll": "vertical_body_roll",
-    "animation_horizontal_body_roll": "horizontal_body_roll",
-    "animation_body_roll_3d": "body_roll_3d",
-}
 
 # Virtual D-pad direction keys. Maps the bindable key name to the
 # physical axis name in ``base.axes`` and the sign (after sign
@@ -129,6 +116,10 @@ class JoyConfig:
     # ``dataclasses.replace`` whenever the active gait changes.
     gait_linear_max: float
     gait_angular_z_max: float
+    # Ordered list of animation names the ANIMATION-mode cycler walks
+    # through. Entry into ANIMATION snaps to index 0; subsequent
+    # ``animation_prev`` / ``animation_next`` presses step the index.
+    animation_list: tuple[str, ...]
 
 
 @dataclass
@@ -167,8 +158,12 @@ class JoyState:
     # The ROS layer seeds ``current_gait_idx`` from the control-node
     # default at startup and on every accepted publish.
     current_gait_idx: int = 0
-    # Per-function rising-edge tracker for animation selectors.
-    prev_animation_select: dict[str, bool] = field(default_factory=dict)
+    # Rising-edge trackers for the animation cycler.
+    prev_animation_prev: bool = False
+    prev_animation_next: bool = False
+    # Index into ``cfg.animation_list`` for the active selection. Reset
+    # to 0 every time ANIMATION mode is entered.
+    current_animation_idx: int = 0
     # Active animation-mode selection. ``""`` when ANIMATION mode is
     # not in effect; otherwise the name of the selected animation.
     animation_name: str = ""
@@ -479,10 +474,12 @@ def map_joy(
         animation_name_out = ""
     elif prev_mode != ANIMATION and state.mode == ANIMATION:
         # Entering ANIMATION: force tripod (animations are tripod-only)
-        # and start with vertical_body_roll so the body is visibly
-        # animated immediately.
-        state.animation_name = "vertical_body_roll"
-        animation_name_out = "vertical_body_roll"
+        # and snap to the first entry in ``animation_list`` so the
+        # body is visibly animated immediately.
+        if cfg.animation_list:
+            state.current_animation_idx = 0
+            state.animation_name = cfg.animation_list[0]
+            animation_name_out = cfg.animation_list[0]
         forced_gait = "tripod"
         if cfg.gait_cycle and "tripod" in cfg.gait_cycle:
             state.current_gait_idx = cfg.gait_cycle.index("tripod")
@@ -575,33 +572,34 @@ def map_joy(
         elif state.height_current < posture_cfg.height_min:
             state.height_current = posture_cfg.height_min
 
-    # Animation selectors: each animation-* function fires a publish
-    # on its own rising edge. Bound to D-pad directions by default,
-    # but any button-class binding works.
+    # Animation cycler: ``animation_prev`` / ``animation_next`` rising
+    # edges step through ``cfg.animation_list``. Active only in
+    # ANIMATION mode; prev-state is still refreshed in other modes so
+    # a button still held when ANIMATION is entered doesn't spuriously
+    # rising-edge on the entry tick.
     animation_cfg = cfg.animation
-    if state.mode == ANIMATION:
-        for fn in ANIMATION_SELECT_FUNCTIONS:
-            pressed = button_pressed_for(
-                fn, base, animation_cfg, buttons, axes
-            )
-            prev = state.prev_animation_select.get(fn, False)
-            if pressed and not prev:
-                anim_name = _ANIMATION_FUNCTION_TO_NAME[fn]
-                if state.animation_name != anim_name:
-                    state.animation_name = anim_name
-                    animation_name_out = anim_name
-            state.prev_animation_select[fn] = pressed
-    else:
-        # Keep the prev map fresh in non-ANIMATION modes too so a
-        # button that's still held when ANIMATION is entered doesn't
-        # spuriously rising-edge on the entry tick. Evaluate against
-        # the animation bindings (the bindings that will be in effect
-        # if/when ANIMATION is entered) so prev tracks the same
-        # interpretation as the in-mode read.
-        for fn in ANIMATION_SELECT_FUNCTIONS:
-            state.prev_animation_select[fn] = button_pressed_for(
-                fn, base, animation_cfg, buttons, axes
-            )
+    anim_prev_pressed = button_pressed_for(
+        "animation_prev", base, animation_cfg, buttons, axes
+    )
+    anim_next_pressed = button_pressed_for(
+        "animation_next", base, animation_cfg, buttons, axes
+    )
+    if state.mode == ANIMATION and cfg.animation_list:
+        delta = 0
+        if anim_next_pressed and not state.prev_animation_next:
+            delta += 1
+        if anim_prev_pressed and not state.prev_animation_prev:
+            delta -= 1
+        if delta != 0:
+            state.current_animation_idx = (
+                state.current_animation_idx + delta
+            ) % len(cfg.animation_list)
+            new_name = cfg.animation_list[state.current_animation_idx]
+            if state.animation_name != new_name:
+                state.animation_name = new_name
+                animation_name_out = new_name
+    state.prev_animation_prev = anim_prev_pressed
+    state.prev_animation_next = anim_next_pressed
 
     # Gait cycler: ``gait_prev`` / ``gait_next`` rising edges. Cycling
     # is mode-agnostic for the resolution itself but suppressed in

@@ -84,9 +84,9 @@ _DEFAULT_ANIMATION_BINDINGS = {
     "r1": "",
     "l2": "",
     "r2": "",
-    "dpad_up": "animation_vertical_body_roll",
-    "dpad_down": "animation_body_roll_3d",
-    "dpad_left": "animation_horizontal_body_roll",
+    "dpad_up": "animation_next",
+    "dpad_down": "animation_prev",
+    "dpad_left": "",
     "dpad_right": "",
     "left_stick_x": "drive_yaw",
     "left_stick_y": "",
@@ -150,6 +150,11 @@ def _cfg(**overrides) -> JoyConfig:
         "gait_cycle": ("wave", "ripple", "tripod"),
         "gait_linear_max": 0.4,
         "gait_angular_z_max": 1.0,
+        "animation_list": (
+            "vertical_body_roll",
+            "horizontal_body_roll",
+            "body_roll_3d",
+        ),
     }
 
     for key, value in overrides.items():
@@ -1147,58 +1152,113 @@ def test_dpad_x_empty_cycle_is_inert():
     assert out.gait_select is None
 
 
-# ---- ANIMATION-mode D-pad animation selection -------------------------------
+# ---- ANIMATION-mode D-pad animation cycler ---------------------------------
 
 
-def test_animation_mode_dpad_up_selects_vertical_body_roll():
+def test_animation_mode_dpad_up_advances_to_next():
+    # D-up = animation_next: first entry → second entry in animation_list.
     cfg = _cfg()
-    state = JoyState(mode=ANIMATION, animation_name="")
+    state = JoyState(
+        mode=ANIMATION,
+        animation_name="vertical_body_roll",
+        current_animation_idx=0,
+    )
     out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "horizontal_body_roll"
+    assert state.animation_name == "horizontal_body_roll"
+    assert state.current_animation_idx == 1
+
+
+def test_animation_mode_dpad_down_steps_back_to_prev():
+    # D-down = animation_prev: second entry → first entry in animation_list.
+    cfg = _cfg()
+    state = JoyState(
+        mode=ANIMATION,
+        animation_name="horizontal_body_roll",
+        current_animation_idx=1,
+    )
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
     assert out.animation_name == "vertical_body_roll"
     assert state.animation_name == "vertical_body_roll"
+    assert state.current_animation_idx == 0
 
 
-def test_animation_mode_dpad_down_selects_body_roll_3d():
-    # D-down picks the body_roll_3d animation — vertical and horizontal
-    # rolls combined with a quarter-cycle phase offset so the motion
-    # traces a circle.
+def test_animation_mode_dpad_up_wraps_around():
+    # Cycling next past the end wraps back to index 0.
     cfg = _cfg()
-    state = JoyState(mode=ANIMATION, animation_name="vertical_body_roll")
+    state = JoyState(
+        mode=ANIMATION,
+        animation_name="body_roll_3d",
+        current_animation_idx=2,
+    )
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "vertical_body_roll"
+    assert state.current_animation_idx == 0
+
+
+def test_animation_mode_dpad_down_wraps_around():
+    # Cycling prev before index 0 wraps to the end of animation_list.
+    cfg = _cfg()
+    state = JoyState(
+        mode=ANIMATION,
+        animation_name="vertical_body_roll",
+        current_animation_idx=0,
+    )
     out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
     assert out.animation_name == "body_roll_3d"
-    assert state.animation_name == "body_roll_3d"
+    assert state.current_animation_idx == 2
 
 
-def test_animation_mode_dpad_y_rising_edge_only():
-    # Holding D-down must not re-publish on every tick.
+def test_animation_mode_dpad_rising_edge_only():
+    # Holding D-up must not re-trigger on every tick.
     cfg = _cfg()
-    state = JoyState(mode=ANIMATION, animation_name="vertical_body_roll")
-    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
-    assert out.animation_name == "body_roll_3d"
+    state = JoyState(
+        mode=ANIMATION,
+        animation_name="vertical_body_roll",
+        current_animation_idx=0,
+    )
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name == "horizontal_body_roll"
     for _ in range(20):
-        out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+        out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
         assert out.animation_name is None
-    # Release then press again → re-fires only if the selection differs;
-    # here the state is already body_roll_3d, so no republish.
+    # Release then press again → fires the next advance.
     map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
-    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
-    assert out.animation_name is None
-    # Toggle through D-up, release, then D-down again — the swap fires.
-    map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
-    map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
-    map_joy(_axes(dpad_y=0.0), _buttons(), cfg, state, DT)
-    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
     assert out.animation_name == "body_roll_3d"
 
 
-def test_animation_mode_dpad_down_outside_animation_mode_is_inert():
-    # D-down in POSTURE integrates height, never publishes animation
-    # selection.
+def test_animation_mode_dpad_outside_animation_mode_is_inert():
+    # D-up / D-down in POSTURE integrate height, never publish
+    # animation selection.
     cfg = _cfg()
     state = JoyState(mode=POSTURE)
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert out.animation_name is None
+    assert state.animation_name == ""
     out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
     assert out.animation_name is None
     assert state.animation_name == ""
+
+
+def test_animation_mode_entry_snaps_to_first_in_list():
+    # Toggling into ANIMATION from GAIT resets idx to 0 and publishes
+    # animation_list[0] regardless of any prior idx state.
+    cfg = _cfg()
+    state = JoyState(
+        mode=GAIT,
+        animation_name="",
+        current_animation_idx=2,
+    )
+    # Press B (animation_mode toggle).
+    pressed = list(_buttons())
+    pressed[1] = 1
+    out = map_joy(_axes(), tuple(pressed), cfg, state, DT)
+    assert out.mode_changed is True
+    assert state.mode == ANIMATION
+    assert state.current_animation_idx == 0
+    assert state.animation_name == "vertical_body_roll"
+    assert out.animation_name == "vertical_body_roll"
 
 
 # ---- Binding flexibility (portability across controllers) ------------------

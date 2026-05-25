@@ -12,6 +12,7 @@
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
   <depend>hexa_gait</depend>
+  <depend>hexa_posture</depend>
 
   <test_depend>python3-pytest</test_depend>
 

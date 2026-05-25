@@ -85,7 +85,7 @@ and `posture.bindings` — are allowed.
 Function namespace (assignable in YAML):
 
 - **base** — `gait_mode`, `posture_mode`, `animation_mode`, `init`, `record`.
-- **button-class** — `yaw_left`, `yaw_right`, `wiggle_left`, `wiggle_right`, `height_up`, `height_down`, `gait_prev`, `gait_next`, `animation_vertical_body_roll`, `animation_horizontal_body_roll`, `animation_body_roll_3d`. Bindable to any button or D-pad direction. `wiggle_left` / `wiggle_right` are polymorphic: bound to a trigger axis (`l2` / `r2`), they're thresholded against `base.trigger_threshold`; bound to a face button, they read the button directly.
+- **button-class** — `yaw_left`, `yaw_right`, `wiggle_left`, `wiggle_right`, `height_up`, `height_down`, `gait_prev`, `gait_next`, `animation_prev`, `animation_next`. Bindable to any button or D-pad direction. `wiggle_left` / `wiggle_right` are polymorphic: bound to a trigger axis (`l2` / `r2`), they're thresholded against `base.trigger_threshold`; bound to a face button, they read the button directly.
 - **axis-class** — `drive_x`, `drive_y`, `drive_yaw` (gait `/cmd_vel`), `pose_x`, `pose_y` (posture translation), `tilt_roll`, `tilt_pitch` (posture body tilt). Bindable only to stick axes.
 
 ## Default behavior
@@ -98,7 +98,7 @@ The shipped YAML:
 - **L1 / R1 (posture)** — `yaw_left` / `yaw_right` body yaw, eased through `posture.yaw_tau_s` (default ~0.1 s), saturates at `posture.yaw_max_deg` while held. Both buttons cancel to zero. Inactive in other modes.
 - **L2 / R2 (posture)** — `wiggle_left` / `wiggle_right`. Same yaw target as L1 / R1 (shared) plus a body translation that holds a point `posture.wiggle_pivot_forward_m` ahead of body centre stationary. Triggers thresholded at `base.trigger_threshold`. Inactive in other modes.
 - **D-pad up / down (posture)** — `height_up` / `height_down` integrate a persistent body-height offset (`pose.z`) while held, clamped to `posture.height.[min,max]_m`. Height **persists** across release and a mode toggle into gait, so the robot keeps walking at the lifted/lowered chassis height.
-- **D-pad up / down / left (animation)** — `animation_vertical_body_roll`, `animation_body_roll_3d`, `animation_horizontal_body_roll`. Each rising edge publishes the corresponding `/animation/mode`.
+- **D-pad up / down (animation)** — `animation_next` / `animation_prev` cycle through the animation list loaded at startup from `hexa_posture/config/posture.yaml` (`animation_mode_animations`; `vertical_body_roll → horizontal_body_roll → body_roll_3d` by default, wrapping). Each rising edge publishes the new selection on `/animation/mode`. Entering ANIMATION mode snaps to index 0 and publishes that name so the body is visibly animated immediately.
 - **D-pad left / right (gait, posture)** — `gait_prev` / `gait_next` cycle the active gait through `gait_cycle` (`wave → ripple → tetrapod → surf → tripod` by default). The switch is only published to `/cmd_gait` when the gait engine reports `stand`; presses mid-walk advance the local cursor but no switch lands on the wire until the engine returns to STAND.
 - **Select (posture)** — `record`. Snapshots the current effective body pose on rising edge into a persistent baseline. The robot holds that pose when the joystick is released; subsequent stick input adds on top and clamps per-axis, so re-pushing a stick that's already at its limit has no further effect. The baseline bleeds through into gait mode.
 - **A** — `gait_mode`. **Y** — `posture_mode`. **B** — `animation_mode` (toggles GAIT ↔ ANIMATION).
@@ -120,3 +120,9 @@ startup from `hexa_gait/config/gait.yaml` via
 - Angular cap is the explicit `angular_z_max` knob in `gait.yaml`.
 
 To change those caps, edit `gait.yaml`; no teleop config edit needed.
+
+Likewise the ANIMATION-mode cycler list is loaded from
+`hexa_posture/config/posture.yaml` via
+`hexa_posture.load_animation_mode_animations`, so adding an entry to
+`animation_mode_animations` exposes it on the joystick without any
+teleop-side edit.

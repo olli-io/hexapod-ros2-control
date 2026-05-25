@@ -26,6 +26,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Empty, String
 
 from hexa_gait import VelocityCaps, load_velocity_caps
+from hexa_posture import load_animation_mode_animations
 
 from .joy_mapping import (
     ANIMATION,
@@ -88,11 +89,12 @@ def _parse_mode_bindings(
 
 
 def _load_config(
-    path: Path, gait_yaml: Path
+    path: Path, gait_yaml: Path, posture_yaml: Path
 ) -> tuple[JoyConfig, str, str, VelocityCaps]:
     with path.open() as f:
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml)
+    animation_list = load_animation_mode_animations(posture_yaml)
 
     gait_cycle = tuple(str(n) for n in raw["gait_cycle"])
     default_gait = str(raw["default_gait"])
@@ -140,6 +142,7 @@ def _load_config(
         # dataclasses.replace whenever a /cmd_gait publish lands.
         gait_linear_max=caps.linear_max(default_gait),
         gait_angular_z_max=caps.angular_max,
+        animation_list=animation_list,
     )
 
     initial_mode = str(raw.get("initial_mode", POSTURE))
@@ -165,12 +168,17 @@ class TeleopJoyNode(Node):
             / "config"
             / "gait.yaml"
         )
+        posture_yaml_path = (
+            Path(get_package_share_directory("hexa_posture"))
+            / "config"
+            / "posture.yaml"
+        )
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
         )
         self._cfg, initial_mode, default_gait, self._caps = _load_config(
-            cfg_path, gait_yaml_path
+            cfg_path, gait_yaml_path, posture_yaml_path
         )
         self._state = JoyState(
             mode=initial_mode,
@@ -200,6 +208,10 @@ class TeleopJoyNode(Node):
 
         self._latest_axes: tuple[float, ...] = ()
         self._latest_buttons: tuple[int, ...] = ()
+        # Diagnostic state: one-shot length log + per-button edge log so
+        # users can see which physical index a press actually fires at.
+        self._joy_shape_logged = False
+        self._last_buttons_for_log: tuple[int, ...] = ()
 
         self._sub_joy = self.create_subscription(Joy, "/joy", self._on_joy, 10)
         self._sub_gait_state = self.create_subscription(

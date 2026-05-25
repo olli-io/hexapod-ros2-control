@@ -33,14 +33,13 @@ posture_node:
     # raise toward 1.0 once the wobble suppression is dialled in.
     gait_sway_strength: 0.5
 
-    # ANIMATION-mode animation stack. Each name listed here is built
-    # as a dedicated stack (just ``still`` + that animation) which
-    # posture swaps in when /animation/mode carries that name.
-    # Comma-separated entries compose multiple animations into a
-    # single stack. The teleop layer binds D-up → vertical_body_roll,
-    # D-left → horizontal_body_roll, and D-down → body_roll_3d;
-    # extending the list here without updating the teleop side just
-    # makes the animation available on the /animation/mode topic.
+    # ANIMATION-mode animation stack. Single source of truth — the
+    # teleop layer reads this list at startup (via
+    # ``hexa_posture.load_animation_mode_animations``) and cycles
+    # through it with D-up / D-down. Each name here is built as a
+    # dedicated stack (just ``still`` + that animation) which posture
+    # swaps in when /animation/mode carries that name. Comma-separated
+    # entries compose multiple animations into a single stack.
     animation_mode_animations:
       - vertical_body_roll
       - horizontal_body_roll
