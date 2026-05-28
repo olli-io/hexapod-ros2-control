@@ -7,15 +7,53 @@ ROS2 control stack for a 6-leg / 18-DOF hexapod robot.
 - **Simulator**: Gazebo Harmonic (paired with Jazzy, via `ros_gz`). The `hexa_hardware` package abstracts the servo bus so the same gait/control code runs in sim or on the real robot.
 - **Dev environment**: Docker container (`./hexa --dev`), so the Arch / non-Ubuntu host doesn't need ROS2 installed. See [`docs/dev-environment.md`](docs/dev-environment.md).
 
+## Build / run
+
+Clone this repository: ``` git clone git@github.com/olli-io/hexapod ```
+
+All commands run inside the dev container. From the repo root on the host:
+
+```
+./hexa --dev            # open interactive shell in the container
+./hexa --dev --launch   # opens shell in the container and launches the desktop sim environment
+```
+
+Other arguments:
+```
+--clean                 # Rebuilds the container and hexapod nodes
+--tmux                  # Same as --dev --launch but with a tmux split for convenience
+```
+
+Inside the container, the workspace CLI is `pod`:
+
+```
+pod build                    # colcon build --symlink-install
+pod sim                      # ros2 launch hexa_bringup sim.launch.py
+```
+
+For the real robot, build and deploy the production image to a rPi 4 or 5 from the host workstation:
+
+```
+./hexa --prod build              # cross-build ARM64 image, save to .deploy/
+./hexa --prod deploy pi@<host>   # ship the image and start the service (cold)
+ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod engage'   # arm the servos
+```
+
+See [`docs/dev-environment.md`](docs/dev-environment.md) for the full `--prod` lifecycle, and [`docs/robot-environment.md`](docs/robot-environment.md) for preparing a fresh Pi to receive deploys.
+
 ## Configuration
 
-All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`colcon build --symlink-install` re-links instantly), relaunch.
+All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`pod build` re-links instantly), relaunch.
 
 - [`src/hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — body dimensions, leg segment lengths / radii / masses, foot, per-leg hip mounts, and per-joint-type (coxa / femur / tibia) servo center, lower / upper travel limits, effort, and velocity. Single source of truth for the robot's shape and joint travel; loaded into the URDF via xacro.
+- [`src/hexa_description/config/standing_pose.yaml`](src/hexa_description/config/standing_pose.yaml) — per-joint angles (coxa / femur / tibia) at rest. Drives nominal foot targets via FK; kept separate from servo center so an asymmetric build can diverge.
 - [`src/hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick axis / button mapping, deadband, posture↔gait toggle button, initial mode, and the max `cmd_vel` and posture offsets each mode emits.
-- [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and the joint-group controller's joint ordering. Sim-only; the real-robot bringup will ship its own copy via `hexa_hardware`.
-
-New packages follow the same convention: ship a `config/*.yaml` and load it at launch via parameters. Gait params, posture envelope / animation weights, and gait-selection thresholds will join the list as `hexa_gait`, `hexa_posture`, and `hexa_control` land.
+- [`src/hexa_control/config/control.yaml`](src/hexa_control/config/control.yaml) — default gait selection and `cmd_vel` ramp / snap tolerances used to shape teleop input before it hits the gait engine.
+- [`src/hexa_gait/config/gait.yaml`](src/hexa_gait/config/gait.yaml) — gait engine knobs: controller tick, default gait, stride length, step height, swing width, and swing-time bounds that anchor per-gait cycle-time limits.
+- [`src/hexa_posture/config/posture.yaml`](src/hexa_posture/config/posture.yaml) — posture node animation stack: which gait-coupled and animation-mode animations are enabled and their gain / strength / amplitude knobs.
+- [`src/hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring (transport, device, per-pin joint assignment), pulse-width calibration endpoints, electrical clamps, and aux ADC scales. Real-robot only.
+- [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and joint-group controller's joint ordering. Sim-only.
+- [`src/hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — real-robot mirror of the sim controllers config, with `use_sim_time: false` and the 100 Hz update rate the gait/IK stack publishes at.
 
 ## Design principles
 
@@ -95,6 +133,6 @@ For the real robot (RPi 3), build and deploy the production image from the host 
 ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod engage'   # arm the servos
 ```
 
-See [`docs/dev-environment.md`](docs/dev-environment.md) for the full `--prod` lifecycle.
+See [`docs/dev-environment.md`](docs/dev-environment.md) for the full `--prod` lifecycle, and [`docs/robot-environment.md`](docs/robot-environment.md) for preparing a fresh Pi to receive deploys.
 
 (Exact entrypoints filled in as packages are implemented. See [`docs/dev-environment.md`](docs/dev-environment.md) for the full container story.)

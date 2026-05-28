@@ -46,8 +46,7 @@
 
        The <sensor type="contact"> blocks emit gz.msgs.Contacts on
        /contact/<foot> whenever the foot is touching another collider.
-       Each Contacts message carries world-frame contact points, which
-       the foot_paint dev node consumes to draw slip trails.
+       Each Contacts message carries world-frame contact points.
        =================================================================== -->
   <xacro:macro name="foot_contact" params="link">
     <gazebo reference="${link}">

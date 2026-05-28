@@ -11,13 +11,11 @@ cd "${REPO_ROOT}"
 clean=0
 run_tests=0
 split_flag="-v"
-sim_args=()
 for arg in "$@"; do
     case "${arg}" in
         --clean)         clean=1 ;;
         --test)          run_tests=1 ;;
         --horizontal)    split_flag="-h" ;;
-        --withFootPaint) sim_args+=("${arg}") ;;
         *)
             echo "Unknown argument: ${arg}" >&2
             exit 1
@@ -60,12 +58,10 @@ fi
 "${REPO_ROOT}/scripts/dev.sh" true
 
 # Pane 0 (left): drop into the dev container, launch sim in the background,
-# then start teleop in the same shell once /clock is up. Use `pod sim` rather
-# than the `sim` alias so shorthand flags like --withFootPaint are translated.
-sim_cmd="pod sim${sim_args[*]:+ ${sim_args[*]}}"
+# then start teleop in the same shell once /clock is up.
 tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/hexa --dev"
 tmux send-keys -t "${SESSION}:${WINDOW}.0" \
-    "${sim_cmd} & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; teleop" Enter
+    "pod sim & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; teleop" Enter
 
 # Pane 1 (right/below): idle dev shell for ad-hoc commands.
 tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/hexa --dev"
