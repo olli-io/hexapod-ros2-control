@@ -18,6 +18,8 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
 
 add_library(${PROJECT_NAME} SHARED
   src/joint_calibration.cpp
@@ -40,7 +42,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_lifecycle
   sensor_msgs
 )
-target_link_libraries(${PROJECT_NAME} yaml-cpp)
+target_link_libraries(${PROJECT_NAME} yaml-cpp PkgConfig::LIBUSB)
 
 pluginlib_export_plugin_description_file(hardware_interface hexa_hardware_plugins.xml)
 

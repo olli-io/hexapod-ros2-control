@@ -23,14 +23,18 @@ if needed.
 sudo apt update && sudo apt full-upgrade -y
 sudo reboot
 curl -fsSL https://get.docker.com | sh
-sudo apt install -y docker-compose-plugin git
+sudo apt install i-y docker-compose-plugin git
 sudo usermod -aG docker $USER
 ```
-
-Log out and back in, then verify:
+Exit and re-enter the ssh session, then verify:
 
 ```
 docker run --rm hello-world
+```
+You may need to run:
+
+```
+sudo usermod -aG docker <your_username>
 ```
 
 ## 3. Note hardware IDs
@@ -38,8 +42,8 @@ docker run --rm hello-world
 Plug in the Servo 2040, then on the Pi:
 
 ```
-ls /dev/serial/by-id/                       # note the usb-Pimoroni_Servo_2040-... path
-getent group input | cut -d: -f3            # note the input GID (example: 904)
+ls /dev/serial/by-id/                       # note the usb-Rasperry-Pi-Pico... path
+getent group input | cut -d: -f3            # note the input GID (example: 994)
 ```
 
 ## 4. First deploy from the workstation
@@ -55,7 +59,7 @@ inactive).
 
 ## 5. Tune `~/hexa-prod/.env` on the Pi
 
-- **`INPUT_GID`** — value from step 3 (typically `104`).
+- **`INPUT_GID`** — value from step 3 (typically something like`996`).
 - **`ROS_DOMAIN_ID`** — DDS domain, default `42`.
 - **`SERVO_DEVICE`** — the `/dev/serial/by-id/usb-Pimoroni_Servo_2040-...`
   path from step 3.
