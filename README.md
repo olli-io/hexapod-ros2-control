@@ -2,44 +2,12 @@
 
 ROS2 control stack for a 6-leg / 18-DOF hexapod robot.
 
-- **Hardware target**: Raspberry Pi 3 (Ubuntu Server 24.04, ARM64) driving a Pimoroni Servo 2040 over USB serial or I2C.
-- **ROS2 distro**: Jazzy Jalisco (LTS, supported through 2029).
-- **Simulator**: Gazebo Harmonic (paired with Jazzy, via `ros_gz`). The `hexa_hardware` package abstracts the servo bus so the same gait/control code runs in sim or on the real robot.
-- **Dev environment**: Docker container (`./hexa --dev`), so the Arch / non-Ubuntu host doesn't need ROS2 installed. See [`docs/dev-environment.md`](docs/dev-environment.md).
+- **Hardware target**: Raspberry Pi 3 or 4 ( recommended OS: Pi OS lite ) driving a Pimoroni Servo 2040 over USB serial.
 
 ## Build / run
 
-Clone this repository: ``` git clone git@github.com/olli-io/hexapod ```
-
-All commands run inside the dev container. From the repo root on the host:
-
-```
-./hexa --dev            # open interactive shell in the container
-./hexa --dev --launch   # opens shell in the container and launches the desktop sim environment
-```
-
-Other arguments:
-```
---clean                 # Rebuilds the container and hexapod nodes
---tmux                  # Same as --dev --launch but with a tmux split for convenience
-```
-
-Inside the container, the workspace CLI is `pod`:
-
-```
-pod build                    # colcon build --symlink-install
-pod sim                      # ros2 launch hexa_bringup sim.launch.py
-```
-
-For the real robot, build and deploy the production image to a rPi 4 or 5 from the host workstation:
-
-```
-./hexa --prod build              # cross-build ARM64 image, save to .deploy/
-./hexa --prod deploy pi@<host>   # ship the image and start the service (cold)
-ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod engage'   # arm the servos
-```
-
-See [`docs/dev-environment.md`](docs/dev-environment.md) for the full `--prod` lifecycle, and [`docs/robot-environment.md`](docs/robot-environment.md) for preparing a fresh Pi to receive deploys.
+[`docs/dev-environment.md`](docs/dev-environment.md) for the dev/desktop container workflow.
+[`docs/robot-environment.md`](docs/robot-environment.md) for preparing a fresh Pi to receive deploys.
 
 ## Configuration
 
@@ -85,54 +53,3 @@ Each arrow is "depends on" — the higher-level package imports the lower-level 
 - Body-pose side channel: `hexa_teleop` → `hexa_posture` → `hexa_kinematics` (parallel to the gait chain, composed in the IK node)
 - `hexa_bringup` → `hexa_control`, `hexa_posture` (composes both chains via launch files)
 - Leaves consumed by the above: `hexa_description`, `hexa_interfaces`, `hexa_simulation`
-
-## Runtime data flow
-
-Body velocity (gait-driving) and body pose (positioning/animation) flow as two parallel signals. The gait engine consumes velocity; the IK node composes pose with foot targets. This keeps gait strategies pure `(phase, params) → foot_target` functions while still allowing the body to translate, yaw, or sway — both with feet grounded (pose mode) and during a walking gait (body animation).
-
-Each step: producer — purpose — topic (message type) — consumer.
-
-1. teleop / autonomy — publish body velocity — `/cmd_vel` (`geometry_msgs/Twist`) → `hexa_control`, `hexa_posture`
-2. teleop / autonomy — publish user body pose offset — `/body/pose` (`hexa_interfaces/BodyPose`) → `hexa_posture`
-3. `hexa_control` — select gait, shape velocity for current gait — `/gait/params` (`hexa_interfaces/GaitParams`) → `hexa_gait`
-4. `hexa_posture` — compose user pose + animations (sway, breathing, lean…), clamp to envelope — `/body/pose_target` (`hexa_interfaces/BodyPose`) → `hexa_kinematics`
-5. `hexa_gait` — per-leg phase + foot trajectory in nominal body frame — `/legs/targets` (`hexa_interfaces/LegState[6]`) → `hexa_kinematics`
-5b. `hexa_gait` — current engine state (FOLDED, INITIALIZE, STAND, ENGAGING, GAIT, STOPPING, FOLDING) — `/gait/state` (`std_msgs/String`) → `hexa_posture` (gates body-pose application so the chassis can't be tilted while folded or mid-cold-start)
-6. `hexa_kinematics` — compose pose target with foot targets, then IK: foot pose → 18 joint angles — `/joint_commands` (`sensor_msgs/JointState`) → `hexa_hardware`
-7. `hexa_hardware` — ros2_control: joints → PWM → Servo 2040 (real) or Gazebo (sim)
-
-### Pose mode vs gait-active
-
-- **Pose mode** — `cmd_vel` is zero, gait is in `STAND` (see `hexa_gait` README). The foot targets emitted by the gait engine are constant (nominal stance). `hexa_posture` runs idle animations (e.g. breathing) and forwards the user's pose offset; the IK node re-solves joint angles against the held foot positions — the body translates/yaws/tilts relative to planted feet.
-- **Gait-active body animation** — `cmd_vel` is non-zero. Foot targets sweep through swing/stance trajectories in the nominal body frame. `hexa_posture` runs gait-coupled animations (sway, lean, bob) on top of the user pose; the IK node composes the resulting offset with each frame's foot targets before solving. Gait strategies stay stateless and ignorant of body pose.
-
-## Build / run
-
-All commands run inside the dev container. From the repo root on the host:
-
-```
-./hexa --dev                 # interactive shell in the container
-```
-
-Then, inside the container:
-
-```
-# Build the workspace
-colcon build --symlink-install
-source install/setup.bash
-
-# Simulated robot (no hardware required)
-ros2 launch hexa_bringup sim.launch.py
-```
-
-For the real robot (RPi 3), build and deploy the production image from the host workstation:
-
-```
-./hexa --prod build              # cross-build ARM64 image, save to .deploy/
-./hexa --prod deploy pi@<host>   # ship the image and start the service (cold)
-ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod engage'   # arm the servos
-```
-
-See [`docs/dev-environment.md`](docs/dev-environment.md) for the full `--prod` lifecycle, and [`docs/robot-environment.md`](docs/robot-environment.md) for preparing a fresh Pi to receive deploys.
-
-(Exact entrypoints filled in as packages are implemented. See [`docs/dev-environment.md`](docs/dev-environment.md) for the full container story.)

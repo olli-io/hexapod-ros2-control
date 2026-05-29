@@ -33,6 +33,15 @@ No native ROS2 install needed.
 
 ## First-time setup
 
+Clone the repository:
+
+```
+git clone git@github.com/olli-io/hexapod
+cd hexapod
+```
+
+Then open the dev container:
+
 ```
 ./hexa --dev
 ```
@@ -42,6 +51,12 @@ long-lived `hexa-dev` container, and drops you at a shell inside `/workspace`
 (the repo, bind-mounted). ROS2 is already sourced for you. Subsequent
 `./hexa --dev` invocations `docker exec` into the same container instead of
 spawning a new one.
+
+To open a shell and immediately launch the desktop sim environment:
+
+```
+./hexa --dev --launch
+```
 
 To tear it down: `./hexa kill`. To rebuild from scratch (after Dockerfile
 edits): `./hexa --dev --clean`, which kills the container, rebuilds the

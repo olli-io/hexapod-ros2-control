@@ -26,7 +26,7 @@ curl -fsSL https://get.docker.com | sh
 sudo apt install i-y docker-compose-plugin git
 sudo usermod -aG docker $USER
 ```
-Exit and re-enter the ssh session, then verify:
+Exit and re-enter the ssh session, then verify that docker runs:
 
 ```
 docker run --rm hello-world
@@ -57,7 +57,7 @@ This ships the image tarball, loads it, seeds `~/hexa-prod/.env` from
 `.env.prod.sample`, and starts the container **cold** (relay open, hardware
 inactive).
 
-## 5. Tune `~/hexa-prod/.env` on the Pi
+## 5. Edit `~/hexa-prod/.env` on the Pi
 
 - **`INPUT_GID`** — value from step 3 (typically something like`996`).
 - **`ROS_DOMAIN_ID`** — DDS domain, default `42`.
