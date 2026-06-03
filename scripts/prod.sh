@@ -81,6 +81,8 @@ require_container_running() {
 cmd_build() {
     require_cmd docker
     docker buildx version >/dev/null 2>&1 || die "docker buildx not available (install docker-buildx-plugin)"
+    [[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]] \
+        || die "aarch64 binfmt handler not registered — install qemu-user-static + qemu-user-static-binfmt (Arch) or equivalent, so cross-building linux/arm64 works."
 
     mkdir -p "${DEPLOY_DIR}"
 

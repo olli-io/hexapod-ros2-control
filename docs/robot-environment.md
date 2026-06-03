@@ -48,6 +48,29 @@ getent group input | cut -d: -f3            # note the input GID (example: 994)
 
 ## 4. First deploy from the workstation
 
+`./hexa --prod build` cross-compiles `linux/arm64` under QEMU, so the
+workstation kernel needs an aarch64 binfmt_misc handler pointing at a
+**static** QEMU interpreter. On Arch this requires manual setup —
+installing `qemu-user-static` (extra) ships the static binary but no
+binfmt config, while the `qemu-user` package's config in
+`/usr/lib/binfmt.d/` points at the *dynamic* interpreter, which fails
+inside the build container with `exec /bin/sh: no such file or directory`.
+Override it once:
+
+```
+sudo install -m 644 /usr/lib/binfmt.d/qemu-aarch64.conf /etc/binfmt.d/qemu-aarch64.conf
+sudo sed -i 's|/usr/bin/qemu-aarch64|/usr/bin/qemu-aarch64-static|' /etc/binfmt.d/qemu-aarch64.conf
+echo -1 | sudo tee /proc/sys/fs/binfmt_misc/qemu-aarch64
+sudo systemctl restart systemd-binfmt
+```
+
+Verify the `interpreter` line in `/proc/sys/fs/binfmt_misc/qemu-aarch64`
+ends in `-static`. Other distros may register the static handler
+automatically on `qemu-user-static` install — check
+`/proc/sys/fs/binfmt_misc/qemu-aarch64` before assuming it's broken.
+`scripts/prod.sh` preflights this and refuses to build without a
+registered aarch64 handler.
+
 ```
 ./hexa --prod build
 ./hexa --prod deploy pi@<host>
