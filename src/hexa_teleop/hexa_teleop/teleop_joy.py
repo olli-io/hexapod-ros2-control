@@ -48,6 +48,16 @@ from .joy_mapping import (
 PUBLISH_RATE_HZ = 50.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
+# Engine states in which a gait switch may be published. STAND swaps
+# immediately; the others latch a pending change that the engine
+# commits via its pause-and-reseat sequence. The gait is locked during
+# engaging / resuming, and a switch is meaningless during initialize /
+# folding / folded. The empty pre-first-publish state stays refused
+# for free.
+_GAIT_SWITCH_STATES: frozenset[str] = frozenset(
+    {"stand", "gait", "pausing", "paused", "reseating"}
+)
+
 
 def _parse_base(raw: dict, /) -> BaseConfig:
     base_raw = raw["base"]
@@ -266,14 +276,18 @@ class TeleopJoyNode(Node):
             )
             self._pub_animation_mode.publish(String(data=out.animation_name))
         if out.gait_select is not None:
-            # Strict STAND gate so a stale switch never sits on the
-            # wire. The JoyState index has already advanced — the next
-            # walk-and-stop cycle resumes from that slot regardless.
-            if self._latest_gait_state == "stand":
+            # Gate on the engine states that accept a switch so a stale
+            # request never sits on the wire. The JoyState index has
+            # already advanced — the next press resumes from that slot
+            # regardless.
+            if self._latest_gait_state in _GAIT_SWITCH_STATES:
                 self.get_logger().info(f"switching gait to {out.gait_select!r}")
                 self._pub_cmd_gait.publish(String(data=out.gait_select))
                 # Update the active cap so the next stick read scales
-                # to the new gait's per-leg velocity ceiling.
+                # to the new gait's per-leg velocity ceiling. During a
+                # mid-walk switch the cap leads the engine for the
+                # length of its pause-and-reseat sequence — harmless,
+                # the engine clamps stride internally.
                 self._active_gait = out.gait_select
                 new_cap = self._caps.linear_max(self._active_gait)
                 self._cfg = dataclasses.replace(self._cfg, gait_linear_max=new_cap)
@@ -283,8 +297,8 @@ class TeleopJoyNode(Node):
                 )
             else:
                 self.get_logger().info(
-                    f"gait switch to {out.gait_select!r} ignored — "
-                    f"engine in {self._latest_gait_state!r}"
+                    f"gait switch to {out.gait_select!r} dropped — "
+                    f"engine in {self._latest_gait_state!r} (gait locked)"
                 )
 
         stamp = self.get_clock().now().to_msg()

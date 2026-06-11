@@ -35,7 +35,7 @@ default_gait: tripod
 stride_length: 0.1
 
 # Swing-arc apex clearance (m) above the higher of origin_z / target_z.
-step_height: 0.06
+step_height: 0.08
 
 # Lateral swing offset (m). 0 keeps swings purely fore/aft.
 swing_width: 0.0
@@ -46,7 +46,7 @@ swing_width: 0.0
 # bounds through the same β-scaling:
 #     min_cycle_time(β) = min_swing_time / (1 − β)
 #     max_cycle_time(β) = max_swing_time / (1 − β)
-# The maximum velocity envelope is a combination of stride_length and 
+# The maximum velocity envelope is a combination of stride_length and
 # swing_time. Max_swing_time is a slow-end clamp: when swing time
 # would rise above it, velocity will start regulating via shorter
 # stride lenght.
@@ -102,7 +102,12 @@ pause_debounce_delay: 0.4
 
 # Dwell (s) in PAUSED before the engine kicks off RESEATING back to
 # the nominal footprint.
-pause_to_reseat_delay: 1
+pause_to_reseat_delay: 0.2
+
+# Short PAUSED → RESEATING dwell (s) used while a gait change is
+# pending, so a mid-walk gait switch feels immediate instead of
+# waiting out the full pause_to_reseat_delay.
+gait_change_pause_to_reseat_delay: 0.1
 
 # ─── INITIALIZE ladder (cold start) ─────────────────────────────────
 

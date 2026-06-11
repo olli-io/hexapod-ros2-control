@@ -55,6 +55,9 @@ def _load_engine_config(path: Path) -> tuple[EngineConfig, str]:
         cmd_zero_tol=float(raw["cmd_zero_tol"]),
         pause_debounce_delay=float(raw["pause_debounce_delay"]),
         pause_to_reseat_delay=float(raw["pause_to_reseat_delay"]),
+        gait_change_pause_to_reseat_delay=float(
+            raw["gait_change_pause_to_reseat_delay"]
+        ),
         max_reset_time=float(raw["max_reset_time"]),
         init_pair_swing_time=float(init_cfg["pair_swing_time"]),
         init_lift_body_time=float(init_cfg["lift_body_time"]),
@@ -184,21 +187,30 @@ class GaitNode(Node):
 
     def _on_params(self, msg: GaitParams) -> None:
         # Strategy switch arrives folded into GaitParams.gait_name —
-        # control multiplexes /cmd_gait onto this field. ``set_strategy``
-        # is strict: only swaps in STAND, returns False otherwise. Log
-        # both outcomes so a rejected swap is visible to the user.
+        # control multiplexes /cmd_gait onto this field and streams it
+        # persistently, so ``_gait_name`` tracks the last *handled*
+        # request (accepted or dropped) to keep a rejected swap from
+        # being retried on every message. The engine's ``strategy_name``
+        # stays the source of truth for what is active.
         if msg.gait_name and msg.gait_name != self._gait_name:
             if self._engine.set_strategy(msg.gait_name):
-                self.get_logger().info(
-                    f"gait strategy switched to {msg.gait_name!r}"
-                )
-                self._gait_name = msg.gait_name
+                if self._engine.pending_strategy_name == msg.gait_name:
+                    self.get_logger().info(
+                        f"gait change to {msg.gait_name!r} pending — "
+                        f"pause-and-reseat sequence running "
+                        f"(engine in {self._engine.state.name})"
+                    )
+                else:
+                    self.get_logger().info(
+                        f"gait strategy switched to {msg.gait_name!r}"
+                    )
             else:
                 self.get_logger().warn(
-                    f"gait strategy switch to {msg.gait_name!r} ignored — "
-                    f"engine in {self._engine.state.name} "
-                    f"(must be STAND, or name unknown)"
+                    f"gait change to {msg.gait_name!r} dropped — "
+                    f"gait locked during engagement "
+                    f"(engine in {self._engine.state.name}); request not retried"
                 )
+            self._gait_name = msg.gait_name
         self._linear_x = float(msg.linear_x)
         self._linear_y = float(msg.linear_y)
         self._angular_z = float(msg.angular_z)

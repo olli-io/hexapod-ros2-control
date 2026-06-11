@@ -40,6 +40,17 @@ debounced (see ``update``). PAUSING ↔ RESUMING are mutually
 interruptible — cmd_vel can flip on/off mid-transition without
 locking the engine.
 
+A gait change while walking (``set_strategy`` in GAIT, or mid
+PAUSING / PAUSED / RESEATING) latches a pending strategy name and
+runs PAUSING → PAUSED (short ``gait_change_pause_to_reseat_delay``
+dwell) → RESEATING immediately, suppressing the resume exits so a
+held stick cannot abort the sequence. The pending name commits at
+the RESEATING → STAND handoff; with cmd_vel still non-zero the next
+STAND tick re-engages in the new gait. Mid-sequence requests
+overwrite the pending name (cycling back to the original gait still
+completes the sequence); during ENGAGING and RESUMING the gait is
+locked — requests are dropped, not queued.
+
 ``cycle_time`` is not configured directly. The engine derives it each
 GAIT tick from the commanded velocity, ``stride_length``, and the
 active strategy's ``duty_factor`` (β): faster commands ⇒ shorter cycles
@@ -166,6 +177,10 @@ class EngineConfig:
     # this long with no cmd_vel, the reseat ladder walks the feet back
     # to the nominal footprint so the operator sees the robot settle.
     pause_to_reseat_delay: float
+    # Short PAUSED → RESEATING dwell used while a gait change is
+    # pending, so a mid-walk gait switch feels immediate instead of
+    # waiting out the full ``pause_to_reseat_delay``.
+    gait_change_pause_to_reseat_delay: float
     # PAUSING / disengagement descent clamp. Each previously-airborne
     # foot's straight-down lowering duration is
     # ``distance_z / (stride_length / min_swing_time)``, clamped to
@@ -571,6 +586,14 @@ class Engine:
         # Lets the teleop's two-press scheme work: press 1 snaps
         # height → 0 (kicks off reseat); press 2 queues the fold.
         self._pending_fold: bool = False
+        # Pending gait-strategy name, latched by ``set_strategy`` while
+        # walking (GAIT) or mid pause/reseat. Committed at the
+        # RESEATING → STAND handoff in ``_tick_reseat``. Invariant:
+        # non-None only in GAIT (for at most one tick), PAUSING,
+        # PAUSED, and RESEATING — RESUMING is unreachable while
+        # pending (the pause exits are suppressed), and ENGAGING is
+        # unreachable because RESEATING clears it before STAND.
+        self._pending_strategy_name: str | None = None
 
     @property
     def state(self) -> EngineState:
@@ -607,31 +630,65 @@ class Engine:
                 return name
         return type(self._strategy).__name__.lower()
 
+    @property
+    def pending_strategy_name(self) -> str | None:
+        """Gait name latched for commit at the next RESEATING → STAND
+        handoff, or ``None`` when no gait change is in flight."""
+        return self._pending_strategy_name
+
+    def _apply_strategy(self, name: str) -> None:
+        """Install a strategy from the registry, rebuilding the
+        β-dependent engagement controller and the phase clock (offsets
+        change with the gait)."""
+        self._strategy = STRATEGIES[name]()
+        self._clock = GaitClock(self._strategy.phase_offsets)
+        self._engagement = self._build_engagement()
+
     def set_strategy(self, name: str) -> bool:
         """Swap the active gait strategy.
 
-        Strict: only succeeds when the engine is in ``STAND``. Anywhere
-        else (walking, engaging, transitioning, folding, reseating)
-        returns ``False`` without queueing. The teleop layer gates the
-        publish on ``/gait/state`` so stale intent does not sit on the
-        wire.
+        In ``STAND`` the swap is immediate. While walking (GAIT) or mid
+        pause/reseat (PAUSING / PAUSED / RESEATING) the name is latched
+        as pending: the engine enters PAUSING immediately (no pause
+        debounce), dwells in PAUSED for the short
+        ``gait_change_pause_to_reseat_delay``, runs RESEATING, and
+        commits the new gait at the RESEATING → STAND handoff; if
+        cmd_vel is still non-zero it re-engages in the new gait.
+        Further calls mid-sequence overwrite the pending name — even
+        back to the originally-active gait, in which case the sequence
+        still completes deterministically and the commit is a no-op.
 
-        Returns ``True`` on a successful swap (including the no-op case
-        where ``name`` matches the current strategy), ``False`` on an
-        unknown name or a non-STAND state. Rebuilds the engagement
-        controller (β-dependent) and the phase clock (offsets change).
+        During ENGAGING and RESUMING the gait is locked: the request is
+        dropped (``False``), not queued. INITIALIZE / FOLDING / FOLDED
+        likewise refuse.
+
+        Returns ``True`` when the swap was applied or latched (including
+        the no-op case where ``name`` matches the current strategy and
+        nothing is pending), ``False`` on an unknown name or a locked
+        state.
         """
-        factory = STRATEGIES.get(name)
-        if factory is None:
+        if name not in STRATEGIES:
             return False
-        if name == self.strategy_name:
+        if self._state is EngineState.STAND:
+            if name != self.strategy_name:
+                self._apply_strategy(name)
             return True
-        if self._state is not EngineState.STAND:
-            return False
-        self._strategy = factory()
-        self._clock = GaitClock(self._strategy.phase_offsets)
-        self._engagement = self._build_engagement()
-        return True
+        if self._state in (
+            EngineState.GAIT,
+            EngineState.PAUSING,
+            EngineState.PAUSED,
+            EngineState.RESEATING,
+        ):
+            # Overwrite an already-pending name unconditionally — the
+            # cycle-back case (name == strategy_name) still completes
+            # the running sequence; only the commit becomes a no-op.
+            if self._pending_strategy_name is None and name == self.strategy_name:
+                return True
+            # No state transition here: the next 50 Hz tick picks the
+            # pending name up (single-threaded executor, no race).
+            self._pending_strategy_name = name
+            return True
+        return False
 
     def start_initialize(self) -> bool:
         """Operator-gated trigger: FOLDED → INITIALIZE.
@@ -972,13 +1029,20 @@ class Engine:
             return out
 
         if self._state is EngineState.GAIT:
+            # A pending gait change pre-empts walking immediately — no
+            # pause debounce; the operator explicitly asked to switch.
+            if self._pending_strategy_name is not None:
+                self._enter_pausing()
+                return self._tick_pause(dt)
             if should_pause:
                 self._enter_pausing()
                 return self._tick_pause(dt)
             return self._tick_gait(dt, v_body_xy, omega_z, cmd_zero)
 
         if self._state is EngineState.PAUSING:
-            if not cmd_zero:
+            # A pending gait change pins the pause sequence: a held
+            # stick must not abort to RESUMING before the commit.
+            if not cmd_zero and self._pending_strategy_name is None:
                 self._enter_resuming()
                 return self._tick_engagement(dt, v_body_xy, omega_z)
             out = self._tick_pause(dt)
@@ -988,15 +1052,24 @@ class Engine:
             return out
 
         if self._state is EngineState.PAUSED:
-            if not cmd_zero:
+            if not cmd_zero and self._pending_strategy_name is None:
                 self._enter_resuming()
                 return self._tick_engagement(dt, v_body_xy, omega_z)
             self._paused_elapsed += dt
-            if self._paused_elapsed >= self._config.pause_to_reseat_delay:
-                # Reseat the legs back to the current nominal footprint.
-                # This is *not* a posture-height change — _commit_new_nominal
-                # must not fire — we just want the ladder to clean up
-                # the lowered positions so the robot looks settled.
+            # A pending gait change uses the short dwell so the switch
+            # feels immediate; the normal settle keeps the longer one.
+            dwell = (
+                self._config.gait_change_pause_to_reseat_delay
+                if self._pending_strategy_name is not None
+                else self._config.pause_to_reseat_delay
+            )
+            if self._paused_elapsed >= dwell:
+                # Reseat the legs back to the current nominal footprint
+                # — not a posture-height change, so the
+                # _commit_new_nominal at the ladder's end is a no-op
+                # rebuild against the unchanged nominal; the ladder
+                # just cleans up the lowered positions so the robot
+                # looks settled.
                 self._reseat = self._build_reseat(self._nominal)
                 self._reseat_target_stance = dict(self._nominal)
                 self._reseat_target_height = self._applied_height
@@ -1228,6 +1301,16 @@ class Engine:
         out = self._reseat.update(dt)
         self._capture_state(out)
         if self._reseat.done:
+            # Commit a pending gait change at the RESEATING → STAND
+            # handoff — every path a pending name can take funnels
+            # through here. Swapping before _commit_new_nominal means
+            # its engagement-controller rebuild already uses the new
+            # gait's β, and pending is always None by STAND, so
+            # STAND's immediate-swap semantics stay untouched.
+            pending = self._pending_strategy_name
+            self._pending_strategy_name = None
+            if pending is not None and pending != self.strategy_name:
+                self._apply_strategy(pending)
             self._commit_new_nominal(
                 self._reseat_target_stance, self._reseat_target_height
             )

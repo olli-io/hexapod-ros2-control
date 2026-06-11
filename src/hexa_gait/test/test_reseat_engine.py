@@ -47,6 +47,7 @@ def _config() -> EngineConfig:
         cmd_zero_tol=1.0e-4,
         pause_debounce_delay=0.0,
         pause_to_reseat_delay=10.0,
+        gait_change_pause_to_reseat_delay=10.0,
         max_reset_time=0.6,
         init_pair_swing_time=PAIR_TIME,
         init_lift_body_time=LIFT_TIME,
@@ -303,6 +304,29 @@ def test_reseat_with_zero_height_is_a_noop():
         engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
     assert engine.state is EngineState.STAND
     assert engine._applied_height == pytest.approx(0.0, abs=1e-12)
+
+
+def test_gait_change_during_height_reseat_commits_at_handoff():
+    # A gait request mid height-change RESEATING latches and commits at
+    # the same RESEATING → STAND handoff that applies the new nominal,
+    # so one ladder serves both the posture change and the gait change.
+    engine = _engine()
+    _drive_to_stand(engine)
+    engine.set_target_height(0.02)
+    for _ in range(50):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        if engine.state is EngineState.RESEATING:
+            break
+    assert engine.state is EngineState.RESEATING
+
+    assert engine.set_strategy("ripple") is True
+    assert engine.pending_strategy_name == "ripple"
+
+    _drive_through_reseat(engine)
+    assert engine.state is EngineState.STAND
+    assert engine.strategy_name == "ripple"
+    assert engine.pending_strategy_name is None
+    assert engine._applied_height == pytest.approx(0.02, abs=1e-9)
 
 
 def test_engine_rejects_partial_reseat_kwargs():

@@ -23,10 +23,17 @@ differ only in duty factor. Tripod and tetrapod use their own paired
 tables. The strategy registry in `gaits/__init__.py` exposes all five
 by name (`STRATEGIES["tripod" | "surf" | "tetrapod" | "ripple" |
 "wave"]`).
-Switching at runtime is strict: `Engine.set_strategy(name)` only swaps
-in `STAND` and returns `False` otherwise. The teleop's D-pad cycler
-publishes the chosen name on `/cmd_gait`; `hexa_control` multiplexes
-it onto `GaitParams.gait_name`, and `gait_node` calls `set_strategy`
+Switching at runtime: `Engine.set_strategy(name)` swaps immediately in
+`STAND`. While walking (or mid pause/reseat) the name is latched as
+pending and the engine runs PAUSING → PAUSED (short
+`gait_change_pause_to_reseat_delay` dwell) → RESEATING, commits the new
+gait at the RESEATING → STAND handoff, and re-engages if `cmd_vel` is
+still non-zero. Requests mid-sequence update the pending gait — cycling
+back to the originally-active gait still completes the full sequence.
+During ENGAGING and RESUMING the gait is locked: requests are dropped
+(`False`), not queued. The teleop's D-pad cycler publishes the chosen
+name on `/cmd_gait`; `hexa_control` multiplexes it onto
+`GaitParams.gait_name`, and `gait_node` calls `set_strategy`
 accordingly.
 
 Inputs:

@@ -94,6 +94,7 @@ def _engine_config() -> EngineConfig:
         cmd_zero_tol=1.0e-4,
         pause_debounce_delay=0.0,
         pause_to_reseat_delay=10.0,
+        gait_change_pause_to_reseat_delay=10.0,
         max_reset_time=0.6,
         init_pair_swing_time=PAIR_TIME,
         init_lift_body_time=LIFT_TIME,

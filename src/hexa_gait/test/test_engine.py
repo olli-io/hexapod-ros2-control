@@ -53,6 +53,7 @@ def _config(
     max_swing_time: float = 1.0,
     pause_debounce_delay: float = 0.0,
     pause_to_reseat_delay: float = 0.2,
+    gait_change_pause_to_reseat_delay: float = 0.1,
 ) -> EngineConfig:
     # min_swing_time=0.25, β=0.5 (tripod) → min_cycle_time = 0.5 s; same
     # for max_swing_time=1.0 → max_cycle_time = 2.0 s (matches the
@@ -68,6 +69,7 @@ def _config(
         cmd_zero_tol=1.0e-4,
         pause_debounce_delay=pause_debounce_delay,
         pause_to_reseat_delay=pause_to_reseat_delay,
+        gait_change_pause_to_reseat_delay=gait_change_pause_to_reseat_delay,
         max_reset_time=0.6,
         # Compact INITIALIZE timings: 3*0.04 + 0.04 = 0.16 s. Keeps the
         # cold-start ladder short enough that drive-past-initialize
@@ -604,23 +606,6 @@ def test_set_strategy_unknown_name_returns_false():
     assert engine._strategy is spy
 
 
-def test_set_strategy_outside_stand_rejected():
-    # Set up a walking engine: the swap must be refused. The engine
-    # stays on its current strategy.
-    engine = Engine(
-        config=_config(),
-        strategy=Tripod(),
-        nominal_stance=_nominal_stance(),
-        initial_stance=_initial_stance(),
-        coxa_to_bottom=0.02,
-        leg_contexts=_leg_contexts(),
-    )
-    _drive_to_gait(engine, v_body_xy=(0.20, 0.0), omega_z=0.0)
-    assert engine.state is EngineState.GAIT
-    assert engine.set_strategy("ripple") is False
-    assert engine.strategy_name == "tripod"
-
-
 def test_set_strategy_same_name_is_no_op():
     spy = _SpyStrategy()
     engine = _engine(spy)
@@ -680,6 +665,247 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     # Fast command above saturation: cycle_time clamped to min_cycle.
     v_fast = 10.0
     assert cycle_time(v_fast) == pytest.approx(expected_min_cycle)
+
+
+# ---- Gait change while walking -------------------------------------------
+#
+# set_strategy while walking latches a pending name and runs PAUSING →
+# PAUSED (short gait_change_pause_to_reseat_delay dwell) → RESEATING,
+# committing the new gait at the RESEATING → STAND handoff. With cmd
+# still held, the next STAND tick re-engages in the new gait. ENGAGING
+# and RESUMING lock the gait: requests are dropped, not queued.
+
+
+_CMD = (0.20, 0.0)
+
+
+def _tripod_engine(config: EngineConfig | None = None) -> Engine:
+    return Engine(
+        config=config or _config(),
+        strategy=Tripod(),
+        nominal_stance=_nominal_stance(),
+        initial_stance=_initial_stance(),
+        coxa_to_bottom=0.02,
+        leg_contexts=_leg_contexts(),
+    )
+
+
+def _trace_states(
+    engine: Engine,
+    v_body_xy: tuple[float, float],
+    ticks: int,
+    dt: float = 0.02,
+) -> list[EngineState]:
+    trace: list[EngineState] = []
+    for _ in range(ticks):
+        engine.update(dt=dt, v_body_xy=v_body_xy, omega_z=0.0)
+        trace.append(engine.state)
+    return trace
+
+
+def _assert_ordered_subsequence(
+    trace: list[EngineState], expected: list[EngineState]
+) -> None:
+    it = iter(trace)
+    for state in expected:
+        assert any(s is state for s in it), (
+            f"{state.name} missing or out of order in "
+            f"{[s.name for s in trace]}"
+        )
+
+
+def _drive_to_state(
+    engine: Engine,
+    v_body_xy: tuple[float, float],
+    target: EngineState,
+    max_ticks: int = 500,
+    dt: float = 0.02,
+) -> None:
+    for _ in range(max_ticks):
+        engine.update(dt=dt, v_body_xy=v_body_xy, omega_z=0.0)
+        if engine.state is target:
+            return
+    raise AssertionError(
+        f"engine did not reach {target.name} within {max_ticks} ticks "
+        f"(ended in {engine.state.name})"
+    )
+
+
+def test_set_strategy_during_gait_runs_pause_reseat_engage_sequence():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+
+    assert engine.set_strategy("ripple") is True
+    assert engine.pending_strategy_name == "ripple"
+
+    trace = _trace_states(engine, _CMD, ticks=400)
+    _assert_ordered_subsequence(
+        trace,
+        [
+            EngineState.PAUSING,
+            EngineState.PAUSED,
+            EngineState.RESEATING,
+            EngineState.STAND,
+            EngineState.ENGAGING,
+        ],
+    )
+    assert EngineState.RESUMING not in trace
+    assert engine.strategy_name == "ripple"
+    assert engine._strategy.duty_factor == pytest.approx(2.0 / 3.0)
+    assert engine.pending_strategy_name is None
+
+
+def test_gait_change_uses_short_pause_to_reseat_dwell():
+    dt = 0.02
+    cfg = _config(
+        pause_to_reseat_delay=5.0, gait_change_pause_to_reseat_delay=0.1
+    )
+
+    # Pending gait change: PAUSED must hand off to RESEATING after the
+    # short dwell, nowhere near the 5 s normal settle.
+    engine = _tripod_engine(cfg)
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+    engine.set_strategy("ripple")
+    _drive_to_state(engine, _CMD, EngineState.PAUSED)
+    paused_ticks = 0
+    for _ in range(50):
+        engine.update(dt=dt, v_body_xy=_CMD, omega_z=0.0)
+        if engine.state is not EngineState.PAUSED:
+            break
+        paused_ticks += 1
+    assert engine.state is EngineState.RESEATING
+    assert paused_ticks * dt <= 0.1 + dt
+
+    # Control: a normal zero-cmd pause with no pending change must
+    # stay PAUSED well past the short-dwell window.
+    control = _tripod_engine(cfg)
+    _drive_to_gait(control, v_body_xy=_CMD, omega_z=0.0)
+    _drive_to_state(control, (0.0, 0.0), EngineState.PAUSED)
+    for _ in range(25):  # 0.5 s — 5× the short dwell
+        control.update(dt=dt, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        assert control.state is EngineState.PAUSED
+
+
+def test_pending_gait_updates_mid_sequence():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+
+    assert engine.set_strategy("ripple") is True
+    engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+    assert engine.state is EngineState.PAUSING
+    assert engine.set_strategy("wave") is True
+    assert engine.pending_strategy_name == "wave"
+
+    _drive_to_state(engine, _CMD, EngineState.PAUSED)
+    assert engine.set_strategy("wave") is True
+
+    _drive_to_state(engine, _CMD, EngineState.GAIT)
+    assert engine.strategy_name == "wave"
+    assert engine._strategy.duty_factor == pytest.approx(5.0 / 6.0)
+
+
+def test_cycle_back_to_original_gait_still_completes_sequence():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+
+    assert engine.set_strategy("ripple") is True
+    engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+    assert engine.state is EngineState.PAUSING
+    # Cycle back to the originally-active gait: still latched, and the
+    # sequence completes deterministically rather than aborting.
+    assert engine.set_strategy("tripod") is True
+    assert engine.pending_strategy_name == "tripod"
+
+    trace = _trace_states(engine, _CMD, ticks=400)
+    _assert_ordered_subsequence(
+        trace,
+        [
+            EngineState.PAUSED,
+            EngineState.RESEATING,
+            EngineState.STAND,
+            EngineState.ENGAGING,
+        ],
+    )
+    assert EngineState.RESUMING not in trace
+    assert engine.strategy_name == "tripod"
+
+
+def test_set_strategy_locked_during_engaging():
+    engine = _tripod_engine()
+    _drive_past_initialize(engine)
+    engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+    assert engine.state is EngineState.ENGAGING
+
+    assert engine.set_strategy("ripple") is False
+    assert engine.pending_strategy_name is None
+
+    _drive_to_state(engine, _CMD, EngineState.GAIT)
+    assert engine.strategy_name == "tripod"
+
+
+def test_set_strategy_locked_during_resuming():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+    _drive_to_state(engine, (0.0, 0.0), EngineState.PAUSED)
+    engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+    assert engine.state is EngineState.RESUMING
+
+    assert engine.set_strategy("ripple") is False
+    assert engine.pending_strategy_name is None
+
+    _drive_to_state(engine, _CMD, EngineState.GAIT)
+    assert engine.strategy_name == "tripod"
+
+
+def test_resume_suppressed_while_gait_change_pending():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+    engine.set_strategy("ripple")
+
+    # cmd held non-zero the whole way: without the suppression the
+    # first PAUSING tick would route straight back to RESUMING.
+    for _ in range(400):
+        engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+        assert engine.state is not EngineState.RESUMING
+        if engine.state is EngineState.GAIT:
+            break
+    assert engine.state is EngineState.GAIT
+    assert engine.strategy_name == "ripple"
+
+
+def test_pending_gait_commits_when_cmd_released_mid_sequence():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+    engine.set_strategy("ripple")
+    engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+    assert engine.state is EngineState.PAUSING
+
+    # Operator releases the stick mid-sequence: the sequence still
+    # completes and commits, then settles in STAND.
+    _drive_to_state(engine, (0.0, 0.0), EngineState.STAND)
+    assert engine.strategy_name == "ripple"
+    assert engine.pending_strategy_name is None
+    for _ in range(25):
+        engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
+        assert engine.state is EngineState.STAND
+
+
+def test_set_strategy_accepted_during_normal_pause():
+    engine = _tripod_engine()
+    _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
+    _drive_to_state(engine, (0.0, 0.0), EngineState.PAUSED)
+
+    # Request during an ordinary zero-cmd pause: latched, committed by
+    # the same short-dwell reseat handoff.
+    assert engine.set_strategy("ripple") is True
+    assert engine.pending_strategy_name == "ripple"
+    _drive_to_state(engine, (0.0, 0.0), EngineState.STAND)
+    assert engine.strategy_name == "ripple"
+
+    # The next walk engages the new gait.
+    engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
+    assert engine.state is EngineState.ENGAGING
+    assert engine._strategy.duty_factor == pytest.approx(2.0 / 3.0)
 
 
 # ---- Stance integrator: world-frame foot invariance ---------------------
