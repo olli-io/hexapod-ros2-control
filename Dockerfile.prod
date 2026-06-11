@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libyaml-cpp-dev \
         libusb-1.0-0-dev \
         python3-numpy \
+        python3-serial \
         python3-yaml \
     && rm -rf /var/lib/apt/lists/*
 
@@ -71,6 +72,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libyaml-cpp0.8 \
         libusb-1.0-0 \
         python3-numpy \
+        python3-serial \
         python3-yaml \
         ros-jazzy-ament-index-cpp \
         ros-jazzy-controller-manager \

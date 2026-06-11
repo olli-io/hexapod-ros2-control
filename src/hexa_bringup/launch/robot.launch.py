@@ -14,12 +14,21 @@ Brings up, in order:
   4. The kinematics / gait / posture chain (ik_node, joint_command_bridge,
      posture_node, control_node, gait_node), identical to sim.launch.py
      except use_sim_time is false.
+  5. display_node (hexa_display) with the serial transport — relays
+     expression/gaze to the ESP32 face over /dev/serial0. Comes up
+     faceless (retrying in the background) if the display is absent.
+     Skipped entirely when ``enabled: false`` in hexa_display's
+     display.yaml.
 
 Run with::
 
     ros2 launch hexa_bringup robot.launch.py
     ros2 launch hexa_bringup robot.launch.py engage_on_start:=false
 """
+import os
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -44,6 +53,24 @@ from launch_ros.substitutions import FindPackageShare
 # xacro. controller_manager keys its hardware_components_initial_state map
 # off this exact string.
 HARDWARE_COMPONENT_NAME = "HexaSystem"
+
+
+def _display_params(transport: str) -> tuple[dict, bool]:
+    """hexa_display's display.yaml params and its `enabled` flag.
+
+    Returned as a plain dict (with the launch-appropriate transport
+    forced) rather than a params-file path: the YAML scopes its entries
+    under the exact node name, and exact-name entries outrank the
+    wildcard `/**` file launch_ros generates for dict overrides — so a
+    `{"transport": ...}` dict after the file would silently lose.
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_display"), "config", "display.yaml"
+    )
+    with open(path) as f:
+        params = yaml.safe_load(f)["display_node"]["ros__parameters"]
+    params["transport"] = transport
+    return params, bool(params.pop("enabled", True))
 
 
 def _bringup(context, *args, **kwargs):
@@ -139,6 +166,15 @@ def _bringup(context, *args, **kwargs):
         control_node,
         gait_node,
     ]
+
+    display_params, display_enabled = _display_params(transport="serial")
+    if display_enabled:
+        actions.append(Node(
+            package="hexa_display",
+            executable="display_node",
+            output="screen",
+            parameters=[display_params],
+        ))
 
     if engage:
         joint_state_broadcaster_spawner = Node(

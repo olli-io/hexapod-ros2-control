@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-xacro \
         ros-jazzy-joint-state-publisher-gui \
         python3-colcon-common-extensions \
+        python3-serial \
         python3-vcstool \
         build-essential \
         git \

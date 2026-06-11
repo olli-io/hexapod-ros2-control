@@ -18,6 +18,11 @@ services:
     # is known, so a re-enumerated bus number doesn't break startup.
     devices:
       - "${SERVO_DEVICE:-/dev/ttyACM0}:/dev/ttyACM0"
+      # ESP32 face on the Pi UART header. Map the resolved PL011 node
+      # (not the /dev/serial0 symlink) into the container under the
+      # name the display node expects. Requires enable_uart=1 +
+      # dtoverlay=disable-bt on the Pi; see docs/robot-environment.md.
+      - "${DISPLAY_DEVICE:-/dev/ttyAMA0}:/dev/serial0"
     # Joystick passthrough (same shape as the dev compose): bind /dev/input
     # rshared so hot-plugged controllers become visible without restarting
     # the container; device_cgroup_rules grants char-device access.

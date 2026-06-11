@@ -1,0 +1,61 @@
+display_node:
+  ros__parameters:
+    # Master switch, read by the bringup launch files: set to false to
+    # bring the stack up without the display node (no face fitted, or
+    # the UART is needed for something else).
+    enabled: true
+
+    # Transport: "serial" on the robot, "stub" in sim (launch overrides).
+    transport: serial
+    serial_device: /dev/serial0
+    serial_baud: 921600
+    reconnect_period_s: 2.0
+
+    # The firmware animates blinks/easing autonomously — the node only
+    # sets target state, so a low rate suffices.
+    update_rate_hz: 10.0
+    # Resend full state periodically so an ESP32 reboot resyncs.
+    refresh_period_s: 5.0
+
+    # Gait-state → expression map. One dotted param per canonical gait
+    # state (rclpy has no string-map parameter type). Valid values:
+    # neutral, happy, sleepy, dead, greedy, woozy, angry, love.
+    expression_map.folded: sleepy
+    expression_map.initialize: neutral
+    expression_map.stand: neutral
+    expression_map.engaging: neutral
+    expression_map.gait: happy
+    expression_map.pausing: neutral
+    expression_map.paused: sleepy
+    expression_map.resuming: neutral
+    expression_map.reseating: neutral
+    expression_map.folding: sleepy
+
+    # Expression while a posture animation mode is active.
+    animation_expression: woozy
+
+    # Battery overrides: warning shows only when idle, critical always.
+    battery_topic: /hexa_hardware_aux/battery_state
+    battery_warning_expression: sleepy
+    battery_critical_expression: dead
+    # 0.0 disables a threshold. Shipped disabled: the hardware.yaml
+    # voltage-divider scale is uncalibrated — set real pack thresholds
+    # once it is.
+    battery_warning_v: 0.0
+    battery_critical_v: 0.0
+    battery_hysteresis_v: 0.3
+    battery_hold_s: 3.0
+
+    # Gaze from cmd_vel (gait-active). Axis values are normalized by
+    # the *_max caps (mirror the teleop velocity caps), then
+    # sign-quantized with enter/exit hysteresis.
+    gaze_deadband: 0.15
+    gaze_exit_ratio: 0.6
+    gaze_wz_weight: 1.0
+    gaze_vx_max: 0.1
+    gaze_vy_max: 0.1
+    gaze_wz_max: 0.5
+
+    # Gaze from body tilt (pose mode), thresholds in radians.
+    pose_pitch_threshold_rad: 0.08
+    pose_tilt_threshold_rad: 0.08

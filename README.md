@@ -20,6 +20,7 @@ All tunable parameters live in YAML files under each package's `config/` directo
 - [`src/hexa_gait/config/gait.yaml`](src/hexa_gait/config/gait.yaml) — gait engine knobs: controller tick, default gait, stride length, step height, swing width, and swing-time bounds that anchor per-gait cycle-time limits.
 - [`src/hexa_posture/config/posture.yaml`](src/hexa_posture/config/posture.yaml) — posture node animation stack: which gait-coupled and animation-mode animations are enabled and their gain / strength / amplitude knobs.
 - [`src/hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring (transport, device, per-pin joint assignment), pulse-width calibration endpoints, electrical clamps, and aux ADC scales. Real-robot only.
+- [`src/hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face relay: `enabled` master switch (false = bringup skips the display node), transport (serial/stub), UART device + baud, gait-state → expression map, battery thresholds, and gaze deadband / hysteresis knobs.
 - [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and joint-group controller's joint ordering. Sim-only.
 - [`src/hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — real-robot mirror of the sim controllers config, with `use_sim_time: false` and the 100 Hz update rate the gait/IK stack publishes at.
 
@@ -42,6 +43,7 @@ This is a colcon workspace; all ROS2 packages live under `src/`. Format: `src/<p
 - `src/hexa_posture/` (ament_python) — Posture engine node; turns user body-pose input + gait state into a clamped body pose target. Owns body-pose animations (sway, breathing, lean…).
 - `src/hexa_control/` (ament_python) — Velocity shaping + gait selection: maps `cmd_vel` to gait params and chooses which gait runs.
 - `src/hexa_teleop/` (ament_python) — Joystick/keyboard → `cmd_vel` and `/body/pose`.
+- `src/hexa_display/` (ament_python) — Face relay: maps gait state / `cmd_vel` / posture / battery to expression + gaze commands for the ESP32 OLED face over UART (stub transport in sim).
 - `src/hexa_simulation/` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
 - `src/hexa_bringup/` (ament_cmake) — Top-level launch files wiring everything together: `robot.launch.py`, `sim.launch.py`.
 
@@ -51,5 +53,6 @@ Each arrow is "depends on" — the higher-level package imports the lower-level 
 
 - Main chain: `hexa_teleop` → `hexa_control` → `hexa_gait` → `hexa_kinematics` → `hexa_hardware` → Servo 2040 / Gazebo
 - Body-pose side channel: `hexa_teleop` → `hexa_posture` → `hexa_kinematics` (parallel to the gait chain, composed in the IK node)
-- `hexa_bringup` → `hexa_control`, `hexa_posture` (composes both chains via launch files)
+- `hexa_bringup` → `hexa_control`, `hexa_posture`, `hexa_display` (composes both chains via launch files)
+- Sink: `hexa_display` subscribes to gait/posture/hardware topics; nothing depends on it.
 - Leaves consumed by the above: `hexa_description`, `hexa_interfaces`, `hexa_simulation`

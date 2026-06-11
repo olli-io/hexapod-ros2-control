@@ -16,17 +16,43 @@ Composes the existing ``hexa_simulation`` launch (Gazebo + ros2_control
   the result as ``GaitParams`` on ``/gait/params`` at 50 Hz.
 - ``gait_node`` (hexa_gait) — runs the tripod gait engine, publishing
   per-leg foot targets on ``/legs/targets`` at 50 Hz.
+- ``display_node`` (hexa_display) — relays expression/gaze to the
+  ESP32 face. Launched with the stub transport, so the decoded frames
+  show up in the console instead of going out over UART. Skipped
+  entirely when ``enabled: false`` in hexa_display's display.yaml.
 
 Run with::
 
     ros2 launch hexa_bringup sim.launch.py
 """
+import os
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+
+def _display_params(transport: str) -> tuple[dict, bool]:
+    """hexa_display's display.yaml params and its `enabled` flag.
+
+    Returned as a plain dict (with the launch-appropriate transport
+    forced) rather than a params-file path: the YAML scopes its entries
+    under the exact node name, and exact-name entries outrank the
+    wildcard `/**` file launch_ros generates for dict overrides — so a
+    `{"transport": ...}` dict after the file would silently lose.
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_display"), "config", "display.yaml"
+    )
+    with open(path) as f:
+        params = yaml.safe_load(f)["display_node"]["ros__parameters"]
+    params["transport"] = transport
+    return params, bool(params.pop("enabled", True))
 
 
 def generate_launch_description():
@@ -78,11 +104,22 @@ def generate_launch_description():
         parameters=common_params,
     )
 
-    return LaunchDescription([
+    actions = [
         sim,
         ik_node,
         joint_command_bridge,
         posture_node,
         control_node,
         gait_node,
-    ])
+    ]
+
+    display_params, display_enabled = _display_params(transport="stub")
+    if display_enabled:
+        actions.append(Node(
+            package="hexa_display",
+            executable="display_node",
+            output="screen",
+            parameters=common_params + [display_params],
+        ))
+
+    return LaunchDescription(actions)

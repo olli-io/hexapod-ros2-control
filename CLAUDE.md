@@ -18,6 +18,7 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 - `hexa_interfaces` depends on nothing hexapod-specific (leaf).
 - `hexa_description` is the **single source of truth** for URDF, joint limits, and leg geometry. Never duplicate these values elsewhere — load them at runtime.
 - `hexa_simulation` owns **all** Gazebo-specific code. The real-robot bringup must not import it.
+- `hexa_display` is a **pure sink**: it subscribes to topics from the existing chains and relays expression/gaze to the ESP32 face over UART. Nothing imports it or subscribes to it; only `hexa_bringup` launches it.
 - Library code in `hexa_kinematics/` and `hexa_posture/` must be importable without `rclpy` (pure Python, unit-testable standalone). ROS glue lives in separate node files (e.g. `ik_node.py`, `posture_node.py`).
 - Gait strategies are pure functions: `(phase, params) → foot_target`. No state, no I/O, no clocks. The phase clock and per-leg transition state live in the gait engine, not in strategies.
 - Posture animations are pure functions: `AnimationContext → BodyPose`. No state outside the animation instance, no I/O, no clocks. The clock and walking-vs-idle state live in the posture node, not in animations.

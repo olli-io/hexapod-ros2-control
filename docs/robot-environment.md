@@ -10,6 +10,8 @@ for the workstation side.
 - Pimoroni Servo 2040 over USB (enumerates as `/dev/ttyACM0`).
 - Servo rail PSU behind the Servo 2040's relay.
 - Wired Ethernet or Wi-Fi.
+- Optional: ESP32 OLED face on the Pi UART header (GPIO14/15,
+  firmware in the `hexapod-esp32-display` repo).
 
 ## 1. Flash the OS
 
@@ -36,6 +38,27 @@ You may need to run:
 ```
 sudo usermod -aG docker <your_username>
 ```
+
+## 2b. Enable the display UART (optional)
+
+Only needed if the ESP32 face is fitted. Free the PL011 UART from
+Bluetooth so `/dev/serial0` points at the header pins:
+
+```
+# /boot/firmware/config.txt
+enable_uart=1
+dtoverlay=disable-bt
+```
+
+Reboot, then verify `/dev/serial0` resolves to `ttyAMA0`:
+
+```
+ls -l /dev/serial0
+```
+
+The prod compose maps the resolved device (`DISPLAY_DEVICE`, default
+`/dev/ttyAMA0`) into the container as `/dev/serial0`. Without the
+display fitted the node simply keeps retrying in the background.
 
 ## 3. Note hardware IDs
 
