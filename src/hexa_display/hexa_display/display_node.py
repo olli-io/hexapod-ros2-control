@@ -19,8 +19,6 @@ clock and relays the due gaze/blink steps; the animation owns the
 gaze until it ends.
 """
 
-from dataclasses import replace
-
 import rclpy
 from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
@@ -82,7 +80,6 @@ class DisplayNode(Node):
         self._face_animation_fired = 0
         self._pending_face_animation: str | None = None
         self._pending_face_animation_since = 0.0
-        self._idling_expression_i = 0
 
         self.declare_parameter("transport", "serial")
         self.declare_parameter("serial_device", "/dev/serial0")
@@ -111,7 +108,6 @@ class DisplayNode(Node):
         self.declare_parameter("gaze_wz_max", 0.5)
         self.declare_parameter("pose_pitch_threshold_rad", 0.08)
         self.declare_parameter("pose_tilt_threshold_rad", 0.08)
-        self.declare_parameter("idling_expressions", ["neutral", "happy"])
         self.declare_parameter("idling_start_delay_s", 4.0)
 
         def _str(name: str) -> str:
@@ -127,14 +123,6 @@ class DisplayNode(Node):
             )
             for state in DEFAULT_EXPRESSION_MAP
         }
-        # [''] in the YAML disables the idle expression cycling.
-        idling_expressions = tuple(
-            _parse_expression(name, "idling_expressions")
-            for name in self.get_parameter("idling_expressions")
-            .get_parameter_value()
-            .string_array_value
-            if name.strip()
-        )
         self._config = PolicyConfig(
             expression_map=expression_map,
             animation_expression=_parse_expression(
@@ -153,7 +141,6 @@ class DisplayNode(Node):
             gaze_wz_max=_dbl("gaze_wz_max"),
             pose_pitch_threshold_rad=_dbl("pose_pitch_threshold_rad"),
             pose_tilt_threshold_rad=_dbl("pose_tilt_threshold_rad"),
-            idling_expressions=idling_expressions,
             idling_start_delay_s=_dbl("idling_start_delay_s"),
         )
         self._battery_monitor = BatteryMonitor(
@@ -327,16 +314,9 @@ class DisplayNode(Node):
             now - self._face_animation_start_t,
             self._face_animation_fired,
         )
-        cycle = self._config.idling_expressions
         for step in steps:
             if step.blink:
                 self._write_frame(trigger_blink_frame())
-            if step.advance_expression and cycle:
-                # blink-and-switch: swap the expression mid-blink.
-                self._idling_expression_i += 1
-                expression = cycle[self._idling_expression_i % len(cycle)]
-                if self._write_frame(set_expression_frame(expression)):
-                    self._sent_expression = expression
             if step.gaze is not None:
                 if self._write_frame(set_gaze_frame(step.gaze)):
                     self._sent_gaze = step.gaze
@@ -390,16 +370,11 @@ class DisplayNode(Node):
         animation = self._update_face_animation(
             select_face_animation(inputs, self._config), now
         )
-        target = self._last_target
-        cycle = self._config.idling_expressions
-        if animation is not None and animation.name == IDLING.name and cycle:
-            target = replace(
-                target,
-                expression=cycle[self._idling_expression_i % len(cycle)],
-            )
         if not self._ensure_transport(now):
             return
-        self._send_target(target, now, suppress_gaze=animation is not None)
+        self._send_target(
+            self._last_target, now, suppress_gaze=animation is not None
+        )
         if animation is not None:
             self._run_face_animation(animation, now)
         self._drain_rx()

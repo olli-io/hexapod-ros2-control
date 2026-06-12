@@ -74,10 +74,8 @@ only drive the display.
   i.e. the robot stack (servo UART, gait engine) is still
   initializing.
 - **idling** — look-around-and-blink cycle (3.04 s period: left,
-  blink, right, up, down, center, blink-and-switch) once the robot has
-  stood idle, level, and command-free for `idling_start_delay_s`. The
-  final blink each cycle switches to the next expression in
-  `idling_expressions`.
+  blink, right, up, down, center, blink) once the robot has stood
+  idle, level, and command-free for `idling_start_delay_s`.
 
 Battery warning/critical, a posture animation mode, any `cmd_vel`, or
 a tilted body pose suppress the animations.
@@ -117,8 +115,8 @@ All knobs in `config/display.yaml`: transport selection, serial
 device/baud, update/refresh/reconnect periods, the per-gait-state
 expression map, animation/battery expressions, battery thresholds and
 debounce, the gaze deadband/hysteresis/normalization caps, and the
-idling expression cycle and start delay. Expression names are
-validated against the protocol enum at startup.
+idling start delay. Expression names are validated against the
+protocol enum at startup.
 
 Setting `enabled: false` in the same file makes the bringup launch
 files (`sim.launch.py`, `robot.launch.py`) skip the display node

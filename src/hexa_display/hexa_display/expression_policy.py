@@ -107,12 +107,6 @@ class PolicyConfig:
     gaze_wz_max: float = 0.5
     pose_pitch_threshold_rad: float = 0.08
     pose_tilt_threshold_rad: float = 0.08
-    # Expressions the idling blink-and-switch steps through; empty
-    # disables the expression cycling (the gaze cycle still runs).
-    idling_expressions: tuple[Expression, ...] = (
-        Expression.NEUTRAL,
-        Expression.HAPPY,
-    )
     idling_start_delay_s: float = 4.0
 
 

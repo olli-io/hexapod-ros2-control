@@ -21,27 +21,22 @@ def test_registry_names_match():
 def test_breathing_is_a_slow_vertical_cycle():
     gazes = [step.gaze for step in BREATHING.steps]
     assert gazes == [Gaze.UP, Gaze.CENTER, Gaze.DOWN, Gaze.CENTER]
-    assert not any(
-        step.blink or step.advance_expression for step in BREATHING.steps
-    )
+    assert not any(step.blink for step in BREATHING.steps)
 
 
 def test_idling_mirrors_reference_sequence():
     # Timing and order of the firmware test snippet: look left, blink,
-    # look right, up, down, recenter, blink-and-switch, 560 ms tail.
+    # look right, up, down, recenter, blink, 560 ms tail.
     expected = [
-        (0.0, Gaze.LEFT, False, False),
-        (0.44, None, True, False),
-        (0.8, Gaze.RIGHT, False, False),
-        (1.24, Gaze.UP, False, False),
-        (1.68, Gaze.DOWN, False, False),
-        (2.12, Gaze.CENTER, False, False),
-        (2.48, None, True, True),
+        (0.0, Gaze.LEFT, False),
+        (0.44, None, True),
+        (0.8, Gaze.RIGHT, False),
+        (1.24, Gaze.UP, False),
+        (1.68, Gaze.DOWN, False),
+        (2.12, Gaze.CENTER, False),
+        (2.48, None, True),
     ]
-    got = [
-        (step.at_s, step.gaze, step.blink, step.advance_expression)
-        for step in IDLING.steps
-    ]
+    got = [(step.at_s, step.gaze, step.blink) for step in IDLING.steps]
     assert got == expected
     assert IDLING.period_s == 3.04
 

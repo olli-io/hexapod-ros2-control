@@ -1,12 +1,12 @@
 """Face animation sequences for the ESP32 face.
 
 Pure module: no rclpy, no I/O, no clocks. A face animation is a fixed,
-looping sequence of timed steps — a gaze target, a blink trigger,
-and/or an advance of the idle expression cycle. The display node owns
-the clock: it tracks elapsed time since the animation started plus a
-fired-step counter, and asks ``due_steps`` each tick which steps to
-relay. The firmware still eases gaze and auto-blinks on top, so a
-sparse step sequence reads as smooth motion.
+looping sequence of timed steps — a gaze target and/or a blink
+trigger. The display node owns the clock: it tracks elapsed time since
+the animation started plus a fired-step counter, and asks
+``due_steps`` each tick which steps to relay. The firmware still eases
+gaze and auto-blinks on top, so a sparse step sequence reads as smooth
+motion.
 
 Note: "face animation" is deliberately distinct from the posture
 animation stack in ``hexa_posture`` (``/animation/mode``) — these only
@@ -16,8 +16,7 @@ drive the display.
   center) while the display waits for the robot stack (servo UART,
   gait engine) to initialize.
 - **idling** — look-around-and-blink cycle while the hexapod stands
-  idle; the final blink of each cycle advances the configured idle
-  expression cycle (blink-and-switch).
+  idle.
 """
 
 from __future__ import annotations
@@ -32,7 +31,6 @@ class FaceAnimationStep:
     at_s: float
     gaze: Gaze | None = None
     blink: bool = False
-    advance_expression: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,9 +91,9 @@ BREATHING = FaceAnimation(
 )
 
 # Mirrors the firmware test sequence: look left, blink, look right,
-# look up, look down, recenter, then blink-and-switch to the next idle
-# expression; the tail to the 3.04 s period lets the last blink play
-# out. lookTo(x, y) maps as x=-1 → LEFT and y=-1 → UP (screen coords).
+# look up, look down, recenter, blink; the tail to the 3.04 s period
+# lets the last blink play out. lookTo(x, y) maps as x=-1 → LEFT and
+# y=-1 → UP (screen coords).
 IDLING = FaceAnimation(
     name="idling",
     period_s=3.04,
@@ -106,7 +104,7 @@ IDLING = FaceAnimation(
         FaceAnimationStep(at_s=1.24, gaze=Gaze.UP),
         FaceAnimationStep(at_s=1.68, gaze=Gaze.DOWN),
         FaceAnimationStep(at_s=2.12, gaze=Gaze.CENTER),
-        FaceAnimationStep(at_s=2.48, blink=True, advance_expression=True),
+        FaceAnimationStep(at_s=2.48, blink=True),
     ),
 )
 

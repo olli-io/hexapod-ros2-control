@@ -65,8 +65,5 @@ display_node:
     # no /gait/state has been heard yet — the robot stack (servo UART,
     # gait engine) is still initializing. idling (look-around-and-blink
     # cycle) runs once the robot has stood idle and level for the start
-    # delay; its final blink each cycle switches to the next expression
-    # in this list (set to [''] to disable the expression cycling).
-    # Battery warning/critical suppress both animations.
-    idling_expressions: [neutral, happy]
+    # delay. Battery warning/critical suppress both animations.
     idling_start_delay_s: 4.0
