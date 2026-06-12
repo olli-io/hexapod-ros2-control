@@ -43,8 +43,8 @@ knob: `control.yaml` exposes `vmax_ramp_time_linear` /
 gait's velocity ceiling) and the node derives `accel_linear =
 linear_max(gait) / vmax_ramp_time_linear` per gait. Without this the
 gait-independent acceleration cap reverses tripod over ~2.7 s but
-wave over ~0.5 s, which reads as "instant" on slower gaits and is the
-worst case for stance-foot slip on the mid-duty ripple gait. On every
+ripple over ~0.5 s, which reads as "instant" on slower gaits and is the
+worst case for stance-foot slip on the mid-duty crawl gait. On every
 `/cmd_gait` switch the limiter's `accel_linear` is updated so the
 ramp time stays constant across gaits. The limiter is not a hard
 safety limit: during ramp-down the published velocity may briefly

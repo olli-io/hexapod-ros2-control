@@ -9,20 +9,24 @@ functions of `(phase, params) → foot_target`.
 
 Designed around a strategy pattern so additional gaits drop in cleanly:
 - `gaits/tripod.py`   — alternating 3+3 (β = 0.5, fast, default).
-- `gaits/surf.py`     — metachronal, 2.5 legs in swing on average
-  (β = 7/12, between tripod and ripple).
+- `gaits/surf.py`     — tripod-grouped metachronal, 2.25 legs in swing
+  on average (β = 5/8, between tripod and crawl).
 - `gaits/tetrapod.py` — three diagonal pairs (β = 2/3, paired siblings
-  of ripple).
-- `gaits/ripple.py`   — metachronal pair, two legs in swing (β = 2/3,
+  of crawl).
+- `gaits/crawl.py`   — metachronal pair, two legs in swing (β = 2/3,
   medium).
-- `gaits/wave.py`     — one leg in swing at a time (β = 5/6, max
+- `gaits/ripple.py`     — one leg in swing at a time (β = 5/6, max
   stability).
 
-Ripple, wave, and surf share the metachronal phase-offset table; they
-differ only in duty factor. Tripod and tetrapod use their own paired
-tables. The strategy registry in `gaits/__init__.py` exposes all five
-by name (`STRATEGIES["tripod" | "surf" | "tetrapod" | "ripple" |
-"wave"]`).
+Crawl and ripple share the metachronal phase-offset table and differ
+only in duty factor. Surf reuses the same cyclic lift-off order but
+clusters the timing by tripod — evenly spread offsets cannot be
+statically stable anywhere between tripod and tetrapod (see the
+`surf.py` docstring). Tripod
+and tetrapod use their own paired tables. Every gait's worst-case
+quasi-static stability margin is pinned in `test/test_stability.py`.
+The strategy registry in `gaits/__init__.py` exposes all five by name
+(`STRATEGIES["tripod" | "surf" | "tetrapod" | "crawl" | "ripple"]`).
 Switching at runtime: `Engine.set_strategy(name)` swaps immediately in
 `STAND`. While walking (or mid pause/reseat) the name is latched as
 pending and the engine runs PAUSING → PAUSED (short
@@ -94,7 +98,7 @@ startup; there are no duplicate knobs in the teleop or control YAML.
 - `linear_max` is **derived per-gait** as
   `stride_length × (1 − β) / (min_swing_time × β)` — exactly each gait's
   per-leg velocity ceiling. Tripod sits at the high end (β=0.5),
-  ripple in the middle (β=2/3), wave at the low end (β=5/6). The
+  crawl in the middle (β=2/3), ripple at the low end (β=5/6). The
   cap is applied at the `/cmd_vel` boundary using the *active* gait's
   value: `hexa_control` looks it up on every tick, and `hexa_teleop`
   rebuilds its stick scaling whenever the user's D-pad cycler accepts
@@ -186,8 +190,8 @@ The queue is built at the moment the engine enters STOPPING:
    (`phase < 1 − β` per the active gait, or flagged airborne by the
    engine) goes in the first group. They are already in the air, so
    they must come down before anything else moves. For tripod this is
-   one of the two natural triples; for ripple it can be one or two
-   singletons that happened to overlap in the swing window; for wave
+   one of the two natural triples; for crawl it can be one or two
+   singletons that happened to overlap in the swing window; for ripple
    it is at most one leg.
 2. **Stance groups** — the remaining legs are bucketed by exact phase
    offset (legs sharing an offset are gait-natural parallel partners,
@@ -218,15 +222,15 @@ Per-gait stop-time bound (at `min_swing_time = 0.3 s`, all legs near
 nominal):
 
 - **Tripod** (β=0.5, two offset groups) — ≤ 2 × `max_reset_time`.
-- **Ripple** (β=2/3, up to five groups after merging the swing
+- **Crawl** (β=2/3, up to five groups after merging the swing
   overlap) — ≤ 5 × `max_reset_time`.
-- **Wave** (β=5/6, six groups) — ≤ 6 × `max_reset_time`.
+- **Ripple** (β=5/6, six groups) — ≤ 6 × `max_reset_time`.
 
 ### Stability
 
 Sequential groups are strictly more conservative than the gait's
 overlapping mid-walk swing windows. Tripod's two triples are each a
-stable support set; ripple/wave never have more than one stance group
+stable support set; crawl/ripple never have more than one stance group
 airborne at a time. The "support polygon contains the CoM" invariant is
 *inherited from the gait itself* — β and the phase offsets are chosen
 so it holds, and the disengagement controller's groups are subsets of

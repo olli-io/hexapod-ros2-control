@@ -39,7 +39,7 @@ This is a colcon workspace; all ROS2 packages live under `src/`. Format: `src/<p
 - `src/hexa_description/` (ament_cmake) — URDF (via xacro), meshes, joint limits, robot_state_publisher config. Source of truth for kinematics.
 - `src/hexa_kinematics/` (ament_python) — Pure-Python FK/IK library (per-leg + body); no ROS deps at the library level, plus a thin ROS node.
 - `src/hexa_hardware/` (ament_cmake) — C++ `hardware_interface` plugin for ros2_control. Real Servo 2040 + sim/mock variants.
-- `src/hexa_gait/` (ament_python) — Gait engine node; emits foot targets given a body velocity. Tripod first; wave/ripple plug in via a strategy.
+- `src/hexa_gait/` (ament_python) — Gait engine node; emits foot targets given a body velocity. Tripod first; ripple/crawl plug in via a strategy.
 - `src/hexa_posture/` (ament_python) — Posture engine node; turns user body-pose input + gait state into a clamped body pose target. Owns body-pose animations (sway, breathing, lean…).
 - `src/hexa_control/` (ament_python) — Velocity shaping + gait selection: maps `cmd_vel` to gait params and chooses which gait runs.
 - `src/hexa_teleop/` (ament_python) — Joystick/keyboard → `cmd_vel` and `/body/pose`.

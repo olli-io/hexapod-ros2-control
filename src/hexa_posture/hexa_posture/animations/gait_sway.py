@@ -1,8 +1,8 @@
 """Gait-sensitive sway — translates the body in XY to track the live
 support-polygon centroid, suppressing the rocking mode that
-four-foot stance polygons (tetrapod, ripple, surf) exhibit.
+four-foot stance polygons (tetrapod, crawl, surf) exhibit.
 
-Three-foot (tripod) and five-foot (wave) polygon centroids land near
+Three-foot (tripod) and five-foot (ripple) polygon centroids land near
 the body origin, so the animation naturally self-attenuates for those
 gaits — no per-gait gating needed.
 

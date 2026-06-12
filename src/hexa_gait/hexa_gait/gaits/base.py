@@ -145,7 +145,7 @@ def derive_cycle_time(
     Clamped to ``[min_cycle_time, max_cycle_time]``. The lower bound is
     duty-factor-dependent in the caller — for the standard strategies
     it is derived as ``min_swing_time / (1 − β)`` so the swing-phase
-    foot velocity stays bounded as β grows (wave) or shrinks (tripod).
+    foot velocity stays bounded as β grows (ripple) or shrinks (tripod).
     At zero ``max_leg_v`` the raw quotient diverges, so we clamp to the
     slow end — the resulting stride is zero anyway because every
     ``v_leg`` is zero.

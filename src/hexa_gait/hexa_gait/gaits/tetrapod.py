@@ -8,11 +8,11 @@ the body so the four supporting feet always bracket the centre of mass:
 - ``master = 1/3``   — ``r_front`` + ``l_rear``    swing together.
 - ``master = 2/3``   — ``l_middle`` + ``r_rear``   swing together.
 
-Shares the duty factor with ripple (β = 2/3, 4 feet on ground at all
-times) but differs in the *which two* — ripple stages its two swings
+Shares the duty factor with crawl (β = 2/3, 4 feet on ground at all
+times) but differs in the *which two* — crawl stages its two swings
 half a cycle apart on opposite body sides, while tetrapod lifts a
 diagonal pair together. The resulting support polygon swap is more
-abrupt than ripple but the static-stability margin is comparable.
+abrupt than crawl but the static-stability margin is comparable.
 """
 
 from __future__ import annotations

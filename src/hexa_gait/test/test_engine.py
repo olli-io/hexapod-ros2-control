@@ -6,9 +6,9 @@ from hexa_gait.clock import LEG_NAMES
 from hexa_gait.engagement import EngagementState
 from hexa_gait.engine import Engine, EngineConfig, EngineState
 from hexa_gait.gaits.base import LegContext, StrideParams
-from hexa_gait.gaits.ripple import Ripple
+from hexa_gait.gaits.crawl import Crawl
 from hexa_gait.gaits.tripod import TRIPOD_OFFSETS, Tripod
-from hexa_gait.gaits.wave import Wave
+from hexa_gait.gaits.ripple import Ripple
 
 
 # Symmetric six-leg layout. Front/rear sit at 0.18 m from body centre
@@ -590,10 +590,10 @@ def test_set_strategy_swap_in_stand_succeeds():
     engine = _engine(spy)
     _drive_past_initialize(engine)
     assert engine.state is EngineState.STAND
-    assert engine.set_strategy("ripple") is True
-    assert engine.strategy_name == "ripple"
+    assert engine.set_strategy("crawl") is True
+    assert engine.strategy_name == "crawl"
     # Engagement controller is rebuilt with the new β so a subsequent
-    # walk uses ripple's duty factor.
+    # walk uses crawl's duty factor.
     assert engine._strategy.duty_factor == pytest.approx(2.0 / 3.0)
 
 
@@ -629,7 +629,7 @@ def test_set_strategy_same_name_is_no_op():
 
 @pytest.mark.parametrize(
     "name,expected_duty",
-    [("tripod", 0.5), ("ripple", 2.0 / 3.0), ("wave", 5.0 / 6.0)],
+    [("tripod", 0.5), ("crawl", 2.0 / 3.0), ("ripple", 5.0 / 6.0)],
 )
 def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     # The engine derives min/max cycle_time = swing_time / (1 − β),
@@ -665,6 +665,30 @@ def test_derive_cycle_time_reads_strategy_duty_factor(name, expected_duty):
     # Fast command above saturation: cycle_time clamped to min_cycle.
     v_fast = 10.0
     assert cycle_time(v_fast) == pytest.approx(expected_min_cycle)
+
+
+def test_stance_classification_absorbs_touchdown_ulp():
+    # Regression for the one-tick stance-flag seam bug. ``1 - 2/3`` is
+    # not exactly representable (0.33333333333333337), so a foot whose
+    # true phase is the touchdown point 1/3 computes one ULP *below*
+    # swing_end. The engine classifies stance as
+    # ``phase >= (1 - duty_factor) - _STANCE_SEAM_EPSILON``; a bare
+    # ``>=`` would misflag that just-landed, load-bearing foot as
+    # airborne for one tick. At β = 2/3 (crawl, tetrapod) every
+    # touchdown coincides with another leg's lift-off, so the misflag
+    # momentarily drops the support set onto a lopsided three-foot
+    # triangle with the CoM on its edge.
+    from hexa_gait.engine import _STANCE_SEAM_EPSILON
+
+    swing_end = 1.0 - 2.0 / 3.0
+    touchdown_phase = 1.0 / 3.0
+    # The trap: the touched-down foot computes just below swing_end.
+    assert touchdown_phase < swing_end
+    # The guard: the engine's rule still classes it as stance.
+    assert touchdown_phase >= swing_end - _STANCE_SEAM_EPSILON
+    # The epsilon stays far below one phase tick (dt/cycle_time ≈ 0.02
+    # at these speeds), so it never swallows a real swing tick.
+    assert 0.0 < _STANCE_SEAM_EPSILON < 1e-6
 
 
 # ---- Gait change while walking -------------------------------------------
@@ -735,8 +759,8 @@ def test_set_strategy_during_gait_runs_pause_reseat_engage_sequence():
     engine = _tripod_engine()
     _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
 
-    assert engine.set_strategy("ripple") is True
-    assert engine.pending_strategy_name == "ripple"
+    assert engine.set_strategy("crawl") is True
+    assert engine.pending_strategy_name == "crawl"
 
     trace = _trace_states(engine, _CMD, ticks=400)
     _assert_ordered_subsequence(
@@ -750,7 +774,7 @@ def test_set_strategy_during_gait_runs_pause_reseat_engage_sequence():
         ],
     )
     assert EngineState.RESUMING not in trace
-    assert engine.strategy_name == "ripple"
+    assert engine.strategy_name == "crawl"
     assert engine._strategy.duty_factor == pytest.approx(2.0 / 3.0)
     assert engine.pending_strategy_name is None
 
@@ -765,7 +789,7 @@ def test_gait_change_uses_short_pause_to_reseat_dwell():
     # short dwell, nowhere near the 5 s normal settle.
     engine = _tripod_engine(cfg)
     _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
-    engine.set_strategy("ripple")
+    engine.set_strategy("crawl")
     _drive_to_state(engine, _CMD, EngineState.PAUSED)
     paused_ticks = 0
     for _ in range(50):
@@ -790,17 +814,17 @@ def test_pending_gait_updates_mid_sequence():
     engine = _tripod_engine()
     _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
 
-    assert engine.set_strategy("ripple") is True
+    assert engine.set_strategy("crawl") is True
     engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
     assert engine.state is EngineState.PAUSING
-    assert engine.set_strategy("wave") is True
-    assert engine.pending_strategy_name == "wave"
+    assert engine.set_strategy("ripple") is True
+    assert engine.pending_strategy_name == "ripple"
 
     _drive_to_state(engine, _CMD, EngineState.PAUSED)
-    assert engine.set_strategy("wave") is True
+    assert engine.set_strategy("ripple") is True
 
     _drive_to_state(engine, _CMD, EngineState.GAIT)
-    assert engine.strategy_name == "wave"
+    assert engine.strategy_name == "ripple"
     assert engine._strategy.duty_factor == pytest.approx(5.0 / 6.0)
 
 
@@ -808,7 +832,7 @@ def test_cycle_back_to_original_gait_still_completes_sequence():
     engine = _tripod_engine()
     _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
 
-    assert engine.set_strategy("ripple") is True
+    assert engine.set_strategy("crawl") is True
     engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
     assert engine.state is EngineState.PAUSING
     # Cycle back to the originally-active gait: still latched, and the
@@ -836,7 +860,7 @@ def test_set_strategy_locked_during_engaging():
     engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
     assert engine.state is EngineState.ENGAGING
 
-    assert engine.set_strategy("ripple") is False
+    assert engine.set_strategy("crawl") is False
     assert engine.pending_strategy_name is None
 
     _drive_to_state(engine, _CMD, EngineState.GAIT)
@@ -850,7 +874,7 @@ def test_set_strategy_locked_during_resuming():
     engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
     assert engine.state is EngineState.RESUMING
 
-    assert engine.set_strategy("ripple") is False
+    assert engine.set_strategy("crawl") is False
     assert engine.pending_strategy_name is None
 
     _drive_to_state(engine, _CMD, EngineState.GAIT)
@@ -860,7 +884,7 @@ def test_set_strategy_locked_during_resuming():
 def test_resume_suppressed_while_gait_change_pending():
     engine = _tripod_engine()
     _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
-    engine.set_strategy("ripple")
+    engine.set_strategy("crawl")
 
     # cmd held non-zero the whole way: without the suppression the
     # first PAUSING tick would route straight back to RESUMING.
@@ -870,20 +894,20 @@ def test_resume_suppressed_while_gait_change_pending():
         if engine.state is EngineState.GAIT:
             break
     assert engine.state is EngineState.GAIT
-    assert engine.strategy_name == "ripple"
+    assert engine.strategy_name == "crawl"
 
 
 def test_pending_gait_commits_when_cmd_released_mid_sequence():
     engine = _tripod_engine()
     _drive_to_gait(engine, v_body_xy=_CMD, omega_z=0.0)
-    engine.set_strategy("ripple")
+    engine.set_strategy("crawl")
     engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
     assert engine.state is EngineState.PAUSING
 
     # Operator releases the stick mid-sequence: the sequence still
     # completes and commits, then settles in STAND.
     _drive_to_state(engine, (0.0, 0.0), EngineState.STAND)
-    assert engine.strategy_name == "ripple"
+    assert engine.strategy_name == "crawl"
     assert engine.pending_strategy_name is None
     for _ in range(25):
         engine.update(dt=0.02, v_body_xy=(0.0, 0.0), omega_z=0.0)
@@ -897,10 +921,10 @@ def test_set_strategy_accepted_during_normal_pause():
 
     # Request during an ordinary zero-cmd pause: latched, committed by
     # the same short-dwell reseat handoff.
-    assert engine.set_strategy("ripple") is True
-    assert engine.pending_strategy_name == "ripple"
+    assert engine.set_strategy("crawl") is True
+    assert engine.pending_strategy_name == "crawl"
     _drive_to_state(engine, (0.0, 0.0), EngineState.STAND)
-    assert engine.strategy_name == "ripple"
+    assert engine.strategy_name == "crawl"
 
     # The next walk engages the new gait.
     engine.update(dt=0.02, v_body_xy=_CMD, omega_z=0.0)
@@ -910,17 +934,17 @@ def test_set_strategy_accepted_during_normal_pause():
 
 # ---- Stance integrator: world-frame foot invariance ---------------------
 #
-# Wave (β = 5/6) spreads its five stance legs across stance phases
+# Ripple (β = 5/6) spreads its five stance legs across stance phases
 # s ∈ {0, 1/5, …, 4/5}. A velocity change mid-stance must not shift any
 # stance foot in the world frame — otherwise the IK pulls loaded feet
 # across the ground. Tripod (β = 0.5, three stance legs lockstep) hides
-# this; wave is the strict test.
+# this; ripple is the strict test.
 
 
-def _wave_engine() -> Engine:
+def _ripple_engine() -> Engine:
     return Engine(
         config=_config(),
-        strategy=Wave(),
+        strategy=Ripple(),
         nominal_stance=_nominal_stance(),
         initial_stance=_initial_stance(),
         coxa_to_bottom=0.02,
@@ -928,11 +952,11 @@ def _wave_engine() -> Engine:
     )
 
 
-def test_wave_stance_world_invariant_at_constant_velocity():
+def test_ripple_stance_world_invariant_at_constant_velocity():
     # Sanity check: under constant velocity each stance leg's world
     # position holds across its stance window. Confirms the integrator
     # is the closed-form's equivalent at constant v.
-    engine = _wave_engine()
+    engine = _ripple_engine()
     v_x = 0.05
     _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
 
@@ -960,13 +984,13 @@ def test_wave_stance_world_invariant_at_constant_velocity():
             prev_stance[name] = True
 
 
-def test_wave_mid_stance_velocity_step_keeps_feet_planted():
-    # The headline test: at a mixed stance-phase moment on wave, step
+def test_ripple_mid_stance_velocity_step_keeps_feet_planted():
+    # The headline test: at a mixed stance-phase moment on ripple, step
     # the commanded velocity from (0.10, 0) to (0.05, 0.05). Every leg
     # that stays in stance across the step must hold its world-frame
     # position. Pre-fix this would have produced a ~25 mm step for the
     # legs at the extreme stance phases (s ≈ 0 and s ≈ 4/5).
-    engine = _wave_engine()
+    engine = _ripple_engine()
     v_x = 0.10
     _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
 
@@ -1018,7 +1042,7 @@ def test_engagement_to_gait_seed_world_invariant_under_velocity_step():
     # anchors (not the strategy's closed-form stance target, which
     # would already differ from the engagement controller's integrated
     # position).
-    engine = _wave_engine()
+    engine = _ripple_engine()
     v_x = 0.10
     _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
     assert engine.state is EngineState.GAIT
@@ -1065,18 +1089,18 @@ def test_engagement_to_gait_seed_world_invariant_under_velocity_step():
 # discontinuously jump when v_y or ω_z is introduced on top of a steady
 # v_x. Pre-fix the strategy rebuilt PEP/AEP from the live stride each
 # tick, so a mid-swing v_y step shifted the swing foot in body frame by
-# a fraction of Δstride — visible on wave (β = 5/6, one airborne leg,
+# a fraction of Δstride — visible on ripple (β = 5/6, one airborne leg,
 # stance_time ≈ 5× tripod's) and a known source of foot tip slipping.
 
 
-def test_wave_mid_swing_velocity_step_keeps_swing_foot_continuous():
-    engine = _wave_engine()
+def test_ripple_mid_swing_velocity_step_keeps_swing_foot_continuous():
+    engine = _ripple_engine()
     v_x = 0.10
     _drive_to_gait(engine, v_body_xy=(v_x, 0.0), omega_z=0.0)
 
     dt = 0.005
     # Tick into steady-state until a leg is mid-swing (phase well inside
-    # [0, 1 − β)). Wave has one airborne leg at a time, so we scan all
+    # [0, 1 − β)). Ripple has one airborne leg at a time, so we scan all
     # six and pick whichever is far enough into its swing window that a
     # single-tick velocity step is clearly mid-arc.
     swing_name: str | None = None
@@ -1084,7 +1108,7 @@ def test_wave_mid_swing_velocity_step_keeps_swing_foot_continuous():
     for _ in range(400):
         last_out = engine.update(dt=dt, v_body_xy=(v_x, 0.0), omega_z=0.0)
         for n in LEG_NAMES:
-            # Mid-swing window: phase ∈ (0.04, 0.12) on wave's [0, 1/6)
+            # Mid-swing window: phase ∈ (0.04, 0.12) on ripple's [0, 1/6)
             # swing — past the lift-off endpoint, before touchdown.
             if not last_out[n].stance and 0.04 < last_out[n].phase < 0.12:
                 swing_name = n
@@ -1098,7 +1122,7 @@ def test_wave_mid_swing_velocity_step_keeps_swing_foot_continuous():
 
     # Single-tick velocity step: add v_y and ω_z on top of steady v_x.
     # The body-frame swing foot must shift by at most the latched arc's
-    # own per-tick progression (≪ 1 mm at dt = 5 ms on wave) — pre-fix
+    # own per-tick progression (≪ 1 mm at dt = 5 ms on ripple) — pre-fix
     # the rebuilt PEP/AEP would have jumped this by O(Δv · stance_time)
     # = O(0.05 · 1 s) · 0.5 = O(25 mm) in y, plus an ω_z contribution.
     out = engine.update(dt=dt, v_body_xy=(v_x, 0.05), omega_z=0.3)
@@ -1118,14 +1142,14 @@ def test_wave_mid_swing_velocity_step_keeps_swing_foot_continuous():
     assert dz < 3.0e-3, f"swing dz={dz*1000:.2f} mm"
 
 
-def test_wave_swing_liftoff_velocity_matches_body_velocity():
-    # Wave's β = 5/6 means the default ``swing_origin_velocity =
+def test_ripple_swing_liftoff_velocity_matches_body_velocity():
+    # Ripple's β = 5/6 means the default ``swing_origin_velocity =
     # -stride/swing_time`` resolves to -5·v_leg, a 5× velocity step at
     # lift-off. The SwingPlanner overrides this with -v_leg so swing
     # launches at the stance-frame velocity. Sampling the foot tip a
     # few ticks past lift-off measures the primary Bezier's endpoint
     # velocity directly.
-    engine = _wave_engine()
+    engine = _ripple_engine()
     cmd_v = 0.10
     _drive_to_gait(engine, v_body_xy=(cmd_v, 0.0), omega_z=0.0)
     dt = 0.001

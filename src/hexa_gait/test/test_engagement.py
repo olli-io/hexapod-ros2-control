@@ -5,9 +5,9 @@ import pytest
 from hexa_gait.clock import LEG_NAMES
 from hexa_gait.engagement import EngagementController, EngagementState
 from hexa_gait.gaits.base import LegContext, StrideParams
-from hexa_gait.gaits.ripple import Ripple
+from hexa_gait.gaits.crawl import Crawl
 from hexa_gait.gaits.tripod import Tripod
-from hexa_gait.gaits.wave import Wave
+from hexa_gait.gaits.ripple import Ripple
 
 
 # Symmetric stance shared with test_engine.py. Front / rear sit at
@@ -203,14 +203,14 @@ def test_internal_v_body_smoothstep_then_holds():
 
 def test_smoothstep_window_matches_first_touchdown():
     # Tripod's first touchdown is at master = swing_end = 0.5; for
-    # ripple and wave the earliest first touchdown is at master = 1/6
+    # crawl and ripple the earliest first touchdown is at master = 1/6
     # (the leg with the largest initial-swing offset). The smoothstep
     # window must equal that value so the envelope saturates exactly
     # when the first leg touches down.
     for strategy_cls, expected in [
         (Tripod, 0.5),
+        (Crawl, 1.0 / 6.0),
         (Ripple, 1.0 / 6.0),
-        (Wave, 1.0 / 6.0),
     ]:
         ctrl = _controller(duty_factor=strategy_cls.duty_factor)
         _begin(ctrl, strategy_cls)
@@ -307,7 +307,7 @@ def test_pure_yaw_inner_vs_outer_stride():
 def test_exit_master_wraps_to_zero():
     # Engagement covers a full master cycle; the modular handoff phase
     # is 0.0 regardless of the active gait's duty factor.
-    for strategy_cls in (Tripod, Ripple, Wave):
+    for strategy_cls in (Tripod, Crawl, Ripple):
         ctrl = _controller(duty_factor=strategy_cls.duty_factor)
         _begin(ctrl, strategy_cls)
         assert ctrl.exit_master == pytest.approx(0.0)
@@ -371,7 +371,7 @@ def _expected_gait_foot(
     return strategy.foot_target(phase, stride, legs[name])
 
 
-@pytest.mark.parametrize("strategy_cls", [Tripod, Ripple, Wave])
+@pytest.mark.parametrize("strategy_cls", [Tripod, Crawl, Ripple])
 def test_engagement_end_matches_strategy_for_constant_cmd(strategy_cls):
     # Every leg lands on its strategy-prescribed position by master = 1.0.
     v_cmd_x = 0.10
@@ -391,11 +391,11 @@ def test_engagement_end_matches_strategy_for_constant_cmd(strategy_cls):
             )
 
 
-@pytest.mark.parametrize("strategy_cls", [Tripod, Ripple, Wave])
+@pytest.mark.parametrize("strategy_cls", [Tripod, Crawl, Ripple])
 def test_no_position_step_at_state_boundaries(strategy_cls):
     # At every per-leg state boundary (INITIAL_STANCE → swing, swing →
     # GAIT_LIKE) the foot position must be continuous. The previous
-    # design failed this for ripple/wave initial-stance legs whose swing
+    # design failed this for crawl/ripple initial-stance legs whose swing
     # window closed before exit_master — they stayed pinned at AEP for
     # the rest of engagement, then jumped to PEP-ish at GAIT handoff.
     # Both transitions show up as ``stance`` flag flips; bound the
@@ -424,7 +424,7 @@ def test_no_position_step_at_state_boundaries(strategy_cls):
             prev_stance[name] = out[name].stance
 
 
-@pytest.mark.parametrize("strategy_cls", [Tripod, Ripple, Wave])
+@pytest.mark.parametrize("strategy_cls", [Tripod, Crawl, Ripple])
 def test_engagement_reaches_done(strategy_cls):
     ctrl = _controller(duty_factor=strategy_cls.duty_factor)
     _begin(ctrl, strategy_cls)
@@ -432,20 +432,20 @@ def test_engagement_reaches_done(strategy_cls):
     assert ctrl.state is EngagementState.DONE
 
 
-def test_wave_engagement_gait_like_stance_world_invariant_under_velocity_step():
+def test_ripple_engagement_gait_like_stance_world_invariant_under_velocity_step():
     # The engagement controller's GAIT_LIKE branch must integrate stance
     # legs against the internal body velocity — not rebuild them from
-    # the closed-form stance Bezier. Drive a wave engagement far enough
+    # the closed-form stance Bezier. Drive a ripple engagement far enough
     # that several legs sit in GAIT_LIKE stance, then step v_cmd. Each
     # such leg's world-frame foot position must hold across the step.
-    ctrl = _controller(duty_factor=Wave.duty_factor)
-    _begin(ctrl, Wave)
+    ctrl = _controller(duty_factor=Ripple.duty_factor)
+    _begin(ctrl, Ripple)
 
     v_x = 0.10
     dt = 0.005
     body_x = 0.0
     body_y = 0.0
-    # Drive to master ≈ 0.7. With wave's first_touchdown masters at
+    # Drive to master ≈ 0.7. With ripple's first_touchdown masters at
     # 1/6, 1/3, 1/2, 2/3, ..., by master 0.7 four legs have already
     # entered GAIT_LIKE (r_rear, l_middle, r_front, l_rear).
     out = None
@@ -482,7 +482,7 @@ def test_wave_engagement_gait_like_stance_world_invariant_under_velocity_step():
         assert dy < 1e-3, f"{name} world dy={dy*1000:.2f} mm"
 
 
-@pytest.mark.parametrize("strategy_cls", [Ripple, Wave])
+@pytest.mark.parametrize("strategy_cls", [Crawl, Ripple])
 def test_legs_enter_stance_after_first_touchdown(strategy_cls):
     # After each leg's first touchdown master it transitions to
     # GAIT_LIKE, where stance=True whenever phase ≥ swing_end. This is

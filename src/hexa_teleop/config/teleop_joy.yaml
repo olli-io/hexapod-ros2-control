@@ -8,7 +8,7 @@
 # controllers by editing that block.
 
 initial_mode: gait              # "gait" | "posture" | "animation"
-gait_cycle: [wave, ripple, tetrapod, surf, tripod]  # slowest → fastest
+gait_cycle: [ripple, crawl, tetrapod, surf, tripod]  # slowest → fastest
 default_gait: tripod
 # ANIMATION-mode cycler list comes from hexa_posture/config/posture.yaml
 # (``animation_mode_animations``) — single source of truth. Entry into

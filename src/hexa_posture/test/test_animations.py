@@ -138,10 +138,10 @@ def test_gait_bounce_identity_when_gait_unknown():
 
 
 def test_gait_bounce_identity_under_non_tripod_gaits():
-    # Tetrapod / wave / ripple / surf all drove the chassis unstable
+    # Tetrapod / ripple / crawl / surf all drove the chassis unstable
     # in testing — gate is hard, not a soft attenuation.
     bounce = GaitBounce(arc_height=0.02, step_height_ref=0.06)
-    for name in ("tetrapod", "wave", "ripple", "surf"):
+    for name in ("tetrapod", "ripple", "crawl", "surf"):
         assert bounce(
             _ctx(walking=True, gait_name=name, swing_lift_z=0.06)
         ) == IDENTITY, f"GaitBounce must stay silent under {name!r}"

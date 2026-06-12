@@ -255,7 +255,7 @@ class PostureNode(Node):
         # is seen with a usable stance polygon; held through
         # degenerate transitions so GaitBounce sees a continuous
         # signal. Filtering smooths the slope kink at swing-leg
-        # handover in overlapping gaits (ripple, surf) where the
+        # handover in overlapping gaits (crawl, surf) where the
         # max-across-legs switches between two arcs.
         self._swing_lift_z: float | None = None
         self._latest_raw_swing_lift: float | None = None

@@ -98,7 +98,7 @@ def test_stance_centroid_returns_none_when_polygon_degenerate():
 
 def test_max_swing_lift_picks_highest_swing_foot_above_stance_mean():
     # Two legs swinging at different heights; the higher one drives
-    # the bounce — this is what makes ripple/surf overlap collapse
+    # the bounce — this is what makes crawl/surf overlap collapse
     # to the "main wave" instead of double-counting both airborne
     # legs.
     msg = _targets(

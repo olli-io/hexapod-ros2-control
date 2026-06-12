@@ -1,15 +1,16 @@
-"""Shared helpers for metachronal gaits (ripple, wave) and tripod.
+"""Shared helpers for metachronal gaits (crawl, ripple) and tripod.
 
 ``METACHRONAL_OFFSETS`` is the Wilson posterior→anterior sequence with a
-contralateral half-cycle offset. Ripple and wave both use it; only the
-duty factor differs between the two.
+contralateral half-cycle offset. Crawl and ripple both use it; only the
+duty factor differs between the two. Surf keeps the same cyclic
+lift-off order but clusters the timing by tripod — see ``surf.py``.
 
 ``phased_foot_target`` is the pure (phase, stride, leg) → body-frame
-target shared across all three gaits. PEP / AEP are symmetric about the
-nominal stance position; the swing window is ``[0, 1 - β)`` and the
-stance window is ``[1 - β, 1)``. Stance is a quartic Bezier from AEP
-toward PEP at constant tip velocity; swing is the two-curve
-``swing_arc`` from ``base``.
+target shared across all the standard strategies. PEP / AEP are
+symmetric about the nominal stance position; the swing window is
+``[0, 1 - β)`` and the stance window is ``[1 - β, 1)``. Stance is a
+quartic Bezier from AEP toward PEP at constant tip velocity; swing is
+the two-curve ``swing_arc`` from ``base``.
 """
 
 from __future__ import annotations
@@ -24,18 +25,28 @@ from .base import LegContext, StrideParams, identity_y_sign, swing_arc
 __all__ = ["METACHRONAL_OFFSETS", "phased_foot_target"]
 
 
-# Wilson's posterior → anterior wave on the right side (rear → middle →
-# front at offsets 0, 1/3, 2/3) with the contralateral side a half cycle
-# out of phase (left side starts at 1/2 and follows the same posterior →
-# anterior ordering).
+# Wilson's posterior → anterior protraction wave with the contralateral
+# side half a cycle out of phase. The clock projects
+# ``leg_phase = (master + offset) mod 1`` and lift-off is at
+# ``leg_phase = 0``, so a leg with offset ``o`` lifts off at
+# ``master = (1 - o) mod 1`` — offsets are the *mirror* of lift-off
+# times, not the lift-off times themselves. The table below realizes
+# lift-offs at
+#
+#     r_rear 0,   r_middle 1/3, r_front 2/3   (rear → middle → front)
+#     l_rear 1/2, l_middle 5/6, l_front 1/6   (same wave, + 1/2 cycle)
+#
+# Among all 720 assignments of the six evenly spaced slots to legs this
+# sequence maximizes crawl's worst-case quasi-static stability margin
+# (floor pinned in ``test/test_stability.py``).
 METACHRONAL_OFFSETS = PhaseOffsets(
     offsets={
         "r_rear": 0.0,
-        "r_middle": 1.0 / 3.0,
-        "r_front": 2.0 / 3.0,
+        "r_middle": 2.0 / 3.0,
+        "r_front": 1.0 / 3.0,
         "l_rear": 1.0 / 2.0,
-        "l_middle": 5.0 / 6.0,
-        "l_front": 1.0 / 6.0,
+        "l_middle": 1.0 / 6.0,
+        "l_front": 5.0 / 6.0,
     }
 )
 

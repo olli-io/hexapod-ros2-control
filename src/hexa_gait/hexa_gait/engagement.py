@@ -1,6 +1,6 @@
 """Stand -> Gait engagement and Paused -> Gait resume.
 
-The standard tripod / wave / ripple strategies assume the engine has
+The standard tripod / ripple / crawl strategies assume the engine has
 already been ticking — they compute foot targets from PEP and AEP
 points that sit symmetrically around the nominal stance. Coming out of
 STAND, every foot is at NOMINAL, so on the first GAIT tick the
@@ -42,7 +42,7 @@ Each leg passes through three per-leg states:
   the internal body velocity from their current body-frame position.
   Stance is therefore history-dependent rather than rebuilt from
   instantaneous stride. A leg that would do a second swing within one
-  cycle (e.g. ripple's ``l_front`` between master 5/6 and 1.0) follows
+  cycle (e.g. crawl's ``l_front`` between master 5/6 and 1.0) follows
   the strategy for that second swing too. Continuity at the engagement
   → GAIT boundary is exact: both sides use the same split, so the
   engine seeds its own ``StanceIntegrator`` from the engagement
@@ -67,7 +67,7 @@ where ``W`` is the **earliest first-touchdown master** across all legs:
 
     W = min over initial-swing legs of (swing_end − offset)
 
-For tripod ``W = 0.5``; for ripple and wave ``W = 1/6``. ``W`` is the
+For tripod ``W = 0.5``; for crawl and ripple ``W = 1/6``. ``W`` is the
 horizon over which body velocity must reach ``cmd_vel`` so that every
 post-touchdown leg sees the steady-state body velocity and integrated
 stance matches the strategy's Bezier-driven stance. Past master = W the
@@ -275,7 +275,7 @@ class EngagementController:
         first_lift_off: dict[str, float] = {}
         first_touchdown: dict[str, float] = {}
         # 1e-9 tolerance covers the float artefacts when the offset and
-        # swing_end share a common irrational like 1/3: ripple's
+        # swing_end share a common irrational like 1/3: crawl's
         # ``r_middle`` (offset 1/3) and ``swing_end`` (1 − 2/3) differ
         # by one ULP. A leg sitting exactly at the boundary is at AEP
         # at master = 0 — that is, in stance, not in swing.
@@ -301,7 +301,7 @@ class EngagementController:
 
         # Smoothstep saturates at the earliest first touchdown so every
         # leg that enters GAIT_LIKE sees v_body = v_cmd. For tripod that
-        # is master = 0.5; for ripple and wave it is master = 1/6 (only
+        # is master = 0.5; for crawl and ripple it is master = 1/6 (only
         # one or two initial-swing legs, the largest offset being 1/6).
         self._smoothstep_window = min(first_touchdown.values())
 

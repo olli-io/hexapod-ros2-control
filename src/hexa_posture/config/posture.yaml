@@ -21,8 +21,8 @@ posture_node:
 
     # GaitSway: feedforward XY translation tracking the live
     # support-polygon centroid. Suppresses the rocking mode that
-    # four-foot stances (tetrapod, ripple, surf) excite. Tripod and
-    # wave self-attenuate (their centroids sit near body origin).
+    # four-foot stances (tetrapod, crawl, surf) excite. Tripod and
+    # ripple self-attenuate (their centroids sit near body origin).
     #
     # gain — physical feedforward gain. 1.0 is the sweet spot for
     # CoG-on-centroid; deviating from 1.0 trades cancellation for
@@ -80,7 +80,7 @@ posture_node:
     # swing lift across all legs so the body rides up with the
     # swinging feet — body is at rest when a leg lands (AEP), at
     # peak when the highest swinging foot is at its swing apex.
-    # For ripple/surf the max picks whichever airborne leg is
+    # For crawl/surf the max picks whichever airborne leg is
     # closest to its apex, so the bounce follows the main wave and
     # ignores the half-phase overlap.
     #
@@ -102,7 +102,7 @@ posture_node:
 
     # Time constant (s) for the first-order low-pass on the swing
     # lift signal driving GaitBounce. Rounds off the slope kink at
-    # leg handover in overlapping gaits (ripple, surf) where the
+    # leg handover in overlapping gaits (crawl, surf) where the
     # max-across-legs switches between two arcs. Keep small (a few
     # percent of the typical sub-cycle period) so the body bounce
     # doesn't visibly lag the feet.

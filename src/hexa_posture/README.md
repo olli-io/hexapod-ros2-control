@@ -89,14 +89,14 @@ document that at the call site.
 
 A planar body translation that tracks the live support-polygon
 centroid. Suppresses the rocking mode that four-foot stance polygons
-(tetrapod, ripple, surf) excite each cycle — the centroid is offset
+(tetrapod, crawl, surf) excite each cycle — the centroid is offset
 from the body origin on those gaits, so feeding it back into the body
 XY pose removes the gravity-driven torque on the rocking axis.
 
 - **What it does** — emits `BodyPose(x=gain·cx, y=gain·cy)` while
   walking, where `(cx, cy)` is the filtered centroid.
 - **When it does nothing** — `walking=False`, or the centroid hasn't
-  been observed yet (`None`). For tripod (3-foot polygon) and wave
+  been observed yet (`None`). For tripod (3-foot polygon) and ripple
   (5-foot polygon) the centroid lands near the body origin, so the
   output naturally self-attenuates without per-gait gating.
 - **Why it works without crossing chains** — the signal it needs is
@@ -132,10 +132,10 @@ Z.
   been observed yet (`None`), or `arc_height = 0`.
 - **How it handles overlapping gaits** — the node aggregates
   `swing_lift_z` as the *max* foot lift across all legs. For
-  non-overlapping gaits (tripod, tetrapod, wave) only one swing
+  non-overlapping gaits (tripod, tetrapod, ripple) only one swing
   group is airborne at a time, so the max IS that group's arc and
   the body bounces `N` times per master cycle (`N` = number of
-  swing groups). For overlapping gaits (ripple, surf) the max
+  swing groups). For overlapping gaits (crawl, surf) the max
   picks whichever airborne leg is closest to its apex, so the
   bounce follows the main wave and ignores the half-phase leg
   lagging or leading behind it. The trough sits at the inter-peak

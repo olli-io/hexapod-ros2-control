@@ -13,8 +13,8 @@ on the active strategy's duty factor (β):
 That is exactly the per-leg velocity ceiling the gait saturates at:
 beyond it the engine pins ``cycle_time`` at ``min_swing_time / (1 − β)``
 and the per-leg stride magnitude is capped at ``stride_length``.
-Tripod (β=0.5) sits at the high end of this curve; ripple (β=2/3) is
-slower; wave (β=5/6) is slowest. Clamping ``/cmd_vel`` at the active
+Tripod (β=0.5) sits at the high end of this curve; crawl (β=2/3) is
+slower; ripple (β=5/6) is slowest. Clamping ``/cmd_vel`` at the active
 gait's cap keeps the engine's stance integration bounded — anything
 higher would push the engagement controller's stance feet past PEP and
 hit joint limits.
@@ -45,8 +45,8 @@ the cut kicks in.
 The effective bias is **per-gait**, easing back toward neutral as
 duty factor grows:
 ``yaw_bias_eff(β) = 0.5 + (yaw_bias − 0.5) · (1.5 − β)``. The YAML
-value anchors at tripod (β=0.5); slower gaits (ripple β=2/3 → 0.583,
-wave β=5/6 → 0.567) sit closer to neutral. The motivation is that the
+value anchors at tripod (β=0.5); slower gaits (crawl β=2/3 → 0.583,
+ripple β=5/6 → 0.567) sit closer to neutral. The motivation is that the
 slower a gait runs, the smaller its ``linear_max`` already is —
 pushing more of the envelope cut onto translation on top of that is
 too aggressive. Tripod, with the most headroom in both directions,

@@ -319,12 +319,12 @@ def test_gait_change_during_height_reseat_commits_at_handoff():
             break
     assert engine.state is EngineState.RESEATING
 
-    assert engine.set_strategy("ripple") is True
-    assert engine.pending_strategy_name == "ripple"
+    assert engine.set_strategy("crawl") is True
+    assert engine.pending_strategy_name == "crawl"
 
     _drive_through_reseat(engine)
     assert engine.state is EngineState.STAND
-    assert engine.strategy_name == "ripple"
+    assert engine.strategy_name == "crawl"
     assert engine.pending_strategy_name is None
     assert engine._applied_height == pytest.approx(0.02, abs=1e-9)
 

@@ -64,8 +64,8 @@ Properties of the gait cycle (the synchronized motion of all six legs):
   β. For the three standard hexapod gaits, the phase offsets are
   chosen so that exactly 6β legs are in stance at every instant:
   - Tripod: β = 1/2 → 3 stance legs
-  - Ripple: β = 2/3 → 4 stance legs
-  - Wave:   β = 5/6 → 5 stance legs
+  - Crawl:  β = 2/3 → 4 stance legs
+  - Ripple: β = 5/6 → 5 stance legs
 - **Phase offset** — each leg's cycle start relative to a reference leg.
   This is what distinguishes the three gaits — they share the same
   per-leg cycle, but offset the six legs differently.
@@ -81,7 +81,7 @@ Properties of the gait cycle (the synchronized motion of all six legs):
   CoG projection to the nearest edge of the support polygon. Larger
   margin = more robust to perturbations and to CoG-estimation error.
 
-Ripple (4 legs down) and wave (5 legs down) are always statically stable
+Crawl (4 legs down) and ripple (5 legs down) are always statically stable
 on flat ground. Tripod (3 legs down) is statically stable only when the
 three stance legs form a triangle enclosing the CoG projection — which
 our standard leg layout achieves, but with a smaller margin than the

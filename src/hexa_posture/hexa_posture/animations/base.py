@@ -76,7 +76,7 @@ class AnimationContext:
 
     Drives the gait-synced vertical bounce. Naturally tracks the
     swinging foot closest to its arc apex: for overlapping gaits
-    (ripple, surf) the max picks the higher of the two airborne
+    (crawl, surf) the max picks the higher of the two airborne
     legs, so the bounce follows the main wave and ignores the
     fractional ``half-phase`` leg lagging or leading behind it."""
 

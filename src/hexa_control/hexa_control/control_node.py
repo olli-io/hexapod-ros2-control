@@ -3,7 +3,7 @@
 Subscribes to ``/cmd_vel``, runs it through ``scale_to_envelope`` and
 the ``BodyVelocityLimiter`` rate-cap slew, and republishes as
 ``GaitParams`` on ``/gait/params`` at 50 Hz. ``/cmd_gait`` multiplexes
-the active gait name (validated against tripod/ripple/wave); on every
+the active gait name (validated against the ``STRATEGIES`` registry); on every
 gait switch the limiter's ``accel_linear`` is recomputed from
 ``linear_max(gait) / vmax_ramp_time_linear`` so the ramp time stays
 constant across gaits despite the per-gait velocity ceiling.

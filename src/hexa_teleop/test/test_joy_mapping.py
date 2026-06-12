@@ -147,7 +147,7 @@ def _cfg(**overrides) -> JoyConfig:
     posture_bindings = dict(_DEFAULT_POSTURE_BINDINGS)
     animation_bindings = dict(_DEFAULT_ANIMATION_BINDINGS)
     top_level = {
-        "gait_cycle": ("wave", "ripple", "tripod"),
+        "gait_cycle": ("ripple", "crawl", "tripod"),
         "gait_linear_max": 0.4,
         "gait_angular_z_max": 1.0,
         "animation_list": (
@@ -1058,11 +1058,11 @@ def test_recorded_pose_respects_per_axis_limit_at_record_time():
 
 def test_dpad_right_rising_edge_advances_gait_index():
     # Cycle starts at "tripod" (index 2). D-right rising edge advances
-    # the index wrap-around → "wave" (index 0).
+    # the index wrap-around → "ripple" (index 0).
     cfg = _cfg()
     state = JoyState(mode=POSTURE, current_gait_idx=2)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select == "wave"
+    assert out.gait_select == "ripple"
     assert state.current_gait_idx == 0
 
 
@@ -1070,7 +1070,7 @@ def test_dpad_left_rising_edge_advances_backward():
     cfg = _cfg()
     state = JoyState(mode=POSTURE, current_gait_idx=2)
     out = map_joy(_axes(dpad_x=-1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select == "ripple"
+    assert out.gait_select == "crawl"
     assert state.current_gait_idx == 1
 
 
@@ -1080,18 +1080,18 @@ def test_dpad_x_hold_does_not_retrigger():
     cfg = _cfg()
     state = JoyState(mode=POSTURE, current_gait_idx=2)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select == "wave"
+    assert out.gait_select == "ripple"
     for _ in range(20):
         out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
         assert out.gait_select is None
     # Release then press again → next slot.
     map_joy(_axes(dpad_x=0.0), _buttons(), cfg, state, DT)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select == "ripple"
+    assert out.gait_select == "crawl"
 
 
 def test_dpad_x_wraparound_full_cycle_returns_to_start():
-    # Three D-right presses through wave→ripple→tripod gets the user
+    # Three D-right presses through ripple→crawl→tripod gets the user
     # back to the starting selection.
     cfg = _cfg()
     state = JoyState(mode=POSTURE, current_gait_idx=2)
@@ -1101,7 +1101,7 @@ def test_dpad_x_wraparound_full_cycle_returns_to_start():
         names.append(out.gait_select)
         # Release between presses to satisfy edge detection.
         map_joy(_axes(dpad_x=0.0), _buttons(), cfg, state, DT)
-    assert names == ["wave", "ripple", "tripod"]
+    assert names == ["ripple", "crawl", "tripod"]
     assert state.current_gait_idx == 2
 
 
@@ -1112,7 +1112,7 @@ def test_dpad_x_works_in_gait_mode_too():
     cfg = _cfg()
     state = JoyState(mode=GAIT, current_gait_idx=0)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select == "ripple"
+    assert out.gait_select == "crawl"
 
 
 def test_dpad_x_no_select_when_axis_neutral():
@@ -1130,7 +1130,7 @@ def test_dpad_x_sign_can_be_flipped_via_config():
     state = JoyState(mode=POSTURE, current_gait_idx=0)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
     # With the flip, axis +1 should walk BACKWARD through the cycle
-    # — from wave (0) to tripod (2).
+    # — from ripple (0) to tripod (2).
     assert out.gait_select == "tripod"
     assert state.current_gait_idx == 2
 
@@ -1343,8 +1343,8 @@ def test_gait_cycler_works_when_bound_to_face_buttons():
     pressed_x = [0] * 11
     pressed_x[2] = 1
     out = map_joy(_axes(), tuple(pressed_x), cfg, state, DT)
-    # gait_prev advances backward: idx 2 -> 1 -> "ripple".
-    assert out.gait_select == "ripple"
+    # gait_prev advances backward: idx 2 -> 1 -> "crawl".
+    assert out.gait_select == "crawl"
     assert state.current_gait_idx == 1
     # Held: no re-trigger.
     out = map_joy(_axes(), tuple(pressed_x), cfg, state, DT)

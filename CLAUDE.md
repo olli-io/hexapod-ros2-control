@@ -6,6 +6,7 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 
 - ROS2 Jazzy (Ubuntu 24.04), Gazebo Harmonic, colcon workspace.
 - All build/run commands execute **inside the Docker dev container**: `hexa --dev` (the `hexa` host script in the repo root) opens a shell in the container. Inside the container the workspace CLI is `pod` (e.g. `pod build`, `pod sim`, `pod teleop`). Do not assume native ROS2 on the host.
+- Tests: `./hexa --dev python3 -m pytest src/<pkg>/test -q` from the repo root (pytest only exists inside the container).
 - ROS2 packages live under `src/hexa_*/`. The top-level `README.md` documents the dependency graph and runtime data flow.
 - **Leg count is fixed at 6.** Do not parameterise it.
 

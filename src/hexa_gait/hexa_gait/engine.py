@@ -110,6 +110,18 @@ from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
 # the round-trip float noise is well below 1 µm in practice.
 _HEIGHT_NOISE_EPSILON: float = 1e-6
 
+# Inclusive tolerance for the swing→stance boundary. ``swing_end =
+# 1.0 - duty_factor`` is not exactly representable for several gaits
+# (e.g. 1 - 2/3 == 0.33333333333333337), while a foot whose true phase
+# is exactly the touchdown point can compute one ULP below it. A bare
+# ``phase >= swing_end`` then misflags that just-landed, load-bearing
+# foot as airborne for a single tick — at gaits whose touchdowns
+# coincide with another leg's lift-off (β = 2/3) this can momentarily
+# drop the support set onto a lopsided three-foot triangle with the CoM
+# on its edge. The epsilon is far below one phase tick (≈ dt/cycle_time
+# ≈ 0.02) so it only absorbs float noise, never a real swing tick.
+_STANCE_SEAM_EPSILON: float = 1e-9
+
 
 __all__ = [
     "Engine",
@@ -301,7 +313,7 @@ class StanceIntegrator:
     snaps every stance leg by ``(0.5 − s) · (stride_new − stride_old)``
     in the body frame — a non-uniform shear across legs at different
     stance phases. For tripod this is masked (β = 0.5, all stance legs
-    share s); for wave and ripple it is visible foot scrubbing.
+    share s); for ripple and crawl it is visible foot scrubbing.
 
     The fix: at each leg's touchdown the body-frame foot position is
     captured as the world-locked anchor, and every subsequent stance
@@ -381,7 +393,7 @@ class SwingPlanner:
     against a moved swing_origin and target — the airborne foot snaps in
     body frame by a fraction of ``Δstride``. Tripod hides this because
     ``stance_time = min_swing_time`` keeps strides short and there are
-    three concurrent swing legs; wave (β = 5/6) has ``stance_time = 5 ·
+    three concurrent swing legs; ripple (β = 5/6) has ``stance_time = 5 ·
     min_swing_time`` so the shift is ~5× larger, and only one leg is
     airborne to bear the discontinuity. The result is a visible body-
     frame jump on the swing foot whenever the operator introduces ``v_y``
@@ -397,7 +409,7 @@ class SwingPlanner:
         ``swing_target_velocity`` so the swing arc launches and lands at
         the stance-frame velocity ``-v_leg``. The default
         ``-stride / swing_time = -v_leg · β / (1−β)`` is correct only at
-        β = 0.5; for ripple it is 2× and for wave 5× too fast, producing
+        β = 0.5; for crawl it is 2× and for ripple 5× too fast, producing
         a body-frame velocity step at every lift-off and touchdown that
         scrubs the loaded stance feet;
       * ``swing_time`` and ``identity_y_sign`` — held alongside so the
@@ -812,7 +824,7 @@ class Engine:
         # Per-gait cycle-time bounds derived from the gait-agnostic
         # swing-phase bounds. β scales both ends the same way so the
         # swing-phase foot-velocity envelope is identical across gaits;
-        # only the cycle stretches as β grows (wave) or shrinks (tripod).
+        # only the cycle stretches as β grows (ripple) or shrinks (tripod).
         min_cycle_time, max_cycle_time = _cycle_time_bounds(cfg, beta)
         return EngagementController(
             nominal_stance=self._nominal,
@@ -1176,7 +1188,7 @@ class Engine:
             # comes from the engagement controller's seeded state, not
             # from our latched swing target).
             strategy_target = self._strategy.foot_target(phases[name], stride, leg)
-            stance = phases[name] >= (1.0 - duty_factor)
+            stance = phases[name] >= (1.0 - duty_factor) - _STANCE_SEAM_EPSILON
 
             if stance:
                 if self._swing.is_swing[name]:

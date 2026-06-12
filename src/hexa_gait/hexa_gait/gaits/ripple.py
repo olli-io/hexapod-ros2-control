@@ -1,10 +1,10 @@
-"""Ripple gait: metachronal sequence, ``duty_factor = 2/3``.
+"""Ripple gait: metachronal sequence, ``duty_factor = 5/6``.
 
-Two legs in swing at a time (one per side, half a cycle apart). The
-support polygon always has four feet on the ground, so the gait is
-markedly more stable than tripod but still keeps a moderate top speed.
-Phase offsets follow the same Wilson posterior → anterior sequence as
-wave; the two gaits differ only in their duty factor.
+One leg in swing at a time. Five feet on the ground throughout — the
+maximum-stability gait, at the cost of a six-fold reduction in top
+speed versus tripod. Phase offsets follow the same Wilson posterior →
+anterior sequence as crawl; the two gaits differ only in their duty
+factor.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ __all__ = ["Ripple"]
 
 class Ripple:
     phase_offsets = METACHRONAL_OFFSETS
-    duty_factor = 2.0 / 3.0
+    duty_factor = 5.0 / 6.0
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

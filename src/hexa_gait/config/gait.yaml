@@ -56,8 +56,8 @@ swing_width: 0.0
 # be maximum 25% higher than min_swing_time )
 #
 # Values below anchor at tripod (β=0.5):
-# min_cycle = 0.60 s, max_cycle = 1.00 s; ripple (β=2/3) gets 0.90 /
-# 1.50 s; wave (β=5/6) gets 1.80 / 3.00 s.
+# min_cycle = 0.60 s, max_cycle = 1.00 s; crawl (β=2/3) gets 0.90 /
+# 1.50 s; ripple (β=5/6) gets 1.80 / 3.00 s.
 min_swing_time: 0.30
 max_swing_time: 0.4
 
@@ -77,8 +77,8 @@ angular_z_max: 3.00
 # This value anchors at tripod (β=0.5). The effective per-gait bias
 # eases back toward neutral as duty factor grows:
 #     yaw_bias_eff(β) = 0.5 + (yaw_bias − 0.5) · (1.5 − β)
-# Slower gaits sit closer to neutral (ripple β=2/3 → 0.583,
-# wave β=5/6 → 0.567) since their already-small linear_max can't
+# Slower gaits sit closer to neutral (crawl β=2/3 → 0.583,
+# ripple β=5/6 → 0.567) since their already-small linear_max can't
 # absorb an aggressive cut on top of the gait's intrinsic slowness.
 #
 # You may need to experiment with this a bit to find a value that feels

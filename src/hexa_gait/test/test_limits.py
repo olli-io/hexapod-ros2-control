@@ -42,14 +42,14 @@ def test_linear_max_per_gait_strictly_decreasing_with_duty(tmp_path):
     # swing window shrinks while the stance window grows.
     path = _write_yaml(tmp_path)
     caps = load_velocity_caps(path)
-    # ripple = 0.12 * (1/3) / (0.30 * 2/3) = 0.20 m/s
-    # wave   = 0.12 * (1/6) / (0.30 * 5/6) = 0.08 m/s
-    assert math.isclose(caps.linear_max("ripple"), 0.20, rel_tol=1e-9)
-    assert math.isclose(caps.linear_max("wave"), 0.08, rel_tol=1e-9)
+    # crawl = 0.12 * (1/3) / (0.30 * 2/3) = 0.20 m/s
+    # ripple   = 0.12 * (1/6) / (0.30 * 5/6) = 0.08 m/s
+    assert math.isclose(caps.linear_max("crawl"), 0.20, rel_tol=1e-9)
+    assert math.isclose(caps.linear_max("ripple"), 0.08, rel_tol=1e-9)
     assert (
         caps.linear_max("tripod")
+        > caps.linear_max("crawl")
         > caps.linear_max("ripple")
-        > caps.linear_max("wave")
     )
 
 
@@ -67,7 +67,7 @@ def test_linear_max_scales_with_stride_length(tmp_path):
     path = _write_yaml(tmp_path, stride_length=0.24)
     caps = load_velocity_caps(path)
     assert math.isclose(caps.linear_max("tripod"), 0.80)
-    assert math.isclose(caps.linear_max("wave"), 0.16)
+    assert math.isclose(caps.linear_max("ripple"), 0.16)
 
 
 def test_linear_max_scales_inversely_with_min_swing_time(tmp_path):
@@ -93,20 +93,20 @@ def test_yaw_bias_anchors_at_tripod_and_eases_with_duty(tmp_path):
     path = _write_yaml(tmp_path, yaw_bias=0.6)
     caps = load_velocity_caps(path)
     assert math.isclose(caps.yaw_bias("tripod"), 0.60, rel_tol=1e-9)
-    # ripple β=2/3 → 0.5 + 0.1 · (1.5 − 2/3) = 0.5833
-    assert math.isclose(caps.yaw_bias("ripple"), 0.5 + 0.1 * (1.5 - 2.0 / 3.0), rel_tol=1e-9)
-    # wave   β=5/6 → 0.5 + 0.1 · (1.5 − 5/6) = 0.5667
-    assert math.isclose(caps.yaw_bias("wave"), 0.5 + 0.1 * (1.5 - 5.0 / 6.0), rel_tol=1e-9)
+    # crawl β=2/3 → 0.5 + 0.1 · (1.5 − 2/3) = 0.5833
+    assert math.isclose(caps.yaw_bias("crawl"), 0.5 + 0.1 * (1.5 - 2.0 / 3.0), rel_tol=1e-9)
+    # ripple   β=5/6 → 0.5 + 0.1 · (1.5 − 5/6) = 0.5667
+    assert math.isclose(caps.yaw_bias("ripple"), 0.5 + 0.1 * (1.5 - 5.0 / 6.0), rel_tol=1e-9)
     # Strict monotone: deviation shrinks as duty grows.
     dev = lambda name: caps.yaw_bias(name) - 0.5
-    assert dev("tripod") > dev("ripple") > dev("wave") > 0.0
+    assert dev("tripod") > dev("crawl") > dev("ripple") > 0.0
 
 
 def test_yaw_bias_uniform_when_yaml_is_neutral(tmp_path):
     # yaw_bias_yaml = 0.5 ⇒ no deviation ⇒ every gait stays at 0.5.
     path = _write_yaml(tmp_path, yaw_bias=0.5)
     caps = load_velocity_caps(path)
-    for name in ("tripod", "ripple", "wave"):
+    for name in ("tripod", "crawl", "ripple"):
         assert math.isclose(caps.yaw_bias(name), 0.5, rel_tol=1e-9)
 
 
@@ -291,7 +291,7 @@ def test_scale_yaw_only_violation_zeros_translation():
 
 def test_scale_uses_per_gait_linear_max(tmp_path):
     # The whole point of the refactor: passing a smaller linear_max
-    # (e.g. wave's cap) cuts the command down accordingly.
+    # (e.g. ripple's cap) cuts the command down accordingly.
     path = _write_yaml(tmp_path)
     caps = load_velocity_caps(path)
     v_x, _, omega = scale_to_envelope(
@@ -299,11 +299,11 @@ def test_scale_uses_per_gait_linear_max(tmp_path):
         0.0,
         0.0,
         _MOUNTS,
-        caps.linear_max("wave"),
+        caps.linear_max("ripple"),
         caps.angular_max,
-        caps.yaw_bias("wave"),
+        caps.yaw_bias("ripple"),
     )
-    # 0.40 was tripod's cap; wave cap is 0.08, so the input gets scaled
+    # 0.40 was tripod's cap; ripple cap is 0.08, so the input gets scaled
     # to 0.08 (no yaw → max leg speed = |v_x|, bias is irrelevant).
     assert math.isclose(v_x, 0.08, rel_tol=1e-9)
     assert math.isclose(omega, 0.0)

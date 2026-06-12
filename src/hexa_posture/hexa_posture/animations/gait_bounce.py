@@ -6,9 +6,9 @@ than rocking against them.
 IDENTITY under any other gait. The bounce is only meaningful with
 the half/half stance pattern: tripod's two non-overlapping triads
 give a clean two-bounce-per-cycle envelope whose troughs land on
-full hexapodal support. Tetrapod and wave bounce more times per
+full hexapodal support. Tetrapod and ripple bounce more times per
 cycle on smaller support polygons (one swing leg at a time), and
-the overlapping gaits (ripple, surf) keep the chassis high during
+the overlapping gaits (crawl, surf) keep the chassis high during
 two-leg-airborne windows — both modes drove the body unstable in
 testing.
 
