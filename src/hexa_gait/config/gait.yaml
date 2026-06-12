@@ -21,7 +21,7 @@ cmd_zero_tol: 1e-4
 # ``hexa_gait.gaits.STRATEGIES``. hexa_control seeds
 # /gait/params.gait_name from its own ``default_gait`` on cold start;
 # the teleop D-pad cycler walks through the list in ``teleop_joy.yaml``.
-# Per-gait knobs (currently only ``duty_factor``) live on the strategy
+# Per-gait knobs (``duty_factor``, ``unstable``) live on the strategy
 # classes in ``hexa_gait/hexa_gait/gaits/`` — the single source of
 # truth — and are read from the active strategy at runtime.
 default_gait: tripod

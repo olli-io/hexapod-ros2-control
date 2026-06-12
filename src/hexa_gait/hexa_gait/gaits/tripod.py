@@ -32,6 +32,7 @@ TRIPOD_OFFSETS = PhaseOffsets(
 class Tripod:
     phase_offsets = TRIPOD_OFFSETS
     duty_factor = 0.5
+    unstable = False
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

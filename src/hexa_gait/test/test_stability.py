@@ -194,3 +194,12 @@ def test_gait_keeps_com_inside_support_polygon(gait_name):
         f"{gait_name}: worst quasi-static margin {worst:.4f} m "
         f"(pinned floor {_MARGIN_FLOORS[gait_name]} m)"
     )
+
+
+def test_unstable_marks_pin_surf_and_crawl():
+    # The ``unstable`` class attribute is what teleop's
+    # ``allow_unstable_gaits: false`` filters out of the D-pad gait
+    # rotation. Pin the set so a new or edited strategy makes an
+    # explicit choice here.
+    unstable = {n for n, factory in STRATEGIES.items() if factory().unstable}
+    assert unstable == {"surf", "crawl"}

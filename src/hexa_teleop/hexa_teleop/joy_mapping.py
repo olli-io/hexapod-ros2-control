@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Collection, Mapping, Sequence
 
 POSTURE = "posture"
 GAIT = "gait"
@@ -109,7 +109,8 @@ class JoyConfig:
     gait: ModeConfig
     posture: PostureConfig
     animation: ModeConfig
-    # Ordered list of gait names the cycler walks through. Index
+    # Ordered list of gait names the cycler walks through, already
+    # filtered by ``allow_unstable_gaits`` at load time. Index
     # ``current_gait_idx`` on ``JoyState`` tracks the user's selection.
     gait_cycle: tuple[str, ...]
     # Per-gait stick scaling. Updated at runtime from /cmd_gait via
@@ -415,6 +416,37 @@ def cross_section_function_check(
                 f"function {fn!r} bound to different keys across sections: "
                 f"{details}"
             )
+
+
+def resolve_gait_cycle(
+    raw_cycle: Sequence[str],
+    known_gaits: Collection[str],
+    unstable_gaits: Collection[str],
+    allow_unstable: bool,
+) -> tuple[str, ...]:
+    """Validate ``gait_cycle`` and apply the ``allow_unstable_gaits`` filter.
+
+    Every name must be in ``known_gaits``. With ``allow_unstable``
+    False, names in ``unstable_gaits`` are dropped (order preserved);
+    an all-unstable cycle raises rather than silently disabling the
+    cycler. The caller passes the gait-knowledge sets so this stays a
+    pure validator like ``validate_bindings``.
+    """
+    unknown = [n for n in raw_cycle if n not in known_gaits]
+    if unknown:
+        raise ValueError(
+            f"gait_cycle: unknown gait(s) {unknown} "
+            f"(known: {sorted(known_gaits)})"
+        )
+    if allow_unstable:
+        return tuple(raw_cycle)
+    filtered = tuple(n for n in raw_cycle if n not in unstable_gaits)
+    if raw_cycle and not filtered:
+        raise ValueError(
+            f"gait_cycle: every entry in {list(raw_cycle)} is unstable "
+            f"and allow_unstable_gaits is false — nothing left to cycle"
+        )
+    return filtered
 
 
 def map_joy(

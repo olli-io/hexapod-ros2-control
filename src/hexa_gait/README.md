@@ -58,7 +58,11 @@ single source of truth — and the engine reads it from the active
 strategy each tick. The engine derives both cycle-time bounds per
 gait as `swing_time / (1 − β)`, so the swing-phase foot-velocity
 envelope is shared across gaits; only the cycle stretches to
-accommodate β.
+accommodate β. The other per-gait class attribute is `unstable`:
+surf and crawl carry `unstable = True`, and the teleop D-pad rotation
+skips them unless `allow_unstable_gaits` is set in `teleop_joy.yaml`
+(the engine itself ignores the flag — `/cmd_gait` can still select
+them directly).
 
 See [`docs/leg-phases.md`](../../docs/leg-phases.md) for the shared
 vocabulary (stance, swing, AEP, PEP, duty factor, support polygon) used

@@ -25,6 +25,7 @@ __all__ = ["Crawl"]
 class Crawl:
     phase_offsets = METACHRONAL_OFFSETS
     duty_factor = 2.0 / 3.0
+    unstable = True
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

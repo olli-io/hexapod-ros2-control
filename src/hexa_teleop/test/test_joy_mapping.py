@@ -1467,3 +1467,49 @@ def test_loader_accepts_identical_cross_section_duplicates():
         "gait": {"dpad_left": "gait_prev", "dpad_right": "gait_next"},
         "posture": {"dpad_left": "gait_prev", "dpad_right": "gait_next"},
     })
+
+
+def test_resolve_gait_cycle_drops_unstable_when_disallowed():
+    from hexa_teleop import resolve_gait_cycle as _resolve_gait_cycle
+
+    cycle = ("ripple", "crawl", "tetrapod", "surf", "tripod")
+    known = {"ripple", "crawl", "tetrapod", "surf", "tripod"}
+    assert _resolve_gait_cycle(
+        cycle, known, unstable_gaits={"surf", "crawl"}, allow_unstable=False
+    ) == ("ripple", "tetrapod", "tripod")
+
+
+def test_resolve_gait_cycle_keeps_unstable_when_allowed():
+    from hexa_teleop import resolve_gait_cycle as _resolve_gait_cycle
+
+    cycle = ("ripple", "crawl", "tetrapod", "surf", "tripod")
+    known = {"ripple", "crawl", "tetrapod", "surf", "tripod"}
+    assert _resolve_gait_cycle(
+        cycle, known, unstable_gaits={"surf", "crawl"}, allow_unstable=True
+    ) == cycle
+
+
+def test_resolve_gait_cycle_rejects_unknown_gait():
+    from hexa_teleop import resolve_gait_cycle as _resolve_gait_cycle
+
+    import pytest
+    with pytest.raises(ValueError, match="unknown gait"):
+        _resolve_gait_cycle(
+            ("tripod", "gallop"),
+            {"tripod"},
+            unstable_gaits=set(),
+            allow_unstable=False,
+        )
+
+
+def test_resolve_gait_cycle_rejects_all_unstable_result():
+    from hexa_teleop import resolve_gait_cycle as _resolve_gait_cycle
+
+    import pytest
+    with pytest.raises(ValueError, match="nothing left to cycle"):
+        _resolve_gait_cycle(
+            ("surf", "crawl"),
+            {"surf", "crawl", "tripod"},
+            unstable_gaits={"surf", "crawl"},
+            allow_unstable=False,
+        )

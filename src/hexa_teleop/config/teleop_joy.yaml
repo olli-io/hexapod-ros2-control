@@ -7,16 +7,21 @@
 # sign conventions, trigger threshold) lives in ``base`` only — swap
 # controllers by editing that block.
 
-initial_mode: gait              # "gait" | "posture" | "animation"
-gait_cycle: [ripple, crawl, tetrapod, surf, tripod]  # slowest → fastest
+initial_mode: gait # "gait" | "posture" | "animation"
+gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
 default_gait: tripod
+# Surf and crawl are inherently less stable than the other gaits
+# (marked ``unstable`` on their strategy classes in hexa_gait — the
+# single source of truth). When false, they are skipped in the D-pad
+# gait rotation above.
+allow_unstable_gaits: false
 # ANIMATION-mode cycler list comes from hexa_posture/config/posture.yaml
 # (``animation_mode_animations``) — single source of truth. Entry into
 # ANIMATION snaps to index 0.
 
 base:
-  deadband: 0.1                 # stick deadband applied after sign norm
-  trigger_threshold: 0.5        # analog triggers used as binary; press = axis < this
+  deadband: 0.1 # stick deadband applied after sign norm
+  trigger_threshold: 0.5 # analog triggers used as binary; press = axis < this
 
   # Linux joystick API indices — sensor_msgs/Joy.buttons[] and Joy.axes[].
   # Edit these two blocks (and ``axis_signs`` below) to support a
@@ -33,10 +38,10 @@ base:
   axes:
     left_stick_x: 0
     left_stick_y: 1
-    l2: 2                       # analog trigger (rest=+1.0, pressed=-1.0)
+    l2: 2 # analog trigger (rest=+1.0, pressed=-1.0)
     right_stick_x: 3
     right_stick_y: 4
-    r2: 5                       # analog trigger
+    r2: 5 # analog trigger
     dpad_x: 6
     dpad_y: 7
 
@@ -99,14 +104,14 @@ posture:
     right_stick_y: pose_x
 
   # Posture-mode scalar limits.
-  x_max: 0.035                  # m
-  y_max: 0.035                  # m
+  x_max: 0.035 # m
+  y_max: 0.035 # m
   roll_max_deg: 12.0
   pitch_max_deg: 12.0
   yaw_max_deg: 20.0
-  yaw_tau_s: 0.10               # low-pass for L1/R1 yaw and L2/R2 wiggle
-  revert_tau_s: 0.25            # low-pass for Start-button revert
-  wiggle_pivot_forward_m: 0.06  # forward pivot point for the wiggle
+  yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle
+  revert_tau_s: 0.25 # low-pass for Start-button revert
+  wiggle_pivot_forward_m: 0.06 # forward pivot point for the wiggle
   height:
     max_m: 0.04
     min_m: -0.04

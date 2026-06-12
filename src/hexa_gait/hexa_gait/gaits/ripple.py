@@ -19,6 +19,7 @@ __all__ = ["Ripple"]
 class Ripple:
     phase_offsets = METACHRONAL_OFFSETS
     duty_factor = 5.0 / 6.0
+    unstable = False
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

@@ -83,6 +83,10 @@ class Strategy(Protocol):
 
     phase_offsets: PhaseOffsets
     duty_factor: float
+    # True for gaits that are inherently less stable than the rest of
+    # the registry. The teleop D-pad rotation skips these unless its
+    # ``allow_unstable_gaits`` flag is set.
+    unstable: bool
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

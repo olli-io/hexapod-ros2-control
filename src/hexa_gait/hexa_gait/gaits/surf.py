@@ -65,6 +65,7 @@ SURF_OFFSETS = PhaseOffsets(
 class Surf:
     phase_offsets = SURF_OFFSETS
     duty_factor = 5.0 / 8.0
+    unstable = True
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

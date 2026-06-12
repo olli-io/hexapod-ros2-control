@@ -31,7 +31,7 @@ posture_node:
     # strength — user-facing attenuator in [0, 1]. Multiplies gain
     # before the centroid is applied. Start conservative at 0.5;
     # raise toward 1.0 once the wobble suppression is dialled in.
-    gait_sway_strength: 0.5
+    gait_sway_strength: 0.4
 
     # ANIMATION-mode animation stack. Single source of truth — the
     # teleop layer reads this list at startup (via

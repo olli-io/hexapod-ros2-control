@@ -40,6 +40,7 @@ TETRAPOD_OFFSETS = PhaseOffsets(
 class Tetrapod:
     phase_offsets = TETRAPOD_OFFSETS
     duty_factor = 2.0 / 3.0
+    unstable = False
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

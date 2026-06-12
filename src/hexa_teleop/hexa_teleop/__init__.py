@@ -18,6 +18,7 @@ from .joy_mapping import (
     button_pressed_for,
     cross_section_function_check,
     map_joy,
+    resolve_gait_cycle,
     validate_bindings,
 )
 
@@ -41,5 +42,6 @@ __all__ = [
     "button_pressed_for",
     "cross_section_function_check",
     "map_joy",
+    "resolve_gait_cycle",
     "validate_bindings",
 ]

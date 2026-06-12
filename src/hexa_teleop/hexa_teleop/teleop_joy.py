@@ -26,6 +26,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Empty, String
 
 from hexa_gait import VelocityCaps, load_velocity_caps
+from hexa_gait.gaits import STRATEGIES
 from hexa_posture import load_animation_mode_animations
 
 from .joy_mapping import (
@@ -42,6 +43,7 @@ from .joy_mapping import (
     PostureConfig,
     cross_section_function_check,
     map_joy,
+    resolve_gait_cycle,
     validate_bindings,
 )
 
@@ -106,12 +108,22 @@ def _load_config(
     caps = load_velocity_caps(gait_yaml)
     animation_list = load_animation_mode_animations(posture_yaml)
 
-    gait_cycle = tuple(str(n) for n in raw["gait_cycle"])
+    gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
+    allow_unstable = bool(raw.get("allow_unstable_gaits", False))
+    unstable_gaits = frozenset(
+        name for name, factory in STRATEGIES.items() if factory().unstable
+    )
+    gait_cycle = resolve_gait_cycle(
+        gait_cycle_raw, set(STRATEGIES), unstable_gaits, allow_unstable
+    )
     default_gait = str(raw["default_gait"])
     if default_gait not in gait_cycle:
-        raise ValueError(
-            f"default_gait={default_gait!r} must be in gait_cycle={list(gait_cycle)}"
+        detail = (
+            "is excluded by allow_unstable_gaits: false"
+            if default_gait in gait_cycle_raw
+            else f"must be in gait_cycle={list(gait_cycle_raw)}"
         )
+        raise ValueError(f"default_gait={default_gait!r} {detail}")
 
     base = _parse_base(raw)
     gait_bindings = _parse_mode_bindings("gait", raw["gait"], base)
@@ -205,6 +217,9 @@ class TeleopJoyNode(Node):
         self._latest_gait_state: str = ""
 
         self.get_logger().info(f"loaded teleop config from {cfg_path}")
+        self.get_logger().info(
+            f"gait rotation: {list(self._cfg.gait_cycle)}"
+        )
         cap_summary = ", ".join(
             f"{n}={v:.2f}" for n, v in sorted(self._caps.linear_max_by_gait.items())
         )
