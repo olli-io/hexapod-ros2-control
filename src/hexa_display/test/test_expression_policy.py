@@ -9,7 +9,9 @@ from hexa_display.expression_policy import (
     PolicyInputs,
     decide,
     quantize_axis,
+    select_face_animation,
 )
+from hexa_display.face_animation import FACE_ANIMATIONS
 from hexa_display.protocol import Expression, Gaze
 
 CONFIG = PolicyConfig(expression_map=dict(DEFAULT_EXPRESSION_MAP))
@@ -93,46 +95,64 @@ def test_battery_critical_overrides_everything_and_centers_gaze():
 
 
 @pytest.mark.parametrize(
-    "vx,vy,wz,gaze",
+    "vy,wz,gaze",
     [
-        (0.1, 0.0, 0.0, Gaze.UP),
-        (-0.1, 0.0, 0.0, Gaze.DOWN),
-        (0.0, 0.1, 0.0, Gaze.LEFT),
-        (0.0, -0.1, 0.0, Gaze.RIGHT),
-        (0.0, 0.0, 0.5, Gaze.LEFT),
-        (0.0, 0.0, -0.5, Gaze.RIGHT),
-        (0.1, 0.1, 0.0, Gaze.UP_LEFT),
-        (0.1, -0.1, 0.0, Gaze.UP_RIGHT),
-        (-0.1, 0.1, 0.0, Gaze.DOWN_LEFT),
-        (-0.1, -0.1, 0.0, Gaze.DOWN_RIGHT),
+        (0.1, 0.0, Gaze.LEFT),
+        (-0.1, 0.0, Gaze.RIGHT),
+        (0.0, 0.5, Gaze.LEFT),
+        (0.0, -0.5, Gaze.RIGHT),
     ],
 )
-def test_gaze_follows_cmd_vel(vx, vy, wz, gaze):
+def test_gaze_follows_cmd_vel_horizontally(vy, wz, gaze):
     target = decide(
-        make_inputs(gait_state="gait", vx=vx, vy=vy, wz=wz), CONFIG, IDLE_TARGET
+        make_inputs(gait_state="gait", vx=0.05, vy=vy, wz=wz),
+        CONFIG,
+        IDLE_TARGET,
     )
     assert target.gaze == gaze
 
 
+def test_forward_backward_motion_keeps_gaze_level():
+    forward = decide(make_inputs(gait_state="gait", vx=0.1), CONFIG, IDLE_TARGET)
+    assert forward.gaze == Gaze.CENTER
+    backward = decide(
+        make_inputs(gait_state="gait", vx=-0.1), CONFIG, IDLE_TARGET
+    )
+    assert backward.gaze == Gaze.CENTER
+
+
+def test_pitch_drives_vertical_gaze_while_gait_active():
+    up = decide(
+        make_inputs(gait_state="gait", vx=0.1, pitch=-0.2), CONFIG, IDLE_TARGET
+    )
+    assert up.gaze == Gaze.UP
+    down_left = decide(
+        make_inputs(gait_state="gait", vx=0.1, vy=0.1, pitch=0.2),
+        CONFIG,
+        IDLE_TARGET,
+    )
+    assert down_left.gaze == Gaze.DOWN_LEFT
+
+
 def test_gaze_below_deadband_is_center():
-    # 0.001 / vx_max 0.1 = 0.01 normalized, far under the 0.15 deadband.
+    # 0.001 / vy_max 0.1 = 0.01 normalized, far under the 0.15 deadband.
     target = decide(
-        make_inputs(gait_state="gait", vx=0.001), CONFIG, IDLE_TARGET
+        make_inputs(gait_state="gait", vy=0.001), CONFIG, IDLE_TARGET
     )
     assert target.gaze == Gaze.CENTER
 
 
 def test_gaze_hysteresis_holds_direction_in_exit_band():
-    prev = DisplayTarget(expression=Expression.HAPPY, gaze=Gaze.UP)
+    prev = DisplayTarget(expression=Expression.HAPPY, gaze=Gaze.LEFT)
     # 0.012 / 0.1 = 0.12 normalized: under deadband 0.15 but above the
-    # exit level 0.15 * 0.6 = 0.09, so UP is held.
-    held = decide(make_inputs(gait_state="gait", vx=0.012), CONFIG, prev)
-    assert held.gaze == Gaze.UP
+    # exit level 0.15 * 0.6 = 0.09, so LEFT is held.
+    held = decide(make_inputs(gait_state="gait", vy=0.012), CONFIG, prev)
+    assert held.gaze == Gaze.LEFT
     # Fresh entry from CENTER at the same value stays CENTER.
-    fresh = decide(make_inputs(gait_state="gait", vx=0.012), CONFIG, IDLE_TARGET)
+    fresh = decide(make_inputs(gait_state="gait", vy=0.012), CONFIG, IDLE_TARGET)
     assert fresh.gaze == Gaze.CENTER
     # Below the exit level the held direction releases.
-    released = decide(make_inputs(gait_state="gait", vx=0.005), CONFIG, prev)
+    released = decide(make_inputs(gait_state="gait", vy=0.005), CONFIG, prev)
     assert released.gaze == Gaze.CENTER
 
 
@@ -148,6 +168,47 @@ def test_pose_mode_gaze_follows_tilt():
     assert right.gaze == Gaze.RIGHT
     level = decide(make_inputs(), CONFIG, IDLE_TARGET)
     assert level.gaze == Gaze.CENTER
+
+
+def test_breathing_selected_while_waiting_for_the_stack():
+    assert (
+        select_face_animation(make_inputs(gait_state=None), CONFIG)
+        == "breathing"
+    )
+
+
+def test_idling_selected_when_standing_idle_and_level():
+    assert (
+        select_face_animation(make_inputs(gait_state="stand"), CONFIG)
+        == "idling"
+    )
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        make_inputs(gait_state="gait", vx=0.1),  # walking
+        make_inputs(gait_state="stand", wz=0.3),  # turning in place
+        make_inputs(gait_state="stand", pitch=0.2),  # pose mode tilt
+        make_inputs(gait_state="stand", yaw=0.2),
+        make_inputs(gait_state="folded"),  # sleepy states stay still
+        make_inputs(gait_state="paused"),
+        make_inputs(gait_state="stand", animation_mode="body_roll_3d"),
+        make_inputs(gait_state="stand", battery_low=True),
+        make_inputs(gait_state=None, battery_critical=True),
+    ],
+)
+def test_no_face_animation_when_busy_or_warning(inputs):
+    assert select_face_animation(inputs, CONFIG) is None
+
+
+def test_selected_face_animations_exist_in_registry():
+    assert select_face_animation(make_inputs(gait_state=None), CONFIG) in (
+        FACE_ANIMATIONS
+    )
+    assert select_face_animation(make_inputs(gait_state="stand"), CONFIG) in (
+        FACE_ANIMATIONS
+    )
 
 
 def test_quantize_axis_basic_and_hysteresis():

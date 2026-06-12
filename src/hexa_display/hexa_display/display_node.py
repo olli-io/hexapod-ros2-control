@@ -12,7 +12,14 @@ Pure sink: nothing in the workspace subscribes to or imports this
 package. Fire-and-forget TX — the firmware animates autonomously and
 NACKs are only logged. The transport is retried in the background, so
 the robot comes up (and stays up) faceless if the display is absent.
+
+Face animations: while the policy selects one (breathing during
+stack bringup, idling once the robot stands idle), this node runs its
+clock and relays the due gaze/blink steps; the animation owns the
+gaze until it ends.
 """
+
+from dataclasses import replace
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -30,10 +37,13 @@ from .expression_policy import (
     PolicyConfig,
     PolicyInputs,
     decide,
+    select_face_animation,
 )
+from .face_animation import FACE_ANIMATIONS, IDLING, FaceAnimation, due_steps
 from .protocol import Cmd, Expression, NackReason, decode_frames
 from .protocol import set_expression as set_expression_frame
 from .protocol import set_gaze as set_gaze_frame
+from .protocol import trigger_blink as trigger_blink_frame
 from .transport import (
     SerialTransport,
     StubTransport,
@@ -67,6 +77,12 @@ class DisplayNode(Node):
         self._rx_buf = b""
         self._last_refresh_t: float | None = None
         self._last_reconnect_t: float | None = None
+        self._active_face_animation: FaceAnimation | None = None
+        self._face_animation_start_t = 0.0
+        self._face_animation_fired = 0
+        self._pending_face_animation: str | None = None
+        self._pending_face_animation_since = 0.0
+        self._idling_expression_i = 0
 
         self.declare_parameter("transport", "serial")
         self.declare_parameter("serial_device", "/dev/serial0")
@@ -91,11 +107,12 @@ class DisplayNode(Node):
         self.declare_parameter("gaze_deadband", 0.15)
         self.declare_parameter("gaze_exit_ratio", 0.6)
         self.declare_parameter("gaze_wz_weight", 1.0)
-        self.declare_parameter("gaze_vx_max", 0.1)
         self.declare_parameter("gaze_vy_max", 0.1)
         self.declare_parameter("gaze_wz_max", 0.5)
         self.declare_parameter("pose_pitch_threshold_rad", 0.08)
         self.declare_parameter("pose_tilt_threshold_rad", 0.08)
+        self.declare_parameter("idling_expressions", ["neutral", "happy"])
+        self.declare_parameter("idling_start_delay_s", 4.0)
 
         def _str(name: str) -> str:
             return self.get_parameter(name).get_parameter_value().string_value
@@ -110,6 +127,14 @@ class DisplayNode(Node):
             )
             for state in DEFAULT_EXPRESSION_MAP
         }
+        # [''] in the YAML disables the idle expression cycling.
+        idling_expressions = tuple(
+            _parse_expression(name, "idling_expressions")
+            for name in self.get_parameter("idling_expressions")
+            .get_parameter_value()
+            .string_array_value
+            if name.strip()
+        )
         self._config = PolicyConfig(
             expression_map=expression_map,
             animation_expression=_parse_expression(
@@ -124,11 +149,12 @@ class DisplayNode(Node):
             gaze_deadband=_dbl("gaze_deadband"),
             gaze_exit_ratio=_dbl("gaze_exit_ratio"),
             gaze_wz_weight=_dbl("gaze_wz_weight"),
-            gaze_vx_max=_dbl("gaze_vx_max"),
             gaze_vy_max=_dbl("gaze_vy_max"),
             gaze_wz_max=_dbl("gaze_wz_max"),
             pose_pitch_threshold_rad=_dbl("pose_pitch_threshold_rad"),
             pose_tilt_threshold_rad=_dbl("pose_tilt_threshold_rad"),
+            idling_expressions=idling_expressions,
+            idling_start_delay_s=_dbl("idling_start_delay_s"),
         )
         self._battery_monitor = BatteryMonitor(
             warning_v=_dbl("battery_warning_v"),
@@ -236,20 +262,10 @@ class DisplayNode(Node):
         self._sent_gaze = None
         return True
 
-    def _send_target(self, target: DisplayTarget, now: float) -> None:
-        refresh = (
-            self._last_refresh_t is None
-            or now - self._last_refresh_t >= self._refresh_period_s
-        )
-        if refresh:
-            self._last_refresh_t = now
+    def _write_frame(self, frame: bytes) -> bool:
         try:
-            if refresh or target.expression != self._sent_expression:
-                self._transport.write(set_expression_frame(target.expression))
-                self._sent_expression = target.expression
-            if refresh or target.gaze != self._sent_gaze:
-                self._transport.write(set_gaze_frame(target.gaze))
-                self._sent_gaze = target.gaze
+            self._transport.write(frame)
+            return True
         except TransportError as e:
             self.get_logger().warn(
                 f"display write failed: {e}",
@@ -257,6 +273,73 @@ class DisplayNode(Node):
             )
             self._sent_expression = None
             self._sent_gaze = None
+            return False
+
+    def _send_target(
+        self, target: DisplayTarget, now: float, suppress_gaze: bool
+    ) -> None:
+        refresh = (
+            self._last_refresh_t is None
+            or now - self._last_refresh_t >= self._refresh_period_s
+        )
+        if refresh:
+            self._last_refresh_t = now
+        if refresh or target.expression != self._sent_expression:
+            if self._write_frame(set_expression_frame(target.expression)):
+                self._sent_expression = target.expression
+        if suppress_gaze:
+            # A face animation owns the gaze; its own steps resync a
+            # rebooted face within one cycle.
+            return
+        if refresh or target.gaze != self._sent_gaze:
+            if self._write_frame(set_gaze_frame(target.gaze)):
+                self._sent_gaze = target.gaze
+
+    def _update_face_animation(
+        self, name: str | None, now: float
+    ) -> FaceAnimation | None:
+        if name is None:
+            self._pending_face_animation = None
+            self._active_face_animation = None
+            return None
+        if (
+            self._active_face_animation is not None
+            and self._active_face_animation.name == name
+        ):
+            return self._active_face_animation
+        if self._pending_face_animation != name:
+            self._pending_face_animation = name
+            self._pending_face_animation_since = now
+        delay = (
+            self._config.idling_start_delay_s if name == IDLING.name else 0.0
+        )
+        if now - self._pending_face_animation_since < delay:
+            self._active_face_animation = None
+            return None
+        self._active_face_animation = FACE_ANIMATIONS[name]
+        self._face_animation_start_t = now
+        self._face_animation_fired = 0
+        return self._active_face_animation
+
+    def _run_face_animation(self, animation: FaceAnimation, now: float) -> None:
+        steps, self._face_animation_fired = due_steps(
+            animation,
+            now - self._face_animation_start_t,
+            self._face_animation_fired,
+        )
+        cycle = self._config.idling_expressions
+        for step in steps:
+            if step.blink:
+                self._write_frame(trigger_blink_frame())
+            if step.advance_expression and cycle:
+                # blink-and-switch: swap the expression mid-blink.
+                self._idling_expression_i += 1
+                expression = cycle[self._idling_expression_i % len(cycle)]
+                if self._write_frame(set_expression_frame(expression)):
+                    self._sent_expression = expression
+            if step.gaze is not None:
+                if self._write_frame(set_gaze_frame(step.gaze)):
+                    self._sent_gaze = step.gaze
 
     def _drain_rx(self) -> None:
         try:
@@ -304,9 +387,21 @@ class DisplayNode(Node):
             battery_critical=battery_critical,
         )
         self._last_target = decide(inputs, self._config, self._last_target)
+        animation = self._update_face_animation(
+            select_face_animation(inputs, self._config), now
+        )
+        target = self._last_target
+        cycle = self._config.idling_expressions
+        if animation is not None and animation.name == IDLING.name and cycle:
+            target = replace(
+                target,
+                expression=cycle[self._idling_expression_i % len(cycle)],
+            )
         if not self._ensure_transport(now):
             return
-        self._send_target(self._last_target, now)
+        self._send_target(target, now, suppress_gaze=animation is not None)
+        if animation is not None:
+            self._run_face_animation(animation, now)
         self._drain_rx()
 
 

@@ -23,7 +23,11 @@ Mirrors the library/node split used by `hexa_kinematics` and
     `SET_EXPRESSION` / `SET_GAZE` / `TRIGGER_BLINK` / `PING`, and a
     stateless `decode_frames` scanner that resyncs on corruption.
   - `expression_policy.py` — pure `decide(inputs, config, prev)`
-    policy plus the stateful `BatteryMonitor` debouncer.
+    policy, face-animation selection, plus the stateful
+    `BatteryMonitor` debouncer.
+  - `face_animation.py` — looping face-animation step sequences
+    (breathing, idling); the node owns the clock and asks `due_steps`
+    what to relay each tick.
   - `transport.py` — `Transport` ABC with `SerialTransport` (pyserial,
     imported lazily) and `StubTransport` (decodes and logs frames; used
     in sim and tests).
@@ -47,20 +51,45 @@ Precedence, highest first:
 
 Gaze:
 
-- **gait-active** — follows `cmd_vel`: forward → up, REP-103 left
+- **vertical** — always follows body pitch from `/body/pose`: nose up
+  → up. Driving forward or backward never moves the gaze up or down.
+- **horizontal, gait-active** — follows `cmd_vel`: REP-103 left
   (`+vy`, `+wz`) → left. Each axis is normalized by a configured cap
   and sign-quantized with enter/exit hysteresis so the gaze does not
   chatter at the deadband.
-- **pose mode** — follows body tilt from `/body/pose`: nose up → up,
+- **horizontal, pose mode** — follows body tilt from `/body/pose`:
   yaw left / roll left → left.
 - `dead` always forces gaze center.
+
+## Face animations
+
+Looping gaze/blink step sequences (`face_animation.py`) relayed by the
+node; the firmware still eases gaze and auto-blinks on top. While one
+is active it owns the gaze; the policy gaze resumes when it ends.
+Distinct from the posture animation stack in `hexa_posture` — these
+only drive the display.
+
+- **breathing** — slow vertical gaze drift (up → center → down →
+  center, 4.8 s period) while no `/gait/state` has been heard yet,
+  i.e. the robot stack (servo UART, gait engine) is still
+  initializing.
+- **idling** — look-around-and-blink cycle (3.04 s period: left,
+  blink, right, up, down, center, blink-and-switch) once the robot has
+  stood idle, level, and command-free for `idling_start_delay_s`. The
+  final blink each cycle switches to the next expression in
+  `idling_expressions`.
+
+Battery warning/critical, a posture animation mode, any `cmd_vel`, or
+a tilted body pose suppress the animations.
 
 ## Topics
 
 - Subscribes:
   - `/gait/state` (`std_msgs/String`) — gait engine state name.
-  - `/cmd_vel` (`geometry_msgs/Twist`) — gaze source while walking.
-  - `/body/pose` (`hexa_interfaces/BodyPose`) — gaze source in pose mode.
+  - `/cmd_vel` (`geometry_msgs/Twist`) — horizontal gaze source while
+    walking.
+  - `/body/pose` (`hexa_interfaces/BodyPose`) — vertical gaze source
+    (pitch); horizontal source in pose mode (yaw/roll).
   - `/animation/mode` (`std_msgs/String`, transient_local depth 1,
     matching the teleop publisher) — posture animation selection.
   - battery topic (`sensor_msgs/BatteryState`, sensor-data QoS,
@@ -87,8 +116,9 @@ the two cannot share it.
 All knobs in `config/display.yaml`: transport selection, serial
 device/baud, update/refresh/reconnect periods, the per-gait-state
 expression map, animation/battery expressions, battery thresholds and
-debounce, and the gaze deadband/hysteresis/normalization caps.
-Expression names are validated against the protocol enum at startup.
+debounce, the gaze deadband/hysteresis/normalization caps, and the
+idling expression cycle and start delay. Expression names are
+validated against the protocol enum at startup.
 
 Setting `enabled: false` in the same file makes the bringup launch
 files (`sim.launch.py`, `robot.launch.py`) skip the display node
@@ -98,4 +128,5 @@ entirely — the rest of the stack is unaffected.
 
 `pytest src/hexa_display/test` — protocol byte-format vectors and
 decoder resync, full policy precedence and gaze quantization table,
-battery debounce, and transport behaviour with fakes.
+face-animation selection and step timing, battery debounce, and
+transport behaviour with fakes.
