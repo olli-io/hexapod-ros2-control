@@ -1,6 +1,15 @@
 import pytest
 
-from hexa_display.protocol import Cmd, Expression, Gaze, set_expression, set_gaze
+from hexa_display.protocol import (
+    Cmd,
+    Expression,
+    Frame,
+    Gaze,
+    decode_frames,
+    ping,
+    set_expression,
+    set_gaze,
+)
 from hexa_display.transport import (
     SerialTransport,
     StubTransport,
@@ -16,6 +25,27 @@ def test_stub_decodes_and_logs_written_frames():
     stub.write(set_gaze(Gaze.UP_LEFT))
     assert [f.cmd for f in stub.frames] == [Cmd.SET_EXPRESSION, Cmd.SET_GAZE]
     assert lines == ["SET_EXPRESSION HAPPY", "SET_GAZE UP_LEFT"]
+
+
+def test_stub_records_but_does_not_log_pings():
+    lines: list[str] = []
+    stub = StubTransport(log_fn=lines.append)
+    stub.open()
+    stub.write(ping())
+    stub.write(set_expression(Expression.HAPPY))
+    assert [f.cmd for f in stub.frames] == [Cmd.PING, Cmd.SET_EXPRESSION]
+    assert lines == ["SET_EXPRESSION HAPPY"]
+
+
+def test_stub_answers_ping_with_pong_echoing_payload():
+    stub = StubTransport()
+    stub.open()
+    assert stub.read() == b""
+    stub.write(ping(b"hi"))
+    frames, leftover = decode_frames(stub.read())
+    assert leftover == b""
+    assert frames == [Frame(cmd=Cmd.PONG, payload=b"hi")]
+    assert stub.read() == b""  # PONG is consumed
 
 
 def test_stub_handles_split_writes():

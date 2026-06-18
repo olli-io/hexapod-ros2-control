@@ -99,9 +99,20 @@ a tilted body pose suppress the animations.
 - **serial** — `/dev/serial0` at 921600 baud (Pi PL011 UART header;
   see `docs/robot-environment.md` for the Pi config and container
   device mapping). Fire-and-forget TX, passive RX: NACK and firmware
-  LOG frames are logged at warn, ACK/PONG at debug. On failure the
+  LOG frames are logged at warn, ACK at debug, PONG feeds the
+  heartbeat monitor. On failure the
   node keeps running faceless and retries the port every
   `reconnect_period_s`, pushing full state on reconnect.
+- **heartbeat** — the firmware counts any valid frame as link
+  activity and falls back to a DEAD face after 3 s of silence
+  (`LINK_TIMEOUT_MS` in the firmware config). Whenever nothing else
+  has been written for `ping_period_s` (default 1 s) — idle, or
+  steady-state walking where change detection sends nothing between
+  refreshes — the node sends a PING to keep the link alive. The
+  firmware echoes each PING back as a PONG; if none arrives within
+  `pong_timeout_s` the node logs a ROS error (throttled) and an info
+  line once the display responds again. The stub transport answers
+  PINGs with PONGs and does not log them.
 - **stub** — sim default: decodes outgoing frames and logs
   `display: SET_EXPRESSION HAPPY` style lines instead.
 
@@ -112,7 +123,7 @@ the two cannot share it.
 ## Configuration
 
 All knobs in `config/display.yaml`: transport selection, serial
-device/baud, update/refresh/reconnect periods, the per-gait-state
+device/baud, update/refresh/reconnect/ping periods, the per-gait-state
 expression map, animation/battery expressions, battery thresholds and
 debounce, the gaze deadband/hysteresis/normalization caps, and the
 idling start delay. Expression names are validated against the

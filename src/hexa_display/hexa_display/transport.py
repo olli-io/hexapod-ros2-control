@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Callable
 
-from .protocol import Cmd, Expression, Frame, Gaze, decode_frames
+from .protocol import Cmd, Expression, Frame, Gaze, decode_frames, encode_frame
 
 
 class TransportError(Exception):
@@ -112,13 +112,16 @@ class StubTransport(Transport):
     """Decodes written frames and reports them via ``log_fn``.
 
     Used in sim and in tests: ``frames`` records every decoded frame
-    so assertions can check exactly what the node sent.
+    so assertions can check exactly what the node sent. Answers each
+    PING with a PONG (echoing the payload, like the firmware) so the
+    node's heartbeat monitoring stays quiet in sim.
     """
 
     def __init__(self, log_fn: Callable[[str], None] | None = None) -> None:
         self._log_fn = log_fn or (lambda _msg: None)
         self._open = False
         self._leftover = b""
+        self._rx = b""
         self.frames: list[Frame] = []
 
     def open(self) -> None:
@@ -133,12 +136,18 @@ class StubTransport(Transport):
         frames, self._leftover = decode_frames(self._leftover + data)
         for frame in frames:
             self.frames.append(frame)
-            self._log_fn(_describe(frame))
+            # Heartbeat PINGs are answered but not logged — a
+            # once-a-second line would drown the face transitions.
+            if frame.cmd == Cmd.PING:
+                self._rx += encode_frame(Cmd.PONG, frame.payload)
+            else:
+                self._log_fn(_describe(frame))
 
     def read(self) -> bytes:
         if not self._open:
             raise TransportError("read on closed transport")
-        return b""
+        out, self._rx = self._rx, b""
+        return out
 
     @property
     def is_open(self) -> bool:

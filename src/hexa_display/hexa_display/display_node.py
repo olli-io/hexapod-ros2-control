@@ -13,6 +13,14 @@ package. Fire-and-forget TX — the firmware animates autonomously and
 NACKs are only logged. The transport is retried in the background, so
 the robot comes up (and stays up) faceless if the display is absent.
 
+Heartbeat: the firmware counts any valid frame as link activity and
+falls back to a DEAD face after 3 s of silence, so whenever nothing
+else has been written for ``ping_period_s`` (idle or steady-state
+walking, where change detection sends nothing between refreshes) the
+node sends a PING. The firmware echoes each PING back as a PONG; if
+none arrives within ``pong_timeout_s`` the node logs a ROS error
+(throttled) until the display responds again.
+
 Face animations: while the policy selects one (breathing during
 stack bringup, idling once the robot stands idle), this node runs its
 clock and relays the due gaze/blink steps; the animation owns the
@@ -39,6 +47,7 @@ from .expression_policy import (
 )
 from .face_animation import FACE_ANIMATIONS, IDLING, FaceAnimation, due_steps
 from .protocol import Cmd, Expression, NackReason, decode_frames
+from .protocol import ping as ping_frame
 from .protocol import set_expression as set_expression_frame
 from .protocol import set_gaze as set_gaze_frame
 from .protocol import trigger_blink as trigger_blink_frame
@@ -73,6 +82,9 @@ class DisplayNode(Node):
         self._sent_expression: Expression | None = None
         self._sent_gaze = None
         self._rx_buf = b""
+        self._last_tx_t: float | None = None
+        self._awaiting_pong_since: float | None = None
+        self._pong_lost = False
         self._last_refresh_t: float | None = None
         self._last_reconnect_t: float | None = None
         self._active_face_animation: FaceAnimation | None = None
@@ -87,6 +99,8 @@ class DisplayNode(Node):
         self.declare_parameter("reconnect_period_s", 2.0)
         self.declare_parameter("update_rate_hz", 10.0)
         self.declare_parameter("refresh_period_s", 5.0)
+        self.declare_parameter("ping_period_s", 1.0)
+        self.declare_parameter("pong_timeout_s", 1.0)
         for state, expression in DEFAULT_EXPRESSION_MAP.items():
             self.declare_parameter(
                 f"expression_map.{state}", expression.name.lower()
@@ -151,6 +165,8 @@ class DisplayNode(Node):
         )
         self._reconnect_period_s = _dbl("reconnect_period_s")
         self._refresh_period_s = _dbl("refresh_period_s")
+        self._ping_period_s = _dbl("ping_period_s")
+        self._pong_timeout_s = _dbl("pong_timeout_s")
 
         self._transport = self._make_transport(_str("transport"))
         try:
@@ -244,14 +260,17 @@ class DisplayNode(Node):
             )
             return False
         self.get_logger().info("display transport reconnected")
-        # Push full state on reconnect.
+        # Push full state on reconnect; pending PONGs from the old
+        # link are void. _pong_lost survives so recovery is logged.
         self._sent_expression = None
         self._sent_gaze = None
+        self._awaiting_pong_since = None
         return True
 
-    def _write_frame(self, frame: bytes) -> bool:
+    def _write_frame(self, frame: bytes, now: float) -> bool:
         try:
             self._transport.write(frame)
+            self._last_tx_t = now
             return True
         except TransportError as e:
             self.get_logger().warn(
@@ -272,14 +291,14 @@ class DisplayNode(Node):
         if refresh:
             self._last_refresh_t = now
         if refresh or target.expression != self._sent_expression:
-            if self._write_frame(set_expression_frame(target.expression)):
+            if self._write_frame(set_expression_frame(target.expression), now):
                 self._sent_expression = target.expression
         if suppress_gaze:
             # A face animation owns the gaze; its own steps resync a
             # rebooted face within one cycle.
             return
         if refresh or target.gaze != self._sent_gaze:
-            if self._write_frame(set_gaze_frame(target.gaze)):
+            if self._write_frame(set_gaze_frame(target.gaze), now):
                 self._sent_gaze = target.gaze
 
     def _update_face_animation(
@@ -316,9 +335,9 @@ class DisplayNode(Node):
         )
         for step in steps:
             if step.blink:
-                self._write_frame(trigger_blink_frame())
+                self._write_frame(trigger_blink_frame(), now)
             if step.gaze is not None:
-                if self._write_frame(set_gaze_frame(step.gaze)):
+                if self._write_frame(set_gaze_frame(step.gaze), now):
                     self._sent_gaze = step.gaze
 
     def _drain_rx(self) -> None:
@@ -338,6 +357,11 @@ class DisplayNode(Node):
                     except ValueError:
                         reason = f"0x{frame.payload[0]:02X}"
                 self.get_logger().warn(f"display NACK: {reason}")
+            elif frame.cmd == Cmd.PONG:
+                self._awaiting_pong_since = None
+                if self._pong_lost:
+                    self._pong_lost = False
+                    self.get_logger().info("display responding again (PONG)")
             elif frame.cmd == Cmd.LOG:
                 text = frame.payload.decode("utf-8", errors="replace")
                 self.get_logger().warn(f"display log: {text}")
@@ -377,7 +401,31 @@ class DisplayNode(Node):
         )
         if animation is not None:
             self._run_face_animation(animation, now)
+        # Heartbeat: the firmware drops the link (DEAD face) after 3 s
+        # of silence, so keep traffic flowing when change detection has
+        # nothing to send — PING counts as link activity. Each PING is
+        # echoed back as a PONG; _awaiting_pong_since tracks the oldest
+        # unanswered one.
+        if (
+            self._last_tx_t is None
+            or now - self._last_tx_t >= self._ping_period_s
+        ):
+            if (
+                self._write_frame(ping_frame(), now)
+                and self._awaiting_pong_since is None
+            ):
+                self._awaiting_pong_since = now
         self._drain_rx()
+        if (
+            self._awaiting_pong_since is not None
+            and now - self._awaiting_pong_since >= self._pong_timeout_s
+        ):
+            self._pong_lost = True
+            self.get_logger().error(
+                "display not responding: no PONG within "
+                f"{self._pong_timeout_s:.1f} s",
+                throttle_duration_sec=WARN_THROTTLE_S,
+            )
 
 
 def main(args=None) -> None:

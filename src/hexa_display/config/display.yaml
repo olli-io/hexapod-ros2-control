@@ -16,6 +16,13 @@ display_node:
     update_rate_hz: 10.0
     # Resend full state periodically so an ESP32 reboot resyncs.
     refresh_period_s: 5.0
+    # UART heartbeat: the firmware falls back to a DEAD face after 3 s
+    # without a valid frame (LINK_TIMEOUT_MS), so send a PING whenever
+    # nothing else has been written for this long. Keep well under 3 s.
+    ping_period_s: 1.0
+    # The firmware echoes each PING back as a PONG; log a ROS error
+    # (throttled) when none arrives within this long.
+    pong_timeout_s: 1.0
 
     # Gait-state → expression map. One dotted param per canonical gait
     # state (rclpy has no string-map parameter type). Valid values:
