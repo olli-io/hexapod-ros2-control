@@ -73,9 +73,11 @@ only drive the display.
   center, 4.8 s period) while no `/gait/state` has been heard yet,
   i.e. the robot stack (servo UART, gait engine) is still
   initializing.
-- **idling** — look-around-and-blink cycle (3.04 s period: left,
-  blink, right, up, down, center, blink) once the robot has stood
-  idle, level, and command-free for `idling_start_delay_s`.
+- **idling** — look-around-and-blink burst (3.04 s: left, blink,
+  right, up, down, center, blink) once the robot has stood idle,
+  level, and command-free for `idling_start_delay_s`. Bursts are
+  spaced a random 5-10 s apart (`repeat_range_s`); the eyes rest at
+  center in between rather than scanning continuously.
 
 Battery warning/critical, a posture animation mode, any `cmd_vel`, or
 a tilted body pose suppress the animations.

@@ -39,6 +39,12 @@ def test_idling_mirrors_reference_sequence():
     got = [(step.at_s, step.gaze, step.blink) for step in IDLING.steps]
     assert got == expected
     assert IDLING.period_s == 3.04
+    # Bursts are spaced a random 5-10 s apart, not looped back-to-back.
+    assert IDLING.repeat_range_s == (5.0, 10.0)
+
+
+def test_breathing_loops_without_a_rest_gap():
+    assert BREATHING.repeat_range_s is None
 
 
 def test_step_count_at_boundaries():
@@ -86,4 +92,18 @@ def test_animation_validation():
                 FaceAnimationStep(at_s=0.5, gaze=Gaze.UP),
                 FaceAnimationStep(at_s=0.2, gaze=Gaze.DOWN),
             ),
+        )
+    with pytest.raises(ValueError):  # range not ordered
+        FaceAnimation(
+            name="bad-range",
+            period_s=1.0,
+            steps=(FaceAnimationStep(at_s=0.0, gaze=Gaze.UP),),
+            repeat_range_s=(5.0, 2.0),
+        )
+    with pytest.raises(ValueError):  # rest shorter than the cycle
+        FaceAnimation(
+            name="short-range",
+            period_s=4.0,
+            steps=(FaceAnimationStep(at_s=0.0, gaze=Gaze.UP),),
+            repeat_range_s=(2.0, 6.0),
         )

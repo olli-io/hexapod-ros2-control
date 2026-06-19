@@ -15,8 +15,9 @@ drive the display.
 - **breathing** — slow vertical gaze drift (up → center → down →
   center) while the display waits for the robot stack (servo UART,
   gait engine) to initialize.
-- **idling** — look-around-and-blink cycle while the hexapod stands
-  idle.
+- **idling** — look-around-and-blink burst while the hexapod stands
+  idle, spaced a random 5-10 s apart (``repeat_range_s``) so the eyes
+  rest at center between glances rather than scanning continuously.
 """
 
 from __future__ import annotations
@@ -38,6 +39,13 @@ class FaceAnimation:
     name: str
     period_s: float
     steps: tuple[FaceAnimationStep, ...] = field(default=())
+    # Optional ``(min_s, max_s)`` rest between cycles. When set, the
+    # node plays one cycle (the burst within ``period_s``) and then waits
+    # a fresh random interval drawn from this range before the next
+    # cycle's start — so the look-around doesn't loop back-to-back. The
+    # randomness and clock live in the node; this is just declarative
+    # timing data. When None the animation loops every ``period_s``.
+    repeat_range_s: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         if not self.steps:
@@ -52,6 +60,18 @@ class FaceAnimation:
                 f"{self.name}: last step at {last}s is past the "
                 f"{self.period_s}s period"
             )
+        if self.repeat_range_s is not None:
+            lo, hi = self.repeat_range_s
+            if lo > hi:
+                raise ValueError(
+                    f"{self.name}: repeat_range_s {self.repeat_range_s} "
+                    "is not ordered (min, max)"
+                )
+            if lo < self.period_s:
+                raise ValueError(
+                    f"{self.name}: repeat_range_s min {lo}s is shorter "
+                    f"than the {self.period_s}s cycle"
+                )
 
 
 def step_count_at(animation: FaceAnimation, elapsed_s: float) -> int:
@@ -93,7 +113,9 @@ BREATHING = FaceAnimation(
 # Mirrors the firmware test sequence: look left, blink, look right,
 # look up, look down, recenter, blink; the tail to the 3.04 s period
 # lets the last blink play out. lookTo(x, y) maps as x=-1 → LEFT and
-# y=-1 → UP (screen coords).
+# y=-1 → UP (screen coords). The eyes rest at CENTER between bursts;
+# repeat_range_s spaces those bursts 5-10 s apart so the hexapod glances
+# around occasionally instead of constantly scanning.
 IDLING = FaceAnimation(
     name="idling",
     period_s=3.04,
@@ -106,6 +128,7 @@ IDLING = FaceAnimation(
         FaceAnimationStep(at_s=2.12, gaze=Gaze.CENTER),
         FaceAnimationStep(at_s=2.48, blink=True),
     ),
+    repeat_range_s=(5.0, 10.0),
 )
 
 FACE_ANIMATIONS: dict[str, FaceAnimation] = {

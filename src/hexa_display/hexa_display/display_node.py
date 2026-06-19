@@ -27,6 +27,8 @@ clock and relays the due gaze/blink steps; the animation owns the
 gaze until it ends.
 """
 
+import random
+
 import rclpy
 from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
@@ -90,8 +92,10 @@ class DisplayNode(Node):
         self._active_face_animation: FaceAnimation | None = None
         self._face_animation_start_t = 0.0
         self._face_animation_fired = 0
+        self._face_animation_next_start_t = 0.0
         self._pending_face_animation: str | None = None
         self._pending_face_animation_since = 0.0
+        self._rng = random.Random()
 
         self.declare_parameter("transport", "serial")
         self.declare_parameter("serial_device", "/dev/serial0")
@@ -323,11 +327,30 @@ class DisplayNode(Node):
             self._active_face_animation = None
             return None
         self._active_face_animation = FACE_ANIMATIONS[name]
-        self._face_animation_start_t = now
-        self._face_animation_fired = 0
+        self._start_face_animation_cycle(self._active_face_animation, now)
         return self._active_face_animation
 
+    def _start_face_animation_cycle(
+        self, animation: FaceAnimation, now: float
+    ) -> None:
+        self._face_animation_start_t = now
+        self._face_animation_fired = 0
+        if animation.repeat_range_s is None:
+            self._face_animation_next_start_t = now
+        else:
+            lo, hi = animation.repeat_range_s
+            self._face_animation_next_start_t = now + self._rng.uniform(lo, hi)
+
     def _run_face_animation(self, animation: FaceAnimation, now: float) -> None:
+        if (
+            animation.repeat_range_s is not None
+            and now - self._face_animation_start_t >= animation.period_s
+        ):
+            # The burst has played out; rest with the eyes at center
+            # until the next randomized start instead of looping back.
+            if now < self._face_animation_next_start_t:
+                return
+            self._start_face_animation_cycle(animation, now)
         steps, self._face_animation_fired = due_steps(
             animation,
             now - self._face_animation_start_t,
