@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Hexapod Control</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="status-bar">
+      <span id="connection-status">Connecting…</span>
+      <span id="owner-display"></span>
+    </div>
+
+    <div id="control-area">
+      <div class="joystick" id="left-joystick">
+        <canvas id="left-canvas"></canvas>
+        <span class="joystick-label">Left</span>
+      </div>
+
+      <!-- 3x3 grid. DOM order is visual order; JS keys off data-index.
+           Row 1: mode select. Row 2/3: per-mode actions, init centred,
+           prev/next stacked at center-left/bottom-left, height ▲/▼ right. -->
+      <div id="button-grid">
+        <button class="mode-btn" data-index="0"></button>
+        <button class="mode-btn" data-index="1"></button>
+        <button class="mode-btn" data-index="2"></button>
+        <button class="action-btn" data-index="5"></button>
+        <button class="action-btn" data-index="3"></button>
+        <button class="action-btn" data-index="7"></button>
+        <button class="action-btn" data-index="6"></button>
+        <button class="action-btn" data-index="4"></button>
+        <button class="action-btn" data-index="8"></button>
+      </div>
+
+      <div class="joystick" id="right-joystick">
+        <canvas id="right-canvas"></canvas>
+        <span class="joystick-label">Right</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="prompt-overlay" class="hidden">
+    <div id="prompt-dialog">
+      <p id="prompt-text">The hexapod is currently connected to a controller.</p>
+      <p>Control from here?</p>
+      <div id="prompt-buttons">
+        <button id="prompt-yes">Yes</button>
+        <button id="prompt-no">No</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

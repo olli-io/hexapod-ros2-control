@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_webteleop</name>
+  <version>0.0.1</version>
+  <description>Web-app teleop: hosts a lightweight HTTP + WebSocket server for phone/tablet control of the hexapod.</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>hexa_interfaces</depend>
+  <depend>hexa_teleop</depend>
+  <depend>hexa_gait</depend>
+  <depend>hexa_posture</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

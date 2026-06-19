@@ -1,0 +1,252 @@
+/* Gruvbox Material (dark, medium) palette + clean technical UI. */
+
+:root {
+  --bg:        #282828; /* bg0  */
+  --bg-dim:    #1d2021; /* bg_dim, status bar */
+  --surface:   #32302f; /* bg1, panels/buttons */
+  --surface-2: #3c3836; /* bg2, raised/active */
+  --border:    #45403d; /* bg4, hairline borders */
+  --fg:        #d4be98; /* fg */
+  --muted:     #7c6f64; /* grey0 */
+  --accent:    #89b482; /* aqua — active/control */
+  --green:     #a9b665; /* green — connected */
+  --red:       #ea6962; /* red — disconnected */
+  --radius:    6px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ── Status bar ─────────────────────────────────────────────────── */
+
+#status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.8rem;
+  background: var(--bg-dim);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+#connection-status {
+  color: var(--muted);
+}
+
+#connection-status.connected {
+  color: var(--green);
+}
+
+#connection-status.disconnected {
+  color: var(--red);
+}
+
+#owner-display {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+#owner-display.web {
+  color: var(--accent);
+}
+
+/* ── Control area ───────────────────────────────────────────────── */
+/* Portrait: joysticks top/bottom (column). Landscape: left/right (row).
+   The button grid is always centred. */
+
+#control-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+@media (orientation: landscape) {
+  #control-area { flex-direction: row; }
+  #button-grid { height: 100%; width: auto; max-height: min(100%, 60vw); }
+  .joystick canvas { max-width: min(40vw, 44vh); }
+}
+
+/* Portrait stacks two square joysticks + a square grid vertically, so each
+   must be capped by viewport height too — otherwise they overflow on tall,
+   narrow screens. Widths are generous; heights keep the column inside 100vh. */
+@media (orientation: portrait) {
+  #control-area { flex-direction: column; }
+  #button-grid {
+    width: auto;
+    height: auto;
+    max-width: min(52vw, 26vh);
+    max-height: 200px;
+  }
+  .joystick canvas { max-width: min(60vw, 24vh); max-height: 200px; }
+}
+
+/* ── Joysticks ──────────────────────────────────────────────────── */
+
+.joystick {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.joystick canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  touch-action: none;
+}
+
+.joystick-label {
+  margin-top: 0.4rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ── Button grid (3x3, square cells) ────────────────────────────── */
+
+#button-grid {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 0.5rem;
+  aspect-ratio: 1;
+}
+
+#button-grid button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: clamp(0.6rem, 2.4vmin, 0.95rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  touch-action: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+/* Active mode is the sole on-screen mode indicator: solid accent fill so it
+   reads as "selected", distinct from the transient pressed/active flash. */
+.mode-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-dim);
+  font-weight: 700;
+}
+
+.mode-btn:active {
+  background: var(--surface-2);
+}
+
+.action-btn:active,
+.action-btn.pressed {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Prompt overlay ─────────────────────────────────────────────── */
+
+#prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+#prompt-overlay.hidden {
+  display: none;
+}
+
+#prompt-dialog {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  text-align: center;
+  max-width: 320px;
+}
+
+#prompt-dialog p {
+  margin-bottom: 0.8rem;
+  font-size: 0.9rem;
+}
+
+#prompt-buttons {
+  display: flex;
+  gap: 0.8rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+#prompt-buttons button {
+  padding: 0.6rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+#prompt-yes {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Disabled state ─────────────────────────────────────────────── */
+
+#control-area.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}

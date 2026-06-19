@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-colcon-common-extensions \
         python3-serial \
         python3-vcstool \
+        python3-aiohttp \
         build-essential \
         git \
         vim \

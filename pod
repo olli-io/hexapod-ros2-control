@@ -10,6 +10,7 @@ Commands:
   build       colcon build --symlink-install
   sim         ros2 launch hexa_bringup sim.launch.py
   teleop      ros2 launch hexa_teleop teleop.launch.py
+  webteleop   ros2 launch hexa_webteleop webteleop.launch.py
   -h, --help  show this help
 
 Extra args are forwarded to the underlying command,
@@ -24,6 +25,7 @@ case "$cmd" in
     build)         exec colcon build --symlink-install "$@" ;;
     sim)           exec ros2 launch hexa_bringup sim.launch.py "$@" ;;
     teleop)        exec ros2 launch hexa_teleop teleop.launch.py "$@" ;;
+    webteleop)     exec ros2 launch hexa_webteleop webteleop.launch.py "$@" ;;
     -h|--help|"")  usage ;;
     *)
         echo "pod: unknown command '$cmd'" >&2

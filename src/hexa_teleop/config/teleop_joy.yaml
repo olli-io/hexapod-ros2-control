@@ -124,7 +124,7 @@ animation:
     l2: ""
     r2: ""
     dpad_up: height_up
-    dpad_down: heigh_down
+    dpad_down: height_down
     dpad_left: animation_prev
     dpad_right: animation_next
     left_stick_x: drive_yaw
@@ -135,3 +135,12 @@ animation:
 # Gait-mode stick scaling (linear and angular caps) comes from
 # hexa_gait/config/gait.yaml; the teleop node loads it at startup and
 # swaps in the active gait's cap whenever /cmd_gait updates.
+
+# Coexistence with the web teleop (hexa_webteleop). When enabled, the
+# gamepad node subscribes to /teleop/owner and only publishes /cmd_vel,
+# /body/pose, /cmd_gait, /animation/mode, /gait/initialize when it is
+# the current owner. Default owner is "gamepad"; the web node claims
+# control when a webapp requests it and releases on disconnect. Disable
+# only for a standalone gamepad session that must never yield control.
+arbitration:
+  enabled: true

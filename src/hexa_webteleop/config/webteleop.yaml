@@ -1,0 +1,120 @@
+# Web teleop config — phone/tablet webapp (two touch joysticks + 9 buttons).
+#
+# The webapp's input model is simpler than a gamepad: 2 analog sticks
+# (each an x/y pair in [-1, 1], already REP-103 normalised by the TS
+# client) and 9 binary buttons. The config maps these virtual keys to
+# the same function namespace the gamepad uses (see
+# hexa_teleop.joy_mapping.ALL_FUNCTIONS), and the shared map_joy state
+# machine does the rest.
+#
+# Top 3 buttons (btn_0, btn_1, btn_2) are fixed mode-select buttons in
+# base.bindings. Bottom 6 (btn_3 … btn_8) are per-mode — the node sends
+# the active mode's labels to the webapp so the UI can relabel them
+# dynamically. init/record are allowed in per-mode bindings (the webapp
+# loader validates with ALL_FUNCTIONS, not the gamepad's restricted set).
+
+initial_mode: gait # "gait" | "posture" | "animation"
+gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
+default_gait: tripod
+allow_unstable_gaits: false
+
+server:
+  port: 8080 # HTTP + WebSocket on the same port
+
+base:
+  deadband: 0.05 # smaller than gamepad (touch input is less noisy)
+  trigger_threshold: 0.5 # unused (no analog triggers) but required by BaseConfig
+
+  # Webapp virtual key → Joy.{buttons,axes} index. The TS client sends
+  # stick events as {stick:"left"|"right", x, y} and button events as
+  # {index: 0..8, pressed: bool}. The node packs them into these slots.
+  buttons:
+    btn_0: 0
+    btn_1: 1
+    btn_2: 2
+    btn_3: 3
+    btn_4: 4
+    btn_5: 5
+    btn_6: 6
+    btn_7: 7
+    btn_8: 8
+  axes:
+    left_stick_x: 0
+    left_stick_y: 1
+    right_stick_x: 2
+    right_stick_y: 3
+  # The TS client already sends REP-103 normalised values (forward = +1,
+  # left = +1), so no sign flip is needed. Missing entries default to +1.0.
+  axis_signs: {}
+
+  # Fixed top-3 mode-select buttons.
+  bindings:
+    btn_0: gait_mode
+    btn_1: posture_mode
+    btn_2: animation_mode
+
+gait:
+  # Bottom 6 + 2 sticks. drive_x = forward/back, drive_y = strafe,
+  # drive_yaw = turn. Left stick drives x/y, right stick X drives yaw.
+  bindings:
+    btn_3: init
+    btn_4: record
+    btn_5: gait_prev
+    btn_6: gait_next
+    btn_7: height_up
+    btn_8: height_down
+    left_stick_y: drive_x
+    left_stick_x: drive_y
+    right_stick_x: drive_yaw
+
+posture:
+  # Left stick = body x/y translation, right stick = roll/pitch tilt.
+  # btn_5/btn_6 = yaw left/right (eased), btn_7/btn_8 = height.
+  bindings:
+    btn_3: init
+    btn_4: record
+    btn_5: yaw_left
+    btn_6: yaw_right
+    btn_7: height_up
+    btn_8: height_down
+    left_stick_y: pose_x
+    left_stick_x: pose_y
+    right_stick_x: tilt_roll
+    right_stick_y: tilt_pitch
+
+  # Posture-mode scalar limits (mirror teleop_joy.yaml).
+  x_max: 0.035 # m
+  y_max: 0.035 # m
+  roll_max_deg: 12.0
+  pitch_max_deg: 12.0
+  yaw_max_deg: 20.0
+  yaw_tau_s: 0.10
+  revert_tau_s: 0.25
+  wiggle_pivot_forward_m: 0.06
+  height:
+    max_m: 0.04
+    min_m: -0.04
+    rate_m_per_s: 0.05
+
+animation:
+  # Same stick mapping as gait; bottom 6 cycle animations.
+  bindings:
+    btn_3: init
+    btn_4: record
+    btn_5: animation_prev
+    btn_6: animation_next
+    btn_7: height_up
+    btn_8: height_down
+    left_stick_y: drive_x
+    left_stick_x: drive_y
+    right_stick_x: drive_yaw
+
+# Gait-mode stick scaling comes from hexa_gait/config/gait.yaml; the
+# web teleop node loads it at startup and swaps in the active gait's
+# cap whenever /cmd_gait updates — same pattern as teleop_joy.
+
+# Coexistence with the gamepad teleop (hexa_teleop). The web node is the
+# sole writer of /teleop/owner. Default owner is "gamepad"; the web node
+# claims control when a webapp requests it and releases on disconnect.
+arbitration:
+  enabled: true

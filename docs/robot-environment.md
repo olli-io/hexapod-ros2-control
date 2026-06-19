@@ -126,6 +126,72 @@ ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod teleop'
 ./hexa --prod disengage
 ```
 
+## 6b. Wi-Fi hotspot for web teleop (optional)
+
+The web teleop (`hexa_webteleop`) hosts an HTTP + WebSocket server on
+port 8080 inside the container. With `network_mode: host` the server is
+reachable on any of the Pi's network interfaces. To let phones connect
+without an existing Wi-Fi network, configure the Pi as a standalone AP:
+
+Install hostapd and dnsmasq:
+
+```
+sudo apt install -y hostapd dnsmasq
+sudo systemctl stop hostapd dnsmasq
+```
+
+Configure a static IP on the wireless interface. Add to
+`/etc/dhcpcd.conf` (or the NetworkManager equivalent on Pi OS Bookworm+):
+
+```
+interface wlan0
+    static ip_address=192.168.50.1/24
+    nohook wpa_supplicant
+```
+
+Configure dnsmasq (`/etc/dnsmasq.conf`):
+
+```
+interface=wlan0
+dhcp-range=192.168.50.10,192.168.50.50,255.255.255.0,24h
+```
+
+Configure hostapd (`/etc/hostapd/hostapd.conf`):
+
+```
+interface=wlan0
+driver=nl80211
+ssid=Hexapod
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=hexapod123
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+```
+
+Point hostapd at the config and enable both services:
+
+```
+sudo sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+sudo systemctl enable hostapd dnsmasq
+sudo systemctl start hostapd dnsmasq
+```
+
+After the Pi reboots, phones can join the **Hexapod** Wi-Fi network
+(password `hexapod123`) and navigate to `http://192.168.50.1:8080` to
+open the webapp. The container's host-network WS server is reachable
+on the AP interface directly — no port mapping or bridge needed.
+
+The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by
+default, and the webapp prompts to claim control when it connects. See
+`src/hexa_webteleop/README.md` for the arbitration protocol.
+
 ## 7. Re-deploy
 
 ```

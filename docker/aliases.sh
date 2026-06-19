@@ -4,3 +4,4 @@
 alias cb='colcon build --symlink-install'
 alias sim='ros2 launch hexa_bringup sim.launch.py'
 alias teleop='ros2 launch hexa_teleop teleop.launch.py'
+alias webteleop='ros2 launch hexa_webteleop webteleop.launch.py'

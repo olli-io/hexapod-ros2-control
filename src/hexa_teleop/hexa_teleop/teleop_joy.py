@@ -46,6 +46,7 @@ from .joy_mapping import (
     resolve_gait_cycle,
     validate_bindings,
 )
+from .teleop_arbitration import GAMEPAD, ArbitrationState, on_owner_msg, should_publish
 
 PUBLISH_RATE_HZ = 50.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
@@ -102,7 +103,7 @@ def _parse_mode_bindings(
 
 def _load_config(
     path: Path, gait_yaml: Path, posture_yaml: Path
-) -> tuple[JoyConfig, str, str, VelocityCaps]:
+) -> tuple[JoyConfig, str, str, VelocityCaps, bool]:
     with path.open() as f:
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml)
@@ -173,7 +174,9 @@ def _load_config(
             f"initial_mode must be one of "
             f"{POSTURE!r}, {GAIT!r}, {ANIMATION!r}; got {initial_mode!r}"
         )
-    return cfg, initial_mode, default_gait, caps
+    arbitration_raw = raw.get("arbitration", {})
+    arbitration_enabled = bool(arbitration_raw.get("enabled", True))
+    return cfg, initial_mode, default_gait, caps, arbitration_enabled
 
 
 class TeleopJoyNode(Node):
@@ -199,7 +202,7 @@ class TeleopJoyNode(Node):
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
         )
-        self._cfg, initial_mode, default_gait, self._caps = _load_config(
+        self._cfg, initial_mode, default_gait, self._caps, self._arbitration_enabled = _load_config(
             cfg_path, gait_yaml_path, posture_yaml_path
         )
         self._state = JoyState(
@@ -242,6 +245,17 @@ class TeleopJoyNode(Node):
         self._sub_gait_state = self.create_subscription(
             String, "/gait/state", self._on_gait_state, 10
         )
+        # Arbitration: when web teleop is running, /teleop/owner carries
+        # the current owner ("gamepad" default, "web" when the webapp has
+        # claimed control). TRANSIENT_LOCAL so a late-joining gamepad node
+        # gets the last owner value. Dormant means we skip publishing but
+        # still run map_joy to keep prev_* edge trackers fresh.
+        self._arbitration = ArbitrationState()
+        self._was_dormant = False
+        owner_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._sub_owner = self.create_subscription(
+            String, "/teleop/owner", self._on_owner, owner_qos
+        )
         self._pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
         self._pub_body_pose = self.create_publisher(BodyPoseMsg, "/body/pose", 10)
         # One-shot trigger on rising-edge of the init binding.
@@ -272,6 +286,14 @@ class TeleopJoyNode(Node):
     def _on_gait_state(self, msg: String) -> None:
         self._latest_gait_state = msg.data
 
+    def _on_owner(self, msg: String) -> None:
+        prev = self._arbitration.owner
+        on_owner_msg(self._arbitration, msg.data)
+        if self._arbitration.owner != prev:
+            self.get_logger().info(
+                f"/teleop/owner: {prev!r} -> {self._arbitration.owner!r}"
+            )
+
     def _tick(self) -> None:
         out = map_joy(
             self._latest_axes,
@@ -282,6 +304,19 @@ class TeleopJoyNode(Node):
         )
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
+        # Arbitration: map_joy always runs (keeps prev_* edge trackers
+        # fresh so no spurious edges on resume), but all publishes are
+        # gated on ownership. When web owns, gamepad goes dormant.
+        if self._arbitration_enabled and not should_publish(
+            self._arbitration, GAMEPAD
+        ):
+            if not self._was_dormant:
+                self._was_dormant = True
+                self.get_logger().info("web teleop owns /cmd_vel — gamepad dormant")
+            return
+        if self._was_dormant:
+            self._was_dormant = False
+            self.get_logger().info("gamepad regained /cmd_vel ownership")
         if out.init_request:
             self.get_logger().info("start button pressed — publishing /gait/initialize")
             self._pub_init.publish(Empty())

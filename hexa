@@ -15,10 +15,10 @@ Commands:
                               Drop into the ROS2 Jazzy dev container (forwards args to the container).
                               --clean tears down the existing container, rebuilds the image,
                               and runs 'pod build' before opening the shell.
-                              --launch runs sim + teleop in the shell (same as --tmux pane 0,
-                              without the second pane).
+                              --launch runs sim + teleop + webteleop in the shell (same as
+                              --tmux pane 0, without the second pane).
   --tmux [--clean] [vert]     Open a tmux session with two panes sharing one dev container:
-                              pane 0 runs sim + teleop together, pane 1 is an idle 'hexa --dev' shell.
+                              pane 0 runs sim + teleop + webteleop together, pane 1 is an idle 'hexa --dev' shell.
                               Default split is side-by-side; pass 'vert' to stack the panes.
                               --clean rebuilds the container first.
   --prod <subcommand> [args]  Cross-build + deploy + operate the production image on the robot.
@@ -56,7 +56,7 @@ case "${cmd}" in
         fi
         if [[ ${launch} -eq 1 ]]; then
             exec "${REPO_ROOT}/scripts/dev.sh" bash -c \
-                "pod sim & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; pod teleop"
+                "pod sim & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; pod webteleop & pod teleop"
         fi
         exec "${REPO_ROOT}/scripts/dev.sh" "${dev_args[@]}"
         ;;
