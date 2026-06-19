@@ -123,8 +123,8 @@ animation:
     r1: ""
     l2: ""
     r2: ""
-    dpad_up: height_up
-    dpad_down: height_down
+    dpad_up: ""
+    dpad_down: ""
     dpad_left: animation_prev
     dpad_right: animation_next
     left_stick_x: drive_yaw

@@ -103,6 +103,9 @@ class WebTeleopNode(Node):
         self._arbitration_enabled = bool(
             raw.get("arbitration", {}).get("enabled", True)
         )
+        logs_cfg = raw.get("logs", {}) or {}
+        self._logs_command = str(logs_cfg.get("command", "")).strip()
+        self._logs_lines = int(logs_cfg.get("lines", 200))
         self._web_dir = str(
             Path(get_package_share_directory("hexa_webteleop")) / "web"
         )
@@ -247,6 +250,8 @@ class WebTeleopNode(Node):
     async def _start_server(self) -> None:
         app = aiohttp.web.Application(client_max_size=1024 * 1024)
         app.router.add_get("/ws", self._handle_ws)
+        app.router.add_get("/logs", self._handle_logs)
+        app.router.add_post("/control/release", self._handle_release)
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/{filename}", self._handle_static)
         runner = aiohttp.web.AppRunner(app, access_log=None)
@@ -270,14 +275,65 @@ class WebTeleopNode(Node):
             raise aiohttp.web.HTTPNotFound()
         return aiohttp.web.FileResponse(filepath)
 
+    async def _handle_logs(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Run the configured log command and return its last N lines."""
+        if not self._logs_command:
+            return aiohttp.web.json_response(
+                {"lines": [], "error": "no logs.command configured"}
+            )
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                self._logs_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+            text = out.decode("utf-8", errors="replace")
+        except asyncio.TimeoutError:
+            return aiohttp.web.json_response(
+                {"lines": [], "error": "log command timed out"}
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            return aiohttp.web.json_response({"lines": [], "error": str(e)})
+        lines = text.splitlines()[-self._logs_lines :]
+        return aiohttp.web.json_response({"lines": lines})
+
+    async def _handle_release(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Hand control back to the gamepad (settings page action)."""
+        self._release_control()
+        owner = self._arbitration.owner if self._arbitration_enabled else GAMEPAD
+        return aiohttp.web.json_response({"owner": owner})
+
     async def _handle_ws(self, request: aiohttp.web.Request) -> aiohttp.web.WebSocketResponse:
         ws = aiohttp.web.WebSocketResponse()
         await ws.prepare(request)
 
+        # Single-connection policy: only one webapp may be connected at a
+        # time. Check-and-increment under one lock so two simultaneous
+        # connections cannot both pass the guard.
+        with self._lock:
+            if self._client_count >= 1:
+                busy = True
+            else:
+                busy = False
+                self._client_count += 1
+
+        if busy:
+            self.get_logger().info(
+                "webapp connection refused — another device is connected"
+            )
+            try:
+                await ws.send_json({
+                    "type": "busy",
+                    "message": "Another device is already connected.",
+                })
+                await ws.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            return ws
+
         with self._ws_clients_lock:
             self._ws_clients.append(ws)
-        with self._lock:
-            self._client_count += 1
 
         self.get_logger().info(f"webapp connected ({self._client_count} client(s))")
 

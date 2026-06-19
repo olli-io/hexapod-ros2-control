@@ -134,9 +134,9 @@ class JoyState:
     yaw_current: float = 0.0
     wiggle_amount: float = 0.0
     # Persistent body-height offset, driven by ``height_up`` /
-    # ``height_down`` in POSTURE mode. Unlike every other posture axis
-    # this value survives release and a mode toggle into GAIT (the
-    # robot walks at the lifted/lowered posture).
+    # ``height_down`` in any mode. Unlike every other posture axis
+    # this value survives release and a mode toggle (the robot walks
+    # at the lifted/lowered posture).
     height_current: float = 0.0
     # Persistent posture baseline captured by a rising-edge ``record``
     # press. Each component is bounded by its ``posture.*_max`` at
@@ -587,22 +587,24 @@ def map_joy(
     ry = axis_value_for("pose_x", base, posture_cfg, axes)
 
     # Body height: ``height_up`` / ``height_down`` are button-class.
-    # Integrate (up - down) * rate * dt in POSTURE. Held both ⇒ no net
-    # change. Works equally well bound to D-pad up/down or to face
-    # buttons or to L1/R1.
+    # Integrate (up - down) * rate * dt in any mode. Held both ⇒ no net
+    # change. Bindings resolve against the active mode's config, so the
+    # function must be bound in each mode's section to be reachable
+    # there. The scalar limits / rate are always the canonical
+    # ``posture`` values. Works equally well bound to D-pad up/down or
+    # to face buttons or to L1/R1.
     height_up = button_pressed_for(
-        "height_up", base, posture_cfg, buttons, axes
+        "height_up", base, mode_cfg, buttons, axes
     )
     height_down = button_pressed_for(
-        "height_down", base, posture_cfg, buttons, axes
+        "height_down", base, mode_cfg, buttons, axes
     )
-    if state.mode == POSTURE:
-        net = (1.0 if height_up else 0.0) - (1.0 if height_down else 0.0)
-        state.height_current += net * posture_cfg.height_rate * dt
-        if state.height_current > posture_cfg.height_max:
-            state.height_current = posture_cfg.height_max
-        elif state.height_current < posture_cfg.height_min:
-            state.height_current = posture_cfg.height_min
+    net = (1.0 if height_up else 0.0) - (1.0 if height_down else 0.0)
+    state.height_current += net * posture_cfg.height_rate * dt
+    if state.height_current > posture_cfg.height_max:
+        state.height_current = posture_cfg.height_max
+    elif state.height_current < posture_cfg.height_min:
+        state.height_current = posture_cfg.height_min
 
     # Animation cycler: ``animation_prev`` / ``animation_next`` rising
     # edges step through ``cfg.animation_list``. Active only in

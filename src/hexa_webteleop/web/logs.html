@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Hexapod Log</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="settings-app">
+    <div id="settings-bar">
+      <button id="close-btn" class="nav-icon" aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
+        </svg>
+      </button>
+      <span id="settings-title">Log</span>
+      <button id="refresh-btn" class="nav-icon" aria-label="Refresh logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 12a8.5 8.5 0 1 1 2.5 6"/>
+          <polyline points="3 19 3 13 9 13"/>
+        </svg>
+      </button>
+    </div>
+
+    <div id="settings-body">
+      <pre id="logs-view">Loading…</pre>
+    </div>
+  </div>
+
+  <script src="logs.js"></script>
+</body>
+</html>

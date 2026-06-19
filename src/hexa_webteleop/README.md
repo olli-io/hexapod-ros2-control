@@ -15,7 +15,8 @@ as the gamepad teleop (`hexa_teleop`).
   publishes.
 - Coexists with the gamepad teleop via `/teleop/owner` arbitration. The
   gamepad owns by default; the webapp must explicitly claim control via
-  a prompt. See **Coexistence** below.
+  the take-control prompt or the navbar controller toggle. See
+  **Coexistence** below.
 
 ## Architecture
 
@@ -27,8 +28,40 @@ as the gamepad teleop (`hexa_teleop`).
 - **`webteleop_node.py`** — ROS glue. Runs an `aiohttp` HTTP + WS
   server in a daemon thread and a 50 Hz rclpy timer that maps input and
   publishes. Thread-safe shared state via a `threading.Lock`.
-- **`web/`** — static webapp: `index.html`, `styles.css`, `main.js`.
-  No TypeScript, no build step, no npm dependencies.
+  Single-connection policy: only one webapp may hold the `/ws` socket at
+  a time. A second device is sent a `busy` message and its socket is
+  closed; its client keeps retrying and connects once the slot frees.
+- **`web/`** — static webapp: `index.html` + `main.js` (navbar,
+  joysticks, buttons, WS, control handover), `settings.html` +
+  `settings.js` (log viewer), shared `styles.css`. No TypeScript, no
+  build step, no npm dependencies.
+
+## Webapp layout
+
+- **Navbar** — symbols only. Responsive: a horizontal bar across the top
+  in portrait, a vertical strip down the left in landscape. It holds a
+  wifi on/off connection indicator (green connected, red disconnected),
+  a controller icon (green while a controller owns `/cmd_vel`; tap for a
+  status popover with a switch-to/from-controller toggle), and a log
+  icon (opens the log page).
+- **Control area** — two touch joysticks flanking a 3x3 button grid.
+  While a controller is active the grid is replaced in place by an
+  inline "Take control" prompt and the joysticks are disabled.
+
+## HTTP endpoints
+
+Alongside the `/ws` WebSocket, the server exposes two plain HTTP
+endpoints:
+
+- **`GET /logs`** — runs the configured `logs.command` shell command and
+  returns `{"lines": [...]}` with its last `logs.lines` lines (default
+  200). The command is environment-specific and set in
+  `config/webteleop.yaml`; the default concatenates the most recent ROS
+  log files under `~/.ros/log`. Used by the log page.
+- **`POST /control/release`** — hands control back to the gamepad
+  (same effect as a webapp disconnect); returns `{"owner": ...}`. The
+  webapp itself releases via the `release_control` WS message; this
+  endpoint remains for out-of-band use.
 
 ## Topics
 
@@ -53,13 +86,15 @@ single latched `/teleop/owner` topic carries the current owner:
 
 Protocol (only the web node writes `/teleop/owner`):
 - Cold start, no webapp connected → gamepad owns by default.
-- Webapp connects → receives current owner. If `gamepad`, the webapp
-  shows a prompt: *"The hexapod is currently connected to a controller.
-  Control from here?"*
-- User taps **Yes** → webapp sends `request_control` → web node
-  publishes `web` → gamepad node stops publishing.
+- Webapp connects → receives current owner. If `gamepad`, the navbar
+  controller icon goes green and the button grid is replaced by an
+  inline "Take control" prompt; the webapp is a passive observer.
+- User taps **Take control** (or the navbar controller toggle) → webapp
+  sends `request_control` → web node publishes `web` → gamepad node
+  stops publishing.
+- User taps the navbar controller toggle while in control → webapp sends
+  `release_control` → web node publishes `gamepad` → gamepad resumes.
 - Webapp disconnects → web node publishes `gamepad` → gamepad resumes.
-- User taps **No** → webapp stays a passive observer.
 
 The arbitration logic lives in `hexa_teleop.teleop_arbitration` (pure
 Python, shared by both nodes, unit-tested).

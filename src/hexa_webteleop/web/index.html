@@ -8,10 +8,47 @@
 </head>
 <body>
   <div id="app">
-    <div id="status-bar">
-      <span id="connection-status">Connecting…</span>
-      <span id="owner-display"></span>
-    </div>
+    <!-- Navbar: symbols only. Horizontal across the top in portrait,
+         vertical down the left in landscape (CSS-driven). -->
+    <nav id="navbar">
+      <!-- Connection: wifi on/off symbol (slash shows when disconnected).
+           Tap to show the host and a disconnect/reconnect toggle. -->
+      <button id="conn-status" class="nav-icon" aria-label="Connection status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 11.5a12 12 0 0 1 16 0"/>
+          <path d="M7.5 15a7 7 0 0 1 9 0"/>
+          <path d="M10.5 18.3a2.5 2.5 0 0 1 3 0"/>
+          <circle cx="12" cy="20.5" r="0.6" fill="currentColor" stroke="none"/>
+          <line class="wifi-slash" x1="3" y1="3" x2="21" y2="21"/>
+        </svg>
+      </button>
+
+      <div class="nav-spacer"></div>
+
+      <!-- Controller: green when a controller is active. Tap for status. -->
+      <button id="controller-btn" class="nav-icon" aria-label="Controller">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="20" height="11" rx="4"/>
+          <line x1="7" y1="11" x2="7" y2="14"/>
+          <line x1="5.5" y1="12.5" x2="8.5" y2="12.5"/>
+          <circle cx="16" cy="11.5" r="1" fill="currentColor" stroke="none"/>
+          <circle cx="18.5" cy="14" r="1" fill="currentColor" stroke="none"/>
+        </svg>
+      </button>
+
+      <!-- Log -->
+      <button id="log-btn" class="nav-icon" aria-label="Log">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="3" width="16" height="18" rx="2"/>
+          <line x1="8" y1="8" x2="16" y2="8"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+          <line x1="8" y1="16" x2="13" y2="16"/>
+        </svg>
+      </button>
+    </nav>
 
     <div id="control-area">
       <div class="joystick" id="left-joystick">
@@ -34,6 +71,12 @@
         <button class="action-btn" data-index="8"></button>
       </div>
 
+      <!-- Replaces the button grid in place while a controller is active. -->
+      <div id="control-prompt" class="hidden">
+        <p>The hexapod is currently being controlled by a game controller</p>
+        <button id="take-control-btn">Take control</button>
+      </div>
+
       <div class="joystick" id="right-joystick">
         <canvas id="right-canvas"></canvas>
         <span class="joystick-label">Right</span>
@@ -41,13 +84,33 @@
     </div>
   </div>
 
-  <div id="prompt-overlay" class="hidden">
-    <div id="prompt-dialog">
-      <p id="prompt-text">The hexapod is currently connected to a controller.</p>
-      <p>Control from here?</p>
-      <div id="prompt-buttons">
-        <button id="prompt-yes">Yes</button>
-        <button id="prompt-no">No</button>
+  <!-- Shown when the server already has another device connected. -->
+  <div id="busy-overlay" class="overlay hidden">
+    <div class="dialog">
+      <p>Another device is already controlling the hexapod.</p>
+      <p class="dialog-sub">Waiting for it to disconnect…</p>
+    </div>
+  </div>
+
+  <!-- Connection popover, opened from the navbar connection icon. -->
+  <div id="conn-overlay" class="overlay hidden">
+    <div class="dialog">
+      <p id="conn-state"></p>
+      <p id="conn-host" class="dialog-sub"></p>
+      <div class="dialog-buttons">
+        <button id="conn-toggle"></button>
+        <button id="conn-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controller status popover, opened from the navbar controller icon. -->
+  <div id="controller-overlay" class="overlay hidden">
+    <div class="dialog">
+      <p id="controller-status"></p>
+      <div class="dialog-buttons">
+        <button id="controller-toggle"></button>
+        <button id="controller-close">Close</button>
       </div>
     </div>
   </div>

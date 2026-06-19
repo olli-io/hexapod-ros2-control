@@ -657,16 +657,19 @@ def test_dpad_release_holds_height():
     assert math.isclose(out.pose_z, held)
 
 
-def test_dpad_inactive_in_gait_mode_but_height_bleeds_through():
-    # In GAIT mode the D-pad must NOT change the height (walking-time
-    # height adjustments would force a reseat mid-walk). The already-
-    # integrated height bleeds through unchanged into pose.z so the
-    # robot walks at the lifted posture.
-    cfg = _cfg()
+def test_dpad_integrates_height_in_gait_mode():
+    # Height is adjustable from every mode (gait/posture/animation), as
+    # long as height_up / height_down are bound there. In GAIT mode the
+    # D-pad up integrates the height upward just as it does in POSTURE,
+    # and the offset bleeds through into pose.z.
+    cfg = _cfg(
+        gait_bindings={"dpad_up": "height_up", "dpad_down": "height_down"}
+    )
     state = JoyState(mode=GAIT, height_current=0.02)
     out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
-    assert math.isclose(state.height_current, 0.02)
-    assert math.isclose(out.pose_z, 0.02)
+    expected = 0.02 + cfg.posture.height_rate * DT
+    assert math.isclose(state.height_current, expected)
+    assert math.isclose(out.pose_z, expected)
 
 
 def test_dpad_sign_can_be_flipped_via_config():

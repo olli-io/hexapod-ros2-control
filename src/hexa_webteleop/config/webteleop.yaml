@@ -21,6 +21,22 @@ allow_unstable_gaits: false
 server:
   port: 8080 # HTTP + WebSocket on the same port
 
+# Log viewer (logs page). The node runs `command` as a shell command
+# on demand (GET /logs) and returns its last `lines` lines. The source
+# differs per environment, so it is fully configurable here.
+#
+# Default: concatenate the 20 most-recently-modified ROS log files under
+# ~/.ros/log (oldest→newest so the tail keeps the freshest entries). This
+# covers every node of the current session in both dev and prod.
+#
+# Prod robots running under docker/systemd can override, e.g.:
+#   command: "journalctl -u hexapod -n 200 --no-pager -o short-iso"
+logs:
+  lines: 400
+  command: >-
+    find "$HOME/.ros/log" -name '*.log' -printf '%T@ %p\n' 2>/dev/null
+    | sort -rn | head -n 20 | sort -n | cut -d' ' -f2- | xargs -r cat 2>/dev/null
+
 base:
   deadband: 0.05 # smaller than gamepad (touch input is less noisy)
   trigger_threshold: 0.5 # unused (no analog triggers) but required by BaseConfig

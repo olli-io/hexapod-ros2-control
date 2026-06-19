@@ -34,6 +34,7 @@ function labelFor(fn) {
 
 let ws = null;
 let connected = false;
+let manualDisconnect = false;
 let arbitrationEnabled = false;
 let owner = "gamepad";
 let currentMode = "gait";
@@ -55,22 +56,24 @@ function send(msg) {
 // ── WebSocket connection ───────────────────────────────────────────
 
 function connect() {
+  manualDisconnect = false;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = proto + "//" + location.host + "/ws";
   ws = new WebSocket(url);
 
   ws.onopen = function () {
     connected = true;
-    $("connection-status").textContent = "Connected";
-    $("connection-status").className = "connected";
+    $("conn-status").className = "nav-icon connected";
+    updateConnOverlay();
   };
 
   ws.onclose = function () {
     connected = false;
-    $("connection-status").textContent = "Disconnected";
-    $("connection-status").className = "disconnected";
-    setControlEnabled(false);
-    setTimeout(connect, 2000);
+    $("conn-status").className = "nav-icon disconnected";
+    setJoysticksEnabled(false);
+    updateConnOverlay();
+    // A manual disconnect stays down until the user reconnects.
+    if (!manualDisconnect) setTimeout(connect, 2000);
   };
 
   ws.onerror = function () {
@@ -91,12 +94,19 @@ function connect() {
 function handleMessage(msg) {
   switch (msg.type) {
     case "init":
+      hideBusy();
       arbitrationEnabled = msg.arbitration_enabled;
       owner = msg.owner;
       currentMode = msg.mode;
       updateModeDisplay();
       updateButtonLabels(msg.button_labels);
       updateOwnerDisplay();
+      break;
+    case "busy":
+      // Server already has another device; it closes the socket right
+      // after. Keep the overlay up across reconnect attempts until a
+      // slot frees and we receive a real "init".
+      showBusy();
       break;
     case "mode":
       currentMode = msg.mode;
@@ -135,37 +145,83 @@ function updateButtonLabels(labels) {
 }
 
 function updateOwnerDisplay() {
-  const el = $("owner-display");
+  // A controller is active whenever arbitration is on and the web app does
+  // not own /cmd_vel. The navbar controller icon turns green in that state,
+  // and the button grid is swapped for the inline take-control prompt.
+  const controllerActive = arbitrationEnabled && owner !== "web";
+  $("controller-btn").classList.toggle("active", controllerActive);
+  $("control-prompt").classList.toggle("hidden", !controllerActive);
+  $("button-grid").classList.toggle("hidden", controllerActive);
+  setJoysticksEnabled(!controllerActive);
+  updateControllerOverlay();
+}
+
+function setJoysticksEnabled(enabled) {
+  $("left-joystick").classList.toggle("disabled", !enabled);
+  $("right-joystick").classList.toggle("disabled", !enabled);
+}
+
+// \u2500\u2500 Controller status overlay (navbar controller icon) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+function updateControllerOverlay() {
+  const status = $("controller-status");
+  const toggle = $("controller-toggle");
   if (!arbitrationEnabled) {
-    el.textContent = "";
-    el.className = "";
-    setControlEnabled(true);
-    $("prompt-overlay").classList.add("hidden");
+    status.textContent = "Arbitration disabled \u2014 web is always in control.";
+    toggle.classList.add("hidden");
     return;
   }
+  toggle.classList.remove("hidden");
   if (owner === "web") {
-    el.textContent = "\u25CF You control";
-    el.className = "web";
-    setControlEnabled(true);
-    $("prompt-overlay").classList.add("hidden");
+    status.textContent = "The web app is in control.";
+    toggle.textContent = "Switch to controller";
   } else {
-    el.textContent = "\u25CF Controller active";
-    el.className = "";
-    setControlEnabled(false);
-    showPrompt();
+    status.textContent = "A controller is active.";
+    toggle.textContent = "Take control";
   }
 }
 
-function setControlEnabled(enabled) {
-  $("control-area").classList.toggle("disabled", !enabled);
+function showControllerOverlay() {
+  updateControllerOverlay();
+  $("controller-overlay").classList.remove("hidden");
 }
 
-function showPrompt() {
-  $("prompt-overlay").classList.remove("hidden");
+function hideControllerOverlay() {
+  $("controller-overlay").classList.add("hidden");
 }
 
-function hidePrompt() {
-  $("prompt-overlay").classList.add("hidden");
+// ── Connection overlay (navbar connection icon) ────────────────────
+
+function updateConnOverlay() {
+  $("conn-host").textContent = location.host;
+  const state = $("conn-state");
+  const toggle = $("conn-toggle");
+  if (connected) {
+    state.textContent = "Connected to";
+    toggle.textContent = "Disconnect";
+  } else {
+    state.textContent = "Disconnected from";
+    toggle.textContent = "Reconnect";
+  }
+}
+
+function showConnOverlay() {
+  updateConnOverlay();
+  $("conn-overlay").classList.remove("hidden");
+}
+
+function hideConnOverlay() {
+  $("conn-overlay").classList.add("hidden");
+}
+
+// ── Busy overlay (another device already connected) ────────────────
+
+function showBusy() {
+  $("busy-overlay").classList.remove("hidden");
+}
+
+function hideBusy() {
+  $("busy-overlay").classList.add("hidden");
 }
 
 // ── Button handling ────────────────────────────────────────────────
@@ -196,12 +252,35 @@ function setupButtons() {
     });
   }
 
-  $("prompt-yes").addEventListener("click", function () {
+  // Inline take-control prompt (shown in place of the button grid).
+  $("take-control-btn").addEventListener("click", function () {
     send({ type: "request_control" });
-    hidePrompt();
   });
-  $("prompt-no").addEventListener("click", function () {
-    hidePrompt();
+
+  // Navbar controller icon → status overlay with a toggle.
+  $("controller-btn").addEventListener("click", showControllerOverlay);
+  $("controller-close").addEventListener("click", hideControllerOverlay);
+  $("controller-toggle").addEventListener("click", function () {
+    send({ type: owner === "web" ? "release_control" : "request_control" });
+    hideControllerOverlay();
+  });
+
+  // Navbar connection icon → host/disconnect popover.
+  $("conn-status").addEventListener("click", showConnOverlay);
+  $("conn-close").addEventListener("click", hideConnOverlay);
+  $("conn-toggle").addEventListener("click", function () {
+    if (connected) {
+      manualDisconnect = true;
+      if (ws) ws.close();
+    } else {
+      connect();
+    }
+    hideConnOverlay();
+  });
+
+  // Navbar log icon → log page.
+  $("log-btn").addEventListener("click", function () {
+    location.href = "logs.html";
   });
 }
 
