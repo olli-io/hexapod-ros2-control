@@ -1,7 +1,7 @@
 # Web teleop config — phone/tablet webapp (two touch joysticks + 9 buttons).
 #
 # The webapp's input model is simpler than a gamepad: 2 analog sticks
-# (each an x/y pair in [-1, 1], already REP-103 normalised by the TS
+# (each an x/y pair in [-1, 1], already REP-103 normalised by the JS
 # client) and 9 binary buttons. The config maps these virtual keys to
 # the same function namespace the gamepad uses (see
 # hexa_teleop.joy_mapping.ALL_FUNCTIONS), and the shared map_joy state
@@ -20,6 +20,15 @@ allow_unstable_gaits: false
 
 server:
   port: 8080 # HTTP + WebSocket on the same port
+  ws_heartbeat_s: 5.0 # ping each client; close it if a pong is missed
+
+# Safety watchdog. If no stick/button message arrives within
+# input_timeout_s (dropped WebSocket, slept phone, backgrounded tab) the
+# node feeds neutral input so /cmd_vel falls to zero instead of latching
+# the last commanded velocity. Keep it a few control ticks long: large
+# enough to ride out transient jitter, short enough to stop promptly.
+safety:
+  input_timeout_s: 0.5
 
 # Log viewer (logs page). The node runs `command` as a shell command
 # on demand (GET /logs) and returns its last `lines` lines. The source
@@ -59,7 +68,7 @@ base:
     left_stick_y: 1
     right_stick_x: 2
     right_stick_y: 3
-  # The TS client already sends REP-103 normalised values (forward = +1,
+  # The JS client already sends REP-103 normalised values (forward = +1,
   # left = +1), so no sign flip is needed. Missing entries default to +1.0.
   axis_signs: {}
 

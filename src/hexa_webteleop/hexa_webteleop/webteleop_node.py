@@ -4,8 +4,8 @@ Hosts a lightweight HTTP + WebSocket server (``aiohttp``) that serves
 the static webapp and relays input events to the same ROS topics the
 gamepad teleop publishes: ``/cmd_vel``, ``/body/pose``, ``/cmd_gait``,
 ``/animation/mode``, ``/gait/initialize``. The webapp is pure HTML +
-TypeScript (compiled at image build time); the server only serves
-static files and a single ``/ws`` endpoint.
+JavaScript (no build step); the server serves the static files plus a
+``/ws`` WebSocket and the ``/logs`` and ``/control/release`` endpoints.
 
 Coexistence with the gamepad teleop (``hexa_teleop.teleop_joy``) is
 mediated by ``/teleop/owner`` (``std_msgs/String``, TRANSIENT_LOCAL).
@@ -13,14 +13,25 @@ The web node is the sole writer. Default owner is ``gamepad``; the
 webapp must explicitly request control, and the web node releases on
 disconnect. See ``hexa_teleop.teleop_arbitration`` for the protocol.
 
+Safety: two independent guards stop the robot if the link to the
+webapp dies — important because a dropped phone (TCP half-open, sleep,
+backgrounded tab) would otherwise leave the last stick value latched
+and republished at 50 Hz.
+- WebSocket heartbeat: ``aiohttp`` pings each client and force-closes a
+  socket that misses its pong, which triggers the disconnect cleanup.
+- Input watchdog: the 50 Hz timer feeds ``neutral_inputs`` to
+  ``map_web`` whenever no stick/button message has arrived within
+  ``safety.input_timeout_s``, so ``/cmd_vel`` falls to zero rather than
+  latching. The disconnect path also zeroes the shared input state.
+
 Architecture:
 - Main thread: ``rclpy.spin`` with a 50 Hz timer that calls
   ``map_web`` and publishes (when web owns).
 - Server thread: ``asyncio`` event loop running the ``aiohttp`` app.
 - Shared state: ``threading.Lock``-protected stick/button values +
-  client count + ownership flag. The WS handler writes; the timer
-  reads. rclpy publishers are thread-safe, so ``/teleop/owner`` is
-  published from the WS handler directly.
+  last-input timestamp + client count + ownership flag. The WS handler
+  writes; the timer reads. rclpy publishers are thread-safe, so
+  ``/teleop/owner`` is published from the WS handler directly.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ import asyncio
 import dataclasses
 import json
 import threading
+import time
 from pathlib import Path
 
 import aiohttp
@@ -50,7 +62,14 @@ from hexa_teleop.teleop_arbitration import (
     web_release,
 )
 
-from .web_mapping import NUM_BUTTONS, button_labels_for_mode, load_web_config, map_web
+from .web_mapping import (
+    NUM_BUTTONS,
+    button_labels_for_mode,
+    input_is_stale,
+    load_web_config,
+    map_web,
+    neutral_inputs,
+)
 
 PUBLISH_RATE_HZ = 50.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
@@ -99,7 +118,12 @@ class WebTeleopNode(Node):
             import yaml
 
             raw = yaml.safe_load(f)
-        self._port = int(raw.get("server", {}).get("port", 8080))
+        server_cfg = raw.get("server", {}) or {}
+        self._port = int(server_cfg.get("port", 8080))
+        self._ws_heartbeat_s = float(server_cfg.get("ws_heartbeat_s", 5.0))
+        self._input_timeout_s = float(
+            (raw.get("safety", {}) or {}).get("input_timeout_s", 0.5)
+        )
         self._arbitration_enabled = bool(
             raw.get("arbitration", {}).get("enabled", True)
         )
@@ -124,6 +148,10 @@ class WebTeleopNode(Node):
         self._left_stick: tuple[float, float] = (0.0, 0.0)
         self._right_stick: tuple[float, float] = (0.0, 0.0)
         self._buttons: tuple[int, ...] = (0,) * NUM_BUTTONS
+        # Safety watchdog: monotonic time of the last stick/button message.
+        # Seeded to 0.0 so input reads stale until the first message lands.
+        self._last_input_monotonic = 0.0
+        self._input_stale = True
 
         # Arbitration + client tracking
         self._arbitration = ArbitrationState()
@@ -181,6 +209,22 @@ class WebTeleopNode(Node):
             right = self._right_stick
             buttons = self._buttons
             web_owns = self._web_owns
+            last_input = self._last_input_monotonic
+
+        # Safety watchdog: if no input has arrived within the timeout (the
+        # WebSocket dropped uncleanly, the phone slept, etc.) feed neutral
+        # inputs so /cmd_vel falls to zero instead of latching the last
+        # commanded velocity. map_web still runs so map_joy sees the button
+        # releases and edge state stays consistent.
+        stale = input_is_stale(last_input, time.monotonic(), self._input_timeout_s)
+        publishing = web_owns or not self._arbitration_enabled
+        if stale and not self._input_stale and publishing:
+            self.get_logger().warning(
+                "webapp input stale — holding zero velocity (input watchdog)"
+            )
+        self._input_stale = stale
+        if stale:
+            left, right, buttons = neutral_inputs()
 
         out = map_web(left, right, buttons, self._cfg, self._state, TICK_DT_S)
 
@@ -305,7 +349,10 @@ class WebTeleopNode(Node):
         return aiohttp.web.json_response({"owner": owner})
 
     async def _handle_ws(self, request: aiohttp.web.Request) -> aiohttp.web.WebSocketResponse:
-        ws = aiohttp.web.WebSocketResponse()
+        # heartbeat: aiohttp pings each client and force-closes a socket
+        # that misses its pong, so a half-open link (no clean FIN) still
+        # reaches the disconnect cleanup below.
+        ws = aiohttp.web.WebSocketResponse(heartbeat=self._ws_heartbeat_s)
         await ws.prepare(request)
 
         # Single-connection policy: only one webapp may be connected at a
@@ -366,6 +413,13 @@ class WebTeleopNode(Node):
             with self._lock:
                 self._client_count -= 1
                 last_client = self._client_count == 0
+                # Drop stale inputs so a fresh client can't inherit the
+                # departed one's stick values, and so the watchdog reads
+                # stale immediately.
+                self._left_stick = (0.0, 0.0)
+                self._right_stick = (0.0, 0.0)
+                self._buttons = (0,) * NUM_BUTTONS
+                self._last_input_monotonic = 0.0
             if last_client:
                 self._release_control()
             self.get_logger().info(
@@ -388,6 +442,7 @@ class WebTeleopNode(Node):
                     self._left_stick = (x, y)
                 elif stick == "right":
                     self._right_stick = (x, y)
+                self._last_input_monotonic = time.monotonic()
         elif msg_type == "button":
             idx = int(data.get("index", -1))
             pressed = bool(data.get("pressed", False))
@@ -396,6 +451,7 @@ class WebTeleopNode(Node):
                     btns = list(self._buttons)
                     btns[idx] = 1 if pressed else 0
                     self._buttons = tuple(btns)
+                    self._last_input_monotonic = time.monotonic()
         elif msg_type == "request_control":
             self._claim_control()
         elif msg_type == "release_control":

@@ -188,6 +188,25 @@ def map_web(
     return map_joy(axes, buttons, cfg, state, dt)
 
 
+def input_is_stale(
+    last_input_monotonic: float, now_monotonic: float, timeout_s: float
+) -> bool:
+    """True if the last webapp input is older than ``timeout_s`` seconds.
+
+    Drives the node's safety watchdog: when input goes stale — the
+    WebSocket dropped uncleanly (TCP half-open, no FIN), the phone slept,
+    or the tab was backgrounded — the node feeds ``neutral_inputs`` to
+    ``map_web`` so ``/cmd_vel`` falls to zero instead of latching the last
+    commanded velocity and walking the robot away.
+    """
+    return (now_monotonic - last_input_monotonic) > timeout_s
+
+
+def neutral_inputs() -> tuple[tuple[float, float], tuple[float, float], tuple[int, ...]]:
+    """Neutral webapp input: centred sticks, all buttons released."""
+    return (0.0, 0.0), (0.0, 0.0), (0,) * NUM_BUTTONS
+
+
 def button_labels_for_mode(cfg: JoyConfig, mode: str) -> tuple[str, ...]:
     """Return ``NUM_BUTTONS`` button labels (function names) for ``mode``.
 

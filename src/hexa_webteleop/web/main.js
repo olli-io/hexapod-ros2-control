@@ -53,6 +53,11 @@ function send(msg) {
   }
 }
 
+// Short haptic tick on button press (no-op where unsupported, e.g. iOS).
+function buzz(ms) {
+  if (navigator.vibrate) navigator.vibrate(ms);
+}
+
 // ── WebSocket connection ───────────────────────────────────────────
 
 function connect() {
@@ -234,6 +239,7 @@ function setupButtons() {
     const press = function (e) {
       e.preventDefault();
       btn.classList.add("pressed");
+      buzz(15);
       send({ type: "button", index: i, pressed: true });
     };
     const release = function (e) {
@@ -353,6 +359,12 @@ class TouchJoystick {
   onEnd(e) {
     e.preventDefault();
     if (!this.active || this.touchId === null) return;
+    this.reset();
+  }
+
+  // Re-centre the knob and command zero. Used on touch/mouse release and
+  // when the page is hidden (safety stop).
+  reset() {
     this.active = false;
     this.touchId = null;
     this.knobX = 0;
@@ -380,12 +392,7 @@ class TouchJoystick {
 
   onMouseUp(e) {
     if (!this.active || this.touchId !== "mouse") return;
-    this.active = false;
-    this.touchId = null;
-    this.knobX = 0;
-    this.knobY = 0;
-    send({ type: "stick", stick: this.stick, x: 0, y: 0 });
-    this.draw();
+    this.reset();
     window.removeEventListener("mousemove", this._mouseMove);
     window.removeEventListener("mouseup", this._mouseUp);
   }
@@ -454,8 +461,23 @@ class TouchJoystick {
 
 function init() {
   setupButtons();
-  new TouchJoystick("left-canvas", "left");
-  new TouchJoystick("right-canvas", "right");
+  const joysticks = [
+    new TouchJoystick("left-canvas", "left"),
+    new TouchJoystick("right-canvas", "right"),
+  ];
+
+  // Safety stop: if the page is hidden (tab switch, screen lock, app
+  // backgrounded) re-centre both sticks so the robot doesn't keep the
+  // last velocity. The server-side input watchdog is the backstop for
+  // when the browser suspends before this can fire.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      joysticks.forEach(function (j) {
+        j.reset();
+      });
+    }
+  });
+
   connect();
 }
 

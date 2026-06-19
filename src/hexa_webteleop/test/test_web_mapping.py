@@ -7,8 +7,10 @@ import yaml
 from hexa_webteleop import (
     NUM_BUTTONS,
     button_labels_for_mode,
+    input_is_stale,
     load_web_config,
     map_web,
+    neutral_inputs,
 )
 from hexa_webteleop.web_mapping import GAIT, POSTURE, ANIMATION
 
@@ -353,6 +355,42 @@ def test_zero_input_produces_zero_output(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     out = map_web((0, 0), (0, 0), _buttons(), loaded_cfg, state, DT)
+    assert out.linear_x == 0.0
+    assert out.linear_y == 0.0
+    assert out.angular_z == 0.0
+
+
+# ─── Safety watchdog ────────────────────────────────────────────────
+
+def test_input_is_stale_after_timeout():
+    # last input at t=10.0, now t=10.6, timeout 0.5 → stale
+    assert input_is_stale(10.0, 10.6, 0.5) is True
+
+
+def test_input_is_fresh_within_timeout():
+    assert input_is_stale(10.0, 10.4, 0.5) is False
+
+
+def test_input_is_stale_at_startup():
+    # last-input seed of 0.0 reads stale against any real monotonic clock
+    assert input_is_stale(0.0, 1234.5, 0.5) is True
+
+
+def test_neutral_inputs_are_centred_and_released():
+    left, right, buttons = neutral_inputs()
+    assert left == (0.0, 0.0)
+    assert right == (0.0, 0.0)
+    assert buttons == (0,) * NUM_BUTTONS
+
+
+def test_neutral_inputs_map_to_zero_velocity(cfg):
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT)
+    # Drive forward, then apply the watchdog's neutral inputs: cmd_vel zeroes.
+    map_web((0.0, 0.8), (0.0, 0.0), _buttons(), loaded_cfg, state, DT)
+    left, right, buttons = neutral_inputs()
+    out = map_web(left, right, buttons, loaded_cfg, state, DT)
     assert out.linear_x == 0.0
     assert out.linear_y == 0.0
     assert out.angular_z == 0.0

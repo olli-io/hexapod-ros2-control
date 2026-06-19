@@ -32,9 +32,9 @@ as the gamepad teleop (`hexa_teleop`).
   a time. A second device is sent a `busy` message and its socket is
   closed; its client keeps retrying and connects once the slot frees.
 - **`web/`** — static webapp: `index.html` + `main.js` (navbar,
-  joysticks, buttons, WS, control handover), `settings.html` +
-  `settings.js` (log viewer), shared `styles.css`. No TypeScript, no
-  build step, no npm dependencies.
+  joysticks, buttons, WS, control handover), `logs.html` + `logs.js`
+  (log viewer), shared `styles.css`. No TypeScript, no build step, no
+  npm dependencies.
 
 ## Webapp layout
 
@@ -62,6 +62,31 @@ endpoints:
   (same effect as a webapp disconnect); returns `{"owner": ...}`. The
   webapp itself releases via the `release_control` WS message; this
   endpoint remains for out-of-band use.
+
+## Safety
+
+The link to a phone is unreliable — WiFi drops, the screen locks, the
+tab is backgrounded — and a naive relay would keep republishing the
+last stick value at 50 Hz, walking the robot away with nobody holding
+it. Three independent guards stop motion when the link goes quiet:
+
+- **WebSocket heartbeat** — the server pings each client every
+  `server.ws_heartbeat_s` and force-closes a socket that misses its
+  pong. This turns a half-open TCP connection (no clean FIN) into a real
+  disconnect, which runs the cleanup path (zero inputs, release control).
+- **Input watchdog** — the 50 Hz timer feeds neutral input (centred
+  sticks, released buttons) to the mapping whenever no stick/button
+  message has arrived within `safety.input_timeout_s`, so `/cmd_vel`
+  falls to zero instead of latching. This is the backstop that covers
+  any way the stream can stall, including a browser suspended before it
+  can send anything. The decision (`input_is_stale`, `neutral_inputs`)
+  is pure Python and unit-tested.
+- **Client-side visibility stop** — the webapp re-centres both sticks on
+  `visibilitychange → hidden`, so a tab switch or screen lock commands
+  zero immediately rather than waiting out the watchdog timeout.
+
+On disconnect the node also zeroes the shared stick/button state so a
+freshly connecting device cannot inherit the departed one's inputs.
 
 ## Topics
 
@@ -104,7 +129,9 @@ Python, shared by both nodes, unit-tested).
 - **Two touch joysticks** — left and right, each an x/y pair.
 - **9 buttons** — top 3 are fixed mode-select (Gait / Posture / Anim),
   bottom 6 are mode-dependent (the node sends labels to the webapp on
-  mode change so the UI relabels dynamically).
+  mode change so the UI relabels dynamically). A button press triggers a
+  short haptic tick via the Vibration API where the browser supports it
+  (Android Chrome; a no-op on iOS Safari).
 
 Default stick mapping (configurable in `config/webteleop.yaml`):
 - **Gait / Animation**: left stick = forward/strafe, right stick X = turn.
@@ -118,7 +145,8 @@ Default button mapping (bottom 6, per mode):
 ## Config
 
 All tunable values live in `config/webteleop.yaml`:
-- Server port
+- Server port and WebSocket heartbeat interval (`server.ws_heartbeat_s`)
+- Safety input-watchdog timeout (`safety.input_timeout_s`)
 - Stick deadband
 - Per-mode button→function bindings
 - Posture-mode scalar limits (x/y max, roll/pitch/yaw max, height range)
