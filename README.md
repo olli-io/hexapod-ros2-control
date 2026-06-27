@@ -16,6 +16,36 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 - Raspberry Pi 4 or 5 ( recommended OS: Pi OS lite ) driving servos over a Pimoroni Servo 2040 over USB serial. Current version tested on a 4GB rPi 4, but it may be runnable 2GB (no quarantees).
 - (Optional) Xiao Seeed ESP32-C3 for driving a front display (eye animations).
 
+## Quickstart ( Gazebo )
+
+1. **Prerequisites**
+   - Docker and docker-compose installed on the platform you are running this on.
+   - An X server reachable as `$DISPLAY`. As an example, on Arch linux — `echo $DISPLAY` should print something like
+     `:0`. No native ROS2 install needed.
+
+2. **First-time setup and launch**
+
+   ```
+   git clone git@github.com:olli-io/hexapod-ros2-control.git
+   cd hexapod-ros2-control
+   ./hexa dev --launch
+   ```
+
+   The first run builds the `hexa-dev` image (a few minutes), creates a
+   long-lived `hexa-dev` container, then opens a shell and launches the desktop
+   sim environment (sim + webteleop + teleop in one pane). ROS2 is already
+   sourced.
+
+3. **Control the hex in sim**
+   - Connect an XBox or XBox-equivalent controller to your setup (wired or bt) and control the hex.
+   - Alternatively, you can take your phone (on the same local network) and connect to {local-pc-ip}:8080 and control the hexapod via webteleop (you may need to adjust your firewall settings).
+
+That's the whole loop. See [`docs/dev-environment.md`](docs/dev-environment.md)
+for the pieces.
+
+> [!NOTICE]
+> This has only been run on arch linux so far. Should be fairly straightforward on linux. MacOs and Windows (WSL) success may vary.
+
 ## Build / run
 
 Development container ( simulation in Gazebo ) - [`docs/dev-environment.md`](docs/dev-environment.md).
