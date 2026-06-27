@@ -1,8 +1,21 @@
-# Hexapod
+# hexapod-ros2-control
 
-ROS2 control stack for a 6-leg / 18-DOF hexapod robot.
+ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 
-- **Hardware target**: Raspberry Pi 3 or 4 ( recommended OS: Pi OS lite ) driving a Pimoroni Servo 2040 over USB serial.
+> [!WARNING]
+> **Work in progress** — This project is under active development. APIs,
+> configuration, and behavior may change without notice, and some features are
+> incomplete or untested. Use at your own risk.
+
+**This repository is part of a multi-repo hexapod stack:**
+- Driver firmware for Pimoroni servo2040 - ['olli-io/hexapod-servo2040-driver'](https://github.com/olli-io/hexapod-servo2040-driver)
+- Esp32 firmware to drive an oled screen - ['olli-io/hexapod-esp32-display'](https://github.com/olli-io/hexapod-esp32-display)
+
+## Hardware target
+
+- Raspberry Pi 4 or 5 ( recommended OS: Pi OS lite ) driving servos over a Pimoroni Servo 2040 over USB serial. Current version tested on a 4GB rPi 4, but it may be runnable 2GB (no quarantees).
+- (Optional) Xiao Seeed ESP32-C3 for driving a front display (eye animations).
+
 
 ## Build / run
 

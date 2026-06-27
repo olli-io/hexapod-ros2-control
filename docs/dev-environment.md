@@ -36,8 +36,8 @@ No native ROS2 install needed.
 Clone the repository:
 
 ```
-git clone git@github.com/olli-io/hexapod
-cd hexapod
+git clone git@github.com:olli-io/hexapod-ros2-control.git
+cd hexapod-ros2-control
 ```
 
 Then open the dev container:
