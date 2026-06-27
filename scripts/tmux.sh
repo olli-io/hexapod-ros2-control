@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open a tmux session that runs sim+teleop+webteleop together in one pane and
-# an idle `hexa --dev` shell in the other, both sharing the hexa-dev container.
+# an idle `hexa dev` shell in the other, both sharing the hexa-dev container.
 #   ./scripts/tmux.sh            -> attach panes to the existing dev container
 #   ./scripts/tmux.sh --clean    -> kill+rebuild the container first, then start
 set -euo pipefail
@@ -15,7 +15,7 @@ for arg in "$@"; do
     case "${arg}" in
         --clean)         clean=1 ;;
         --test)          run_tests=1 ;;
-        --horizontal)    split_flag="-h" ;;
+        horizontal)      split_flag="-h" ;;
         *)
             echo "Unknown argument: ${arg}" >&2
             exit 1
@@ -57,13 +57,12 @@ fi
 # don't race on the first-time `docker compose up --build`.
 "${REPO_ROOT}/scripts/dev.sh" true
 
-# Pane 0 (left): drop into the dev container, launch sim in the background,
-# then start webteleop (background) + teleop (foreground) once /clock is up.
-tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/hexa --dev"
-tmux send-keys -t "${SESSION}:${WINDOW}.0" \
-    "pod sim & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; webteleop & teleop" Enter
+# Pane 0 (left): drop into the dev container and bring up the full sim stack
+# (sim + webteleop + teleop) via `pod launch` — the same stack `hexa dev --launch` runs.
+tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/hexa dev"
+tmux send-keys -t "${SESSION}:${WINDOW}.0" "pod launch" Enter
 
 # Pane 1 (right/below): idle dev shell for ad-hoc commands.
-tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/hexa --dev"
+tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/hexa dev"
 
 exec tmux attach-session -t "${SESSION}"

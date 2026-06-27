@@ -13,8 +13,8 @@ this is complete scaffolding and not only a dev solution.
 Dockerfile               # image definition: jazzy-desktop + ros_gz + ros2_control + dev user
 docker/entrypoint.sh     # sources /opt/ros/jazzy/setup.bash, then install/setup.bash if built
 docker-compose.yml       # mounts workspace, X11 socket, host network for DDS
-hexa                     # top-level host dispatcher (--dev, --tmux, kill)
-pod                      # in-container workspace CLI (build / sim / teleop)
+hexa                     # top-level host dispatcher (dev, prod, kill)
+pod                      # in-container workspace CLI (build / sim / teleop / webteleop / launch)
 scripts/dev.sh           # ensure single long-lived dev container, then docker exec into it
 scripts/kill.sh          # stop and remove the dev container
 scripts/tmux.sh          # tmux session with sim + teleop sharing one container
@@ -43,23 +43,24 @@ cd hexapod-ros2-control
 Then open the dev container:
 
 ```
-./hexa --dev
+./hexa dev
 ```
 
 Builds the `hexa-dev` image (takes a few minutes the first time), creates a
 long-lived `hexa-dev` container, and drops you at a shell inside `/workspace`
 (the repo, bind-mounted). ROS2 is already sourced for you. Subsequent
-`./hexa --dev` invocations `docker exec` into the same container instead of
+`./hexa dev` invocations `docker exec` into the same container instead of
 spawning a new one.
 
-To open a shell and immediately launch the desktop sim environment:
+To open a shell and immediately launch the desktop sim environment
+(runs `pod launch`: sim + webteleop + teleop in one pane):
 
 ```
-./hexa --dev --launch
+./hexa dev --launch
 ```
 
 To tear it down: `./hexa kill`. To rebuild from scratch (after Dockerfile
-edits): `./hexa --dev --clean`, which kills the container, rebuilds the
+edits): `./hexa dev --clean`, which kills the container, rebuilds the
 image, runs `pod build`, then drops you into a shell.
 
 ## Daily loop
@@ -70,18 +71,22 @@ Inside the container, use the `pod` CLI:
 pod build                       # colcon build --symlink-install
 pod sim                         # ros2 launch hexa_bringup sim.launch.py
 pod teleop                      # ros2 launch hexa_teleop teleop.launch.py
+pod webteleop                   # ros2 launch hexa_webteleop webteleop.launch.py
+pod launch                      # sim + webteleop + teleop, once /clock is up
 ```
 
 Extra args are forwarded, e.g. `pod build --packages-select hexa_kinematics`.
 `install/setup.bash` is already sourced in new shells.
 
-For the common sim + teleop pair, `./hexa --tmux` opens a tmux session with
-both panes attached to the same dev container (`vert` stacks the split).
+`./hexa dev --tmux` opens a tmux session with two panes on the same dev container:
+pane 0 runs `pod launch` (the full sim stack), pane 1 is an idle shell for
+ad-hoc commands (add `horizontal` to split side-by-side). It's the same stack as
+`./hexa dev --launch`, plus the spare shell.
 
 To build and run the full test suite in one shot:
 
 ```
-./hexa --dev --test             # runs `pod build`, then colcon test
+./hexa dev --test             # runs `pod build`, then colcon test
 ```
 
 Outside the container, on the host, the same workspace files are visible —
@@ -93,8 +98,8 @@ to write outside `/workspace`.
 These should each pop a window on your desktop:
 
 ```
-./hexa --dev rviz2
-./hexa --dev gz sim shapes.sdf
+./hexa dev rviz2
+./hexa dev gz sim shapes.sdf
 ```
 
 If you get `cannot open display`, run `xhost +local:docker` once on the host
@@ -119,7 +124,7 @@ When the Pimoroni Servo 2040 is connected:
 1. Plug it in; confirm with `lsusb` on the host. Note the device path
    (typically `/dev/ttyACM0`).
 2. Uncomment the `devices:` block in `docker-compose.yml`.
-3. Rebuild from scratch: `./hexa --dev --clean`.
+3. Rebuild from scratch: `./hexa dev --clean`.
 
 `usbutils` is already installed in the image, so `lsusb` inside the container
 works once the device is mapped in.
@@ -128,7 +133,7 @@ A controller plugged into the host is exposed via `/dev/input/event*`;
 `scripts/dev.sh` forwards the host's `input` group GID so `joy_node` inside
 the container can read it without root.
 
-## Production deployment (`./hexa --prod`)
+## Production deployment (`./hexa prod`)
 
 The dev container is x86_64, Gazebo-heavy, and built around a live source
 bind-mount — none of that fits the Pi. The prod path is a separate
@@ -152,21 +157,21 @@ Prerequisites on the Pi (Ubuntu Server 24.04, ARM64):
 
 Lifecycle:
 
-- `./hexa --prod build` — cross-build the ARM64 image, save it to
+- `./hexa prod build` — cross-build the ARM64 image, save it to
   `.deploy/hexa-prod_<sha>.tar.gz`. The tag and tarball are stamped with
   `git rev-parse --short HEAD` (with `-dirty` if the tree has changes).
-- `./hexa --prod deploy <user@host>` — `scp` the tarball plus
+- `./hexa prod deploy <user@host>` — `scp` the tarball plus
   `docker-compose.prod.yaml` and `.env.prod.sample` to `~/hexa-prod/` on
   the Pi, `docker load`, and `docker compose up -d`. The service comes up
   **cold**: the hardware component sits at `inactive` and the servo-rail
   relay stays open — container start does **not** energise the robot.
-- `./hexa --prod engage` (on the Pi, or via `ssh`) — transitions the
+- `./hexa prod engage` (on the Pi, or via `ssh`) — transitions the
   hardware component to `active` (relay click), then spawns
   `joint_state_broadcaster` and `joint_group_position_controller`. After
   this the robot is drivable.
-- `./hexa --prod disengage` — unloads the controllers and drops the
+- `./hexa prod disengage` — unloads the controllers and drops the
   hardware back to `inactive`. Relay opens; the robot goes limp.
-- `./hexa --prod {start|stop|restart|status|logs|shell|teleop}` —
+- `./hexa prod {start|stop|restart|status|logs|shell|teleop}` —
   routine container ops against the local `hexa-prod` service.
 
 The cold-start gate is implemented by passing the
@@ -182,7 +187,7 @@ lifecycle state is held back externally.
   attempts this but silently ignores failures.
 - **Files in `build/` / `install/` owned by root** — your host UID/GID didn't
   match what was baked into the image. Rebuild from scratch with
-  `./hexa --dev --clean`, which forwards `UID`/`GID`/`INPUT_GID` into the
+  `./hexa dev --clean`, which forwards `UID`/`GID`/`INPUT_GID` into the
   build. The issue only appears if you call `docker compose` directly
   without those env vars set.
 - **`ros2 topic list` empty across containers** — check `ROS_DOMAIN_ID` is the

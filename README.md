@@ -16,11 +16,19 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 - Raspberry Pi 4 or 5 ( recommended OS: Pi OS lite ) driving servos over a Pimoroni Servo 2040 over USB serial. Current version tested on a 4GB rPi 4, but it may be runnable 2GB (no quarantees).
 - (Optional) Xiao Seeed ESP32-C3 for driving a front display (eye animations).
 
-
 ## Build / run
 
-[`docs/dev-environment.md`](docs/dev-environment.md) for the dev/desktop container workflow.
-[`docs/robot-environment.md`](docs/robot-environment.md) for preparing a fresh Pi to receive deploys.
+Development container ( simulation in Gazebo ) - [`docs/dev-environment.md`](docs/dev-environment.md).
+Robot container ( build, deploy and run on rPi ) - [`docs/robot-environment.md`](docs/robot-environment.md).
+
+All host-side commands go through the `hexa` dispatcher in the repo root:
+
+- `./hexa dev` — drop into the ROS2 Jazzy dev container (`--clean` rebuilds it first, `--launch` runs the full sim stack instead of a shell).
+- `./hexa dev --tmux` — two-pane tmux session sharing one dev container: pane 0 runs the full sim stack, pane 1 is an idle shell.
+- `./hexa prod <subcommand>` — cross-build, deploy, and operate the production image on the robot.
+- `./hexa kill` — stop and remove a running dev container.
+
+See docs and `./hexa --help` 
 
 ## Configuration
 

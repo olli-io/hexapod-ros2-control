@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Entry point for hexapod project commands (host side).
 # Dispatches to per-process scripts under scripts/.
-#   ./hexa --dev [args...]   -> drop into the ROS2 Jazzy dev container
+#   ./hexa dev [args...]   -> drop into the ROS2 Jazzy dev container
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,17 +11,16 @@ usage() {
 Usage: ./hexa <command> [args...]
 
 Commands:
-  --dev [--clean] [--launch] [args...]
+  dev [--clean] [--launch] [--tmux] [args...]
                               Drop into the ROS2 Jazzy dev container (forwards args to the container).
                               --clean tears down the existing container, rebuilds the image,
                               and runs 'pod build' before opening the shell.
-                              --launch runs sim + teleop + webteleop in the shell (same as
-                              --tmux pane 0, without the second pane).
-  --tmux [--clean] [vert]     Open a tmux session with two panes sharing one dev container:
-                              pane 0 runs sim + teleop + webteleop together, pane 1 is an idle 'hexa --dev' shell.
-                              Default split is side-by-side; pass 'vert' to stack the panes.
-                              --clean rebuilds the container first.
-  --prod <subcommand> [args]  Cross-build + deploy + operate the production image on the robot.
+                              --launch runs 'pod launch' (sim + webteleop + teleop), the
+                              same stack as --tmux pane 0, without the second pane.
+                              --tmux opens a tmux session with two panes sharing one dev container:
+                              pane 0 runs sim + teleop + webteleop together, pane 1 is an idle
+                              'hexa dev' shell. Add 'horizontal' to split the panes side-by-side.
+  prod <subcommand> [args]    Cross-build + deploy + operate the production image on the robot.
                               Subcommands: build, deploy <host>, start, stop, restart, status,
                               logs [-f], shell, engage, disengage, teleop. Run with no
                               subcommand for the full list.
@@ -39,31 +38,33 @@ cmd="$1"
 shift
 
 case "${cmd}" in
-    --dev)
+    dev)
         clean=0
         launch=0
+        tmux=0
         dev_args=()
+        tmux_args=()
         for arg in "$@"; do
             case "${arg}" in
-                --clean)  clean=1 ;;
+                --tmux)   tmux=1 ;;
+                --clean)  clean=1; tmux_args+=("${arg}") ;;
                 --launch) launch=1 ;;
-                *)        dev_args+=("${arg}") ;;
+                *)        dev_args+=("${arg}"); tmux_args+=("${arg}") ;;
             esac
         done
+        if [[ ${tmux} -eq 1 ]]; then
+            exec "${REPO_ROOT}/scripts/tmux.sh" "${tmux_args[@]}"
+        fi
         if [[ ${clean} -eq 1 ]]; then
             "${REPO_ROOT}/scripts/kill.sh"
             "${REPO_ROOT}/scripts/dev.sh" pod build
         fi
         if [[ ${launch} -eq 1 ]]; then
-            exec "${REPO_ROOT}/scripts/dev.sh" bash -c \
-                "pod sim & echo 'waiting for sim (/clock)...'; until ros2 topic list 2>/dev/null | grep -q '^/clock\$'; do sleep 1; done; echo 'sim ready'; pod webteleop & pod teleop"
+            exec "${REPO_ROOT}/scripts/dev.sh" pod launch
         fi
         exec "${REPO_ROOT}/scripts/dev.sh" "${dev_args[@]}"
         ;;
-    --tmux)
-        exec "${REPO_ROOT}/scripts/tmux.sh" "$@"
-        ;;
-    --prod)
+    prod)
         exec "${REPO_ROOT}/scripts/prod.sh" "$@"
         ;;
     kill)

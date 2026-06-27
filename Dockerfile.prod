@@ -4,7 +4,7 @@
 # Two-stage: a fat builder with colcon + headers, a slim runtime that only
 # carries the compiled install/ tree plus its runtime apt deps.
 #
-# Build on the workstation via `./hexa --prod build`, which wraps:
+# Build on the workstation via `./hexa prod build`, which wraps:
 #   docker buildx build --platform linux/arm64 -f Dockerfile.prod ...
 
 # ---------------------------------------------------------------------------

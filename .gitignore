@@ -3,7 +3,7 @@ build/
 install/
 log/
 
-# Production image tarballs (`./hexa --prod build`)
+# Production image tarballs (`./hexa prod build`)
 .deploy/
 
 # Local prod env override (never committed; copy from .env.prod.sample)

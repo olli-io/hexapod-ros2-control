@@ -42,7 +42,7 @@ case "${state}" in
     "")
         # No container yet — rebuild the image, then create and start it
         # detached. Always rebuilding on a fresh start means Dockerfile
-        # edits take effect after `hexa kill && hexa --dev`,
+        # edits take effect after `hexa kill && hexa dev`,
         # without a separate rebuild step.
         # `UID` is a readonly builtin in bash, so we can't `export` it; pass
         # the values inline and docker compose reads them as env vars.

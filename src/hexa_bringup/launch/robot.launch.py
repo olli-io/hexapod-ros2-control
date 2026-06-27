@@ -89,7 +89,7 @@ def _bringup(context, *args, **kwargs):
     cm_parameters = [robot_description, controllers_yaml]
 
     # Cold-start: bring the hardware to `inactive` only. The relay stays open
-    # until `hexa --prod engage` activates the component.
+    # until `hexa prod engage` activates the component.
     if not engage:
         cm_parameters.append({
             "hardware_components_initial_state": {
@@ -195,7 +195,7 @@ def generate_launch_description():
             description=(
                 "If true, activate the hardware and spawn controllers at "
                 "launch. If false, boot cold (inactive, relay open, no "
-                "controllers); `hexa --prod engage` flips it live."
+                "controllers); `hexa prod engage` flips it live."
             ),
         ),
         OpaqueFunction(function=_bringup),

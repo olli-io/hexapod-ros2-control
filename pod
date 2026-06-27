@@ -11,22 +11,100 @@ Commands:
   sim         ros2 launch hexa_bringup sim.launch.py
   teleop      ros2 launch hexa_teleop teleop.launch.py
   webteleop   ros2 launch hexa_webteleop webteleop.launch.py
+  launch      sim (background) + webteleop + teleop, once /clock is up
   -h, --help  show this help
+
+Lifecycle flags (sim / teleop / webteleop / launch):
+  (none)      start it
+  --restart   stop any running instance, then start it
+  --kill      stop it, don't restart
 
 Extra args are forwarded to the underlying command,
 e.g. pod build --packages-select hexa_kinematics
 EOF
 }
 
+# ros2 launch invocation for each long-running command. The same string
+# doubles as the `pkill -f` pattern used to restart / kill it — each is a
+# unique substring of exactly one process' command line.
+declare -A LAUNCHERS=(
+    [sim]="ros2 launch hexa_bringup sim.launch.py"
+    [teleop]="ros2 launch hexa_teleop teleop.launch.py"
+    [webteleop]="ros2 launch hexa_webteleop webteleop.launch.py"
+)
+
+# Stop a launcher by SIGINT (ros2 launch shuts its child nodes down
+# cleanly), wait for it to exit, escalate to SIGKILL only if it refuses.
+stop_launcher() {
+    local pattern=$1 name=$2
+    if ! pgrep -f -- "$pattern" >/dev/null; then
+        echo "pod: $name not running"
+        return 0
+    fi
+    echo "pod: stopping $name..."
+    pkill -INT -f -- "$pattern" || true
+    for _ in $(seq 1 50); do
+        pgrep -f -- "$pattern" >/dev/null || break
+        sleep 0.1
+    done
+    if pgrep -f -- "$pattern" >/dev/null; then
+        echo "pod: $name did not stop, sending SIGKILL"
+        pkill -KILL -f -- "$pattern" || true
+    fi
+}
+
+# Split lifecycle flags out of the args; sets MODE and the REST array.
+parse_mode() {
+    MODE=start
+    REST=()
+    for a in "$@"; do
+        case "$a" in
+            --restart) MODE=restart ;;
+            --kill)    MODE=kill ;;
+            *)         REST+=("$a") ;;
+        esac
+    done
+}
+
+# start / --restart / --kill a single launcher command.
+run_launcher() {
+    local name=$1; shift
+    local pattern="${LAUNCHERS[$name]}"
+    parse_mode "$@"
+    case "$MODE" in
+        kill)    stop_launcher "$pattern" "$name" ;;
+        restart) stop_launcher "$pattern" "$name"; exec $pattern "${REST[@]}" ;;
+        start)   exec $pattern "${REST[@]}" ;;
+    esac
+}
+
+# start / --restart / --kill the full sim stack as one group.
+launch_group() {
+    parse_mode "$@"
+    if [ "$MODE" = kill ] || [ "$MODE" = restart ]; then
+        stop_launcher "${LAUNCHERS[teleop]}" teleop
+        stop_launcher "${LAUNCHERS[webteleop]}" webteleop
+        stop_launcher "${LAUNCHERS[sim]}" sim
+        [ "$MODE" = kill ] && return 0
+    fi
+    # Bring up the full desktop sim stack in one pane: sim in the
+    # background, then webteleop + teleop once /clock is publishing.
+    "$0" sim &
+    echo 'waiting for sim (/clock)...'
+    until ros2 topic list 2>/dev/null | grep -q '^/clock$'; do sleep 1; done
+    echo 'sim ready'
+    "$0" webteleop &
+    exec "$0" teleop "${REST[@]}"
+}
+
 cmd="${1:-}"
 [ $# -gt 0 ] && shift || true
 
 case "$cmd" in
-    build)         exec colcon build --symlink-install "$@" ;;
-    sim)           exec ros2 launch hexa_bringup sim.launch.py "$@" ;;
-    teleop)        exec ros2 launch hexa_teleop teleop.launch.py "$@" ;;
-    webteleop)     exec ros2 launch hexa_webteleop webteleop.launch.py "$@" ;;
-    -h|--help|"")  usage ;;
+    build)                 exec colcon build --symlink-install "$@" ;;
+    sim|teleop|webteleop)  run_launcher "$cmd" "$@" ;;
+    launch)                launch_group "$@" ;;
+    -h|--help|"")          usage ;;
     *)
         echo "pod: unknown command '$cmd'" >&2
         usage >&2

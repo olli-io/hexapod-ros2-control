@@ -170,7 +170,7 @@ gamepad teleop automatically.
 ## Testing
 
 ```
-./hexa --dev python3 -m pytest src/hexa_webteleop/test -q
+./hexa dev python3 -m pytest src/hexa_webteleop/test -q
 ```
 
 Tests cover config loading, button-label resolution, stick→cmd_vel

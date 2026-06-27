@@ -1,7 +1,7 @@
 # Robot environment
 
 Steps to take a fresh Raspberry Pi 4 or 5 from a blank SD card to a host ready
-to receive `./hexa --prod deploy`. See [`dev-environment.md`](dev-environment.md)
+to receive `./hexa prod deploy`. See [`dev-environment.md`](dev-environment.md)
 for the workstation side.
 
 ## Hardware
@@ -71,7 +71,7 @@ getent group input | cut -d: -f3            # note the input GID (example: 994)
 
 ## 4. First deploy from the workstation
 
-`./hexa --prod build` cross-compiles `linux/arm64` under QEMU, so the
+`./hexa prod build` cross-compiles `linux/arm64` under QEMU, so the
 workstation kernel needs an aarch64 binfmt_misc handler pointing at a
 **static** QEMU interpreter. On Arch this requires manual setup —
 installing `qemu-user-static` (extra) ships the static binary but no
@@ -95,8 +95,8 @@ automatically on `qemu-user-static` install — check
 registered aarch64 handler.
 
 ```
-./hexa --prod build
-./hexa --prod deploy pi@<host>
+./hexa prod build
+./hexa prod deploy pi@<host>
 ```
 
 This ships the image tarball, loads it, seeds `~/hexa-prod/.env` from
@@ -121,9 +121,9 @@ docker compose -f docker-compose.prod.yaml up -d
 ## 6. Engage and drive
 
 ```
-ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod engage'
-ssh pi@<host> 'cd ~/hexa-prod && ./hexa --prod teleop'
-./hexa --prod disengage
+ssh pi@<host> 'cd ~/hexa-prod && ./hexa prod engage'
+ssh pi@<host> 'cd ~/hexa-prod && ./hexa prod teleop'
+./hexa prod disengage
 ```
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
@@ -195,8 +195,8 @@ default, and the webapp prompts to claim control when it connects. See
 ## 7. Re-deploy
 
 ```
-./hexa --prod build
-./hexa --prod deploy pi@<host>
+./hexa prod build
+./hexa prod deploy pi@<host>
 ```
 
 The container restarts cold after each redeploy — re-run `engage`.

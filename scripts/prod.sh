@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hexapod prod-image lifecycle. Dispatched from `./hexa --prod <cmd>`.
+# Hexapod prod-image lifecycle. Dispatched from `./hexa prod <cmd>`.
 #
 # Workstation-only commands:
 #   build              cross-build ARM64 image, save to .deploy/<sha>.tar.gz
@@ -31,7 +31,7 @@ HARDWARE_COMPONENT_NAME="HexaSystem"
 
 usage() {
     cat <<EOF
-Usage: ./hexa --prod <command> [args...]
+Usage: ./hexa prod <command> [args...]
 
 Workstation:
   build                       Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
@@ -50,7 +50,7 @@ Local container (Pi or workstation):
 EOF
 }
 
-die() { echo "hexa --prod: $*" >&2; exit 1; }
+die() { echo "hexa prod: $*" >&2; exit 1; }
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
@@ -75,7 +75,7 @@ tty_flags() {
 require_container_running() {
     local state
     state="$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
-    [[ "${state}" == "running" ]] || die "container ${CONTAINER_NAME} is not running (state: ${state:-absent}). Run 'hexa --prod start' first."
+    [[ "${state}" == "running" ]] || die "container ${CONTAINER_NAME} is not running (state: ${state:-absent}). Run 'hexa prod start' first."
 }
 
 cmd_build() {
@@ -117,13 +117,13 @@ cmd_build() {
 
 cmd_deploy() {
     local host="${1:-}"
-    [[ -n "${host}" ]] || die "usage: hexa --prod deploy <user@host>"
+    [[ -n "${host}" ]] || die "usage: hexa prod deploy <user@host>"
 
     require_cmd scp
     require_cmd ssh
 
     local tarball="${DEPLOY_DIR}/latest.tar.gz"
-    [[ -e "${tarball}" ]] || die "no tarball at ${tarball}. Run 'hexa --prod build' first."
+    [[ -e "${tarball}" ]] || die "no tarball at ${tarball}. Run 'hexa prod build' first."
 
     # Resolve symlink so scp ships the actual file, not a dangling link.
     local resolved
@@ -153,7 +153,7 @@ docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 
     echo ">> Deployed. Service is up but the servo rail is cold."
-    echo "   Engage with:   ssh ${host} '~/hexa-prod && hexa --prod engage'  (or run engage locally)"
+    echo "   Engage with:   ssh ${host} '~/hexa-prod && hexa prod engage'  (or run engage locally)"
 }
 
 # `docker compose` invocation with the prod env / file pinned.
@@ -258,7 +258,7 @@ case "${sub}" in
     teleop)     cmd_teleop "$@" ;;
     -h|--help)  usage ;;
     *)
-        echo "hexa --prod: unknown command '${sub}'" >&2
+        echo "hexa prod: unknown command '${sub}'" >&2
         usage >&2
         exit 1
         ;;
