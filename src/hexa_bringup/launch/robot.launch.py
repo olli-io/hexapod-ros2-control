@@ -1,26 +1,4 @@
-"""Real-robot bringup.
-
-Brings up, in order:
-  1. robot_state_publisher (via hexa_description/launch/description.launch.py)
-     with use_sim:=false so the URDF tags out the hexa_hardware
-     SystemInterface plugin instead of gz_ros2_control.
-  2. ros2_control_node — the standalone controller manager. Loads
-     ros2_controllers.yaml from this package.
-  3. joint_state_broadcaster spawner, then joint_group_position_controller
-     spawner, chained on OnProcessExit so the controllers come up only
-     after the manager is alive. **Skipped when ``engage_on_start:=false``** —
-     in that mode the hardware boots in `inactive` and an external operator
-     promotes it (and spawns controllers) via `hexa --prod engage`.
-  4. The kinematics / gait / posture chain (ik_node, joint_command_bridge,
-     posture_node, control_node, gait_node), identical to sim.launch.py
-     except use_sim_time is false.
-  5. display_node (hexa_display) with the serial transport — relays
-     expression/gaze to the ESP32 face over /dev/serial0. Comes up
-     faceless (retrying in the background) if the display is absent.
-     Skipped entirely when ``enabled: false`` in hexa_display's
-     display.yaml.
-
-Run with::
+"""Real-robot bringup: controller manager, kinematics/gait/posture chain, display.
 
     ros2 launch hexa_bringup robot.launch.py
     ros2 launch hexa_bringup robot.launch.py engage_on_start:=false
@@ -49,20 +27,15 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
-# Name of the <ros2_control> block declared in hexa_description's URDF
-# xacro. controller_manager keys its hardware_components_initial_state map
-# off this exact string.
+# Must match the <ros2_control> block name in hexa_description's URDF xacro.
 HARDWARE_COMPONENT_NAME = "HexaSystem"
 
 
 def _display_params(transport: str) -> tuple[dict, bool]:
-    """hexa_display's display.yaml params and its `enabled` flag.
+    """hexa_display's display.yaml params (transport forced) and `enabled` flag.
 
-    Returned as a plain dict (with the launch-appropriate transport
-    forced) rather than a params-file path: the YAML scopes its entries
-    under the exact node name, and exact-name entries outrank the
-    wildcard `/**` file launch_ros generates for dict overrides — so a
-    `{"transport": ...}` dict after the file would silently lose.
+    Returned as a dict, not a file path: exact-name YAML entries would
+    outrank a transport override layered on top of the params file.
     """
     path = os.path.join(
         get_package_share_directory("hexa_display"), "config", "display.yaml"
@@ -94,7 +67,7 @@ def _bringup(context, *args, **kwargs):
     )
 
     # The controller manager needs robot_description in its own parameters,
-    # not just on the topic; re-expand xacro here for that.
+    # not just on the topic; re-expand xacro here.
     xacro_path = PathJoinSubstitution([
         pkg_hexa_description, "urdf", "hexapod.urdf.xacro",
     ])
@@ -115,10 +88,8 @@ def _bringup(context, *args, **kwargs):
 
     cm_parameters = [robot_description, controllers_yaml]
 
-    # Cold-start mode: tell the controller manager to bring the hardware
-    # component up to `inactive` only, not `active`. The plugin's
-    # `on_activate` (which drives the servo-rail relay high) does not fire
-    # until `hexa --prod engage` transitions the component to active.
+    # Cold-start: bring the hardware to `inactive` only. The relay stays open
+    # until `hexa --prod engage` activates the component.
     if not engage:
         cm_parameters.append({
             "hardware_components_initial_state": {
@@ -222,12 +193,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "engage_on_start", default_value="true",
             description=(
-                "If true (default), the hardware component is brought to "
-                "`active` at launch and controllers are spawned — the relay "
-                "energises and the robot is immediately drivable. Set to "
-                "false on the real robot to boot cold: the component stops "
-                "at `inactive`, the relay stays open, and the controllers "
-                "are not spawned. `hexa --prod engage` flips it live."
+                "If true, activate the hardware and spawn controllers at "
+                "launch. If false, boot cold (inactive, relay open, no "
+                "controllers); `hexa --prod engage` flips it live."
             ),
         ),
         OpaqueFunction(function=_bringup),

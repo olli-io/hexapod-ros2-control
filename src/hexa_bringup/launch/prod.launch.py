@@ -1,21 +1,14 @@
-"""Production bringup — the CMD of the `hexa-prod` container.
+"""Production entrypoint (CMD of the `hexa-prod` container).
 
-Composes the real-robot stack with the safety gate engaged and brings up
-both teleop sources in the same process tree, so a freshly-started
-container is one `hexa --prod engage` away from being drivable.
+Wraps the robot stack with production policy: it composes robot.launch.py —
+the reusable robot — with the gamepad and web teleop input sources, which
+robot.launch.py deliberately omits. Boots cold (``engage_on_start:=false``,
+relay open) so the container is one `hexa --prod engage` away from drivable.
 
-  1. robot.launch.py with ``engage_on_start:=false`` — the hardware
-     component stops at `inactive`, the servo-rail relay stays open, no
-     controllers are spawned.
-  2. teleop.launch.py — joy_publisher + teleop_joy publishing /cmd_vel
-     and /body/pose. Safe to run cold: with no controllers loaded, the
-     commands have no consumer.
-  3. webteleop.launch.py — web teleop node hosting an HTTP + WebSocket
-     server on port 8080. Coexists with the gamepad via /teleop/owner
-     arbitration; the gamepad owns by default, the webapp must claim
-     control explicitly.
-
-Run with::
+  1. robot.launch.py (engage_on_start:=false) — the robot, brought up cold.
+  2. teleop.launch.py — gamepad → /cmd_vel + /body/pose.
+  3. webteleop.launch.py — web UI → /cmd_vel, on port 8080. Coexists with the
+     gamepad via /teleop/owner arbitration (gamepad owns by default).
 
     ros2 launch hexa_bringup prod.launch.py
 """

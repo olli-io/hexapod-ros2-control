@@ -1,27 +1,4 @@
-"""Top-level sim bringup.
-
-Composes the existing ``hexa_simulation`` launch (Gazebo + ros2_control
-+ joint_group_position_controller) with the hexapod kinematics chain:
-
-- ``ik_node`` (hexa_kinematics) — composes ``/body/pose_target`` with
-  ``/legs/targets`` and publishes ``/joint_commands`` (JointState).
-- ``joint_command_bridge`` (hexa_kinematics) — translates
-  ``/joint_commands`` to ``/joint_group_position_controller/commands``
-  (Float64MultiArray) for the sim controller.
-- ``posture_node`` (hexa_posture) — turns ``/cmd_vel`` + ``/body/pose``
-  into ``/body/pose_target``. Launched here with the animation stack
-  trimmed to ``["still"]`` so the breathing bob doesn't mask
-  gait-induced body motion while locomotion is being tuned.
-- ``control_node`` (hexa_control) — clamps ``/cmd_vel`` and republishes
-  the result as ``GaitParams`` on ``/gait/params`` at 50 Hz.
-- ``gait_node`` (hexa_gait) — runs the tripod gait engine, publishing
-  per-leg foot targets on ``/legs/targets`` at 50 Hz.
-- ``display_node`` (hexa_display) — relays expression/gaze to the
-  ESP32 face. Launched with the stub transport, so the decoded frames
-  show up in the console instead of going out over UART. Skipped
-  entirely when ``enabled: false`` in hexa_display's display.yaml.
-
-Run with::
+"""Top-level sim bringup: hexa_simulation (Gazebo) + the kinematics/gait/posture chain.
 
     ros2 launch hexa_bringup sim.launch.py
 """
@@ -38,13 +15,10 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _display_params(transport: str) -> tuple[dict, bool]:
-    """hexa_display's display.yaml params and its `enabled` flag.
+    """hexa_display's display.yaml params (transport forced) and `enabled` flag.
 
-    Returned as a plain dict (with the launch-appropriate transport
-    forced) rather than a params-file path: the YAML scopes its entries
-    under the exact node name, and exact-name entries outrank the
-    wildcard `/**` file launch_ros generates for dict overrides — so a
-    `{"transport": ...}` dict after the file would silently lose.
+    Returned as a dict, not a file path: exact-name YAML entries would
+    outrank a transport override layered on top of the params file.
     """
     path = os.path.join(
         get_package_share_directory("hexa_display"), "config", "display.yaml"
