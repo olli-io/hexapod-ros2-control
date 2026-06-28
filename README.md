@@ -94,6 +94,7 @@ This is a colcon workspace; all ROS2 packages live under `src/`. Format: `src/<p
 - `src/hexa_posture/` (ament_python) — Posture engine node; turns user body-pose input + gait state into a clamped body pose target. Owns body-pose animations (sway, breathing, lean…).
 - `src/hexa_control/` (ament_python) — Velocity shaping + gait selection: maps `cmd_vel` to gait params and chooses which gait runs.
 - `src/hexa_teleop/` (ament_python) — Joystick/keyboard → `cmd_vel` and `/body/pose`.
+- `src/hexa_webteleop/` (ament_python) — Web-app teleop: hosts an HTTP + WebSocket server for phone/tablet control, publishing the same topics as `hexa_teleop` via a shared mapping; arbitrates with the gamepad over `/teleop/owner`.
 - `src/hexa_display/` (ament_python) — Face relay: maps gait state / `cmd_vel` / posture / battery to expression + gaze commands for the ESP32 OLED face over UART (stub transport in sim).
 - `src/hexa_simulation/` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
 - `src/hexa_bringup/` (ament_cmake) — Top-level launch files wiring everything together: `robot.launch.py`, `sim.launch.py`.
@@ -104,6 +105,7 @@ Each arrow is "depends on" — the higher-level package imports the lower-level 
 
 - Main chain: `hexa_teleop` → `hexa_control` → `hexa_gait` → `hexa_kinematics` → `hexa_hardware` → Servo 2040 / Gazebo
 - Body-pose side channel: `hexa_teleop` → `hexa_posture` → `hexa_kinematics` (parallel to the gait chain, composed in the IK node)
+- Web teleop: `hexa_webteleop` → `hexa_teleop` (reuses its mapping) → `cmd_vel` / `/body/pose` (interchangeable with the gamepad at the top of both chains)
 - `hexa_bringup` → `hexa_control`, `hexa_posture`, `hexa_display` (composes both chains via launch files)
 - Sink: `hexa_display` subscribes to gait/posture/hardware topics; nothing depends on it.
 - Leaves consumed by the above: `hexa_description`, `hexa_interfaces`, `hexa_simulation`
