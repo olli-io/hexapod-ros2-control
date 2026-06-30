@@ -62,6 +62,13 @@ Full definitions in `docs/leg-phases.md`. Do not introduce new synonyms.
 - `ament_cmake` (C++): only where required — pluginlib (`hexa_hardware`), description, simulation, and bringup composition.
 - Do not reach for C++ speculatively for performance. Profile first.
 
+## In-progress C++ port of hexa_gait
+
+`hexa_gait_cpp` is an `ament_cmake` C++ port of `hexa_gait`, built **side-by-side** with the Python package (both compile). `hexa_bringup` still launches the Python `gait_node`; cutover and deletion of the Python package are later tasks.
+
+- **Kinematics stubs (must be replaced).** `hexa_gait_cpp` depends on the `hexa_kinematics` surface (`LegSpec`, `load_leg_specs`, `leg_to_body`, `forward_kinematics`, `load_standing_pose`, `load_initial_pose`), which is still Python. Until `hexa_kinematics` is ported to C++ (and `leg_specs` moves to `hexa_description`), these live as **compile-only placeholders** in `src/hexa_gait_cpp/include/hexa_gait_cpp/kinematics_stub.hpp` (namespace `hexa_gait::kin`). Every stub returns zeros / degenerate geometry: the engine builds and the state machine runs, but nominal / initial / reseat stance **values are wrong** until the real port lands. Each stub is tagged `// TODO(kinematics-port)`; the eventual swap is a one-line include change plus a namespace alias. Keep the stub signatures in lockstep with the Python sources they mirror.
+- **Tests deferred.** The 15 `hexa_gait` pytest suites are **not** yet ported to `ament_cmake_gtest` (separate task). The C++ engine library links without ROS, so the gtest targets can exercise it directly (mirror `hexa_hardware`'s test setup). `CMakeLists.txt` has an empty `BUILD_TESTING` block flagged with a TODO.
+
 ## Documentation formatting
 
 - **No markdown tables in `.md` files.** Anywhere — package READMEs, `/docs/`, top-level README.

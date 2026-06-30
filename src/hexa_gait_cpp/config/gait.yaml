@@ -1,0 +1,162 @@
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
+# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
+# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
+# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.
+
+# hexa_gait engine parameters. See hexa_gait/README.md for engine
+# behavior — this file describes the knobs themselves, not how the
+# engine consumes them.
+#
+# Units: m, s, rad.
+
+# ─── Engine basics ──────────────────────────────────────────────────
+
+# Engine tick period (s).
+controller_dt: 0.02
+
+# Magnitude below which a cmd_vel component is treated as zero.
+cmd_zero_tol: 1e-4
+
+# Default gait at engine startup. Must be a key in
+# ``hexa_gait.gaits.STRATEGIES``. hexa_control seeds
+# /gait/params.gait_name from its own ``default_gait`` on cold start;
+# the teleop D-pad cycler walks through the list in ``teleop_joy.yaml``.
+# Per-gait knobs (``duty_factor``, ``unstable``) live on the strategy
+# classes in ``hexa_gait/hexa_gait/gaits/`` — the single source of
+# truth — and are read from the active strategy at runtime.
+default_gait: tripod
+
+# ─── Stride geometry ────────────────────────────────────────────────
+
+# Design per-leg stride magnitude (m): the maximum body-frame
+# displacement a foot covers between AEP and PEP in one stance.
+# Lower stride_length → tighter joint use, more headroom against
+# geometry.yaml limits, lower v_max.
+stride_length: 0.1
+
+# Swing-arc apex clearance (m) above the higher of origin_z / target_z.
+step_height: 0.08
+
+# Lateral swing offset (m). 0 keeps swings purely fore/aft.
+swing_width: 0.0
+
+# ─── Cycle timing ───────────────────────────────────────────────────
+
+# Swing-phase duration bounds (s). Both anchor per-gait cycle-time
+# bounds through the same β-scaling:
+#     min_cycle_time(β) = min_swing_time / (1 − β)
+#     max_cycle_time(β) = max_swing_time / (1 − β)
+# The maximum velocity envelope is a combination of stride_length and
+# swing_time. Max_swing_time is a slow-end clamp: when swing time
+# would rise above it, velocity will start regulating via shorter
+# stride lenght.
+#
+# DUE TO HOW GAIT FOOT PLACEMENT WORKING DURING LINEAR REVERSALS OF
+# DIRECTION, THESE SHOULD BE KEPT FAIRLY CLOSE TOGETHER ( max should
+# be maximum 25% higher than min_swing_time )
+#
+# Values below anchor at tripod (β=0.5):
+# min_cycle = 0.60 s, max_cycle = 1.00 s; crawl (β=2/3) gets 0.90 /
+# 1.50 s; ripple (β=5/6) gets 1.80 / 3.00 s.
+min_swing_time: 0.30
+max_swing_time: 0.4
+
+# ─── Velocity envelope ──────────────────────────────────────────────
+
+# Maximum body yaw rate (rad/s). Explicit knob (not geometry-derived):
+# the geometric ceiling from leg radii is well above what feels
+# comfortable, so this trades reach for tunable feel.
+angular_z_max: 3.00
+
+# Fraction of an envelope-overrun cut allocated to yaw vs translation
+# in scale_to_envelope. 0.5 cuts both equally (direction preserved);
+# >0.5 preserves more yaw at the cost of translation; 1.0 is pure
+# yaw priority. Trade-off is direction fidelity for yaw responsiveness
+# at the extremes.
+#
+# This value anchors at tripod (β=0.5). The effective per-gait bias
+# eases back toward neutral as duty factor grows:
+#     yaw_bias_eff(β) = 0.5 + (yaw_bias − 0.5) · (1.5 − β)
+# Slower gaits sit closer to neutral (crawl β=2/3 → 0.583,
+# ripple β=5/6 → 0.567) since their already-small linear_max can't
+# absorb an aggressive cut on top of the gait's intrinsic slowness.
+#
+# You may need to experiment with this a bit to find a value that feels
+# natural for you.
+yaw_bias: 0.6
+
+# ─── PAUSING descent ────────────────────────────────────────────────
+
+# Upper clamp (s) on the PAUSING / disengagement descent that lowers
+# previously-airborne feet straight down to the ground. Lower bound is
+# min_swing_time; per-leg duration scales with the Z drop using the
+# fastest gait's per-leg foot-velocity ceiling
+# (stride_length / min_swing_time, derived in code — not a knob).
+max_reset_time: 1.2
+
+# ─── Pause state machine ────────────────────────────────────────────
+
+# Debounce (s) on cmd_vel → 0 before the engine commits to PAUSING.
+# Wider window = fewer spurious pauses on joystick zero crossings.
+pause_debounce_delay: 0.4
+
+# Dwell (s) in PAUSED before the engine kicks off RESEATING back to
+# the nominal footprint.
+pause_to_reseat_delay: 0.2
+
+# Short PAUSED → RESEATING dwell (s) used while a gait change is
+# pending, so a mid-walk gait switch feels immediate instead of
+# waiting out the full pause_to_reseat_delay.
+gait_change_pause_to_reseat_delay: 0.1
+
+# ─── INITIALIZE ladder (cold start) ─────────────────────────────────
+
+initialize:
+  # Seconds per mirroring pair during PLACE_FEET. Three pairs ⇒ total
+  # PLACE_FEET ≈ 3 * pair_swing_time.
+  pair_swing_time: 0.4
+  # Seconds for the LIFT_BODY z-ramp.
+  lift_body_time: 0.6
+  # Swing-arc clearance (m) added above each leg's apex during
+  # PLACE_FEET. Small because the folded foot already sits well above
+  # the ground.
+  swing_clearance: 0.04
+  # Body-frame offset (m) from the floor (with body on belly) of the
+  # IK target at the end of each PLACE_FEET swing. Must clear the foot
+  # collision sphere (~foot_radius below the IK target at the
+  # PLACE_FEET endpose), otherwise Gazebo contact resolution lifts the
+  # chassis off its belly before LIFT_BODY starts. ~foot_radius
+  # (geometry.yaml foot.radius = 0.01) leaves a small real-clearance
+  # margin.
+  place_feet_clearance: 0.012
+
+# ─── RESEAT ladder ──────────────────────────────────────────────────
+
+reseat:
+  # Seconds the target pose.z must stay unchanged before the
+  # STAND → RESEATING path fires after a height edit. Distinct from
+  # ``pause_to_reseat_delay`` above, which gates the PAUSED → RESEATING
+  # path. Bigger = less twitchy on intermediate D-pad releases.
+  pose_settle_delay: 0.5
+  # Dead-band (m) on |target_z − applied_z| for the STAND → RESEATING
+  # trigger. Above the float-arithmetic noise on the joystick →
+  # integrator → topic round-trip; tighter epsilons inside the engine
+  # drive the settle timer.
+  height_change_threshold: 0.002
+  # Seconds per mirroring pair during the reseat swing. Matches
+  # initialize.pair_swing_time so the two ladders feel visually
+  # symmetric.
+  pair_swing_time: 0.2
+  # Seconds the ladder dwells between successive pair swings so each
+  # pair visibly arrives before the next lifts off. No dwell before
+  # the first pair or after the last; only between.
+  pair_dwell_time: 0.05
+  # Swing-arc clearance (m) above the standing footprint mid-swing.
+  # Smaller than initialize.swing_clearance because feet come off a
+  # planted standing pose, not from above the body.
+  swing_clearance: 0.025
+
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
+# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
+# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
+# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.
