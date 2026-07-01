@@ -7,9 +7,13 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -40,15 +44,29 @@ def generate_launch_description():
 
     common_params = [{"use_sim_time": True}]
 
+    # Select the Python or C++ port of each subsystem. Default keeps the Python
+    # nodes; set the arg true to run the ament_cmake ports (built side-by-side).
+    # The ports are drop-in: same node names, topics, message types, and params.
+    use_cpp_kinematics = LaunchConfiguration("use_cpp_kinematics")
+    use_cpp_gait = LaunchConfiguration("use_cpp_gait")
+    kinematics_pkg = PythonExpression(
+        ["'hexa_kinematics_cpp' if '", use_cpp_kinematics,
+         "'.lower() in ('true', '1') else 'hexa_kinematics'"]
+    )
+    gait_pkg = PythonExpression(
+        ["'hexa_gait_cpp' if '", use_cpp_gait,
+         "'.lower() in ('true', '1') else 'hexa_gait'"]
+    )
+
     ik_node = Node(
-        package="hexa_kinematics",
+        package=kinematics_pkg,
         executable="ik_node",
         output="screen",
         parameters=common_params,
     )
 
     joint_command_bridge = Node(
-        package="hexa_kinematics",
+        package=kinematics_pkg,
         executable="joint_command_bridge",
         output="screen",
         parameters=common_params,
@@ -72,13 +90,28 @@ def generate_launch_description():
     )
 
     gait_node = Node(
-        package="hexa_gait",
+        package=gait_pkg,
         executable="gait_node",
         output="screen",
         parameters=common_params,
     )
 
     actions = [
+        # Defaults honour the HEXA_CPP env var (set by `hexa dev --cpp`), so the
+        # whole sim stack flips to the C++ ports without per-command args. An
+        # explicit `use_cpp_*:=...` on the command line still overrides.
+        DeclareLaunchArgument(
+            "use_cpp_kinematics",
+            default_value=os.environ.get("HEXA_CPP", "false"),
+            description="Run the C++ hexa_kinematics_cpp nodes instead of the "
+                        "Python hexa_kinematics nodes.",
+        ),
+        DeclareLaunchArgument(
+            "use_cpp_gait",
+            default_value=os.environ.get("HEXA_CPP", "false"),
+            description="Run the C++ hexa_gait_cpp gait_node instead of the "
+                        "Python hexa_gait gait_node.",
+        ),
         sim,
         ik_node,
         joint_command_bridge,

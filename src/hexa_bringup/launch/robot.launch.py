@@ -54,6 +54,22 @@ def _bringup(context, *args, **kwargs):
     engage_on_start = LaunchConfiguration("engage_on_start").perform(context)
     engage = engage_on_start.lower() in ("1", "true", "yes")
 
+    # Select the Python or C++ port of each subsystem. Default keeps the Python
+    # nodes; set the arg true to run the ament_cmake ports (built side-by-side).
+    # The ports are drop-in: same node names, topics, message types, and params.
+    use_cpp_kinematics = LaunchConfiguration("use_cpp_kinematics").perform(context)
+    use_cpp_gait = LaunchConfiguration("use_cpp_gait").perform(context)
+    kinematics_pkg = (
+        "hexa_kinematics_cpp"
+        if use_cpp_kinematics.lower() in ("1", "true", "yes")
+        else "hexa_kinematics"
+    )
+    gait_pkg = (
+        "hexa_gait_cpp"
+        if use_cpp_gait.lower() in ("1", "true", "yes")
+        else "hexa_gait"
+    )
+
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
@@ -116,16 +132,16 @@ def _bringup(context, *args, **kwargs):
     )
 
     ik_node = Node(
-        package="hexa_kinematics", executable="ik_node", output="screen",
+        package=kinematics_pkg, executable="ik_node", output="screen",
     )
     joint_command_bridge = Node(
-        package="hexa_kinematics", executable="joint_command_bridge", output="screen",
+        package=kinematics_pkg, executable="joint_command_bridge", output="screen",
     )
     control_node = Node(
         package="hexa_control", executable="control_node", output="screen",
     )
     gait_node = Node(
-        package="hexa_gait", executable="gait_node", output="screen",
+        package=gait_pkg, executable="gait_node", output="screen",
     )
 
     actions = [
@@ -197,6 +213,21 @@ def generate_launch_description():
                 "launch. If false, boot cold (inactive, relay open, no "
                 "controllers); `hexa prod engage` flips it live."
             ),
+        ),
+        # Defaults honour the HEXA_CPP env var (set by `hexa dev --cpp`), so the
+        # whole chain flips to the C++ ports without per-command args. An
+        # explicit `use_cpp_*:=...` on the command line still overrides.
+        DeclareLaunchArgument(
+            "use_cpp_kinematics",
+            default_value=os.environ.get("HEXA_CPP", "false"),
+            description="Run the C++ hexa_kinematics_cpp nodes instead of the "
+                        "Python hexa_kinematics nodes.",
+        ),
+        DeclareLaunchArgument(
+            "use_cpp_gait",
+            default_value=os.environ.get("HEXA_CPP", "false"),
+            description="Run the C++ hexa_gait_cpp gait_node instead of the "
+                        "Python hexa_gait gait_node.",
         ),
         OpaqueFunction(function=_bringup),
     ])

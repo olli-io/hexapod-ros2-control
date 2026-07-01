@@ -11,13 +11,17 @@ cd "${REPO_ROOT}"
 
 CONTAINER_NAME="hexa-dev"
 
-# Extract --test from the front of the arg list. When set, run colcon tests
-# after the main command (which defaults to `pod build` in test mode).
+# Extract --test / --cpp from the arg list. --test runs colcon tests after the
+# main command (which defaults to `pod build` in test mode). --cpp exports
+# HEXA_CPP=1 into the container so the bringup launch files default to the C++
+# ports (hexa_kinematics_cpp / hexa_gait_cpp).
 run_tests=0
+cpp=0
 args=()
 for arg in "$@"; do
     case "${arg}" in
         --test) run_tests=1 ;;
+        --cpp)  cpp=1 ;;
         *)      args+=("${arg}") ;;
     esac
 done
@@ -59,14 +63,19 @@ esac
 exec_flags=(-i)
 [ -t 0 ] && exec_flags=(-it)
 
+# Forward the C++-port toggle into the container as an env var. Applied per
+# `docker exec`, so it works even on an already-running container.
+env_flags=()
+[[ ${cpp} -eq 1 ]] && env_flags=(-e HEXA_CPP=1)
+
 if [[ ${run_tests} -eq 1 ]]; then
     # In test mode the main command defaults to `pod build` so a bare
     # `dev.sh --test` means "build then test".
-    docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" \
+    docker exec "${exec_flags[@]}" "${env_flags[@]}" "${CONTAINER_NAME}" \
         /usr/local/bin/entrypoint.sh "${@:-pod build}"
-    exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" \
+    exec docker exec "${exec_flags[@]}" "${env_flags[@]}" "${CONTAINER_NAME}" \
         /usr/local/bin/entrypoint.sh bash -c \
         "colcon test --event-handlers console_direct+ && colcon test-result --verbose"
 fi
 
-exec docker exec "${exec_flags[@]}" "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh "${@:-bash}"
+exec docker exec "${exec_flags[@]}" "${env_flags[@]}" "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh "${@:-bash}"

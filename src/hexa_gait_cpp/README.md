@@ -24,19 +24,19 @@ Python `gait_node` until the C++ node is verified and cut over.
   GAIT / PAUSING / PAUSED / RESUMING / FOLDING / RESEATING state machine.
 - Math uses Eigen (`Vec3 = Eigen::Vector3d`); YAML uses `yaml-cpp`.
 
-## Temporary kinematics stub
+## Kinematics
 
-`include/hexa_gait_cpp/kinematics_stub.hpp` (namespace `hexa_gait::kin`) is a
-**placeholder** for the `hexa_kinematics` surface (`LegSpec`, `load_leg_specs`,
-`leg_to_body`, `forward_kinematics`, `load_standing_pose`, `load_initial_pose`),
-which is still Python. Every stub returns zeros / degenerate geometry, so:
+`include/hexa_gait_cpp/kinematics.hpp` includes the real C++ kinematics library
+(`hexa_kinematics_cpp`) and aliases its namespace as `hexa_gait::kin`, providing
+the surface the engine consumes (`LegSpec`, `load_leg_specs`, `leg_to_body`,
+`forward_kinematics`, `load_standing_pose`, `load_initial_pose`). Because both
+packages share the same underlying types (`Vec3 = Eigen::Vector3d`,
+`JointAngles = std::array<double, 3>`), no engine code changed — nominal /
+initial / reseat stance values are now real geometry.
 
-- The engine **builds** and the state machine **runs** — message flow and state
-  transitions are exercisable.
-- Nominal / initial / reseat stance **values are wrong** until `hexa_kinematics`
-  is ported to C++ (and `leg_specs` moves to `hexa_description`). Replace the
-  stub then — each function is tagged `// TODO(kinematics-port)` and the swap is
-  a one-line include change plus a namespace alias.
+This replaced the former compile-only `kinematics_stub.hpp` (which returned
+zeros). The kinematics library's exported surface is ROS-free (Eigen + yaml-cpp
+only), so the engine library still links without `rclcpp`.
 
 ## Tests
 

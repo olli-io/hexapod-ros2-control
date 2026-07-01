@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hexa_kinematics_cpp</name>
+  <version>0.0.1</version>
+  <description>C++ port of hexa_kinematics: forward / inverse kinematics, body
+  frame transforms, and the IK and joint-command-bridge nodes. The pure library
+  (leg geometry, IK, leg specs, body transforms, joint config) links without
+  rclcpp and is unit-testable standalone; only the node executables touch ROS.
+  Built side-by-side with the Python hexa_kinematics until the cutover. The gait
+  engine (hexa_gait_cpp) consumes this library through a namespace alias
+  (hexa_gait::kin).</description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>ament_index_cpp</depend>
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>hexa_interfaces</depend>
+  <depend>eigen</depend>
+  <depend>yaml-cpp</depend>
+
+  <exec_depend>hexa_description</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

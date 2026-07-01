@@ -17,7 +17,7 @@
 #include "hexa_gait_cpp/fold.hpp"
 #include "hexa_gait_cpp/gaits/base.hpp"
 #include "hexa_gait_cpp/initialize.hpp"
-#include "hexa_gait_cpp/kinematics_stub.hpp"
+#include "hexa_gait_cpp/kinematics.hpp"
 #include "hexa_gait_cpp/leg_output.hpp"
 #include "hexa_gait_cpp/pause.hpp"
 #include "hexa_gait_cpp/reseat.hpp"
@@ -199,7 +199,7 @@ class Engine {
   double reseat_target_height_ = 0.0;
 };
 
-// ── YAML builders (use the kinematics stub until hexa_kinematics is ported) ──
+// ── YAML builders (backed by the hexa_kinematics_cpp library via kin::) ──
 
 std::map<std::string, Vec3> nominal_stance_from_yaml(
     const std::string& geometry_yaml, const std::string& standing_pose_yaml);

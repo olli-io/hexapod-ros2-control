@@ -7,7 +7,7 @@
 #include <map>
 #include <string>
 
-#include "hexa_gait_cpp/kinematics_stub.hpp"
+#include "hexa_gait_cpp/kinematics.hpp"
 #include "hexa_gait_cpp/leg_output.hpp"
 #include "hexa_gait_cpp/types.hpp"
 
