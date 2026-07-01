@@ -28,7 +28,7 @@
 
 #include "hexa_kinematics_cpp/body_transform.hpp"
 #include "hexa_kinematics_cpp/leg_ik.hpp"
-#include "hexa_kinematics_cpp/leg_specs.hpp"
+#include "hexa_kinematics_cpp/description_loader.hpp"
 
 namespace {
 

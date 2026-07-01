@@ -4,8 +4,7 @@
 #include <stdexcept>
 
 #include "hexa_gait_cpp/gaits/base.hpp"
-#include "hexa_gait_cpp/initialize.hpp"
-#include "hexa_gait_cpp/validation.hpp"
+#include "hexa_gait_cpp/stand_transition.hpp"
 
 namespace hexa_gait {
 

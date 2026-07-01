@@ -4,7 +4,6 @@
 #include <cmath>
 
 #include "hexa_kinematics_cpp/body_transform.hpp"
-#include "hexa_kinematics_cpp/leg_geometry.hpp"
 #include "hexa_kinematics_cpp/leg_ik.hpp"
 
 namespace {

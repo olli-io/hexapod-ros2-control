@@ -26,11 +26,9 @@ add_library(${PROJECT_NAME} SHARED
   src/clock.cpp
   src/trajectory.cpp
   src/gaits/base.cpp
-  src/gaits/common.cpp
   src/gaits/registry.cpp
   src/pause.cpp
-  src/initialize.cpp
-  src/fold.cpp
+  src/stand_transition.cpp
   src/reseat.cpp
   src/stability.cpp
   src/limits.cpp
@@ -80,9 +78,38 @@ install(
 )
 
 if(BUILD_TESTING)
-  # TODO(tests): port the 15 pytest suites from hexa_gait to ament_cmake_gtest
-  # as a separate task. The pure engine library above links without ROS, so the
-  # gtest targets can exercise it directly (mirror hexa_hardware's test setup).
+  # gtest ports of the hexa_gait pytest suites. The pure engine library above
+  # links without ROS, so the gtest targets exercise it directly; linking
+  # ${PROJECT_NAME} propagates the include dir plus the Eigen / yaml-cpp /
+  # hexa_kinematics_cpp deps transitively.
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # Suites that link only against the pure engine library.
+  set(gait_cpp_tests
+    test_engine
+    test_clock
+    test_tripod
+    test_ripple
+    test_crawl
+    test_surf
+    test_trajectory
+    test_engagement
+    test_initialize
+    test_fold
+    test_limits
+    test_stability
+    test_reseat
+    test_reseat_engine
+  )
+  foreach(test_name ${gait_cpp_tests})
+    ament_add_gtest(${test_name} test/${test_name}.cpp)
+    target_link_libraries(${test_name} ${PROJECT_NAME})
+  endforeach()
+
+  # test_reseat and test_reseat_engine resolve hexa_description's real config
+  # via the package share path, so they additionally need ament_index_cpp.
+  ament_target_dependencies(test_reseat ament_index_cpp)
+  ament_target_dependencies(test_reseat_engine ament_index_cpp)
 endif()
 
 ament_export_include_directories(include)

@@ -5,7 +5,6 @@
 #include <stdexcept>
 
 #include "hexa_gait_cpp/gaits/registry.hpp"
-#include "hexa_gait_cpp/validation.hpp"
 
 namespace hexa_gait {
 

@@ -14,7 +14,6 @@
 // XYZ (roll about body +x, then pitch about body +y, then yaw about body +z).
 #pragma once
 
-#include "hexa_kinematics_cpp/leg_geometry.hpp"
 #include "hexa_kinematics_cpp/types.hpp"
 
 namespace hexa_kinematics {

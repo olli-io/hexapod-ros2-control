@@ -1,16 +1,28 @@
-// Per-joint servo configuration and default standing pose. Port of
-// joint_config.py.
+// Loaders that expand hexa_description's YAML into typed kinematics inputs.
+// Ports leg_specs.py and joint_config.py.
 //
-// Loads the two YAMLs that live in hexa_description/config/:
+// Everything here parses config that lives in hexa_description/config/:
 //
-//   - geometry.yaml — under joints:, per-joint-type servo center (URDF angle at
-//     the servo's physical zero) plus absolute lower / upper travel limits, all
-//     in intuitive per-joint degrees. Also the initial_pose: block.
+//   - geometry.yaml — leg segment lengths (leg:), the two reference coxa mounts
+//     (mounts.l_front / mounts.l_middle), per-joint-type servo config (joints:),
+//     and the initial_pose: block.
 //   - standing_pose.yaml — per-joint-type default at-rest angle.
 //
-// Both files express angles in degrees, in each joint's intuitive sense. This
-// module is the single source of truth for converting those intuitive degrees
-// into the IK-convention radians used by hexa_kinematics (see leg_geometry.hpp):
+// Two families of output share this file because they share one concern (turn
+// hexa_description YAML into typed values) and one mechanism: the six-leg
+// expansion by the URDF symmetry rules
+//
+//   rear  mirrors front about the body y-axis: x -> -x, yaw -> pi - yaw.
+//   right mirrors left  about the body x-axis: y -> -y, yaw -> -yaw.
+//
+// which drives both load_leg_specs (mount positions) and load_initial_pose
+// (coxa angles). These match the mount_leg macro in hexapod.urdf.xacro: the YAML
+// stays the single source of truth, and the URDF and this loader expand it the
+// same way.
+//
+// Angles in the YAML are in each joint's intuitive degrees; this file is the
+// single source of truth for converting them into the IK-convention radians used
+// by the rest of hexa_kinematics (see types.hpp):
 //
 //   coxa  — theta_coxa  =  radians(deg).
 //   femur — theta_femur = -radians(above_horizontal_deg).
@@ -18,15 +30,27 @@
 //
 // femur and tibia conversions are monotonically decreasing, so an intuitive
 // upper_limit_deg maps to a smaller URDF-rad value than lower_limit_deg. The
-// loader reconciles this with min/max after conversion.
+// loaders reconcile this with min/max after conversion.
 #pragma once
 
+#include <array>
 #include <map>
 #include <string>
 
 #include "hexa_kinematics_cpp/types.hpp"
 
 namespace hexa_kinematics {
+
+// Canonical leg order. Fixed at six legs (see CLAUDE.md: leg count is not
+// parameterised). Mirror of hexa_kinematics.leg_specs.LEG_NAMES.
+inline const std::array<std::string, 6> LEG_NAMES = {
+    "l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear",
+};
+
+// Parse geometry.yaml and return one LegSpec per leg, by name. Segment lengths
+// come from leg.*; mount positions come from mounts.l_front / mounts.l_middle
+// and are mirrored for the rear and right-side legs.
+std::map<std::string, LegSpec> load_leg_specs(const std::string& geometry_yaml_path);
 
 // Servo configuration for one joint type, in IK-convention radians.
 struct JointLimits {

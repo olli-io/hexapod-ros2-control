@@ -14,13 +14,11 @@
 
 #include "hexa_gait_cpp/clock.hpp"
 #include "hexa_gait_cpp/engagement.hpp"
-#include "hexa_gait_cpp/fold.hpp"
 #include "hexa_gait_cpp/gaits/base.hpp"
-#include "hexa_gait_cpp/initialize.hpp"
 #include "hexa_gait_cpp/kinematics.hpp"
-#include "hexa_gait_cpp/leg_output.hpp"
 #include "hexa_gait_cpp/pause.hpp"
 #include "hexa_gait_cpp/reseat.hpp"
+#include "hexa_gait_cpp/stand_transition.hpp"
 #include "hexa_gait_cpp/types.hpp"
 
 namespace hexa_gait {
@@ -125,6 +123,9 @@ class Engine {
   std::optional<std::string> pending_strategy_name() const {
     return pending_strategy_name_;
   }
+  // Committed body height, updated when a reseat ladder applies a new nominal.
+  // Exposed read-only for test_reseat_engine (mirrors the Python _applied_height).
+  double applied_height() const { return applied_height_; }
 
   bool set_strategy(const std::string& name);
   bool start_initialize();
