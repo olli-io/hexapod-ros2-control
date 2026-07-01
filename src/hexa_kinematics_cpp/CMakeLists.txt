@@ -24,9 +24,8 @@ find_package(yaml-cpp REQUIRED)
 # contract that the kinematics modules are importable/unit-testable standalone.
 add_library(${PROJECT_NAME} SHARED
   src/leg_ik.cpp
-  src/leg_specs.cpp
   src/body_transform.cpp
-  src/joint_config.cpp
+  src/description_loader.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

@@ -6,7 +6,7 @@
 #include <set>
 #include <string>
 
-#include "hexa_kinematics_cpp/leg_specs.hpp"
+#include "hexa_kinematics_cpp/description_loader.hpp"
 
 namespace {
 

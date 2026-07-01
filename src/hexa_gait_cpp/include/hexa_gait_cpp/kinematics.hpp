@@ -9,10 +9,8 @@
 #pragma once
 
 #include "hexa_kinematics_cpp/body_transform.hpp"
-#include "hexa_kinematics_cpp/joint_config.hpp"
-#include "hexa_kinematics_cpp/leg_geometry.hpp"
+#include "hexa_kinematics_cpp/description_loader.hpp"
 #include "hexa_kinematics_cpp/leg_ik.hpp"
-#include "hexa_kinematics_cpp/leg_specs.hpp"
 
 namespace hexa_gait {
 namespace kin = ::hexa_kinematics;

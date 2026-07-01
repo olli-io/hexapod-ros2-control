@@ -1,16 +1,25 @@
-// Cold-start initialization: initial_pose -> standing. Port of initialize.py.
+// Folded <-> standing body transitions. Port of initialize.py and fold.py.
 //
-// PLACE_FEET swings three sequential mirroring pairs onto the standing
-// footprint while the body rests on its belly; LIFT_BODY ramps the body-frame z
-// via a smoothstep S-curve; DONE emits nominal_stance. PAIR_ORDER and
-// smoothstep are shared with fold.py's FoldController.
+// The two controllers are exact time-reverses and share the same pair-swing +
+// smoothstep machinery, so they live together:
+//
+//   InitializeController (cold start, initial_pose -> standing): PLACE_FEET
+//   swings three sequential mirroring pairs onto the standing footprint while
+//   the body rests on its belly; LIFT_BODY ramps the body-frame z via a
+//   smoothstep S-curve; DONE emits nominal_stance.
+//
+//   FoldController (warm shutdown, standing -> initial_pose): LOWER_BODY ramps
+//   the body-frame z up to the belly height, then LIFT_FEET swings the same
+//   three pairs in reverse back to the folded initial_pose; DONE emits
+//   initial_stance.
+//
+// PAIR_ORDER and smoothstep are also reused by reseat.cpp.
 #pragma once
 
 #include <array>
 #include <map>
 #include <string>
 
-#include "hexa_gait_cpp/leg_output.hpp"
 #include "hexa_gait_cpp/types.hpp"
 
 namespace hexa_gait {
@@ -73,6 +82,44 @@ class InitializeController {
   std::size_t pair_idx_ = 0;
   double t_in_pair_ = 0.0;
   double t_in_lift_ = 0.0;
+};
+
+enum class FoldState { LOWER_BODY, LIFT_FEET, DONE };
+
+class FoldController {
+ public:
+  FoldController(std::map<std::string, Vec3> initial_stance,
+                 std::map<std::string, Vec3> nominal_stance,
+                 double coxa_to_bottom, double pair_swing_time,
+                 double lift_body_time, double swing_clearance,
+                 double place_feet_clearance, double swing_width,
+                 double controller_dt);
+
+  FoldState state() const { return state_; }
+  bool done() const { return state_ == FoldState::DONE; }
+
+  std::map<std::string, LegOutput> update(double dt);
+
+ private:
+  std::map<std::string, LegOutput> tick_lower_body(double dt);
+  std::map<std::string, LegOutput> tick_lift_feet(double dt);
+  std::map<std::string, LegOutput> emit_initial() const;
+
+  std::map<std::string, Vec3> initial_;
+  std::map<std::string, Vec3> nominal_;
+  double lower_end_z_;
+  std::map<std::string, Vec3> ground_targets_;
+  double pair_swing_time_;
+  double lift_body_time_;
+  double swing_clearance_;
+  double swing_width_;
+  double controller_dt_;
+
+  std::map<std::string, Vec3> positions_;
+  FoldState state_ = FoldState::LOWER_BODY;
+  std::size_t pair_idx_ = 0;
+  double t_in_pair_ = 0.0;
+  double t_in_lower_ = 0.0;
 };
 
 }  // namespace hexa_gait

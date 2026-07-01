@@ -1,13 +1,17 @@
-// Shared foundational types for the gait engine.
+// Shared foundational types and invariants for the gait engine.
 //
 // Vec3 is the body-frame 3-vector currency used throughout (foot targets,
 // stride vectors, mount positions). LEG_NAMES is the canonical leg ordering;
 // every per-leg loop iterates it so behaviour is deterministic and matches the
 // Python package (hexa_kinematics.leg_specs.LEG_NAMES, re-exported via clock).
+// LegOutput is the per-leg currency every trajectory controller emits, and
+// require_all_legs is the LEG_NAMES-coverage check they all run at construction.
 #pragma once
 
 #include <array>
 #include <cmath>
+#include <map>
+#include <stdexcept>
 #include <string>
 
 #include <Eigen/Core>
@@ -34,5 +38,35 @@ using JointAngles = std::array<double, 3>;
 inline const std::array<std::string, 6> LEG_NAMES = {
     "l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear",
 };
+
+// One leg's contribution to a LegTargets message — the shared currency every
+// trajectory controller in this package emits. stance=true means the foot is on
+// the ground this tick. During a descent/swing the phase value is informational
+// (fractional progress through the curve).
+struct LegOutput {
+  Vec3 foot_target = Vec3::Zero();
+  double phase = 0.0;
+  bool stance = true;
+};
+
+// Every controller checks that a per-leg map covers all six legs and raises with
+// the missing names listed (mirrors the `set(LEG_NAMES) - set(...)` checks
+// throughout the Python package).
+template <typename Value>
+void require_all_legs(const std::map<std::string, Value>& m,
+                      const std::string& what) {
+  std::string missing;
+  for (const auto& name : LEG_NAMES) {
+    if (m.find(name) == m.end()) {
+      if (!missing.empty()) {
+        missing += ", ";
+      }
+      missing += name;
+    }
+  }
+  if (!missing.empty()) {
+    throw std::invalid_argument(what + " missing legs: " + missing);
+  }
+}
 
 }  // namespace hexa_gait

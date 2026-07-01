@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "hexa_gait_cpp/gaits/base.hpp"
-#include "hexa_gait_cpp/leg_output.hpp"
 #include "hexa_gait_cpp/types.hpp"
 
 namespace hexa_gait {

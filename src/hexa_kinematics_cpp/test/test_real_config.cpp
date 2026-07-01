@@ -16,8 +16,7 @@
 #include <ament_index_cpp/get_package_prefix.hpp>  // PackageNotFoundError
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
-#include "hexa_kinematics_cpp/joint_config.hpp"
-#include "hexa_kinematics_cpp/leg_specs.hpp"
+#include "hexa_kinematics_cpp/description_loader.hpp"
 
 namespace {
 
