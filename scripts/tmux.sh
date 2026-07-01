@@ -10,11 +10,13 @@ cd "${REPO_ROOT}"
 
 clean=0
 run_tests=0
+cpp=0
 split_flag="-v"
 for arg in "$@"; do
     case "${arg}" in
         --clean)         clean=1 ;;
         --test)          run_tests=1 ;;
+        --cpp)           cpp=1 ;;
         horizontal)      split_flag="-h" ;;
         *)
             echo "Unknown argument: ${arg}" >&2
@@ -22,6 +24,11 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Both panes drop into the dev container via `hexa dev`; forward --cpp so their
+# `pod launch` / ad-hoc commands default to the C++ ports (HEXA_CPP=1).
+dev_cmd="${REPO_ROOT}/hexa dev"
+[[ ${cpp} -eq 1 ]] && dev_cmd="${dev_cmd} --cpp"
 
 if ! command -v tmux >/dev/null 2>&1; then
     echo "Error: tmux is not installed on the host." >&2
@@ -59,10 +66,10 @@ fi
 
 # Pane 0 (left): drop into the dev container and bring up the full sim stack
 # (sim + webteleop + teleop) via `pod launch` — the same stack `hexa dev --launch` runs.
-tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${REPO_ROOT}/hexa dev"
+tmux new-session -d -s "${SESSION}" -n "${WINDOW}" "${dev_cmd}"
 tmux send-keys -t "${SESSION}:${WINDOW}.0" "pod launch" Enter
 
 # Pane 1 (right/below): idle dev shell for ad-hoc commands.
-tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${REPO_ROOT}/hexa dev"
+tmux split-window "${split_flag}" -t "${SESSION}:${WINDOW}" "${dev_cmd}"
 
 exec tmux attach-session -t "${SESSION}"

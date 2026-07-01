@@ -7,8 +7,9 @@
   the FOLDED/INITIALIZE/STAND/ENGAGING/GAIT/PAUSING/PAUSED/RESUMING/FOLDING/
   RESEATING state machine; gait strategies stay pure (phase, stride, leg) ->
   foot_target functions. Built side-by-side with the Python hexa_gait until the
-  cutover. The hexa_kinematics surface is temporarily stubbed
-  (kinematics_stub.hpp) until that package is ported.</description>
+  cutover. The hexa_kinematics surface is provided by the C++
+  hexa_kinematics_cpp library (aliased as hexa_gait::kin via
+  kinematics.hpp).</description>
   <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
   <license>Apache-2.0</license>
 
@@ -19,6 +20,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
+  <depend>hexa_kinematics_cpp</depend>
   <depend>eigen</depend>
   <depend>yaml-cpp</depend>
 

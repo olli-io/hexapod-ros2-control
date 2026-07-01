@@ -11,10 +11,13 @@ usage() {
 Usage: ./hexa <command> [args...]
 
 Commands:
-  dev [--clean] [--launch] [--tmux] [args...]
+  dev [--clean] [--cpp] [--launch] [--tmux] [args...]
                               Drop into the ROS2 Jazzy dev container (forwards args to the container).
                               --clean tears down the existing container, rebuilds the image,
                               and runs 'pod build' before opening the shell.
+                              --cpp sets HEXA_CPP=1 in the container so the bringup launch
+                              files default to the C++ ports (hexa_kinematics_cpp /
+                              hexa_gait_cpp) instead of the Python nodes.
                               --launch runs 'pod launch' (sim + webteleop + teleop), the
                               same stack as --tmux pane 0, without the second pane.
                               --tmux opens a tmux session with two panes sharing one dev container:
@@ -42,16 +45,22 @@ case "${cmd}" in
         clean=0
         launch=0
         tmux=0
+        cpp=0
         dev_args=()
         tmux_args=()
         for arg in "$@"; do
             case "${arg}" in
                 --tmux)   tmux=1 ;;
                 --clean)  clean=1; tmux_args+=("${arg}") ;;
+                --cpp)    cpp=1; dev_args+=("${arg}"); tmux_args+=("${arg}") ;;
                 --launch) launch=1 ;;
                 *)        dev_args+=("${arg}"); tmux_args+=("${arg}") ;;
             esac
         done
+        # --cpp is a dev.sh flag; the --launch path skips dev_args, so pass it
+        # through explicitly there.
+        cpp_flag=()
+        [[ ${cpp} -eq 1 ]] && cpp_flag=(--cpp)
         if [[ ${tmux} -eq 1 ]]; then
             exec "${REPO_ROOT}/scripts/tmux.sh" "${tmux_args[@]}"
         fi
@@ -60,7 +69,7 @@ case "${cmd}" in
             "${REPO_ROOT}/scripts/dev.sh" pod build
         fi
         if [[ ${launch} -eq 1 ]]; then
-            exec "${REPO_ROOT}/scripts/dev.sh" pod launch
+            exec "${REPO_ROOT}/scripts/dev.sh" "${cpp_flag[@]}" pod launch
         fi
         exec "${REPO_ROOT}/scripts/dev.sh" "${dev_args[@]}"
         ;;

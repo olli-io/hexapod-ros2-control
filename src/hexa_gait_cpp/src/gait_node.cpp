@@ -28,7 +28,7 @@
 
 #include "hexa_gait_cpp/engine.hpp"
 #include "hexa_gait_cpp/gaits/registry.hpp"
-#include "hexa_gait_cpp/kinematics_stub.hpp"
+#include "hexa_gait_cpp/kinematics.hpp"
 #include "hexa_gait_cpp/types.hpp"
 
 namespace {
