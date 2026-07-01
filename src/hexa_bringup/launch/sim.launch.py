@@ -49,6 +49,7 @@ def generate_launch_description():
     # The ports are drop-in: same node names, topics, message types, and params.
     use_cpp_kinematics = LaunchConfiguration("use_cpp_kinematics")
     use_cpp_gait = LaunchConfiguration("use_cpp_gait")
+    use_cpp_posture = LaunchConfiguration("use_cpp_posture")
     kinematics_pkg = PythonExpression(
         ["'hexa_kinematics_cpp' if '", use_cpp_kinematics,
          "'.lower() in ('true', '1') else 'hexa_kinematics'"]
@@ -56,6 +57,10 @@ def generate_launch_description():
     gait_pkg = PythonExpression(
         ["'hexa_gait_cpp' if '", use_cpp_gait,
          "'.lower() in ('true', '1') else 'hexa_gait'"]
+    )
+    posture_pkg = PythonExpression(
+        ["'hexa_posture_cpp' if '", use_cpp_posture,
+         "'.lower() in ('true', '1') else 'hexa_posture'"]
     )
 
     ik_node = Node(
@@ -73,10 +78,10 @@ def generate_launch_description():
     )
 
     posture_config = PathJoinSubstitution([
-        FindPackageShare("hexa_posture"), "config", "posture.yaml",
+        FindPackageShare(posture_pkg), "config", "posture.yaml",
     ])
     posture_node = Node(
-        package="hexa_posture",
+        package=posture_pkg,
         executable="posture_node",
         output="screen",
         parameters=common_params + [posture_config],
@@ -111,6 +116,12 @@ def generate_launch_description():
             default_value=os.environ.get("HEXA_CPP", "false"),
             description="Run the C++ hexa_gait_cpp gait_node instead of the "
                         "Python hexa_gait gait_node.",
+        ),
+        DeclareLaunchArgument(
+            "use_cpp_posture",
+            default_value=os.environ.get("HEXA_CPP", "false"),
+            description="Run the C++ hexa_posture_cpp posture_node instead of "
+                        "the Python hexa_posture posture_node.",
         ),
         sim,
         ik_node,

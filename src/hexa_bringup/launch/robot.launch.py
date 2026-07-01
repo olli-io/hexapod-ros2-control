@@ -49,7 +49,6 @@ def _display_params(transport: str) -> tuple[dict, bool]:
 def _bringup(context, *args, **kwargs):
     pkg_hexa_bringup = FindPackageShare("hexa_bringup")
     pkg_hexa_description = FindPackageShare("hexa_description")
-    pkg_hexa_posture = FindPackageShare("hexa_posture")
 
     engage_on_start = LaunchConfiguration("engage_on_start").perform(context)
     engage = engage_on_start.lower() in ("1", "true", "yes")
@@ -59,6 +58,7 @@ def _bringup(context, *args, **kwargs):
     # The ports are drop-in: same node names, topics, message types, and params.
     use_cpp_kinematics = LaunchConfiguration("use_cpp_kinematics").perform(context)
     use_cpp_gait = LaunchConfiguration("use_cpp_gait").perform(context)
+    use_cpp_posture = LaunchConfiguration("use_cpp_posture").perform(context)
     kinematics_pkg = (
         "hexa_kinematics_cpp"
         if use_cpp_kinematics.lower() in ("1", "true", "yes")
@@ -69,6 +69,12 @@ def _bringup(context, *args, **kwargs):
         if use_cpp_gait.lower() in ("1", "true", "yes")
         else "hexa_gait"
     )
+    posture_pkg = (
+        "hexa_posture_cpp"
+        if use_cpp_posture.lower() in ("1", "true", "yes")
+        else "hexa_posture"
+    )
+    pkg_hexa_posture = FindPackageShare(posture_pkg)
 
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -125,7 +131,7 @@ def _bringup(context, *args, **kwargs):
         pkg_hexa_posture, "config", "posture.yaml",
     ])
     posture_node = Node(
-        package="hexa_posture",
+        package=posture_pkg,
         executable="posture_node",
         output="screen",
         parameters=[posture_config],
@@ -228,6 +234,12 @@ def generate_launch_description():
             default_value=os.environ.get("HEXA_CPP", "false"),
             description="Run the C++ hexa_gait_cpp gait_node instead of the "
                         "Python hexa_gait gait_node.",
+        ),
+        DeclareLaunchArgument(
+            "use_cpp_posture",
+            default_value=os.environ.get("HEXA_CPP", "false"),
+            description="Run the C++ hexa_posture_cpp posture_node instead of "
+                        "the Python hexa_posture posture_node.",
         ),
         OpaqueFunction(function=_bringup),
     ])
