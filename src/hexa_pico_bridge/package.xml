@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hexa_pico_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    Gazebo-in-the-loop bridge for the Pico 2 W firmware (plan part 10, Tier 3).
+    Compiles the target-agnostic firmware pipeline sources (pico-2-firmware/src)
+    directly and runs the real 50 Hz control tick against the simulated hexapod:
+    subscribes /joy (the exact layout the firmware's bt_teleop emits), runs
+    hexa::pipeline::Pipeline, and publishes the joint angles on
+    /joint_group_position_controller/commands — so the firmware brain walks the
+    Gazebo model with no hardware. Honors the repo's sim-first rule.
+  </description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <!-- Build-time config codegen reads these packages' YAMLs from the source
+       tree (single source of truth stays in hexa_description / the config
+       packages); no runtime filesystem dependency. -->
+  <build_depend>hexa_description</build_depend>
+
+  <!-- Runtime: the launch file reuses the sim + the existing joy publisher. -->
+  <exec_depend>hexa_simulation</exec_depend>
+  <exec_depend>hexa_teleop</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

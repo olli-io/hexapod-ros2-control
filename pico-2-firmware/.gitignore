@@ -1,0 +1,11 @@
+# CMake / build output (Pico SDK build and host test harness).
+build*/
+test/host/build*/
+
+# Generated at build time by tools/gen_config.py from the repo YAMLs
+# (single source of truth stays in hexa_description / the config packages).
+src/config_generated.hpp
+
+# Vendored Bluepad32 checkout (part 02) — pulled as a submodule or via
+# BLUEPAD32_ROOT, not committed here.
+external/

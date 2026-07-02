@@ -1,0 +1,132 @@
+// Target-agnostic 50 Hz control brain (plan part 10, Tier 2).
+//
+// The whole velocity / posture / compose / IK pipeline plus the failsafe
+// supervisor, factored out of main.cpp into ONE class with no Pico SDK, no ROS,
+// no I/O. The caller owns the hardware-touching seam — input (bt_teleop / a
+// scripted axes source / a ROS /joy bridge), servo out (the Chica UART / a sim
+// publisher / a log), and the clock (time_us_64 / std::chrono / a ROS clock) —
+// and each tick it samples those, feeds a TickInput, and applies the TickResult
+// (drive the servos from `theta`, the relay from `relay_energized`, the LED from
+// `decision.led`, and log off the event flags).
+//
+// This is the "link-time swap, not #ifdef soup" the plan calls for: the Pico
+// firmware (main.cpp) composes the Pico impls around this; the Gazebo bridge
+// (hexa_pico_bridge/firmware_bridge_node.cpp) composes ROS impls around the very
+// same source. The tick logic — every line that could carry a port bug — is
+// compiled unchanged for both targets and exercised off-target by the host
+// harness (test/host/test_pipeline.cpp).
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+
+#include "bt_teleop.hpp"                   // bt_teleop::kNumAxes
+#include "control.hpp"                     // hexa::control::Control
+#include "gait/engine.hpp"                 // hexa::gait::Engine, EngineState
+#include "gait/limits.hpp"                 // hexa::gait::VelocityCaps
+#include "joy_mapping.hpp"                 // hexa::teleop::JoyConfig / JoyState / Mode
+#include "kinematics/body_transform.hpp"   // hexa::BodyPose
+#include "posture/posture.hpp"             // hexa::posture::PostureController
+#include "servo_out.hpp"                   // servo_out::kNumJoints
+#include "supervisor.hpp"                  // hexa::supervisor::Supervisor
+
+namespace hexa::pipeline {
+
+// The 50 Hz tick contract shared by every caller: 20 ms period (matches the ROS
+// node rate and the engine controller_dt), 4 ms of slack before an inter-tick
+// interval counts as a deadline overrun. kDt is the same period in seconds, fed
+// to the engine / filters.
+inline constexpr std::uint64_t kTickPeriodUs = 20'000;   // 20 ms -> 50 Hz
+inline constexpr std::uint64_t kTickMarginUs = 4'000;    // overrun slack
+inline constexpr float kDt = 0.02f;                      // engine tick, seconds
+
+// What the caller sampled for this tick from its input / clock / telemetry seam.
+struct TickInput {
+  std::uint64_t now_us = 0;              // monotonic clock (caller's seam)
+  const std::int16_t* axes = nullptr;    // bt_teleop::kNumAxes raw int16 entries
+  std::uint32_t buttons = 0;             // button bitmask (bit i == button i)
+  bool bt_connected = false;             // input link up
+  std::uint64_t last_input_us = 0;       // freshness for the watchdog (0 = none)
+  bool battery_valid = false;            // a fresh battery sample is present
+  float battery_v = 0.0f;                // decoded pack voltage (iff valid)
+  float dt = kDt;                        // tick period, seconds
+};
+
+// Which branch the init-button edge drove the engine down (for the caller log).
+enum class InitAction { kNone, kInitialized, kFoldRequested };
+
+// Everything the caller needs to drive the outputs and log this tick.
+struct TickResult {
+  // 18 joint angles, URDF-convention rad, leg-major/segment-minor order
+  // (l_front,l_middle,l_rear,r_front,r_middle,r_rear x coxa,femur,tibia) —
+  // identical to servo_out's pin table AND the sim controller's joints: list, so
+  // the servo sink and the Gazebo publisher both consume it directly. Holds the
+  // per-leg last-good angle across an UnreachableTarget (no command spike).
+  float theta[servo_out::kNumJoints] = {};
+  int unreachable = 0;                   // legs that held last-good this tick
+
+  // Failsafe / telemetry / LED decision. force_zero was already applied to the
+  // command inside tick(); the caller drives the relay + LED off this.
+  hexa::supervisor::Decision decision{};
+  bool relay_energized = false;          // == decision.relay_energized
+
+  // Engine / posture snapshot for logging + diagnostics.
+  hexa::gait::EngineState engine_state = hexa::gait::EngineState::FOLDED;
+  float master_phase = 0.0f;
+  bool walking = false;                  // shaped-command non-zero (posture gate)
+
+  // Teleop events — the caller's log surface (main's [teleop]/[safety] lines).
+  bool mode_changed = false;
+  hexa::teleop::Mode mode = hexa::teleop::Mode::Posture;
+  bool init_request = false;
+  InitAction init_action = InitAction::kNone;
+  bool has_gait_select = false;
+  std::string gait_select;               // requested strategy (accepted or not)
+  bool gait_accepted = false;            // switch allowed in the current state
+  float gait_linear_max = 0.0f;          // new stick cap iff accepted
+  bool has_animation_name = false;
+  std::string animation_name;            // requested animation mode
+  bool animation_accepted = false;       // known animation (else warn-and-ignore)
+};
+
+class Pipeline {
+ public:
+  // Builds the engine / control / posture / supervisor from the baked config
+  // (config_generated.hpp) exactly as main.cpp used to: FOLDED cold-start,
+  // default gait, initial teleop mode, standing-pose last-good seed.
+  Pipeline();
+
+  // Run one 50 Hz control tick. Also records the tick edge for jitter accounting
+  // (supervisor.record_tick), so the caller need only feed now_us once.
+  TickResult tick(const TickInput& in);
+
+  // Accessors for the caller's heartbeat / diagnostics (main's [gait]/[safety]
+  // heartbeat reads engine state + master phase and the supervisor tick stats).
+  const hexa::gait::Engine& engine() const { return *engine_; }
+  hexa::gait::Engine& engine() { return *engine_; }
+  const hexa::supervisor::Supervisor& supervisor() const { return supervisor_; }
+  const hexa::posture::PostureController& posture() const { return posture_; }
+
+ private:
+  // Compose the engine's per-leg body-frame foot targets into theta_ (the exact
+  // ik_node.cpp ordering: apply_body_pose -> body_to_leg -> inverse_kinematics),
+  // holding last-good on UnreachableTarget. Returns the unreachable-leg count.
+  int compose_gait(const std::map<std::string, hexa::gait::LegOutput>& out,
+                   const hexa::BodyPose& body_pose);
+
+  std::unique_ptr<hexa::gait::Engine> engine_;
+  hexa::gait::VelocityCaps caps_;
+  hexa::control::Control control_;
+  hexa::teleop::JoyConfig joycfg_;
+  hexa::teleop::JoyState joystate_;
+  hexa::posture::PostureController posture_;
+  hexa::supervisor::Supervisor supervisor_;
+
+  // Last-good joint angles, persisted across ticks (seeded with the standing
+  // pose so the very first tick's held legs are valid).
+  float theta_[servo_out::kNumJoints];
+};
+
+}  // namespace hexa::pipeline

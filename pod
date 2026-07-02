@@ -12,12 +12,15 @@ Commands:
   teleop      ros2 launch hexa_teleop teleop.launch.py
   webteleop   ros2 launch hexa_webteleop webteleop.launch.py
   launch      sim (background) + webteleop + teleop, once /clock is up
+  pico        build hexa_pico_bridge; --launch runs it in the Gazebo sim
   -h, --help  show this help
 
-Lifecycle flags (sim / teleop / webteleop / launch):
+Lifecycle flags (sim / teleop / webteleop / launch / pico):
   (none)      start it
   --restart   stop any running instance, then start it
   --kill      stop it, don't restart
+
+pico also takes --launch (build, then launch the firmware bridge in the sim).
 
 Extra args are forwarded to the underlying command,
 e.g. pod build --packages-select hexa_kinematics
@@ -31,6 +34,7 @@ declare -A LAUNCHERS=(
     [sim]="ros2 launch hexa_bringup sim.launch.py"
     [teleop]="ros2 launch hexa_teleop teleop.launch.py"
     [webteleop]="ros2 launch hexa_webteleop webteleop.launch.py"
+    [pico]="ros2 launch hexa_pico_bridge bridge.launch.py"
 )
 
 # Stop a launcher by SIGINT (ros2 launch shuts its child nodes down
@@ -97,6 +101,50 @@ launch_group() {
     exec "$0" teleop "${REST[@]}"
 }
 
+# Pico firmware-in-sim: the "pico linux build" (compile the firmware pipeline
+# into the ROS bridge — native float, no Pico SDK) and, with --launch, run it
+# against Gazebo. bridge.launch.py brings up sim + joy + the firmware bridge, so
+# the firmware brain walks the simulated hexapod (plan part 10, Tier 3).
+#   pod pico            build hexa_pico_bridge only
+#   pod pico --launch   build, then launch the firmware bridge in the sim
+#   pod pico --restart  rebuild, stop any running bridge, relaunch it
+#   pod pico --kill     stop the running bridge (and the sim/joy it started)
+pico_cmd() {
+    local do_launch=0
+    local rest=()
+    for a in "$@"; do
+        case "$a" in
+            --launch) do_launch=1 ;;
+            *)        rest+=("$a") ;;
+        esac
+    done
+    parse_mode "${rest[@]}"   # peels --restart/--kill, sets MODE + REST
+    local pattern="${LAUNCHERS[pico]}"
+
+    if [ "$MODE" = kill ]; then
+        stop_launcher "$pattern" pico
+        return 0
+    fi
+
+    echo 'pod: building hexa_pico_bridge...'
+    colcon build --symlink-install --packages-select hexa_pico_bridge
+    # Pick up the freshly-built package so this shell's ros2 launch finds it.
+    # colcon's setup.bash references unset vars, so relax nounset while sourcing.
+    set +u
+    source /workspace/install/setup.bash
+    set -u
+
+    if [ "$MODE" = restart ]; then
+        stop_launcher "$pattern" pico
+        do_launch=1
+    fi
+
+    if [ "$do_launch" -eq 1 ]; then
+        exec $pattern "${REST[@]}"
+    fi
+    echo 'pod: hexa_pico_bridge built. Run with --launch to drive the Gazebo hexapod.'
+}
+
 cmd="${1:-}"
 [ $# -gt 0 ] && shift || true
 
@@ -104,6 +152,7 @@ case "$cmd" in
     build)                 exec colcon build --symlink-install "$@" ;;
     sim|teleop|webteleop)  run_launcher "$cmd" "$@" ;;
     launch)                launch_group "$@" ;;
+    pico)                  pico_cmd "$@" ;;
     -h|--help|"")          usage ;;
     *)
         echo "pod: unknown command '$cmd'" >&2

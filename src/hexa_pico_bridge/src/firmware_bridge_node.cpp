@@ -1,0 +1,220 @@
+// Gazebo-in-the-loop firmware bridge (plan part 10, Tier 3).
+//
+// Runs the Pico 2 W firmware's control brain — the exact same
+// hexa::pipeline::Pipeline source compiled for the RP2350 — against the
+// simulated hexapod, with no hardware. It is the ROS composition of the
+// firmware's hardware seam (see pico-2-firmware/src/pipeline.hpp):
+//
+//   - Input  seam: subscribe /joy (sensor_msgs/Joy) and convert it into the
+//     exact raw int16 axes[] / button bitmask the firmware's bt_teleop emits, so
+//     map_joy runs identically to on-hardware. /joy is the layout the existing
+//     joy_publisher already produces (teleop_joy.yaml base block); the firmware
+//     applies the axis signs itself, so we only rescale [-1,1] -> int16.
+//   - Output seam: tap the pipeline at the JointAngles stage (before to_pulse_us
+//     — the Pico's servo_out) and publish std_msgs/Float64MultiArray (radians)
+//     on /joint_group_position_controller/commands. The firmware's joint order
+//     (l_front,l_middle,l_rear,r_front,r_middle,r_rear x coxa,femur,tibia) is
+//     identical to the controller's joints: list (ros2_controllers.yaml), so the
+//     array publishes directly with no remap.
+//   - Clock seam: a std::chrono steady clock stands in for time_us_64().
+//
+// Launch it alongside `ros2 launch hexa_simulation sim.launch.py` (or `pod
+// sim`): the firmware brain now walks the Gazebo hexapod. Cross-check against the
+// ROS2 node chain (ik_node + gait_node + posture_node) in the same world — the
+// same teleop input should produce visually identical motion.
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
+
+#include "bt_teleop.hpp"     // axis / button indices + int16 extremes
+#include "gait/engine.hpp"   // state_value for logging
+#include "pipeline.hpp"      // the shared firmware control brain
+#include "servo_out.hpp"     // kNumJoints
+
+namespace {
+
+using Joy = sensor_msgs::msg::Joy;
+using Float64MultiArray = std_msgs::msg::Float64MultiArray;
+
+// A neutral gamepad snapshot in the firmware's raw int16 layout: sticks/dpad
+// centered, analog triggers released at +max, no buttons. Matches bt_teleop's
+// idle state, so a missing / empty /joy reads as "no input" rather than garbage.
+void fill_neutral(std::array<std::int16_t, bt_teleop::kNumAxes>& axes) {
+  axes.fill(0);
+  axes[bt_teleop::kL2] = bt_teleop::kAxisMax;
+  axes[bt_teleop::kR2] = bt_teleop::kAxisMax;
+}
+
+// Rescale a /joy float in [-1, 1] to the firmware's int16 axis convention
+// (map_joy divides by 32767 internally). Clamped so a driver reporting slightly
+// past the rail can't overflow.
+std::int16_t to_axis_i16(float v) {
+  const float scaled = std::lround(v * static_cast<float>(bt_teleop::kAxisMax));
+  const float clamped =
+      std::min(std::max(scaled, static_cast<float>(bt_teleop::kAxisMin)),
+               static_cast<float>(bt_teleop::kAxisMax));
+  return static_cast<std::int16_t>(clamped);
+}
+
+class FirmwareBridgeNode : public rclcpp::Node {
+ public:
+  FirmwareBridgeNode() : rclcpp::Node("firmware_bridge") {
+    // Publish the same command interface gz_ros2_control exposes (see
+    // hexa_simulation/config/ros2_controllers.yaml).
+    const std::string command_topic = declare_parameter<std::string>(
+        "command_topic", "/joint_group_position_controller/commands");
+    const std::string joy_topic =
+        declare_parameter<std::string>("joy_topic", "/joy");
+
+    fill_neutral(axes_);
+
+    pub_ = create_publisher<Float64MultiArray>(command_topic, 10);
+    sub_ = create_subscription<Joy>(
+        joy_topic, 10,
+        [this](Joy::SharedPtr msg) { on_joy(*msg); });
+
+    // Real 50 Hz control tick — the firmware's scheduler rate. Driven off wall
+    // time (a monotonic steady clock), independent of sim time, exactly as the
+    // Pico loop runs off time_us_64().
+    boot_ = std::chrono::steady_clock::now();
+    timer_ = create_wall_timer(
+        std::chrono::microseconds(hexa::pipeline::kTickPeriodUs),
+        [this]() { on_tick(); });
+
+    RCLCPP_INFO(get_logger(),
+                "firmware bridge up: /joy -> Pipeline -> %s (50 Hz). Press the "
+                "init (start) button to stand, then drive.",
+                command_topic.c_str());
+  }
+
+ private:
+  // Monotonic microseconds since construction — the bridge's clock seam.
+  std::uint64_t now_us() const {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - boot_)
+            .count());
+  }
+
+  void on_joy(const Joy& msg) {
+    std::array<std::int16_t, bt_teleop::kNumAxes> axes;
+    fill_neutral(axes);
+    const std::size_t na =
+        std::min<std::size_t>(msg.axes.size(), bt_teleop::kNumAxes);
+    for (std::size_t i = 0; i < na; ++i) {
+      axes[i] = to_axis_i16(msg.axes[i]);
+    }
+    std::uint32_t buttons = 0;
+    const std::size_t nb =
+        std::min<std::size_t>(msg.buttons.size(), bt_teleop::kNumButtons);
+    for (std::size_t i = 0; i < nb; ++i) {
+      if (msg.buttons[i] != 0) {
+        buttons |= (1u << i);
+      }
+    }
+    axes_ = axes;
+    buttons_ = buttons;
+    last_joy_us_ = now_us();
+    have_joy_ = true;
+  }
+
+  void on_tick() {
+    const std::uint64_t t = now_us();
+
+    // Link freshness for the firmware watchdog: "connected" once /joy has
+    // arrived and stayed fresh within the input-timeout window. A stalled
+    // publisher (or none) reads as a lost link -> the pipeline force-zeroes the
+    // command and settles, exactly as on-hardware.
+    const std::uint64_t timeout_us = static_cast<std::uint64_t>(
+        hexa::config::kInputTimeoutS * 1e6f);
+    const bool fresh =
+        have_joy_ && (t - last_joy_us_) < timeout_us;
+
+    hexa::pipeline::TickInput in;
+    in.now_us = t;
+    in.axes = axes_.data();
+    in.buttons = buttons_;
+    in.bt_connected = fresh;
+    in.last_input_us = have_joy_ ? last_joy_us_ : 0;
+    in.battery_valid = false;  // no battery telemetry in sim
+    in.battery_v = 0.0f;
+    in.dt = hexa::pipeline::kDt;
+
+    const hexa::pipeline::TickResult res = pipeline_.tick(in);
+    log_events(res);
+
+    // Firmware joint order == controller joints: order, so publish directly.
+    Float64MultiArray out;
+    out.data.resize(servo_out::kNumJoints);
+    for (int i = 0; i < servo_out::kNumJoints; ++i) {
+      out.data[static_cast<std::size_t>(i)] = static_cast<double>(res.theta[i]);
+    }
+    pub_->publish(out);
+  }
+
+  // Narrate the teleop / safety events the pipeline resolved (the sim analogue
+  // of main.cpp's [teleop] / [safety] logs). Rate-limited edges only.
+  void log_events(const hexa::pipeline::TickResult& res) {
+    if (res.mode_changed) {
+      RCLCPP_INFO(get_logger(), "mode changed");
+    }
+    if (res.init_request) {
+      using IA = hexa::pipeline::InitAction;
+      if (res.init_action == IA::kInitialized) {
+        RCLCPP_INFO(get_logger(), "init: FOLDED -> INITIALIZE");
+      } else if (res.init_action == IA::kFoldRequested) {
+        RCLCPP_INFO(get_logger(), "init: fold requested (state=%s)",
+                    hexa::gait::state_value(res.engine_state).c_str());
+      }
+    }
+    if (res.has_gait_select) {
+      if (res.gait_accepted) {
+        RCLCPP_INFO(get_logger(), "gait -> %s (linear_max=%.3f m/s)",
+                    res.gait_select.c_str(),
+                    static_cast<double>(res.gait_linear_max));
+      } else {
+        RCLCPP_INFO(get_logger(), "gait -> %s dropped (state=%s)",
+                    res.gait_select.c_str(),
+                    hexa::gait::state_value(res.engine_state).c_str());
+      }
+    }
+    if (res.has_animation_name && !res.animation_accepted) {
+      RCLCPP_WARN(get_logger(), "animation=%s dropped (unknown)",
+                  res.animation_name.c_str());
+    }
+    if (res.unreachable > 0) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                           "%d/6 legs unreachable (holding last-good)",
+                           res.unreachable);
+    }
+  }
+
+  hexa::pipeline::Pipeline pipeline_;
+
+  std::array<std::int16_t, bt_teleop::kNumAxes> axes_{};
+  std::uint32_t buttons_ = 0;
+  bool have_joy_ = false;
+  std::uint64_t last_joy_us_ = 0;
+
+  std::chrono::steady_clock::time_point boot_;
+  rclcpp::Subscription<Joy>::SharedPtr sub_;
+  rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
+};
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<FirmwareBridgeNode>());
+  rclcpp::shutdown();
+  return 0;
+}

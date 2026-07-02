@@ -1,0 +1,157 @@
+// Integration supervisor implementation (plan part 09). See supervisor.hpp.
+
+#include "supervisor.hpp"
+
+namespace hexa::supervisor {
+
+// ── BatteryMonitor ──────────────────────────────────────────────────────────
+//
+// Port of hexa_display/expression_policy.py BatteryMonitor._step: a threshold
+// of 0 disables the flag; it raises after hold_s below threshold and clears
+// above threshold + hysteresis with no hold on the way up.
+
+BatteryMonitor::BatteryMonitor(float warning_v, float critical_v,
+                               float hysteresis_v, float hold_s)
+    : warning_v_(warning_v),
+      critical_v_(critical_v),
+      hysteresis_v_(hysteresis_v),
+      hold_s_(hold_s) {}
+
+void BatteryMonitor::step(Flag& f, float voltage, float t,
+                          float threshold) const {
+  if (threshold <= 0.0f) {  // disabled
+    f.active = false;
+    f.has_since = false;
+    return;
+  }
+  if (f.active) {
+    if (voltage > threshold + hysteresis_v_) {  // recovered
+      f.active = false;
+      f.has_since = false;
+    }
+    return;
+  }
+  if (voltage < threshold) {
+    if (!f.has_since) {
+      f.below_since = t;
+      f.has_since = true;
+    }
+    if (t - f.below_since >= hold_s_) {
+      f.active = true;
+    }
+    return;
+  }
+  f.has_since = false;  // back above threshold before the hold elapsed
+}
+
+void BatteryMonitor::update(float voltage_v, float t_s) {
+  step(warn_, voltage_v, t_s, warning_v_);
+  step(crit_, voltage_v, t_s, critical_v_);
+  low_ = warn_.active;
+  critical_ = crit_.active;
+}
+
+// ── Supervisor ──────────────────────────────────────────────────────────────
+
+Supervisor::Supervisor(const Config& cfg)
+    : cfg_(cfg),
+      battery_(cfg.battery_warning_v, cfg.battery_critical_v,
+               cfg.battery_hysteresis_v, cfg.battery_hold_s) {}
+
+Decision Supervisor::step(const Observation& obs) {
+  // Battery debounce advances only on a fresh sample; the flags hold between.
+  if (obs.battery_valid) {
+    battery_.update(obs.battery_v, static_cast<float>(obs.now_us) * 1e-6f);
+  }
+  const bool batt_low = battery_.low();
+  const bool batt_critical = battery_.critical();
+
+  // Input watchdog — mirror hexa_webteleop's stale-input rule. A live link that
+  // stops delivering frames for input_timeout_s is stale (pad edging out of
+  // range, radio hiccup); a clean disconnect is stale by definition. Stale ->
+  // main zeroes the command so the engine settles rather than latching the last
+  // velocity. Never walk on stale input.
+  bool input_stale;
+  if (!obs.bt_connected) {
+    input_stale = true;
+  } else if (obs.last_input_us == 0) {
+    input_stale = true;  // connected but no frame observed yet
+  } else {
+    const float since_s =
+        static_cast<float>(obs.now_us - obs.last_input_us) * 1e-6f;
+    input_stale = since_s >= cfg_.input_timeout_s;
+  }
+
+  // Relay-arming discipline. Arm (energize) only once the link is up AND the
+  // engine has stood — the electrical backstop stays dropped through boot,
+  // pairing, and the INITIALIZE ladder. Disarm on a clean fold (feet parked in
+  // the folded pose — the safe moment to cut) or a critical battery (protect
+  // the electronics). A stale link / lost pilot deliberately does NOT drop the
+  // rail: the robot holds its stand and settles; cutting servo power mid-stance
+  // would collapse it.
+  if (relay_armed_) {
+    if (obs.folded || batt_critical) {
+      relay_armed_ = false;
+    }
+  } else if (obs.bt_connected && obs.stood && !batt_critical) {
+    relay_armed_ = true;
+  }
+
+  // Safe-stop aggregate: main zeroes the command on a stale link OR a low/
+  // critical battery, so the robot never keeps walking on stale input or a weak
+  // pack — it settles to a stand. (A stale link still holds the rail; only a
+  // critical battery / clean fold drops it, above.)
+  const bool force_zero = input_stale || batt_low || batt_critical;
+
+  // Fault = a condition that demands the alarm cadence. Battery low/critical is
+  // always a fault; a lost link is a fault only once armed (losing the pilot
+  // mid-operation), so pre-link boot scanning stays a calm slow blink.
+  const bool bt_lost = relay_armed_ && !obs.bt_connected;
+  const bool fault = batt_low || batt_critical || bt_lost;
+
+  // Solid means "linked and actually walking" — gated on the safe-stop: a stale
+  // link or weak pack zeroes the command (the robot settles), so the LED must
+  // not keep reading solid off the latched-but-discarded velocity.
+  LedPattern led;
+  if (fault) {
+    led = LedPattern::kFastBlink;
+  } else if (obs.bt_connected && obs.walking && !force_zero) {
+    led = LedPattern::kSolid;
+  } else {
+    led = LedPattern::kSlowBlink;
+  }
+
+  Decision d;
+  d.input_stale = input_stale;
+  d.force_zero = force_zero;
+  d.relay_energized = relay_armed_;
+  d.battery_low = batt_low;
+  d.battery_critical = batt_critical;
+  d.fault = fault;
+  d.led = led;
+  return d;
+}
+
+void Supervisor::record_tick(std::uint64_t now_us) {
+  if (!have_last_tick_) {
+    have_last_tick_ = true;
+    last_tick_us_ = now_us;
+    return;
+  }
+  const std::uint64_t dt = now_us - last_tick_us_;
+  last_tick_us_ = now_us;
+  tick_.last_dt_us = dt;
+  if (tick_.count == 0) {
+    tick_.min_dt_us = dt;
+    tick_.max_dt_us = dt;
+  } else {
+    if (dt < tick_.min_dt_us) tick_.min_dt_us = dt;
+    if (dt > tick_.max_dt_us) tick_.max_dt_us = dt;
+  }
+  ++tick_.count;
+  if (dt > cfg_.tick_period_us + cfg_.tick_margin_us) {
+    ++tick_.overruns;
+  }
+}
+
+}  // namespace hexa::supervisor
