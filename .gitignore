@@ -24,5 +24,7 @@ __pycache__/
 .DS_Store
 
 # tmp docs
-./docs/tmp/* 
-./docs/trajectory-generation/*
+/docs/tmp/*
+/docs/trajectory-generation/*
+/.tmp
+
