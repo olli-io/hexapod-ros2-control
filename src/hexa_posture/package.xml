@@ -10,6 +10,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
+  <depend>hexa_common</depend>
 
   <test_depend>python3-pytest</test_depend>
 

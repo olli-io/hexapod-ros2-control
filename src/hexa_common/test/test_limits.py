@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from hexa_gait.limits import VelocityCaps, load_velocity_caps, scale_to_envelope
+from hexa_common.limits import VelocityCaps, load_velocity_caps, scale_to_envelope
 
 
 def _write_yaml(tmp_path: Path, **overrides) -> Path:
-    # Duty factors are sourced from the strategy classes in
-    # ``hexa_gait.gaits``, not YAML. The YAML only carries the
+    # Duty factors are sourced from the gait descriptors in
+    # ``hexa_common.gait_catalog``, not YAML. The YAML only carries the
     # gait-agnostic knobs.
     base = dict(
         stride_length=0.12,
@@ -55,7 +55,7 @@ def test_linear_max_per_gait_strictly_decreasing_with_duty(tmp_path):
 
 def test_linear_max_unknown_gait_raises(tmp_path):
     # Per-gait caps fail fast on typos rather than silently falling
-    # back — the control layer must agree with the registry names.
+    # back — the control layer must agree with the catalog names.
     path = _write_yaml(tmp_path)
     caps = load_velocity_caps(path)
     with pytest.raises(KeyError):

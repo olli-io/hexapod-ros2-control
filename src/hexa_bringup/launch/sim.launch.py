@@ -113,11 +113,20 @@ def generate_launch_description():
         parameters=posture_params,
     )
 
+    control_config = PathJoinSubstitution([
+        FindPackageShare("hexa_control"), "config", "control.yaml",
+    ])
+    # Layer the tuning overlay's control block on top of control.yaml (last
+    # param source wins). Appended only when non-empty.
+    control_params = common_params + [control_config]
+    control_overlay = _tuning_block("control")
+    if control_overlay:
+        control_params.append(control_overlay)
     control_node = Node(
         package="hexa_control",
         executable="control_node",
         output="screen",
-        parameters=common_params,
+        parameters=control_params,
     )
 
     gait_node = Node(

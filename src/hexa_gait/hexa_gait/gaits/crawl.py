@@ -15,6 +15,8 @@ foot is never misflagged airborne for a tick — see ``engine.py``.
 
 from __future__ import annotations
 
+from hexa_common.gait_catalog import GAIT_DESCRIPTORS
+
 from ._common import METACHRONAL_OFFSETS, phased_foot_target
 from .base import LegContext, StrideParams
 
@@ -24,8 +26,8 @@ __all__ = ["Crawl"]
 
 class Crawl:
     phase_offsets = METACHRONAL_OFFSETS
-    duty_factor = 2.0 / 3.0
-    unstable = True
+    duty_factor = GAIT_DESCRIPTORS["crawl"].duty_factor
+    unstable = GAIT_DESCRIPTORS["crawl"].unstable
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

@@ -9,6 +9,8 @@ always has exactly three feet on the ground.
 
 from __future__ import annotations
 
+from hexa_common.gait_catalog import GAIT_DESCRIPTORS
+
 from ..clock import PhaseOffsets
 from ._common import phased_foot_target
 from .base import LegContext, StrideParams
@@ -31,8 +33,8 @@ TRIPOD_OFFSETS = PhaseOffsets(
 
 class Tripod:
     phase_offsets = TRIPOD_OFFSETS
-    duty_factor = 0.5
-    unstable = False
+    duty_factor = GAIT_DESCRIPTORS["tripod"].duty_factor
+    unstable = GAIT_DESCRIPTORS["tripod"].unstable
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

@@ -3,7 +3,7 @@
 Subscribes to ``/cmd_vel``, runs it through ``scale_to_envelope`` and
 the ``BodyVelocityLimiter`` rate-cap slew, and republishes as
 ``GaitParams`` on ``/gait/params`` at 200 Hz. ``/cmd_gait`` multiplexes
-the active gait name (validated against the ``STRATEGIES`` registry); on every
+the active gait name (validated against the gait catalog); on every
 gait switch the limiter's ``accel_linear`` is recomputed from
 ``linear_max(gait) / vmax_ramp_time_linear`` so the ramp time stays
 constant across gaits despite the per-gait velocity ceiling.
@@ -17,16 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import rclpy
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
-from hexa_gait import (
-    deep_merge,
+from hexa_common import (
     load_tuning_block,
     load_velocity_caps,
     scale_to_envelope,
 )
-from hexa_gait.gaits import STRATEGIES
+from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 from hexa_interfaces.msg import GaitParams
 from hexa_kinematics.leg_specs import load_leg_specs
 from rclpy.node import Node
@@ -51,19 +49,28 @@ class ControlConfig:
     snap_tol_angular: float
 
 
-def _load_config(path: Path, overlay: dict | None = None) -> ControlConfig:
-    with path.open() as f:
-        raw = yaml.safe_load(f)
-    if overlay:
-        deep_merge(raw, overlay)
-    name = str(raw["default_gait"])
-    if name not in STRATEGIES:
+def _read_control_config(node: Node) -> ControlConfig:
+    """Declare and read ``control_node``'s ros params into a ``ControlConfig``.
+
+    Defaults mirror ``config/control.yaml``; the launch files pass that file
+    (plus the ``control`` tuning-overlay block, layered last) so the YAML is
+    authoritative in the normal composed run, while a bare ``ros2 run`` still
+    starts on the built-in defaults.
+    """
+    node.declare_parameter("default_gait", "tripod")
+    node.declare_parameter("vmax_ramp_time_linear", 0.8)
+    node.declare_parameter("vmax_ramp_time_angular", 1.0)
+    node.declare_parameter("snap_tol_linear", 1.0e-4)
+    node.declare_parameter("snap_tol_angular", 1.0e-4)
+
+    name = str(node.get_parameter("default_gait").value)
+    if name not in GAIT_DESCRIPTORS:
         raise ValueError(
-            f"default_gait={name!r} not in STRATEGIES "
-            f"({sorted(STRATEGIES)})"
+            f"default_gait={name!r} not in the gait catalog "
+            f"({sorted(GAIT_DESCRIPTORS)})"
         )
-    vmax_ramp_time_linear = float(raw["vmax_ramp_time_linear"])
-    vmax_ramp_time_angular = float(raw["vmax_ramp_time_angular"])
+    vmax_ramp_time_linear = float(node.get_parameter("vmax_ramp_time_linear").value)
+    vmax_ramp_time_angular = float(node.get_parameter("vmax_ramp_time_angular").value)
     if vmax_ramp_time_linear <= 0.0:
         raise ValueError(
             f"vmax_ramp_time_linear must be positive, got {vmax_ramp_time_linear}"
@@ -72,8 +79,8 @@ def _load_config(path: Path, overlay: dict | None = None) -> ControlConfig:
         raise ValueError(
             f"vmax_ramp_time_angular must be positive, got {vmax_ramp_time_angular}"
         )
-    snap_tol_linear = float(raw.get("snap_tol_linear", 1.0e-4))
-    snap_tol_angular = float(raw.get("snap_tol_angular", 1.0e-4))
+    snap_tol_linear = float(node.get_parameter("snap_tol_linear").value)
+    snap_tol_angular = float(node.get_parameter("snap_tol_angular").value)
     return ControlConfig(
         default_gait=name,
         vmax_ramp_time_linear=vmax_ramp_time_linear,
@@ -87,7 +94,6 @@ class ControlNode(Node):
     def __init__(self) -> None:
         super().__init__("control_node")
 
-        share = Path(get_package_share_directory("hexa_control")) / "config"
         gait_yaml = (
             Path(get_package_share_directory("hexa_gait")) / "config" / "gait.yaml"
         )
@@ -96,7 +102,7 @@ class ControlNode(Node):
             / "config"
             / "geometry.yaml"
         )
-        self._cfg = _load_config(share / "control.yaml", load_tuning_block("control"))
+        self._cfg = _read_control_config(self)
         self._caps = load_velocity_caps(gait_yaml, load_tuning_block("gait"))
         self._leg_mounts = {
             name: spec.mount_xyz for name, spec in load_leg_specs(geometry_yaml).items()
@@ -155,10 +161,10 @@ class ControlNode(Node):
 
     def _on_gait(self, msg: String) -> None:
         name = msg.data
-        if name not in STRATEGIES:
+        if name not in GAIT_DESCRIPTORS:
             self.get_logger().warn(
-                f"/cmd_gait={name!r} is not a known strategy "
-                f"({sorted(STRATEGIES)}); dropping"
+                f"/cmd_gait={name!r} is not a known gait "
+                f"({sorted(GAIT_DESCRIPTORS)}); dropping"
             )
             return
         if name == self._active_gait:

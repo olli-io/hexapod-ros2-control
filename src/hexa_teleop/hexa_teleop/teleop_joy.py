@@ -25,9 +25,12 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Empty, String
 
-from hexa_gait import VelocityCaps, load_velocity_caps
-from hexa_gait.gaits import STRATEGIES
-from hexa_posture import load_animation_mode_animations
+from hexa_common import (
+    VelocityCaps,
+    load_animation_mode_animations,
+    load_velocity_caps,
+)
+from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 
 from .joy_mapping import (
     ANIMATION,
@@ -112,10 +115,10 @@ def _load_config(
     gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
     allow_unstable = bool(raw.get("allow_unstable_gaits", False))
     unstable_gaits = frozenset(
-        name for name, factory in STRATEGIES.items() if factory().unstable
+        name for name, descriptor in GAIT_DESCRIPTORS.items() if descriptor.unstable
     )
     gait_cycle = resolve_gait_cycle(
-        gait_cycle_raw, set(STRATEGIES), unstable_gaits, allow_unstable
+        gait_cycle_raw, set(GAIT_DESCRIPTORS), unstable_gaits, allow_unstable
     )
     default_gait = str(raw["default_gait"])
     if default_gait not in gait_cycle:

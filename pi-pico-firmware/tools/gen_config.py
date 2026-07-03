@@ -705,6 +705,11 @@ def main() -> int:
         return 1
 
     loaded = {k: load_yaml(v) for k, v in paths.items()}
+    # control.yaml is a ros2 params file; unwrap to the flat knob block so the
+    # rest of this tool (emit + the tuning overlay below) reads the same keys
+    # the control node exposes as ros params. posture.yaml stays wrapped and is
+    # unwrapped at its own use sites.
+    loaded["control"] = loaded["control"]["control_node"]["ros__parameters"]
     sources = [os.path.relpath(p, args.repo_root) for p in paths.values()]
 
     # Runtime-tuning overlay (optional): its per-domain blocks override the

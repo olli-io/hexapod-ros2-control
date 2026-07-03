@@ -39,6 +39,8 @@ the lift-offs bunch toward tripod's simultaneous triple.
 
 from __future__ import annotations
 
+from hexa_common.gait_catalog import GAIT_DESCRIPTORS
+
 from ..clock import PhaseOffsets
 from ._common import phased_foot_target
 from .base import LegContext, StrideParams
@@ -64,8 +66,8 @@ SURF_OFFSETS = PhaseOffsets(
 
 class Surf:
     phase_offsets = SURF_OFFSETS
-    duty_factor = 5.0 / 8.0
-    unstable = True
+    duty_factor = GAIT_DESCRIPTORS["surf"].duty_factor
+    unstable = GAIT_DESCRIPTORS["surf"].unstable
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext

@@ -169,8 +169,16 @@ def _bringup(context, *args, **kwargs):
     joint_command_bridge = Node(
         package=kinematics_pkg, executable="joint_command_bridge", output="screen",
     )
+    control_config = PathJoinSubstitution([
+        FindPackageShare("hexa_control"), "config", "control.yaml",
+    ])
+    control_params = [control_config]
+    control_overlay = _tuning_block("control")
+    if control_overlay:
+        control_params.append(control_overlay)
     control_node = Node(
         package="hexa_control", executable="control_node", output="screen",
+        parameters=control_params,
     )
     gait_node = Node(
         package=gait_pkg, executable="gait_node", output="screen",

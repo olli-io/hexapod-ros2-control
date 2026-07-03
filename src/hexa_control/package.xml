@@ -9,10 +9,14 @@
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>hexa_interfaces</depend>
-  <depend>hexa_gait</depend>
+  <depend>hexa_common</depend>
   <depend>hexa_kinematics</depend>
   <depend>hexa_description</depend>
   <depend>python3-yaml</depend>
+  <!-- Runtime config-data read, not a code import: control reads hexa_gait's
+       gait.yaml for the velocity envelope. Drops to a code dep once the
+       envelope moves to a neutral package (deferred with the gait migration). -->
+  <exec_depend>hexa_gait</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

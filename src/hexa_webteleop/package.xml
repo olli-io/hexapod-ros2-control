@@ -11,8 +11,13 @@
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
   <depend>hexa_teleop</depend>
-  <depend>hexa_gait</depend>
-  <depend>hexa_posture</depend>
+  <depend>hexa_common</depend>
+  <!-- Runtime config-data reads, not code imports: webteleop reads hexa_gait's
+       gait.yaml (velocity caps) and hexa_posture's posture.yaml (animation-mode
+       list). These drop away once that data moves to a neutral package
+       (deferred with the gait migration). -->
+  <exec_depend>hexa_gait</exec_depend>
+  <exec_depend>hexa_posture</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

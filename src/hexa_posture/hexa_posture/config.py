@@ -1,30 +1,11 @@
-"""Pure-Python loaders for the posture node's YAML config.
+"""Compatibility shim — the animation-mode loader moved to ``hexa_common``.
 
-Kept rclpy-free so upstream packages (e.g. ``hexa_teleop``) can read the
-authoritative values at startup without dragging in a ROS context.
+The implementation now lives in :mod:`hexa_common.posture_config`; this
+re-export keeps ``hexa_posture``'s public API (``hexa_posture.
+load_animation_mode_animations``) and its consumers valid after the
+extraction to the leaf library.
 """
 
-from __future__ import annotations
+from hexa_common.posture_config import load_animation_mode_animations
 
-from pathlib import Path
-
-import yaml
-
-
-def load_animation_mode_animations(posture_yaml: str | Path) -> tuple[str, ...]:
-    """Return ``posture_node.ros__parameters.animation_mode_animations``.
-
-    This is the single source of truth for the ordered set of names
-    teleop can publish on ``/animation/mode``; the teleop cycler walks
-    through this list directly so adding an animation here exposes it
-    on the joystick without any teleop-side edit.
-    """
-    path = Path(posture_yaml)
-    with path.open() as f:
-        raw = yaml.safe_load(f)
-    names = raw["posture_node"]["ros__parameters"]["animation_mode_animations"]
-    if not names:
-        raise ValueError(
-            f"animation_mode_animations in {path} must list at least one name"
-        )
-    return tuple(str(n) for n in names)
+__all__ = ["load_animation_mode_animations"]

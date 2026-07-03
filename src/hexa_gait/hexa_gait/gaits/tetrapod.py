@@ -17,6 +17,8 @@ abrupt than crawl but the static-stability margin is comparable.
 
 from __future__ import annotations
 
+from hexa_common.gait_catalog import GAIT_DESCRIPTORS
+
 from ..clock import PhaseOffsets
 from ._common import phased_foot_target
 from .base import LegContext, StrideParams
@@ -39,8 +41,8 @@ TETRAPOD_OFFSETS = PhaseOffsets(
 
 class Tetrapod:
     phase_offsets = TETRAPOD_OFFSETS
-    duty_factor = 2.0 / 3.0
-    unstable = False
+    duty_factor = GAIT_DESCRIPTORS["tetrapod"].duty_factor
+    unstable = GAIT_DESCRIPTORS["tetrapod"].unstable
 
     def foot_target(
         self, phase: float, stride: StrideParams, leg: LegContext
