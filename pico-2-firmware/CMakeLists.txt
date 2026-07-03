@@ -5,6 +5,12 @@ cmake_minimum_required(VERSION 3.13)
 # Bluepad32 + RP2350 require Pico SDK >= 2.1 (see README).
 set(PICO_BOARD pico2_w CACHE STRING "Target board")
 
+# ── enable_usb_debugging ───────────────────────────────────────────────────
+# USB-CDC debug logging (all HEXA_DBG output + the USB stdio stack itself). ON
+# for bench development; turn OFF (-DHEXA_ENABLE_USB_DEBUGGING=OFF) for on-robot
+# / low-jitter runs so a blocking CDC write never stalls the 200 Hz control tick.
+option(HEXA_ENABLE_USB_DEBUGGING "USB-CDC debug logging" ON)
+
 # Pull in the SDK (locate via PICO_SDK_PATH, or fetch the pinned tag from git).
 include(pico_sdk_import.cmake)
 
@@ -99,6 +105,10 @@ target_compile_options(hexa_pico PRIVATE -fexceptions)
 # Single-precision FPU: keep doubles from silently sneaking in.
 target_compile_options(hexa_pico PRIVATE -Wdouble-promotion)
 
+# enable_usb_debugging: seen by src/dbg.hpp's HEXA_DBG / HEXA_DBG_INIT macros.
+target_compile_definitions(hexa_pico PRIVATE
+    HEXA_ENABLE_USB_DEBUGGING=$<BOOL:${HEXA_ENABLE_USB_DEBUGGING}>)
+
 target_link_libraries(hexa_pico
     pico_stdlib                             # core runtime, timers, GPIO, flash
     hardware_uart                           # Servo 2040 Chica link (part 03)
@@ -109,8 +119,9 @@ target_link_libraries(hexa_pico
 )
 
 # Debug channel: USB-CDC only (no UART stdio — GP0/GP1 UART is reserved for the
-# Servo 2040 Chica link in part 03).
-pico_enable_stdio_usb(hexa_pico 1)
+# Servo 2040 Chica link in part 03). Gated by enable_usb_debugging: OFF drops the
+# USB stdio stack entirely (no enumeration, no blocking CDC writes).
+pico_enable_stdio_usb(hexa_pico $<BOOL:${HEXA_ENABLE_USB_DEBUGGING}>)
 pico_enable_stdio_uart(hexa_pico 0)
 
 # Emit .uf2 / .bin / .hex / map / disassembly.

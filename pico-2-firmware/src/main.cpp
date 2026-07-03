@@ -35,6 +35,7 @@
 
 #include "bt_teleop.hpp"
 #include "config_generated.hpp"
+#include "dbg.hpp"
 #include "gait/engine.hpp"
 #include "leg_index.hpp"
 #include "pipeline.hpp"
@@ -91,7 +92,7 @@ bool led_level(hexa::supervisor::LedPattern p, uint64_t now_us) {
 }
 
 void dump_joy(bool connected, const int16_t axes[bt_teleop::kNumAxes], uint32_t buttons) {
-    printf("[joy] %s LX=%6d LY=%6d L2=%6d RX=%6d RY=%6d R2=%6d DX=%6d DY=%6d btns=0x%02lx\n",
+    HEXA_DBG("[joy] %s LX=%6d LY=%6d L2=%6d RX=%6d RY=%6d R2=%6d DX=%6d DY=%6d btns=0x%02lx\n",
            connected ? "conn" : "idle",
            axes[bt_teleop::kLeftStickX], axes[bt_teleop::kLeftStickY], axes[bt_teleop::kL2],
            axes[bt_teleop::kRightStickX], axes[bt_teleop::kRightStickY], axes[bt_teleop::kR2],
@@ -102,12 +103,12 @@ void dump_joy(bool connected, const int16_t axes[bt_teleop::kNumAxes], uint32_t 
 }  // namespace
 
 int main() {
-    stdio_init_all();
+    HEXA_DBG_INIT();
 
     // bt_teleop owns cyw43_arch init (same chip the onboard LED hangs off of).
     if (!bt_teleop::init()) {
         while (true) {
-            printf("[boot] bt_teleop init failed\n");
+            HEXA_DBG("[boot] bt_teleop init failed\n");
             sleep_ms(1000);
         }
     }
@@ -128,19 +129,19 @@ int main() {
 
     hexa::supervisor::LedPattern led_pattern = hexa::supervisor::LedPattern::kSlowBlink;
 
-    printf("\n=== hexa Pico 2 W firmware ===\n");
-    printf("board: pico2_w (RP2350)  build: %s %s\n", __DATE__, __TIME__);
-    printf("stdio: USB-CDC   scheduler: %llu us tick (%.0f Hz)\n",
+    HEXA_DBG("\n=== hexa Pico 2 W firmware ===\n");
+    HEXA_DBG("board: pico2_w (RP2350)  build: %s %s\n", __DATE__, __TIME__);
+    HEXA_DBG("stdio: USB-CDC   scheduler: %llu us tick (%.0f Hz)\n",
            (unsigned long long)kTickPeriodUs, 1e6 / (double)kTickPeriodUs);
-    printf("bt: scanning for a gamepad (pair a PS4/PS5/Xbox pad)\n");
-    printf("servo: Chica UART up (uart0 GP0/GP1 @ 921600); rail DROPPED "
+    HEXA_DBG("bt: scanning for a gamepad (pair a PS4/PS5/Xbox pad)\n");
+    HEXA_DBG("servo: Chica UART up (uart0 GP0/GP1 @ 921600); rail DROPPED "
            "(arms on link-up + stand)\n");
-    printf("teleop: press init (start) to stand; sticks drive once standing\n");
-    printf("safety: input timeout %.2f s, battery GET every %d ticks, heap %lu B "
+    HEXA_DBG("teleop: press init (start) to stand; sticks drive once standing\n");
+    HEXA_DBG("safety: input timeout %.2f s, battery GET every %d ticks, heap %lu B "
            "free\n",
            (double)hexa::config::kInputTimeoutS, hexa::config::kGetPeriodTicks,
            (unsigned long)heap_free_bytes());
-    printf("boot ok — entering loop\n");
+    HEXA_DBG("boot ok — entering loop\n");
 
     uint64_t next_tick_us = time_us_64();
     uint64_t next_beat_us = time_us_64();
@@ -213,31 +214,31 @@ int main() {
 
             // ── Teleop event logs (the pipeline resolved them; we narrate) ──
             if (res.mode_changed) {
-                printf("[teleop] mode=%s\n", mode_name(res.mode));
+                HEXA_DBG("[teleop] mode=%s\n", mode_name(res.mode));
             }
             if (res.init_request) {
                 using IA = hexa::pipeline::InitAction;
                 if (res.init_action == IA::kInitialized) {
-                    printf("[teleop] init: FOLDED -> INITIALIZE\n");
+                    HEXA_DBG("[teleop] init: FOLDED -> INITIALIZE\n");
                 } else if (res.init_action == IA::kFoldRequested) {
-                    printf("[teleop] init: fold requested (state=%s)\n",
+                    HEXA_DBG("[teleop] init: fold requested (state=%s)\n",
                            hexa::gait::state_value(pipeline.engine().state()).c_str());
                 }
             }
             if (res.has_animation_name) {
                 if (res.animation_accepted) {
-                    printf("[teleop] animation=%s\n", res.animation_name.c_str());
+                    HEXA_DBG("[teleop] animation=%s\n", res.animation_name.c_str());
                 } else {
-                    printf("[teleop] animation=%s dropped (unknown)\n",
+                    HEXA_DBG("[teleop] animation=%s dropped (unknown)\n",
                            res.animation_name.c_str());
                 }
             }
             if (res.has_gait_select) {
                 if (res.gait_accepted) {
-                    printf("[teleop] gait -> %s (linear_max=%.3f m/s)\n",
+                    HEXA_DBG("[teleop] gait -> %s (linear_max=%.3f m/s)\n",
                            res.gait_select.c_str(), (double)res.gait_linear_max);
                 } else {
-                    printf("[teleop] gait -> %s dropped (state=%s)\n",
+                    HEXA_DBG("[teleop] gait -> %s dropped (state=%s)\n",
                            res.gait_select.c_str(),
                            hexa::gait::state_value(pipeline.engine().state()).c_str());
                 }
@@ -247,7 +248,7 @@ int main() {
             if (res.relay_energized != relay_state) {
                 servo_out::set_relay(res.relay_energized);
                 relay_state = res.relay_energized;
-                printf("[safety] relay %s (state=%s%s)\n",
+                HEXA_DBG("[safety] relay %s (state=%s%s)\n",
                        relay_state ? "ENERGIZED" : "dropped",
                        hexa::gait::state_value(pipeline.engine().state()).c_str(),
                        res.decision.battery_critical ? ", battery critical" : "");
@@ -284,18 +285,18 @@ int main() {
         // driven continuously above; the heartbeat is log-only now.)
         if (now_us >= next_beat_us) {
             next_beat_us += kHeartbeatUs;
-            printf("[heartbeat] %lu  up=%llu ms\n",
+            HEXA_DBG("[heartbeat] %lu  up=%llu ms\n",
                    (unsigned long)heartbeat++,
                    (unsigned long long)(now_us / 1000));
             if (last_batt_ok) {
-                printf("[servo] compute=%llu us  SET burst=%llu us  GET rt=%llu us  "
+                HEXA_DBG("[servo] compute=%llu us  SET burst=%llu us  GET rt=%llu us  "
                        "batt=%.2f V %.2f A\n",
                        (unsigned long long)last_compute_us,
                        (unsigned long long)last_set_burst_us,
                        (unsigned long long)last_get_rt_us,
                        (double)last_batt_v, (double)last_batt_i);
             } else {
-                printf("[servo] compute=%llu us  SET burst=%llu us  GET rt=%llu us  "
+                HEXA_DBG("[servo] compute=%llu us  SET burst=%llu us  GET rt=%llu us  "
                        "batt=-- (no reply)\n",
                        (unsigned long long)last_compute_us,
                        (unsigned long long)last_set_burst_us,
@@ -304,7 +305,7 @@ int main() {
             // Gait state: current FSM state, active strategy, master phase, and the
             // l_front leg's stance flag + commanded coxa/femur/tibia.
             const int l_front = hexa::leg_index(hexa::Leg::L_FRONT) * 3;
-            printf("[gait] state=%s strat=%s phase=%.3f  l_front(c=%.3f f=%.3f "
+            HEXA_DBG("[gait] state=%s strat=%s phase=%.3f  l_front(c=%.3f f=%.3f "
                    "t=%.3f) unreachable=%d/6\n",
                    hexa::gait::state_value(pipeline.engine().state()).c_str(),
                    pipeline.engine().strategy_name().c_str(),
@@ -315,7 +316,7 @@ int main() {
             // interval spread vs the 5 ms budget + deadline overruns), and the
             // soak free-heap low-water mark (fragmentation drift).
             const auto& ts = pipeline.supervisor().tick_stats();
-            printf("[safety] relay=%s bt=%s batt=%s jitter(last=%llu min=%llu "
+            HEXA_DBG("[safety] relay=%s bt=%s batt=%s jitter(last=%llu min=%llu "
                    "max=%llu us over=%lu/%lu) heap=%lu B (min %lu B)\n",
                    relay_state ? "on" : "off",
                    bt_teleop::connected() ? "conn" : "idle",

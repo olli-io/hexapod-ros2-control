@@ -18,6 +18,8 @@
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"  // time_us_64
 
+#include "dbg.hpp"  // HEXA_DBG — BT event logs (gated by enable_usb_debugging)
+
 extern "C" {
 #include <uni.h>
 }
@@ -128,15 +130,15 @@ void platform_on_init_complete() {
     // mode. (_unsafe: must be called from the BT thread — this callback is.)
     uni_bt_enable_new_connections_unsafe(true);
     uni_bt_start_scanning_and_autoconnect_unsafe();
-    printf("[bt] init complete — scanning for controllers\n");
+    HEXA_DBG("[bt] init complete — scanning for controllers\n");
 }
 
 void platform_on_device_connected(uni_hid_device_t* d) {
-    printf("[bt] device connected: %p\n", static_cast<void*>(d));
+    HEXA_DBG("[bt] device connected: %p\n", static_cast<void*>(d));
 }
 
 void platform_on_device_disconnected(uni_hid_device_t* d) {
-    printf("[bt] device disconnected: %p\n", static_cast<void*>(d));
+    HEXA_DBG("[bt] device disconnected: %p\n", static_cast<void*>(d));
     if (d == g_device) {
         g_device = nullptr;
         int16_t axes[kNumAxes];
@@ -149,12 +151,12 @@ void platform_on_device_disconnected(uni_hid_device_t* d) {
 uni_error_t platform_on_device_ready(uni_hid_device_t* d) {
     // Bind to the first ready gamepad; reject additional controllers.
     if (g_device != nullptr && g_device != d) {
-        printf("[bt] second controller rejected (already piloting %p)\n",
+        HEXA_DBG("[bt] second controller rejected (already piloting %p)\n",
                static_cast<void*>(g_device));
         return UNI_ERROR_IGNORE_DEVICE;
     }
     g_device = d;
-    printf("[bt] controller ready: %p\n", static_cast<void*>(d));
+    HEXA_DBG("[bt] controller ready: %p\n", static_cast<void*>(d));
     return UNI_ERROR_SUCCESS;
 }
 
@@ -196,7 +198,7 @@ bool init() {
     fill_neutral(g_axes, g_buttons);
 
     if (cyw43_arch_init() != 0) {
-        printf("[bt] cyw43_arch_init failed\n");
+        HEXA_DBG("[bt] cyw43_arch_init failed\n");
         return false;
     }
     uni_platform_set_custom(get_platform());
