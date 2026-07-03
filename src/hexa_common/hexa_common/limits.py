@@ -68,7 +68,6 @@ from typing import Mapping
 import yaml
 
 from .gait_catalog import GAIT_DESCRIPTORS
-from .overlay import deep_merge
 
 
 @dataclass(frozen=True)
@@ -93,9 +92,7 @@ class VelocityCaps:
         return self.yaw_bias_by_gait[gait]
 
 
-def load_velocity_caps(
-    envelope_yaml: str | Path, overlay: Mapping[str, object] | None = None
-) -> VelocityCaps:
+def load_velocity_caps(envelope_yaml: str | Path) -> VelocityCaps:
     """Build per-gait caps from the velocity-envelope YAML and the catalog.
 
     Duty factor is **not** in YAML — it lives on each gait descriptor in
@@ -105,20 +102,16 @@ def load_velocity_caps(
     contributes the gait-agnostic knobs (``stride_length``,
     ``min_swing_time``, ``angular_z_max``, ``yaw_bias``).
 
-    ``overlay`` is the optional tuning-overlay ``gait`` block
-    (``hexa_common.load_tuning_block("gait")``); when given, its keys
-    override the file's before the caps are derived. Defaulted off so
-    tests that pass an explicit ``envelope_yaml`` path are unaffected.
+    ``envelope_yaml`` is hexa_description's ``tuning.yaml`` (or any ros2
+    params file carrying a ``gait_node`` block); the caps are read from
+    that block.
     """
     path = Path(envelope_yaml)
     with path.open() as f:
         raw = yaml.safe_load(f)
-    # gait.yaml is a ros2 params file; unwrap to the flat knob block the caps
-    # are derived from (mirrors the gait node's ros params). The overlay's
-    # ``gait`` block stays flat and merges into the unwrapped dict.
+    # tuning.yaml is a ros2 params file; unwrap to the flat knob block the caps
+    # are derived from (mirrors the gait node's ros params).
     raw = raw["gait_node"]["ros__parameters"]
-    if overlay:
-        deep_merge(raw, dict(overlay))
 
     stride_length = float(raw["stride_length"])
     min_swing_time = float(raw["min_swing_time"])

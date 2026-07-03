@@ -3,7 +3,7 @@
 Velocity shaping between teleop / autonomy and the gait engine.
 
 - Subscribes to `/cmd_vel`, clamps against the caps in
-  `hexa_gait/config/gait.yaml`, and republishes as `GaitParams` on
+  `hexa_description/config/tuning.yaml`, and republishes as `GaitParams` on
   `/gait/params` at 200 Hz.
 - Subscribes to `/cmd_gait` (`transient_local`) for the active gait
   name; unknown names are warned and dropped.
@@ -38,7 +38,7 @@ A constant-acceleration slew (not a first-order time constant) so the
 worst-case derivative is symmetric and finite-time, and the gait
 engine's `cmd_zero_tol` triggers cleanly on release without any
 special-case snap. The acceleration cap itself is not the tuning
-knob: `control.yaml` exposes `vmax_ramp_time_linear` /
+knob: `tuning.yaml` (the `control_node` block) exposes `vmax_ramp_time_linear` /
 `vmax_ramp_time_angular` (seconds to ramp from rest to the active
 gait's velocity ceiling) and the node derives `accel_linear =
 linear_max(gait) / vmax_ramp_time_linear` per gait. Without this the

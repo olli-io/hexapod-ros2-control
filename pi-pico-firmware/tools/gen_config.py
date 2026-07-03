@@ -162,20 +162,6 @@ def load_yaml(path: str):
         return yaml.safe_load(f)
 
 
-def deep_merge(base: dict, overlay: dict) -> dict:
-    """Recursively merge ``overlay`` into ``base`` in place; overlay wins.
-
-    Mirrors hexa_gait/overlay.py so the baked header sees the same tuning
-    overrides the ROS nodes apply at runtime.
-    """
-    for key, value in (overlay or {}).items():
-        if isinstance(base.get(key), dict) and isinstance(value, dict):
-            deep_merge(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
 def leg_specs(geometry: dict):
     """Six LegSpecs by symmetry — port of load_leg_specs()."""
     leg = geometry["leg"]
@@ -370,7 +356,7 @@ def emit(geometry, standing, gait, teleop, posture, control, hardware,
     w("")
 
     # ── gait engine ──
-    w("// ── Gait engine knobs (hexa_gait_cpp/config/gait.yaml) ──")
+    w("// ── Gait engine knobs (hexa_description/config/tuning.yaml) ──")
     w("struct EngineConfig {")
     fields = [
         ("stride_length", gait["stride_length"]),
@@ -542,7 +528,7 @@ def emit(geometry, standing, gait, teleop, posture, control, hardware,
 
     # ── posture animation stack ──
     pn = posture["posture_node"]["ros__parameters"]
-    w("// ── Posture animation stack (hexa_posture/config/posture.yaml) ──")
+    w("// ── Posture animation stack (hexa_description/config/tuning.yaml) ──")
     enabled = pn["enabled_animations"]
     w(f"inline constexpr std::array<std::string_view, {len(enabled)}> "
       "kEnabledAnimations = {" + ", ".join(cstr(a) for a in enabled) + "};")
@@ -585,7 +571,7 @@ def emit(geometry, standing, gait, teleop, posture, control, hardware,
     w("")
 
     # ── control velocity shaping ──
-    w("// ── Control velocity shaping (hexa_control/config/control.yaml) ──")
+    w("// ── Control velocity shaping (hexa_description/config/tuning.yaml) ──")
     w("struct ControlConfig {")
     control_fields = [
         ("vmax_ramp_time_linear", control["vmax_ramp_time_linear"]),
@@ -686,13 +672,18 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg_dir = os.path.join(args.repo_root, "src")
+    # gait / control / posture all come from hexa_description's tuning.yaml —
+    # the single source of truth the ROS nodes read. Baking from the same file
+    # keeps the firmware constants in lockstep with sim/robot with no overlay
+    # merge to mirror.
+    tuning_yaml = f"{cfg_dir}/hexa_description/config/tuning.yaml"
     paths = {
         "geometry": f"{cfg_dir}/hexa_description/config/geometry.yaml",
         "standing": f"{cfg_dir}/hexa_description/config/standing_pose.yaml",
-        "gait": f"{cfg_dir}/hexa_gait_cpp/config/gait.yaml",
+        "gait": tuning_yaml,
         "teleop": f"{cfg_dir}/hexa_teleop/config/teleop_joy.yaml",
-        "posture": f"{cfg_dir}/hexa_posture/config/posture.yaml",
-        "control": f"{cfg_dir}/hexa_control/config/control.yaml",
+        "posture": tuning_yaml,
+        "control": tuning_yaml,
         "hardware": f"{cfg_dir}/hexa_hardware/config/hardware.yaml",
         "webteleop": f"{cfg_dir}/hexa_webteleop/config/webteleop.yaml",
         "display": f"{cfg_dir}/hexa_display/config/display.yaml",
@@ -705,29 +696,17 @@ def main() -> int:
         return 1
 
     loaded = {k: load_yaml(v) for k, v in paths.items()}
-    # control.yaml and gait.yaml are ros2 params files; unwrap each to the flat
-    # knob block so the rest of this tool (emit + the tuning overlay below)
-    # reads the same keys the nodes expose as ros params. The unwrapped gait
-    # dict is byte-identical to the former flat file (nested initialize:/reseat:
-    # maps preserved). posture.yaml stays wrapped and is unwrapped at its own
-    # use sites.
+    # tuning.yaml is a ros2 params file; unwrap control and gait to their flat
+    # knob blocks so the rest of this tool reads the same keys the nodes expose
+    # as ros params (nested initialize:/reseat: maps preserved). posture stays
+    # wrapped and is unwrapped at its own use sites. Each key loaded tuning.yaml
+    # in its own parse, so unwrapping one does not touch the others.
     loaded["control"] = loaded["control"]["control_node"]["ros__parameters"]
     loaded["gait"] = loaded["gait"]["gait_node"]["ros__parameters"]
-    sources = [os.path.relpath(p, args.repo_root) for p in paths.values()]
-
-    # Runtime-tuning overlay (optional): its per-domain blocks override the
-    # matching base YAML, exactly as the ROS nodes apply them at runtime, so the
-    # baked firmware constants stay in lockstep. Absent file/block = no override.
-    tuning_path = f"{cfg_dir}/hexa_description/config/tuning.yaml"
-    if os.path.isfile(tuning_path):
-        tuning = load_yaml(tuning_path) or {}
-        deep_merge(loaded["gait"], tuning.get("gait", {}))
-        deep_merge(loaded["control"], tuning.get("control", {}))
-        deep_merge(
-            loaded["posture"]["posture_node"]["ros__parameters"],
-            tuning.get("posture", {}),
-        )
-        sources.append(os.path.relpath(tuning_path, args.repo_root))
+    # Dedupe the provenance list: tuning.yaml backs three logical sources.
+    sources = list(dict.fromkeys(
+        os.path.relpath(p, args.repo_root) for p in paths.values()
+    ))
     header = emit(loaded["geometry"], loaded["standing"], loaded["gait"],
                   loaded["teleop"], loaded["posture"], loaded["control"],
                   loaded["hardware"], loaded["webteleop"], loaded["display"],

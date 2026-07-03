@@ -134,7 +134,7 @@ animation:
     left_stick_x: drive_y
     right_stick_x: drive_yaw
 
-# Gait-mode stick scaling comes from hexa_gait/config/gait.yaml; the
+# Gait-mode stick scaling comes from hexa_description/config/tuning.yaml; the
 # web teleop node loads it at startup and swaps in the active gait's
 # cap whenever /cmd_gait updates — same pattern as teleop_joy.
 

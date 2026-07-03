@@ -20,7 +20,6 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from hexa_common import (
-    load_tuning_block,
     load_velocity_caps,
     scale_to_envelope,
 )
@@ -52,8 +51,8 @@ class ControlConfig:
 def _read_control_config(node: Node) -> ControlConfig:
     """Declare and read ``control_node``'s ros params into a ``ControlConfig``.
 
-    Defaults mirror ``config/control.yaml``; the launch files pass that file
-    (plus the ``control`` tuning-overlay block, layered last) so the YAML is
+    Defaults mirror hexa_description's ``config/tuning.yaml`` (the
+    ``control_node`` block); the launch files pass that file so the YAML is
     authoritative in the normal composed run, while a bare ``ros2 run`` still
     starts on the built-in defaults.
     """
@@ -94,8 +93,12 @@ class ControlNode(Node):
     def __init__(self) -> None:
         super().__init__("control_node")
 
-        gait_yaml = (
-            Path(get_package_share_directory("hexa_gait")) / "config" / "gait.yaml"
+        # Velocity caps derive from the gait_node block of hexa_description's
+        # tuning.yaml — the single source of truth the gait node also reads.
+        tuning_yaml = (
+            Path(get_package_share_directory("hexa_description"))
+            / "config"
+            / "tuning.yaml"
         )
         geometry_yaml = (
             Path(get_package_share_directory("hexa_description"))
@@ -103,7 +106,7 @@ class ControlNode(Node):
             / "geometry.yaml"
         )
         self._cfg = _read_control_config(self)
-        self._caps = load_velocity_caps(gait_yaml, load_tuning_block("gait"))
+        self._caps = load_velocity_caps(tuning_yaml)
         self._leg_mounts = {
             name: spec.mount_xyz for name, spec in load_leg_specs(geometry_yaml).items()
         }
@@ -139,7 +142,7 @@ class ControlNode(Node):
         )
         self.get_logger().info(
             f"control_node up: default_gait={self._cfg.default_gait}, "
-            f"caps from {gait_yaml}: "
+            f"caps from {tuning_yaml}: "
             f"linear_max=({cap_summary}) m/s, "
             f"angular_z_max={self._caps.angular_max:.2f} rad/s, "
             f"yaw_bias=({bias_summary}), "

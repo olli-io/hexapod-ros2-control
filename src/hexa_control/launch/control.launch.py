@@ -1,8 +1,8 @@
 """Launch ``control_node`` standalone.
 
 Sim composition (``hexa_bringup/launch/sim.launch.py``) starts
-``control_node`` directly with its own param wiring (control.yaml plus the
-tuning overlay), bypassing this launch file.
+``control_node`` directly with its own param wiring (hexa_description's
+tuning.yaml), bypassing this launch file.
 
 Run with::
 
@@ -16,7 +16,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     control_config = PathJoinSubstitution([
-        FindPackageShare("hexa_control"), "config", "control.yaml",
+        FindPackageShare("hexa_description"), "config", "tuning.yaml",
     ])
     control_node = Node(
         package="hexa_control",

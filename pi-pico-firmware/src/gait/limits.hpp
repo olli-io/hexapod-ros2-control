@@ -29,7 +29,7 @@ struct VelocityCaps {
 };
 
 // Build per-gait caps from the baked config (config::kGaits + kAngularMax),
-// mirroring the double load_velocity_caps that reads gait.yaml.
+// mirroring the double load_velocity_caps that reads tuning.yaml.
 VelocityCaps load_velocity_caps_from_config();
 
 // Clamp omega_z and cut the velocity triple to fit the gait envelope. Returns

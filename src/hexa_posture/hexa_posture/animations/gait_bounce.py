@@ -42,10 +42,10 @@ class GaitBounce:
     the lift composes additively with the user pose and any other
     Z-axis animation (e.g. ``Breathing``)."""
 
-    step_height_ref: float = 0.06
+    step_height_ref: float = 0.08
     """Reference foot swing apex (m) used to normalise the lift
-    signal. Defaults to ``hexa_gait/config/gait.yaml``'s
-    ``step_height``. If the gait engine's ``step_height`` is
+    signal. Defaults to ``hexa_description/config/tuning.yaml``'s
+    ``gait_node`` ``step_height``. If the gait engine's ``step_height`` is
     retuned, mirror the change here so ``arc_height`` continues to
     represent the actual peak body lift in metres.
 

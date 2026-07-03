@@ -18,6 +18,8 @@
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
   <depend>eigen</depend>
+  <!-- Standalone bench launch loads hexa_description's tuning.yaml. -->
+  <exec_depend>hexa_description</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 

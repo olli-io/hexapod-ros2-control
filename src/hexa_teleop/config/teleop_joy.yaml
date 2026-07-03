@@ -15,8 +15,8 @@ default_gait: tripod
 # single source of truth). When false, they are skipped in the D-pad
 # gait rotation above.
 allow_unstable_gaits: true
-# ANIMATION-mode cycler list comes from hexa_posture/config/posture.yaml
-# (``animation_mode_animations``) — single source of truth. Entry into
+# ANIMATION-mode cycler list comes from hexa_description/config/tuning.yaml
+# (posture_node ``animation_mode_animations``) — single source of truth. Entry into
 # ANIMATION snaps to index 0.
 
 base:
@@ -133,7 +133,7 @@ animation:
     right_stick_y: drive_x
 
 # Gait-mode stick scaling (linear and angular caps) comes from
-# hexa_gait/config/gait.yaml; the teleop node loads it at startup and
+# hexa_description/config/tuning.yaml; the teleop node loads it at startup and
 # swaps in the active gait's cap whenever /cmd_gait updates.
 
 # Coexistence with the web teleop (hexa_webteleop). When enabled, the

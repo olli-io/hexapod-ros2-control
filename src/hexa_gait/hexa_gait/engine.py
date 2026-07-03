@@ -166,7 +166,8 @@ class EngineState(Enum):
 @dataclass(frozen=True)
 class EngineConfig:
     """Engine-internal knobs, sourced entirely from
-    ``hexa_gait/config/gait.yaml``. None of these are on the wire.
+    ``hexa_description/config/tuning.yaml`` (the ``gait_node`` block). None
+    of these are on the wire.
 
     ``stride_length`` and ``min_swing_time`` / ``max_swing_time`` define
     the velocity → cycle_time relationship the engine applies each
@@ -208,7 +209,7 @@ class EngineConfig:
     # target above the floor (with body on belly) at the end of each
     # PLACE_FEET swing; must absorb the URDF's vertical-tibia
     # assumption so the foot sphere does not penetrate the floor (see
-    # gait.yaml comment for the geometry behind the value).
+    # tuning.yaml comment for the geometry behind the value).
     init_pair_swing_time: float
     init_lift_body_time: float
     init_swing_clearance: float

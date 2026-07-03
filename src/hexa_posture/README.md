@@ -103,17 +103,17 @@ XY pose removes the gravity-driven torque on the rocking axis.
   already on `/legs/targets`. `hexa_posture` does not import from
   `hexa_gait`; only the topic contract is shared.
 - **Knobs** — three ROS params, all sourced from
-  `hexa_posture/config/posture.yaml`:
+  `hexa_description/config/tuning.yaml` (the `posture_node` block):
   - `gait_sway_gain` (default 1.0) — physical feedforward gain on
     the centroid. 1.0 makes the body track the polygon centroid
     one-for-one.
-  - `gait_sway_strength` (default 0.5) — user-facing attenuator in
+  - `gait_sway_strength` (default 0.4) — user-facing attenuator in
     `[0, 1]` that multiplies the gain output. Lets you tone the
     sway down without changing the physical gain. 0.0 disables.
   - `support_centroid_tau` (default 0.1 s) — first-order low-pass
     time constant on the centroid signal.
   Disabled by default in the node — add `gait_sway` to
-  `enabled_animations` (the shipped `posture.yaml` already does so
+  `enabled_animations` (the shipped `tuning.yaml` already does so
   alongside `still`).
 
 ### GaitBounce
@@ -141,12 +141,12 @@ Z.
   lagging or leading behind it. The trough sits at the inter-peak
   overlap height, not at zero.
 - **Knobs** — two ROS params, both from
-  `hexa_posture/config/posture.yaml`:
+  `hexa_description/config/tuning.yaml` (the `posture_node` block):
   - `gait_bounce_arc_height` (default 0.02 m) — peak body lift at
     swing apex.
-  - `gait_bounce_step_height_ref` (default 0.06 m) — reference
-    swing apex used to normalise the lift signal. Mirror
-    `hexa_gait/config/gait.yaml`'s `step_height` so `arc_height`
+  - `gait_bounce_step_height_ref` (default 0.08 m) — reference
+    swing apex used to normalise the lift signal. Mirrors the
+    `gait_node` `step_height` in the same `tuning.yaml` so `arc_height`
     continues to represent the actual peak body lift in metres.
   - `swing_lift_tau` (default 0.04 s) — first-order low-pass time
     constant on the swing-lift signal feeding the animation.
@@ -164,8 +164,9 @@ safety layer.
 
 ## Configuration
 
-`config/posture.yaml` is the single source of truth for the node's
-runtime knobs (animation stack, GaitSway tuning, centroid filter).
+`hexa_description/config/tuning.yaml` (the `posture_node` block) is the
+single source of truth for the node's runtime knobs (animation stack,
+GaitSway tuning, centroid filter).
 It loads as a standard ROS2 parameter file under the `posture_node`
 key. The bringup launch passes it to the node; overriding any value
 on the command line via `--ros-args -p name:=value` still works.

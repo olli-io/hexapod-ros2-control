@@ -151,9 +151,9 @@ All tunable values live in `config/webteleop.yaml`:
 - Per-mode button→function bindings
 - Posture-mode scalar limits (x/y max, roll/pitch/yaw max, height range)
 
-Velocity caps are loaded from `hexa_gait/config/gait.yaml` (single
-source of truth); the animation list from
-`hexa_posture/config/posture.yaml`.
+Velocity caps are loaded from `hexa_description/config/tuning.yaml`
+(single source of truth, the `gait_node` block); the animation list from
+the same file's `posture_node` block.
 
 ## Running
 

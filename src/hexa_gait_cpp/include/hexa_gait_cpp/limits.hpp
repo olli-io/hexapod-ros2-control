@@ -1,4 +1,4 @@
-// Velocity caps derived from gait.yaml — single source of truth. Port of
+// Velocity caps derived from tuning.yaml — single source of truth. Port of
 // limits.py. Linear cap is per-gait (depends on the strategy's duty factor);
 // angular cap is the raw angular_z_max. scale_to_envelope cuts (v_x, v_y,
 // omega_z) so the implied per-leg planar speed never exceeds linear_max.
@@ -27,7 +27,7 @@ struct VelocityCaps {
   }
 };
 
-// Build per-gait caps from gait.yaml and the strategy registry.
+// Build per-gait caps from tuning.yaml and the strategy registry.
 VelocityCaps load_velocity_caps(const std::string& gait_yaml);
 
 // Clamp omega_z and cut the velocity triple to fit the gait envelope. Returns

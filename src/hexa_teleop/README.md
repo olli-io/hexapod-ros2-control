@@ -98,7 +98,7 @@ The shipped YAML:
 - **L1 / R1 (posture)** — `yaw_left` / `yaw_right` body yaw, eased through `posture.yaw_tau_s` (default ~0.1 s), saturates at `posture.yaw_max_deg` while held. Both buttons cancel to zero. Inactive in other modes.
 - **L2 / R2 (posture)** — `wiggle_left` / `wiggle_right`. Same yaw target as L1 / R1 (shared) plus a body translation that holds a point `posture.wiggle_pivot_forward_m` ahead of body centre stationary. Triggers thresholded at `base.trigger_threshold`. Inactive in other modes.
 - **D-pad up / down (all modes)** — `height_up` / `height_down` integrate a persistent body-height offset (`pose.z`) while held, clamped to `posture.height.[min,max]_m`. Active in any mode in which the function is bound (gait, posture, and animation all bind it to the D-pad by default); the rate and limits always come from the canonical `posture.height` block. Height **persists** across release and mode toggles, so the robot keeps walking at the lifted/lowered chassis height.
-- **D-pad up / down (animation)** — `animation_next` / `animation_prev` cycle through the animation list loaded at startup from `hexa_posture/config/posture.yaml` (`animation_mode_animations`; `vertical_body_roll → horizontal_body_roll → body_roll_3d` by default, wrapping). Each rising edge publishes the new selection on `/animation/mode`. Entering ANIMATION mode snaps to index 0 and publishes that name so the body is visibly animated immediately.
+- **D-pad up / down (animation)** — `animation_next` / `animation_prev` cycle through the animation list loaded at startup from `hexa_description/config/tuning.yaml` (`animation_mode_animations`; `vertical_body_roll → horizontal_body_roll → body_roll_3d` by default, wrapping). Each rising edge publishes the new selection on `/animation/mode`. Entering ANIMATION mode snaps to index 0 and publishes that name so the body is visibly animated immediately.
 - **D-pad left / right (gait, posture)** — `gait_prev` / `gait_next` cycle the active gait through `gait_cycle` (`tripod → tetrapod → ripple` by default: surf and crawl are marked `unstable` on their strategy classes in `hexa_gait` and are skipped from the rotation unless `allow_unstable_gaits: true` is set, which restores the full `tripod → surf → tetrapod → crawl → ripple` list). The switch is published to `/cmd_gait` when the gait engine reports `stand`, `gait`, `pausing`, `paused`, or `reseating`. A switch while standing applies immediately; a switch while walking makes the engine pause, reseat with a short dwell, commit the new gait, and resume walking if the stick is still held — further presses mid-sequence keep updating the pending gait. During `engaging` / `resuming` the gait is locked: the press advances the local cursor but the switch is dropped, not queued.
 - **Select (posture)** — `record`. Snapshots the current effective body pose on rising edge into a persistent baseline. The robot holds that pose when the joystick is released; subsequent stick input adds on top and clamps per-axis, so re-pushing a stick that's already at its limit has no further effect. The baseline bleeds through into gait mode.
 - **A** — `gait_mode`. **Y** — `posture_mode`. **B** — `animation_mode` (toggles GAIT ↔ ANIMATION).
@@ -109,20 +109,20 @@ The node starts in **gait** mode. Override the config at launch with
 
 Gait-mode stick scaling — the linear and angular velocity caps applied
 to a full-stick deflection — is **not** owned here. It is loaded at
-startup from `hexa_gait/config/gait.yaml` via
-`hexa_gait.load_velocity_caps`:
+startup from `hexa_description/config/tuning.yaml` via
+`hexa_common.load_velocity_caps`:
 
 - Linear is **isotropic and per-gait**: full-stick forward and full-stick
   sideways saturate at `stride_length × (1 − β) / (min_swing_time × β)`
   for the *active* gait's β. Tripod has the highest cap, ripple the
   lowest. The stick re-scales the moment a D-pad cycle accepts a new
   gait so 100% deflection always commands the gait's true top speed.
-- Angular cap is the explicit `angular_z_max` knob in `gait.yaml`.
+- Angular cap is the explicit `angular_z_max` knob in `tuning.yaml`.
 
-To change those caps, edit `gait.yaml`; no teleop config edit needed.
+To change those caps, edit `tuning.yaml`; no teleop config edit needed.
 
 Likewise the ANIMATION-mode cycler list is loaded from
-`hexa_posture/config/posture.yaml` via
+`hexa_description/config/tuning.yaml` via
 `hexa_posture.load_animation_mode_animations`, so adding an entry to
 `animation_mode_animations` exposes it on the joystick without any
 teleop-side edit.

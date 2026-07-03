@@ -30,10 +30,8 @@ set(REPO_ROOT ${FW_ROOT}/..)
 file(GLOB_RECURSE CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_description/config/geometry.yaml
   ${REPO_ROOT}/src/hexa_description/config/standing_pose.yaml
-  ${REPO_ROOT}/src/hexa_gait_cpp/config/gait.yaml
+  ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
   ${REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
-  ${REPO_ROOT}/src/hexa_posture/config/posture.yaml
-  ${REPO_ROOT}/src/hexa_control/config/control.yaml
   ${REPO_ROOT}/src/hexa_hardware/config/hardware.yaml
   ${REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml
   ${REPO_ROOT}/src/hexa_display/config/display.yaml)
@@ -197,8 +195,7 @@ add_custom_command(
   DEPENDS ${CMAKE_CURRENT_LIST_DIR}/gen_joy_golden.py
           ${REPO_ROOT}/src/hexa_teleop/hexa_teleop/joy_mapping.py
           ${REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
-          ${REPO_ROOT}/src/hexa_gait_cpp/config/gait.yaml
-          ${REPO_ROOT}/src/hexa_posture/config/posture.yaml
+          ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
   COMMENT "Generating joy_golden_generated.hpp from the Python map_joy reference"
   VERBATIM)
 add_custom_target(gen_joy_golden DEPENDS ${JOY_GOLDEN})
@@ -238,7 +235,7 @@ add_custom_command(
           ${REF_POSTURE}/animations/vertical_body_roll.py
           ${REF_POSTURE}/animations/horizontal_body_roll.py
           ${REF_POSTURE}/animations/body_roll_3d.py
-          ${REPO_ROOT}/src/hexa_posture/config/posture.yaml
+          ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
   COMMENT "Generating posture_golden_generated.hpp from the Python reference"
   VERBATIM)
 add_custom_target(gen_posture_golden DEPENDS ${POSTURE_GOLDEN})

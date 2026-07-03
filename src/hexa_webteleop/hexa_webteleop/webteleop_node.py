@@ -88,15 +88,13 @@ class WebTeleopNode(Node):
             / "config"
             / "webteleop.yaml"
         )
-        gait_yaml_path = (
-            Path(get_package_share_directory("hexa_gait"))
+        # Velocity caps (gait_node block) and the animation-mode list
+        # (posture_node block) both come from hexa_description's tuning.yaml —
+        # the single source of truth the gait/posture nodes also read.
+        tuning_yaml_path = (
+            Path(get_package_share_directory("hexa_description"))
             / "config"
-            / "gait.yaml"
-        )
-        posture_yaml_path = (
-            Path(get_package_share_directory("hexa_posture"))
-            / "config"
-            / "posture.yaml"
+            / "tuning.yaml"
         )
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
@@ -104,7 +102,7 @@ class WebTeleopNode(Node):
         )
 
         self._cfg, initial_mode, default_gait, self._caps = load_web_config(
-            cfg_path, gait_yaml_path, posture_yaml_path
+            cfg_path, tuning_yaml_path, tuning_yaml_path
         )
         self._state = JoyState(
             mode=initial_mode,

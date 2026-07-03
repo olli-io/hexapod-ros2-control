@@ -271,9 +271,9 @@ class PostureNode(Node):
             list(DEFAULT_ANIMATION_MODE_ANIMATIONS),
         )
         self.declare_parameter("gait_sway_gain", 1.0)
-        self.declare_parameter("gait_sway_strength", 0.5)
+        self.declare_parameter("gait_sway_strength", 0.4)
         self.declare_parameter("gait_bounce_arc_height", 0.02)
-        self.declare_parameter("gait_bounce_step_height_ref", 0.06)
+        self.declare_parameter("gait_bounce_step_height_ref", 0.08)
         self.declare_parameter("vertical_body_roll_z_amplitude", 0.02)
         self.declare_parameter("vertical_body_roll_pitch_amplitude_deg", 10.0)
         self.declare_parameter("vertical_body_roll_phase_offset", 0.0)

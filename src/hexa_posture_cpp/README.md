@@ -39,11 +39,12 @@ offset with the per-leg foot targets before solving IK.
 
 ## Config
 
-- `config/posture.yaml` — the runtime knobs (animation stack selection and
-  per-animation parameters). Copied verbatim from the Python package. See its
-  inline comments for what each parameter does.
+- Runtime knobs (animation stack selection and per-animation parameters) come
+  from `hexa_description/config/tuning.yaml` (the `posture_node` block) — the
+  single source of truth shared with the Python node. See its inline comments
+  for what each parameter does.
 
 ## Standalone run
 
 - `ros2 launch hexa_posture_cpp posture.launch.py` — brings up the node on a
-  bench with `config/posture.yaml` applied.
+  bench with `hexa_description`'s tuning.yaml applied.

@@ -9,7 +9,7 @@
 namespace hexa_gait {
 
 VelocityCaps load_velocity_caps(const std::string& gait_yaml) {
-  // gait.yaml is a ros2 params file; unwrap to the flat knob block the caps
+  // tuning.yaml is a ros2 params file; unwrap to the flat knob block the caps
   // are derived from (mirrors the gait node's ros params and gen_config.py).
   const YAML::Node raw =
       YAML::LoadFile(gait_yaml)["gait_node"]["ros__parameters"];

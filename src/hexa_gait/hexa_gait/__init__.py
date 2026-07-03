@@ -14,7 +14,6 @@ from .gaits.base import LegContext, Strategy, StrideParams, swing_arc
 from .gaits.tripod import TRIPOD_OFFSETS, Tripod
 from .initialize import InitializeController, InitializeState
 from .limits import VelocityCaps, load_velocity_caps, scale_to_envelope
-from .overlay import deep_merge, load_tuning_block
 from .pause import PauseController, PauseState
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
 
@@ -41,9 +40,7 @@ __all__ = [
     "Tripod",
     "VelocityCaps",
     "build_leg_contexts",
-    "deep_merge",
     "initial_stance_from_yaml",
-    "load_tuning_block",
     "load_velocity_caps",
     "nominal_stance_from_yaml",
     "reseat_geometry_from_yaml",

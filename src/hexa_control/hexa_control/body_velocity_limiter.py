@@ -28,7 +28,7 @@ properties so the control node can retune the linear cap on a
 ``/cmd_gait`` switch (the gait's per-leg velocity ceiling is
 gait-specific, so an absolute acceleration cap that feels right on
 one gait over- or under-shoots on another — see
-``hexa_control/config/control.yaml``).
+``hexa_description/config/tuning.yaml``, the ``control_node`` block).
 
 ``snap_tol_*`` clamps any sub-tolerance dribble at the very end of a
 ramp so the engine sees an exact zero, not a 1e-15 residue. Keep it

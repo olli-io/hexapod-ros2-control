@@ -36,7 +36,8 @@ enum class EngineState {
   RESEATING,
 };
 
-// Engine-internal knobs, sourced entirely from gait.yaml. None are on the wire.
+// Engine-internal knobs, sourced entirely from hexa_description's tuning.yaml
+// (the gait_node block). None are on the wire.
 struct EngineConfig {
   double stride_length = 0.0;
   double min_swing_time = 0.0;

@@ -52,9 +52,9 @@ themselves are pure functions of `(phase, params) → foot_target`.
 
 Gait-agnostic walk-cycle knobs (`stride_length`, `min_swing_time`,
 `max_swing_time`, `step_height`, ...) are `gait_node` ROS parameters
-whose defaults live in `config/gait.yaml` (a `gait_node:` /
-`ros__parameters:` file the launch files pass in, with the `gait`
-tuning overlay layered last) — they are not on the wire. Per-gait `duty_factor` (β) is a class
+whose defaults live in `hexa_description/config/tuning.yaml` (a
+`gait_node:` / `ros__parameters:` file the launch files pass in) — they
+are not on the wire. Per-gait `duty_factor` (β) is a class
 attribute on each strategy in `hexa_gait/hexa_gait/gaits/` — the
 single source of truth — and the engine reads it from the active
 strategy each tick. The engine derives both cycle-time bounds per
@@ -95,7 +95,8 @@ linearly instead.
 
 ## Velocity caps for upstream nodes
 
-`gait.yaml` is the **single source of truth** for the velocity caps that
+`hexa_description/config/tuning.yaml` (the `gait_node` block) is the
+**single source of truth** for the velocity caps that
 upstream nodes (`hexa_teleop` for stick scaling, `hexa_control` for
 `/cmd_vel` clamping) apply at their respective boundaries. Both load
 the caps through `hexa_gait.load_velocity_caps(gait_yaml_path)` at
@@ -111,7 +112,7 @@ startup; there are no duplicate knobs in the teleop or control YAML.
   a new gait. Anchoring on the active gait keeps the engagement
   controller's stance integration bounded — over-cap commands would
   push initial-stance feet past PEP and trip joint limits.
-- `angular_z_max` is an **explicit** knob in `gait.yaml`. Kept explicit
+- `angular_z_max` is an **explicit** knob in `tuning.yaml`. Kept explicit
   (not geometry-derived) because angular feel is harder to predict from
   leg radii — the gait's geometric ceiling
   (`linear_max / r_outer`) is typically well above what feels
@@ -178,7 +179,7 @@ The ladder is non-preemptible — `cmd_vel` arriving mid-sequence is
 ignored until the engine transitions to `STAND`, mirroring `STOPPING`'s
 commit-to-completion contract. Tuning knobs (`pair_swing_time`,
 `lift_body_time`, `swing_clearance`) live under `initialize:` in
-`config/gait.yaml`.
+`hexa_description/config/tuning.yaml`.
 
 ## Stopping: idle and standing reset
 

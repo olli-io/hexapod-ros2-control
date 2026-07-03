@@ -33,46 +33,6 @@ def _display_params(transport: str) -> tuple[dict, bool]:
     return params, bool(params.pop("enabled", True))
 
 
-def _tuning_block(domain: str) -> dict:
-    """The ``domain`` block of hexa_description's tuning overlay, or ``{}``.
-
-    Layered on top of a node's base params file (later param sources win)
-    so an uncommented knob in config/tuning.yaml overrides it. A missing
-    file / block / key yields ``{}`` (no override).
-    """
-    path = os.path.join(
-        get_package_share_directory("hexa_description"), "config", "tuning.yaml"
-    )
-    try:
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
-    except FileNotFoundError:
-        return {}
-    block = data.get(domain, {})
-    return block if isinstance(block, dict) else {}
-
-
-def _gait_params() -> dict:
-    """gait_node's knobs from config/gait.yaml with the tuning overlay merged.
-
-    Returned as a single dict, not the file path plus a dict overlay: an
-    exact-name YAML params file (``gait_node:``) outranks a dict layered on
-    top of it, so the overlay would silently lose (same reasoning as
-    ``_display_params``). Merging here keeps a single param source where the
-    overlay reliably wins. The ``gait`` overlay block is flat scalars only, so
-    a shallow update suffices — the nested initialize:/reseat: maps are never
-    overridden. gait.yaml is byte-identical across the Python and C++ packages,
-    so hexa_gait's copy is authoritative for either node.
-    """
-    path = os.path.join(
-        get_package_share_directory("hexa_gait"), "config", "gait.yaml"
-    )
-    with open(path) as f:
-        params = yaml.safe_load(f)["gait_node"]["ros__parameters"]
-    params.update(_tuning_block("gait"))
-    return params
-
-
 def generate_launch_description():
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -117,46 +77,33 @@ def generate_launch_description():
         parameters=common_params,
     )
 
-    posture_config = PathJoinSubstitution([
-        FindPackageShare(posture_pkg), "config", "posture.yaml",
+    # Every subsystem reads its knobs from hexa_description's tuning.yaml —
+    # the single source of truth. It is a standard params file keyed by node
+    # name (gait_node / control_node / posture_node), so the one file serves
+    # all three nodes; each picks up only its own block.
+    tuning_config = PathJoinSubstitution([
+        FindPackageShare("hexa_description"), "config", "tuning.yaml",
     ])
-    # Layer the tuning overlay's posture block on top of posture.yaml (last
-    # param source wins). Appended only when non-empty so the base file is
-    # untouched in the normal override-nothing case.
-    posture_params = common_params + [posture_config]
-    posture_overlay = _tuning_block("posture")
-    if posture_overlay:
-        posture_params.append(posture_overlay)
+
     posture_node = Node(
         package=posture_pkg,
         executable="posture_node",
         output="screen",
-        parameters=posture_params,
+        parameters=common_params + [tuning_config],
     )
 
-    control_config = PathJoinSubstitution([
-        FindPackageShare("hexa_control"), "config", "control.yaml",
-    ])
-    # Layer the tuning overlay's control block on top of control.yaml (last
-    # param source wins). Appended only when non-empty.
-    control_params = common_params + [control_config]
-    control_overlay = _tuning_block("control")
-    if control_overlay:
-        control_params.append(control_overlay)
     control_node = Node(
         package="hexa_control",
         executable="control_node",
         output="screen",
-        parameters=control_params,
+        parameters=common_params + [tuning_config],
     )
 
-    # gait_node's knobs are passed as one merged dict (see _gait_params) so the
-    # tuning overlay reliably wins over the base gait.yaml values.
     gait_node = Node(
         package=gait_pkg,
         executable="gait_node",
         output="screen",
-        parameters=common_params + [_gait_params()],
+        parameters=common_params + [tuning_config],
     )
 
     actions = [

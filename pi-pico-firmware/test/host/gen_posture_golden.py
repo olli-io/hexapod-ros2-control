@@ -283,7 +283,7 @@ def main():
     from hexa_posture import animations as anim  # noqa: E402
 
     posture_yaml = yaml.safe_load(
-        open(f"{src}/hexa_posture/config/posture.yaml"))
+        open(f"{src}/hexa_description/config/tuning.yaml"))
     pn = posture_yaml["posture_node"]["ros__parameters"]
 
     default_stack, animation_stacks = build_stacks(pose_mod, anim, pn)

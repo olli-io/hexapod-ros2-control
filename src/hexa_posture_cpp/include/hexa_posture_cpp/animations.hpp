@@ -102,7 +102,7 @@ class GaitSway : public Animation {
 // the swing arc. Off when not walking, signal unseen, or gait != tripod.
 class GaitBounce : public Animation {
  public:
-  explicit GaitBounce(double arc_height = 0.02, double step_height_ref = 0.06)
+  explicit GaitBounce(double arc_height = 0.02, double step_height_ref = 0.08)
       : arc_height_(arc_height), step_height_ref_(step_height_ref) {}
   BodyPose operator()(const AnimationContext& ctx) const override;
 

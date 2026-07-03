@@ -12,7 +12,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description() -> LaunchDescription:
     gait_config = PathJoinSubstitution([
-        FindPackageShare("hexa_gait_cpp"), "config", "gait.yaml",
+        FindPackageShare("hexa_description"), "config", "tuning.yaml",
     ])
     return LaunchDescription(
         [

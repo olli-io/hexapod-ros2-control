@@ -95,7 +95,7 @@ Control::Control()
     : caps_(hexa::gait::load_velocity_caps_from_config()),
       vmax_ramp_time_linear_(::hexa::config::kControl.vmax_ramp_time_linear),
       vmax_ramp_time_angular_(::hexa::config::kControl.vmax_ramp_time_angular),
-      // control.yaml's default_gait is kept aligned with teleop's kDefaultGait
+      // tuning.yaml's control_node default_gait is kept aligned with teleop's kDefaultGait
       // (both "tripod") and the engine's make_default_engine default.
       active_gait_(std::string(::hexa::config::kDefaultGait)),
       limiter_(accel_linear_for(active_gait_), accel_angular(),

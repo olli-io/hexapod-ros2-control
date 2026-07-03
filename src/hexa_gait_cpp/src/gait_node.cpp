@@ -4,8 +4,9 @@
 // /body/pose (height axis only); publishes /legs/targets and /gait/state at
 // 50 Hz. Builds an Engine at init from hexa_description's YAML (single source of
 // truth for body geometry and standing pose) and its own ROS parameters
-// (engine-internal knobs; defaults mirror config/gait.yaml, which the launch
-// files pass as the param source). All gait logic lives in the pure Engine;
+// (engine-internal knobs; defaults mirror hexa_description's config/tuning.yaml
+// (the gait_node block), which the launch files pass as the param source). All
+// gait logic lives in the pure Engine;
 // this file owns only the ROS plumbing.
 
 #include <chrono>
@@ -103,10 +104,10 @@ class GaitNode : public rclcpp::Node {
 
  private:
   // Declare and read the engine knobs from this node's ros params. Defaults
-  // mirror config/gait.yaml; the launch files pass that file (plus the "gait"
-  // tuning-overlay block, layered last) as the param source, so a bare
-  // `ros2 run` still boots on these defaults. The nested initialize:/reseat:
-  // blocks in the YAML surface as dotted parameter names.
+  // mirror hexa_description's config/tuning.yaml (the gait_node block); the
+  // launch files pass that file as the param source, so a bare `ros2 run` still
+  // boots on these defaults. The nested initialize:/reseat: blocks in the YAML
+  // surface as dotted parameter names.
   hexa_gait::EngineConfig read_engine_config(std::string& default_gait_out) {
     hexa_gait::EngineConfig cfg;
     cfg.stride_length = declare_parameter<double>("stride_length", 0.1);

@@ -94,7 +94,8 @@ std::vector<std::string> split_trim(const std::string& s) {
 class PostureNode : public rclcpp::Node {
  public:
   PostureNode() : rclcpp::Node("posture_node") {
-    // --- Parameters (defaults mirror posture.yaml / the Python node) ---
+    // --- Parameters (defaults mirror tuning.yaml's posture_node block /
+    // the Python node) ---
     const auto enabled = declare_string_array(
         "enabled_animations", hexa_posture::DEFAULT_ANIMATIONS);
     const auto animation_mode_names = declare_string_array(
@@ -102,11 +103,11 @@ class PostureNode : public rclcpp::Node {
         hexa_posture::DEFAULT_ANIMATION_MODE_ANIMATIONS);
     const double gait_sway_gain = declare_parameter("gait_sway_gain", 1.0);
     const double gait_sway_strength =
-        declare_parameter("gait_sway_strength", 0.5);
+        declare_parameter("gait_sway_strength", 0.4);
     const double gait_bounce_arc_height =
         declare_parameter("gait_bounce_arc_height", 0.02);
     const double gait_bounce_step_height_ref =
-        declare_parameter("gait_bounce_step_height_ref", 0.06);
+        declare_parameter("gait_bounce_step_height_ref", 0.08);
     const double vbr_z =
         declare_parameter("vertical_body_roll_z_amplitude", 0.02);
     const double vbr_pitch_rad =

@@ -12,12 +12,10 @@
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
   <depend>hexa_common</depend>
-  <!-- Runtime config-data reads, not code imports: teleop reads hexa_gait's
-       gait.yaml (velocity caps) and hexa_posture's posture.yaml (animation-mode
-       list). These drop away once that data moves to a neutral package
-       (deferred with the gait migration). -->
-  <exec_depend>hexa_gait</exec_depend>
-  <exec_depend>hexa_posture</exec_depend>
+  <!-- Runtime config-data read, not a code import: teleop reads the velocity
+       caps (gait_node block) and animation-mode list (posture_node block) from
+       hexa_description's tuning.yaml — the single source of truth. -->
+  <exec_depend>hexa_description</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

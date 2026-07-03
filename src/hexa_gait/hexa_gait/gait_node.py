@@ -4,9 +4,9 @@ Subscribes to ``/gait/params`` (last-write-wins, no queue replay) and
 publishes ``/legs/targets`` at 200 Hz. Builds an ``Engine`` + ``Tripod``
 at init using the YAML in ``hexa_description`` (single source of truth
 for body geometry and standing pose) and its own ROS parameters
-(engine-internal knobs), whose defaults mirror ``config/gait.yaml`` — the
-launch files pass that file (plus the ``gait`` tuning overlay) as the
-parameter source.
+(engine-internal knobs), whose defaults mirror hexa_description's
+``config/tuning.yaml`` (the ``gait_node`` block) — the launch files pass
+that file as the parameter source.
 
 The node is intentionally thin: all gait logic lives in the pure-python
 ``Engine``. Tests live alongside the engine modules; this file owns
@@ -45,8 +45,8 @@ PUBLISH_RATE_HZ = 200.0
 def _read_engine_config(node: Node) -> tuple[EngineConfig, str]:
     """Declare and read ``gait_node``'s ros params into an ``EngineConfig``.
 
-    Defaults mirror ``config/gait.yaml``; the launch files pass that file
-    (plus the ``gait`` tuning-overlay block, layered last) so the YAML is
+    Defaults mirror hexa_description's ``config/tuning.yaml`` (the
+    ``gait_node`` block); the launch files pass that file so the YAML is
     authoritative in the normal composed run, while a bare ``ros2 run`` still
     starts on the built-in defaults. The nested ``initialize:`` / ``reseat:``
     blocks in the YAML surface as dotted parameter names.

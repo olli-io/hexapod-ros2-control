@@ -11,10 +11,10 @@ Python `gait_node` until the C++ node is verified and cut over.
   controllers).
 - `src/` — the pure engine library (no ROS) plus `gait_node.cpp` (the only
   `rclcpp` component).
-- `config/gait.yaml` — engine knobs as `gait_node` ROS parameters (a
-  `gait_node:` / `ros__parameters:` file the launch files pass in; copied
-  byte-for-byte from `hexa_gait`; `hexa_description` stays the single source of
-  truth for geometry / standing pose).
+- Engine knobs come from `hexa_description/config/tuning.yaml` — the `gait_node`
+  block of a `gait_node:` / `ros__parameters:` file the launch files pass in.
+  `hexa_description` is the single source of truth for tuning, geometry, and
+  standing pose.
 - `launch/gait.launch.py` — standalone bench launcher.
 
 ## Architecture

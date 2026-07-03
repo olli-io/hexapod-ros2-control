@@ -130,7 +130,7 @@ class InitializeController:
         # sphere bottom sits up to ~foot_radius below the IK target.
         # The configured clearance must absorb that offset or contact
         # resolution will lift the chassis off its belly before
-        # LIFT_BODY runs (see gait.yaml comment).
+        # LIFT_BODY runs (see tuning.yaml comment).
         self._lift_start_z = -coxa_to_bottom + place_feet_clearance
         self._ground_targets: dict[str, Vec3] = {
             n: (self._nominal[n][0], self._nominal[n][1], self._lift_start_z)
