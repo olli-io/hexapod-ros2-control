@@ -47,6 +47,6 @@ it directly (mirror `hexa_hardware`).
 
 ## Build & run
 
-    ./hexa dev
+    ./hexa sim
     pod build   # or: colcon build --packages-select hexa_gait_cpp
     ros2 run hexa_gait_cpp gait_node

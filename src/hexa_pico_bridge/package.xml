@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>
     Gazebo-in-the-loop bridge for the Pico 2 W firmware (plan part 10, Tier 3).
-    Compiles the target-agnostic firmware pipeline sources (pico-2-firmware/src)
+    Compiles the target-agnostic firmware pipeline sources (pi-pico-firmware/src)
     directly and runs the real 50 Hz control tick against the simulated hexapod:
     subscribes /joy (the exact layout the firmware's bt_teleop emits), runs
     hexa::pipeline::Pipeline, and publishes the joint angles on

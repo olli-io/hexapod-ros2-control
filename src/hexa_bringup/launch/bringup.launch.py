@@ -1,16 +1,16 @@
-"""Production entrypoint (CMD of the `hexa-prod` container).
+"""Robot bringup entrypoint (CMD of the `hexa-robot` container).
 
 Wraps the robot stack with production policy: it composes robot.launch.py —
 the reusable robot — with the gamepad and web teleop input sources, which
 robot.launch.py deliberately omits. Boots cold (``engage_on_start:=false``,
-relay open) so the container is one `hexa prod engage` away from drivable.
+relay open) so the container is one `hexa robot activate` away from drivable.
 
   1. robot.launch.py (engage_on_start:=false) — the robot, brought up cold.
   2. teleop.launch.py — gamepad → /cmd_vel + /body/pose.
   3. webteleop.launch.py — web UI → /cmd_vel, on port 8080. Coexists with the
      gamepad via /teleop/owner arbitration (gamepad owns by default).
 
-    ros2 launch hexa_bringup prod.launch.py
+    ros2 launch hexa_bringup bringup.launch.py
 """
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription

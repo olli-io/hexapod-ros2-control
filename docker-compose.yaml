@@ -1,13 +1,13 @@
 services:
-  dev:
+  sim:
     build:
       context: .
       args:
         USER_UID: "${UID:-1000}"
         USER_GID: "${GID:-1000}"
-    image: hexa-dev:jazzy
-    container_name: hexa-dev
-    hostname: hexa-dev
+    image: hexa-sim:jazzy
+    container_name: hexa-sim
+    hostname: hexa-sim
     network_mode: host
     ipc: host
     stdin_open: true

@@ -3,13 +3,13 @@ project(hexa_pico_bridge CXX)
 
 # ── Gazebo-in-the-loop firmware bridge (plan part 10, Tier 3) ───────────────
 #
-# Links the target-agnostic Pico firmware pipeline sources (pico-2-firmware/src)
+# Links the target-agnostic Pico firmware pipeline sources (pi-pico-firmware/src)
 # DIRECTLY — the same float source compiled for the RP2350 — and runs the real
 # 50 Hz control tick against the simulated hexapod. The only thing that changes
 # vs the Pico build is the hardware seam: input comes from /joy instead of
 # Bluepad32, output goes to the sim controller instead of the Chica UART, and the
 # clock is a std::chrono steady clock instead of time_us_64(). No #ifdefs — a
-# link-time swap (see pico-2-firmware/src/pipeline.hpp).
+# link-time swap (see pi-pico-firmware/src/pipeline.hpp).
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 20)
@@ -22,9 +22,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 # ── Firmware source tree ────────────────────────────────────────────────────
-# pico-2-firmware sits beside src/ at the workspace root; REPO_ROOT feeds the
+# pi-pico-firmware sits beside src/ at the workspace root; REPO_ROOT feeds the
 # config generator the same repo YAMLs the Pico and host builds bake from.
-set(FW_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../pico-2-firmware)
+set(FW_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../pi-pico-firmware)
 set(FW_SRC ${FW_ROOT}/src)
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(GEN_CONFIG ${FW_SRC}/config_generated.hpp)

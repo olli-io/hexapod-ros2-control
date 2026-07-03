@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 #
-# Production image for the hexapod (Raspberry Pi 3, ARM64).
+# Robot (production) image for the hexapod (Raspberry Pi 3, ARM64).
 # Two-stage: a fat builder with colcon + headers, a slim runtime that only
 # carries the compiled install/ tree plus its runtime apt deps.
 #
-# Build on the workstation via `./hexa prod build`, which wraps:
-#   docker buildx build --platform linux/arm64 -f Dockerfile.prod ...
+# Build on the workstation via `./hexa deploy build`, which wraps:
+#   docker buildx build --platform linux/arm64 -f Dockerfile.robot ...
 
 # ---------------------------------------------------------------------------
 # Stage 1 — builder
@@ -100,4 +100,4 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /workspace/pod
 ENV PATH="/workspace:${PATH}"
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["ros2", "launch", "hexa_bringup", "prod.launch.py"]
+CMD ["ros2", "launch", "hexa_bringup", "bringup.launch.py"]

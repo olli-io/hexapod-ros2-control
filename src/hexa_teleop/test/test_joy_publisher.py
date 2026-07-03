@@ -4,7 +4,7 @@ Covers the ``js_event`` decoder and the ``_JsHandle.drain`` state
 machine through a pair of file descriptors (no real device needed).
 The reconnect / open paths are intentionally not unit-tested — they
 hinge on the kernel reporting /dev/input/jsN behaviour, which is
-better verified end-to-end in the dev container.
+better verified end-to-end in the sim container.
 """
 
 import os

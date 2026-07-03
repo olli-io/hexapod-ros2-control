@@ -43,7 +43,7 @@ and `joint_command_bridge.cpp` — **read those to replicate the exact ordering*
 ## Repo layout (new tree; ROS2 workspace untouched)
 
 ```
-pico-2-firmware/
+pi-pico-firmware/
   CMakeLists.txt  pico_sdk_import.cmake  btstack_config.h
   tools/gen_config.py            # repo YAMLs → config_generated.hpp
   src/ main.cpp bt_teleop.* joy_mapping.* control.* servo_out.*

@@ -1,7 +1,7 @@
 # Robot environment
 
 Steps to take a fresh Raspberry Pi 4 or 5 from a blank SD card to a host ready
-to receive `./hexa prod deploy`. See [`dev-environment.md`](dev-environment.md)
+to receive `./hexa deploy push`. See [`sim-environment.md`](sim-environment.md)
 for the workstation side.
 
 ## Hardware
@@ -56,7 +56,7 @@ Reboot, then verify `/dev/serial0` resolves to `ttyAMA0`:
 ls -l /dev/serial0
 ```
 
-The prod compose maps the resolved device (`DISPLAY_DEVICE`, default
+The robot compose maps the resolved device (`DISPLAY_DEVICE`, default
 `/dev/ttyAMA0`) into the container as `/dev/serial0`. Without the
 display fitted the node simply keeps retrying in the background.
 
@@ -71,7 +71,7 @@ getent group input | cut -d: -f3            # note the input GID (example: 994)
 
 ## 4. First deploy from the workstation
 
-`./hexa prod build` cross-compiles `linux/arm64` under QEMU, so the
+`./hexa deploy build` cross-compiles `linux/arm64` under QEMU, so the
 workstation kernel needs an aarch64 binfmt_misc handler pointing at a
 **static** QEMU interpreter. On Arch this requires manual setup —
 installing `qemu-user-static` (extra) ships the static binary but no
@@ -91,19 +91,21 @@ Verify the `interpreter` line in `/proc/sys/fs/binfmt_misc/qemu-aarch64`
 ends in `-static`. Other distros may register the static handler
 automatically on `qemu-user-static` install — check
 `/proc/sys/fs/binfmt_misc/qemu-aarch64` before assuming it's broken.
-`scripts/prod.sh` preflights this and refuses to build without a
+`scripts/deploy.sh` preflights this and refuses to build without a
 registered aarch64 handler.
 
 ```
-./hexa prod build
-./hexa prod deploy pi@<host>
+./hexa deploy build
+./hexa deploy push pi@<host>
 ```
 
-This ships the image tarball, loads it, seeds `~/hexa-prod/.env` from
-`.env.prod.sample`, and starts the container **cold** (relay open, hardware
-inactive).
+This ships the image tarball, the compose file, and the launcher
+(`hexa` + `scripts/robot.sh`) to `~/hexa-robot/`, loads the image, seeds
+`~/hexa-robot/.env` from `.env.robot.sample`, and starts the container **cold**
+(relay open, hardware inactive). The shipped launcher is what makes
+`./hexa robot <cmd>` work on the Pi.
 
-## 5. Edit `~/hexa-prod/.env` on the Pi
+## 5. Edit `~/hexa-robot/.env` on the Pi
 
 - **`INPUT_GID`** — value from step 3 (typically something like`996`).
 - **`ROS_DOMAIN_ID`** — DDS domain, default `42`.
@@ -113,17 +115,28 @@ inactive).
 Restart the container:
 
 ```
-cd ~/hexa-prod
-docker compose -f docker-compose.prod.yaml down
-docker compose -f docker-compose.prod.yaml up -d
+cd ~/hexa-robot
+docker compose -f docker-compose.robot.yaml down
+docker compose -f docker-compose.robot.yaml up -d
 ```
 
-## 6. Engage and drive
+## 6. Activate and drive
+
+Run the robot ops on the Pi (the launcher was shipped in step 4):
 
 ```
-ssh pi@<host> 'cd ~/hexa-prod && ./hexa prod engage'
-ssh pi@<host> 'cd ~/hexa-prod && ./hexa prod teleop'
-./hexa prod disengage
+ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot activate'
+ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot teleop'
+ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot deactivate'
+```
+
+Or drive them from the workstation with `-H/--host` — `hexa robot` re-dispatches
+the command over ssh in `~/hexa-robot`:
+
+```
+./hexa robot -H pi@<host> activate
+./hexa robot -H pi@<host> teleop
+./hexa robot -H pi@<host> deactivate
 ```
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
@@ -195,8 +208,8 @@ default, and the webapp prompts to claim control when it connects. See
 ## 7. Re-deploy
 
 ```
-./hexa prod build
-./hexa prod deploy pi@<host>
+./hexa deploy build
+./hexa deploy push pi@<host>
 ```
 
-The container restarts cold after each redeploy — re-run `engage`.
+The container restarts cold after each redeploy — re-run `hexa robot activate`.

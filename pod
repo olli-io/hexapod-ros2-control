@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hexapod workspace CLI — run inside the dev container.
+# Hexapod workspace CLI — run inside the sim container.
 set -euo pipefail
 
 usage() {

@@ -28,7 +28,7 @@ these tests always run against the current `hexa_description` values.
 ## Build & run
 
 Host (needs `cmake`, a C++20 compiler, GoogleTest, `python3` + PyYAML), or the
-same inside `hexa dev`:
+same inside `hexa sim`:
 
 ```sh
 cmake -S . -B build

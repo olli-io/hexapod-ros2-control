@@ -3,12 +3,12 @@ build/
 install/
 log/
 
-# Production image tarballs (`./hexa prod build`)
+# Production image tarballs (`./hexa deploy build`)
 .deploy/
 
-# Local prod env override (never committed; copy from .env.prod.sample)
+# Local robot env override (never committed; copy from .env.robot.sample)
 .env
-.env.prod
+.env.robot
 
 # Python
 __pycache__/

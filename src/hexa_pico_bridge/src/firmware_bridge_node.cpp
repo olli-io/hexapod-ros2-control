@@ -3,7 +3,7 @@
 // Runs the Pico 2 W firmware's control brain — the exact same
 // hexa::pipeline::Pipeline source compiled for the RP2350 — against the
 // simulated hexapod, with no hardware. It is the ROS composition of the
-// firmware's hardware seam (see pico-2-firmware/src/pipeline.hpp):
+// firmware's hardware seam (see pi-pico-firmware/src/pipeline.hpp):
 //
 //   - Input  seam: subscribe /joy (sensor_msgs/Joy) and convert it into the
 //     exact raw int16 axes[] / button bitmask the firmware's bt_teleop emits, so

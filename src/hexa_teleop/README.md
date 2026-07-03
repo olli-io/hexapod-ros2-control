@@ -6,7 +6,7 @@ consumed by `hexa_posture`).
 
 - `joy_publisher.py` — reads `/dev/input/jsN` directly and publishes
   `sensor_msgs/Joy` on `/joy`. Drop-in for upstream `joy_node` with
-  reliable hot-plug recovery in the dev container.
+  reliable hot-plug recovery in the sim container.
 - `teleop_joy.py` — consumes `/joy` and publishes `/cmd_vel`,
   `/body/pose`, `/cmd_gait`, `/animation/mode`, and
   `/gait/initialize`. Mode-switched stick semantics; axis / button
@@ -51,7 +51,7 @@ for. Set `device_path:=/dev/input/jsN` to override when multiple
 controllers are attached.
 
 Upstream `joy_node` nominally supports hot-plug via SDL2 + udev, but
-udev events don't propagate reliably into the dev container — that's
+udev events don't propagate reliably into the sim container — that's
 the gap this node fills. The Joy layout matches what `joy_node` would
 have produced for the same device, so `teleop_joy` and downstream
 consumers are unchanged.

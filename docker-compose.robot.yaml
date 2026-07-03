@@ -1,8 +1,8 @@
 services:
-  prod:
-    image: hexa-prod:latest
-    container_name: hexa-prod
-    hostname: hexa-prod
+  robot:
+    image: hexa-robot:latest
+    container_name: hexa-robot
+    hostname: hexa-robot
     network_mode: host
     ipc: host
     restart: unless-stopped

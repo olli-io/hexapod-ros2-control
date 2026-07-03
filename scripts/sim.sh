@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Drop into the hexapod ROS2 Jazzy dev container.
+# Drop into the hexapod ROS2 Jazzy sim container.
 # Ensures a single long-lived container exists; multiple invocations attach
 # to it instead of spawning new ones.
-#   ./scripts/dev.sh                 -> interactive shell in the container
-#   ./scripts/dev.sh ros2 topic list -> one-shot command in the container
+#   ./scripts/sim.sh                 -> interactive shell in the container
+#   ./scripts/sim.sh ros2 topic list -> one-shot command in the container
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-CONTAINER_NAME="hexa-dev"
+CONTAINER_NAME="hexa-sim"
 
 # Extract --test / --cpp from the arg list. --test runs colcon tests after the
 # main command (which defaults to `pod build` in test mode). --cpp exports
@@ -46,12 +46,12 @@ case "${state}" in
     "")
         # No container yet — rebuild the image, then create and start it
         # detached. Always rebuilding on a fresh start means Dockerfile
-        # edits take effect after `hexa kill && hexa dev`,
+        # edits take effect after `hexa kill && hexa sim`,
         # without a separate rebuild step.
         # `UID` is a readonly builtin in bash, so we can't `export` it; pass
         # the values inline and docker compose reads them as env vars.
         env UID="$(id -u)" GID="$(id -g)" INPUT_GID="${INPUT_GID}" \
-            docker compose up -d --build dev
+            docker compose up -d --build sim
         ;;
     *)
         # Exists but stopped (exited, created, paused, ...). Restart it.
@@ -70,7 +70,7 @@ env_flags=()
 
 if [[ ${run_tests} -eq 1 ]]; then
     # In test mode the main command defaults to `pod build` so a bare
-    # `dev.sh --test` means "build then test".
+    # `sim.sh --test` means "build then test".
     docker exec "${exec_flags[@]}" "${env_flags[@]}" "${CONTAINER_NAME}" \
         /usr/local/bin/entrypoint.sh "${@:-pod build}"
     exec docker exec "${exec_flags[@]}" "${env_flags[@]}" "${CONTAINER_NAME}" \

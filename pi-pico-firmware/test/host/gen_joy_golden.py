@@ -161,7 +161,7 @@ def emit(frames, expected) -> str:
 
 def main() -> int:
     here = os.path.dirname(os.path.abspath(__file__))
-    firmware_root = os.path.dirname(os.path.dirname(here))  # pico-2-firmware/
+    firmware_root = os.path.dirname(os.path.dirname(here))  # pi-pico-firmware/
     default_repo = os.path.dirname(firmware_root)
 
     ap = argparse.ArgumentParser(description=__doc__)

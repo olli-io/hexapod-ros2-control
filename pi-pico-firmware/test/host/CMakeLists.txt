@@ -9,14 +9,14 @@ cmake_minimum_required(VERSION 3.16)
 # with vec3 + generated-config tests; parts 05-08 add the forked libs and the
 # golden-trace diff against the double ROS2 engines (see README.md, Tier 1).
 #
-# Build (host, or inside `hexa dev`):
+# Build (host, or inside `hexa sim`):
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
 project(hexa_pico_host_test CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Firmware sources live two levels up (pico-2-firmware/src). The generated
+# Firmware sources live two levels up (pi-pico-firmware/src). The generated
 # config header is emitted there by tools/gen_config.py.
 set(FW_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
 set(FW_SRC ${FW_ROOT}/src)

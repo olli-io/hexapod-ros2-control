@@ -23,7 +23,7 @@ The real-robot bringup never loads this package.
 
 ## Run
 
-From inside the dev container:
+From inside the sim container:
 
 ```
 colcon build --symlink-install

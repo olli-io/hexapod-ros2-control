@@ -28,11 +28,11 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
    ```
    git clone git@github.com:olli-io/hexapod-ros2-control.git
    cd hexapod-ros2-control
-   ./hexa dev --launch
+   ./hexa sim --launch
    ```
 
-   The first run builds the `hexa-dev` image (a few minutes), creates a
-   long-lived `hexa-dev` container, then opens a shell and launches the desktop
+   The first run builds the `hexa-sim` image (a few minutes), creates a
+   long-lived `hexa-sim` container, then opens a shell and launches the desktop
    sim environment (sim + webteleop + teleop in one pane). ROS2 is already
    sourced.
 
@@ -40,7 +40,7 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
    - Connect an XBox or XBox-equivalent controller to your setup (wired or bt) and control the hex.
    - Alternatively, you can take your phone (on the same local network) and connect to {local-pc-ip}:8080 and control the hexapod via webteleop (you may need to adjust your firewall settings).
 
-That's the whole loop. See [`docs/dev-environment.md`](docs/dev-environment.md)
+That's the whole loop. See [`docs/sim-environment.md`](docs/sim-environment.md)
 for the pieces.
 
 > [!NOTICE]
@@ -48,15 +48,15 @@ for the pieces.
 
 ## Build / run
 
-Development container ( simulation in Gazebo ) - [`docs/dev-environment.md`](docs/dev-environment.md).
+Development container ( simulation in Gazebo ) - [`docs/sim-environment.md`](docs/sim-environment.md).
 Robot container ( build, deploy and run on rPi ) - [`docs/robot-environment.md`](docs/robot-environment.md).
 
 All host-side commands go through the `hexa` dispatcher in the repo root:
 
-- `./hexa dev` — drop into the ROS2 Jazzy dev container (`--clean` rebuilds it first, `--launch` runs the full sim stack instead of a shell).
-- `./hexa dev --tmux` — two-pane tmux session sharing one dev container: pane 0 runs the full sim stack, pane 1 is an idle shell.
-- `./hexa prod <subcommand>` — cross-build, deploy, and operate the production image on the robot.
-- `./hexa kill` — stop and remove a running dev container.
+- `./hexa sim` — drop into the ROS2 Jazzy sim container (`--clean` rebuilds it first, `--launch` runs the full sim stack instead of a shell).
+- `./hexa deploy <subcommand>` — cross-build (`build`) and ship (`push <host>`) the production image to the robot.
+- `./hexa robot <subcommand>` — operate the running robot container (`activate`, `deactivate`, `teleop`, `start`/`stop`/`restart`, `status`, `logs`, `shell`); runs on the Pi, or `-H user@host` to target it from the workstation.
+- `./hexa kill` — stop and remove a running sim container.
 
 See docs and `./hexa --help` 
 

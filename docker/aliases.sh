@@ -1,4 +1,4 @@
-# Shell init sourced inside the dev container.
+# Shell init sourced inside the sim container.
 # Edit freely — no image rebuild required.
 
 alias cb='colcon build --symlink-install'

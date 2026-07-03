@@ -1,7 +1,7 @@
 """``/dev/input/jsN`` → ``sensor_msgs/Joy`` publisher with hot-plug.
 
 Drop-in replacement for upstream ``joy_node`` — wire-compatible Joy
-layout, with reliable hot-plug recovery in the dev container (where
+layout, with reliable hot-plug recovery in the sim container (where
 SDL2's udev path does not propagate). Polls ``/dev/input/`` and
 re-opens the device whenever it returns, so the controller can be
 unplugged or replugged mid-session without restarting any ROS

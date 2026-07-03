@@ -102,7 +102,7 @@ def generate_launch_description():
     )
 
     actions = [
-        # Defaults honour the HEXA_CPP env var (set by `hexa dev --cpp`), so the
+        # Defaults honour the HEXA_CPP env var (set by `hexa sim --cpp`), so the
         # whole sim stack flips to the C++ ports without per-command args. An
         # explicit `use_cpp_*:=...` on the command line still overrides.
         DeclareLaunchArgument(
