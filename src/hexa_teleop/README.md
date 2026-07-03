@@ -25,7 +25,7 @@ has a mode switch, put it in **X-input mode** (on 8BitDo: hold
 `Start + X` for a few seconds at power-on), then plug in via USB-C.
 Plug timing relative to the dev
 container does not matter — the `/dev/input` bind mount in
-`docker-compose.yaml` propagates new device nodes into the running
+`docker-compose.sim.yaml` propagates new device nodes into the running
 container, and `joy_publisher.py` polls for them.
 
 - Launch the sim (separate terminal): `ros2 launch hexa_bringup sim.launch.py`

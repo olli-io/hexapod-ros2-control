@@ -162,6 +162,20 @@ def load_yaml(path: str):
         return yaml.safe_load(f)
 
 
+def deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge ``overlay`` into ``base`` in place; overlay wins.
+
+    Mirrors hexa_gait/overlay.py so the baked header sees the same tuning
+    overrides the ROS nodes apply at runtime.
+    """
+    for key, value in (overlay or {}).items():
+        if isinstance(base.get(key), dict) and isinstance(value, dict):
+            deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def leg_specs(geometry: dict):
     """Six LegSpecs by symmetry — port of load_leg_specs()."""
     leg = geometry["leg"]
@@ -692,6 +706,20 @@ def main() -> int:
 
     loaded = {k: load_yaml(v) for k, v in paths.items()}
     sources = [os.path.relpath(p, args.repo_root) for p in paths.values()]
+
+    # Runtime-tuning overlay (optional): its per-domain blocks override the
+    # matching base YAML, exactly as the ROS nodes apply them at runtime, so the
+    # baked firmware constants stay in lockstep. Absent file/block = no override.
+    tuning_path = f"{cfg_dir}/hexa_description/config/tuning.yaml"
+    if os.path.isfile(tuning_path):
+        tuning = load_yaml(tuning_path) or {}
+        deep_merge(loaded["gait"], tuning.get("gait", {}))
+        deep_merge(loaded["control"], tuning.get("control", {}))
+        deep_merge(
+            loaded["posture"]["posture_node"]["ros__parameters"],
+            tuning.get("posture", {}),
+        )
+        sources.append(os.path.relpath(tuning_path, args.repo_root))
     header = emit(loaded["geometry"], loaded["standing"], loaded["gait"],
                   loaded["teleop"], loaded["posture"], loaded["control"],
                   loaded["hardware"], loaded["webteleop"], loaded["display"],

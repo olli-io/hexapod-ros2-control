@@ -5,7 +5,7 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 ## Stack
 
 - ROS2 Jazzy (Ubuntu 24.04), Gazebo Harmonic, colcon workspace.
-- All build/run commands execute **inside the Docker sim container**: `hexa sim` (the `hexa` host script in the repo root) opens a shell in the container. Inside the container the workspace CLI is `pod` (e.g. `pod build`, `pod sim`, `pod teleop`). Do not assume native ROS2 on the host.
+- All build/run commands execute **inside the Docker sim container**, driven by the `hexa` host script in the repo root. The sim stack runs as the container's PID 1, so lifecycle is docker-native: `hexa sim up` (bring the stack up detached), `hexa sim down`, `hexa sim logs -f`. Build the workspace with `hexa sim build` (ephemeral `compose run --rm`, which runs `colcon build --symlink-install` in the container), and run one-off commands with `hexa sim <cmd>` (e.g. `hexa sim ros2 topic list`). Do not assume native ROS2 on the host.
 - Tests: `./hexa sim python3 -m pytest src/<pkg>/test -q` from the repo root (pytest only exists inside the container).
 - ROS2 packages live under `src/hexa_*/`. The top-level `README.md` documents the dependency graph and runtime data flow.
 - **Leg count is fixed at 6.** Do not parameterise it.

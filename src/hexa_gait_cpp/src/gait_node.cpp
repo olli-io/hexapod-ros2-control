@@ -35,9 +35,44 @@ namespace {
 
 constexpr double kPublishRateHz = 50.0;
 
+// Runtime-tuning overlay: hexa_description/config/tuning.yaml, a sparse
+// override whose per-domain block (here "gait") wins over the base gait.yaml.
+// A missing package / file / block yields an undefined node (no override), so
+// the overlay is safe to omit. Mirrors hexa_gait/overlay.py.
+YAML::Node load_tuning_block(const std::string& domain) {
+  try {
+    const std::string path =
+        ament_index_cpp::get_package_share_directory("hexa_description") +
+        "/config/tuning.yaml";
+    const YAML::Node data = YAML::LoadFile(path);
+    if (data[domain]) {
+      return data[domain];
+    }
+  } catch (const std::exception&) {
+    // package or file absent — fall through to no overlay.
+  }
+  return YAML::Node(YAML::NodeType::Undefined);
+}
+
+// Recursively merge scalar/leaf keys from `overlay` into `base`; overlay wins.
+void merge_into(YAML::Node base, const YAML::Node& overlay) {
+  if (!overlay || !overlay.IsMap()) {
+    return;
+  }
+  for (const auto& kv : overlay) {
+    const std::string key = kv.first.as<std::string>();
+    if (base[key] && base[key].IsMap() && kv.second.IsMap()) {
+      merge_into(base[key], kv.second);
+    } else {
+      base[key] = kv.second;
+    }
+  }
+}
+
 hexa_gait::EngineConfig load_engine_config(const std::string& path,
                                            std::string& default_gait_out) {
-  const YAML::Node raw = YAML::LoadFile(path);
+  YAML::Node raw = YAML::LoadFile(path);
+  merge_into(raw, load_tuning_block("gait"));
   const YAML::Node init_cfg = raw["initialize"];
   const YAML::Node reseat_cfg = raw["reseat"];
 

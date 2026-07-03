@@ -157,12 +157,12 @@ source of truth); the animation list from
 
 ## Running
 
-In sim (sim container):
+In sim (from the host):
 ```
-pod sim
-ros2 launch hexa_webteleop webteleop.launch.py
+./hexa sim up
 ```
-Then open `http://<container-ip>:8080` in a browser.
+`hexa sim up` brings up sim + webteleop + teleop; then open
+`http://<container-ip>:8080` in a browser.
 
 In production, `bringup.launch.py` includes webteleop alongside the
 gamepad teleop automatically.

@@ -46,13 +46,14 @@ identical constants (leg geometry, gait knobs, teleop mapping, posture stack).
 
 ## Run
 
-Everything at once (sim + joy publisher + bridge):
+Everything at once (sim + joy publisher + bridge) — from the host, this is
+`./hexa pico up` (see the top-level README); directly, inside the container:
 
 ```sh
 ros2 launch hexa_pico_bridge bridge.launch.py
 ```
 
-Or against an already-running sim (e.g. `pod sim` in another pane):
+Or against an already-running sim (e.g. `hexa sim up` in another pane):
 
 ```sh
 ros2 launch hexa_pico_bridge bridge.launch.py sim:=false

@@ -35,14 +35,19 @@ from .engine import (
     reseat_geometry_from_yaml,
 )
 from .gaits import STRATEGIES
+from .overlay import deep_merge, load_tuning_block
 
 
 PUBLISH_RATE_HZ = 200.0
 
 
-def _load_engine_config(path: Path) -> tuple[EngineConfig, str]:
+def _load_engine_config(
+    path: Path, overlay: dict | None = None
+) -> tuple[EngineConfig, str]:
     with path.open() as f:
         raw = yaml.safe_load(f)
+    if overlay:
+        deep_merge(raw, overlay)
     init_cfg = raw["initialize"]
     reseat_cfg = raw["reseat"]
     cfg = EngineConfig(
@@ -91,7 +96,9 @@ class GaitNode(Node):
         gait_share = Path(get_package_share_directory("hexa_gait")) / "config"
         desc_share = Path(get_package_share_directory("hexa_description")) / "config"
 
-        self._cfg, default_gait = _load_engine_config(gait_share / "gait.yaml")
+        self._cfg, default_gait = _load_engine_config(
+            gait_share / "gait.yaml", load_tuning_block("gait")
+        )
         nominal = nominal_stance_from_yaml(
             desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
         )

@@ -112,34 +112,31 @@ This ships the image tarball, the compose file, and the launcher
 - **`SERVO_DEVICE`** — the `/dev/serial/by-id/usb-Pimoroni_Servo_2040-...`
   path from step 3.
 
-Restart the container:
+
+## 6. Bring up and drive
+
+Run the robot ops on the Pi (the launcher was shipped in step 4). `up` boots the
+container cold, waits for `controller_manager`, then energizes (relay on + spawns
+the controllers); `down` is the safe-stop (relay off + unload, then compose down).
+The gamepad and web teleop are part of the container's launch, so the robot is
+drivable as soon as `up` finishes — no separate teleop step:
 
 ```
-cd ~/hexa-robot
-docker compose -f docker-compose.robot.yaml down
-docker compose -f docker-compose.robot.yaml up -d
-```
-
-## 6. Activate and drive
-
-Run the robot ops on the Pi (the launcher was shipped in step 4):
-
-```
-ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot activate'
-ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot teleop'
-ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot deactivate'
+ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot up'
+ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot down'
 ```
 
 Or drive them from the workstation with `-H/--host` — `hexa robot` re-dispatches
 the command over ssh in `~/hexa-robot`:
 
 ```
-./hexa robot -H pi@<host> activate
-./hexa robot -H pi@<host> teleop
-./hexa robot -H pi@<host> deactivate
+./hexa robot -H pi@<host> up
+./hexa robot -H pi@<host> down
 ```
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
+
+**Teleop already works by connecting to the Pi's local ip**
 
 The web teleop (`hexa_webteleop`) hosts an HTTP + WebSocket server on
 port 8080 inside the container. With `network_mode: host` the server is
@@ -212,4 +209,4 @@ default, and the webapp prompts to claim control when it connects. See
 ./hexa deploy push pi@<host>
 ```
 
-The container restarts cold after each redeploy — re-run `hexa robot activate`.
+The container restarts cold after each redeploy — re-run `hexa robot up`.

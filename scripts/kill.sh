@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# Tear down the hexapod ROS2 Jazzy sim container.
-# No-op if the container doesn't exist.
+# Tear down the hexapod sim + pico containers (docker compose down).
+# No-op if nothing is up.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-CONTAINER_NAME="hexa-sim"
+# Host's `input` group GID, needed for the compose interpolation. Falls back
+# to 992 (matches scripts/sim.sh).
+input_gid() {
+    local gid
+    gid="$(getent group input 2>/dev/null | cut -d: -f3 || true)"
+    echo "${gid:-992}"
+}
 
-if [ -z "$(docker ps -aq --filter "name=^${CONTAINER_NAME}$")" ]; then
-    echo "No ${CONTAINER_NAME} container to kill."
-    exit 0
-fi
+# `UID` is a readonly bash builtin, so pass UID/GID/INPUT_GID inline as env.
+env UID="$(id -u)" GID="$(id -g)" INPUT_GID="$(input_gid)" \
+    docker compose -f docker-compose.sim.yaml down --remove-orphans
 
-docker rm -f "${CONTAINER_NAME}" >/dev/null
-echo "Removed ${CONTAINER_NAME}."
+echo "Removed the sim + pico containers."

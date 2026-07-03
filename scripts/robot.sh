@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
 # Hexapod robot-container ops. Dispatched from `./hexa robot <cmd>`.
 #
-# The robot-side mirror of `pod`: it operates the running hexa-robot container,
+# The robot-side container ops CLI: it operates the running hexa-robot container,
 # whereas scripts/deploy.sh (`hexa deploy`) cross-builds and ships the image.
 #
 # Commands (run against the local hexa-robot container):
-#   start              docker compose up -d (cold; hardware in `inactive`)
-#   stop               docker compose down
-#   restart            stop && start (returns to cold state)
+#   up                 docker compose up -d, then energize (relay on + spawn
+#                      controllers). The one attended action that makes the
+#                      robot drivable.
+#   down               safe-stop: relay off + unload controllers, then compose down
+#   restart            down && up
 #   status             container + hardware-component state summary
 #   logs [-f]          docker compose logs
 #   shell              interactive ROS2-sourced shell in the container
-#   activate           relay on: activate HexaSystem, spawn the controllers
-#   deactivate         inverse of activate (relay off)
-#   teleop             re-launch teleop.launch.py inside the container
+#
+# Teleop (gamepad + web) is part of the container's launch (bringup.launch.py),
+# so the robot is drivable as soon as `up` finishes — there is no separate teleop
+# verb.
+#
+# Cold-boot safety gate: the container boots cold (robot.Dockerfile CMD runs
+# bringup.launch.py with engage_on_start:=false — relay open, hardware inactive).
+# Energizing is a step in `up` here in the CLI, never the container CMD, so a
+# `restart: unless-stopped` auto-restart (crash / power blip) brings the stack
+# back cold — the servos never flail unattended. `up` is the deliberate
+# energize; `down` is the safe-stop.
 #
 # By default these run against the container on *this* host (i.e. on the Pi).
 # From the workstation, target a remote Pi with a leading -H/--host:
-#   ./hexa robot -H pi@hexapod.local activate
-# which re-dispatches `./hexa robot activate` over ssh in ~/hexa-robot (the
+#   ./hexa robot -H pi@hexapod.local up
+# which re-dispatches `./hexa robot up` over ssh in ~/hexa-robot (the
 # launcher is shipped there by `hexa deploy push`).
 set -euo pipefail
 
@@ -52,15 +62,18 @@ Operate the local hexa-robot container. With -H/--host, re-dispatch the command
 on a remote Pi over ssh (in ~/hexa-robot).
 
 Commands:
-  start                       docker compose up -d (hardware boots cold/inactive).
-  stop                        docker compose down.
-  restart                     stop && start.
+  up                          compose up -d, then energize (relay on + spawn
+                              controllers). Makes the robot drivable.
+  down                        Safe-stop: relay off + unload controllers, then compose down.
+  restart                     down && up.
   status                      Container state + hardware-component state.
   logs [-f]                   docker compose logs.
   shell                       Interactive shell inside the container.
-  activate                    Activate the hardware (relay on) and spawn controllers.
-  deactivate                  Unload controllers and deactivate the hardware (relay off).
-  teleop                      Re-launch teleop inside the container.
+
+Teleop (gamepad + web) is part of the container's launch, so the robot is drivable
+as soon as 'up' finishes. The container always boots cold (relay open); 'up' is the
+attended energize, so a 'restart: unless-stopped' auto-restart returns the robot to
+a cold, safe state.
 EOF
 }
 
@@ -85,7 +98,7 @@ tty_flags() {
 require_container_running() {
     local state
     state="$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
-    [[ "${state}" == "running" ]] || die "container ${CONTAINER_NAME} is not running (state: ${state:-absent}). Run 'hexa robot start' first."
+    [[ "${state}" == "running" ]] || die "container ${CONTAINER_NAME} is not running (state: ${state:-absent}). Run 'hexa robot up' first."
 }
 
 # `docker compose` invocation with the robot env / file pinned.
@@ -95,9 +108,38 @@ compose() {
         docker compose -f "${COMPOSE_FILE}" "$@"
 }
 
-cmd_start()   { compose up -d; }
-cmd_stop()    { compose down; }
-cmd_restart() { compose down && compose up -d; }
+# Block until controller_manager answers, so energize() doesn't race a
+# still-booting container. `list_hardware_components` succeeds once it's up.
+wait_for_controller_manager() {
+    echo ">> Waiting for controller_manager..."
+    local _
+    for _ in $(seq 1 60); do
+        if docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
+            ros2 control list_hardware_components >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    die "controller_manager did not come up within 60s"
+}
+
+cmd_up() {
+    [[ $# -eq 0 ]] || die "up: unexpected argument '$1'"
+    compose up -d
+    wait_for_controller_manager
+    energize
+}
+
+cmd_down() {
+    # Safe-stop: drop the relay + unload the controllers first (if the container
+    # is up), then remove the container.
+    if [[ "$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)" == "running" ]]; then
+        deenergize
+    fi
+    compose down
+}
+
+cmd_restart() { cmd_down && cmd_up "$@"; }
 
 cmd_logs() {
     if [[ "${1:-}" == "-f" ]]; then
@@ -129,7 +171,8 @@ cmd_shell() {
     docker exec $(tty_flags) "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh bash
 }
 
-cmd_activate() {
+# Relay ON + spawn controllers. Internal to `up` (no longer a public verb).
+energize() {
     require_container_running
     echo ">> Activating ${HARDWARE_COMPONENT_NAME} (relay ON)"
     docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
@@ -146,7 +189,8 @@ cmd_activate() {
     echo ">> Activated. Robot is now drivable."
 }
 
-cmd_deactivate() {
+# Unload controllers + relay OFF. Internal to `down` (no longer a public verb).
+deenergize() {
     require_container_running
     echo ">> Unloading joint_group_position_controller"
     docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
@@ -161,13 +205,6 @@ cmd_deactivate() {
         ros2 control set_hardware_component_state "${HARDWARE_COMPONENT_NAME}" inactive
 }
 
-cmd_teleop() {
-    require_container_running
-    # shellcheck disable=SC2046
-    docker exec $(tty_flags) "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
-        ros2 launch hexa_teleop teleop.launch.py
-}
-
 if [[ $# -lt 1 ]]; then
     usage
     exit 1
@@ -177,15 +214,12 @@ sub="$1"
 shift
 
 case "${sub}" in
-    start)      cmd_start "$@" ;;
-    stop)       cmd_stop "$@" ;;
+    up)         cmd_up "$@" ;;
+    down)       cmd_down "$@" ;;
     restart)    cmd_restart "$@" ;;
     status)     cmd_status "$@" ;;
     logs)       cmd_logs "$@" ;;
     shell)      cmd_shell "$@" ;;
-    activate)   cmd_activate "$@" ;;
-    deactivate) cmd_deactivate "$@" ;;
-    teleop)     cmd_teleop "$@" ;;
     -h|--help)  usage ;;
     *)
         echo "hexa robot: unknown command '${sub}'" >&2

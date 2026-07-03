@@ -11,8 +11,17 @@ services:
     # `input` group so joy_node can read /dev/input/event* (the joystick).
     group_add:
       - "${INPUT_GID:-994}"
-    environment:
-      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+    # Process-level environment for the ROS stack, sourced from .env (the same
+    # file deploy seeds from .env.robot.sample, at ~/hexa-robot/.env). Any
+    # ROS-facing var added there flows into the container without editing this
+    # file. Optional so compose still parses on a host without a .env. Note the
+    # device / GID vars below stay as ${...} interpolations by necessity —
+    # they configure the container itself at create time, not the process env —
+    # and env changes still require a container recreate (`hexa robot restart`),
+    # never a bare `docker compose restart`.
+    env_file:
+      - path: .env
+        required: false
     # Servo 2040 over USB-CDC. SERVO_DEVICE defaults to /dev/ttyACM0 — set it
     # to a /dev/serial/by-id/... path in .env once the actual device string
     # is known, so a re-enumerated bus number doesn't break startup.
@@ -33,5 +42,11 @@ services:
         bind:
           propagation: rshared
       - ./log:/workspace/log
+      # Runtime-tuning overlay, mounted over the image's baked copy so an edit
+      # to ~/hexa-robot/tuning.yaml applies on a bare `hexa robot restart` — the
+      # node re-reads it at startup, no image rebuild and no container recreate.
+      # Deploy seeds this file from tuning.yaml.default; if it's absent the node
+      # falls through to the packages' base YAML defaults.
+      - ./tuning.yaml:/workspace/install/share/hexa_description/config/tuning.yaml:ro
     device_cgroup_rules:
       - 'c 13:* rmw'

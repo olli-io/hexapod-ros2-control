@@ -20,7 +20,12 @@ import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
-from hexa_gait import load_velocity_caps, scale_to_envelope
+from hexa_gait import (
+    deep_merge,
+    load_tuning_block,
+    load_velocity_caps,
+    scale_to_envelope,
+)
 from hexa_gait.gaits import STRATEGIES
 from hexa_interfaces.msg import GaitParams
 from hexa_kinematics.leg_specs import load_leg_specs
@@ -46,9 +51,11 @@ class ControlConfig:
     snap_tol_angular: float
 
 
-def _load_config(path: Path) -> ControlConfig:
+def _load_config(path: Path, overlay: dict | None = None) -> ControlConfig:
     with path.open() as f:
         raw = yaml.safe_load(f)
+    if overlay:
+        deep_merge(raw, overlay)
     name = str(raw["default_gait"])
     if name not in STRATEGIES:
         raise ValueError(
@@ -89,8 +96,8 @@ class ControlNode(Node):
             / "config"
             / "geometry.yaml"
         )
-        self._cfg = _load_config(share / "control.yaml")
-        self._caps = load_velocity_caps(gait_yaml)
+        self._cfg = _load_config(share / "control.yaml", load_tuning_block("control"))
+        self._caps = load_velocity_caps(gait_yaml, load_tuning_block("gait"))
         self._leg_mounts = {
             name: spec.mount_xyz for name, spec in load_leg_specs(geometry_yaml).items()
         }

@@ -66,6 +66,7 @@ from typing import Mapping
 import yaml
 
 from .gaits import STRATEGIES
+from .overlay import deep_merge
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,9 @@ class VelocityCaps:
         return self.yaw_bias_by_gait[gait]
 
 
-def load_velocity_caps(gait_yaml: str | Path) -> VelocityCaps:
+def load_velocity_caps(
+    gait_yaml: str | Path, overlay: Mapping[str, object] | None = None
+) -> VelocityCaps:
     """Build per-gait caps from ``gait.yaml`` and the strategy registry.
 
     Duty factor is **not** in YAML — it lives on each strategy class in
@@ -99,10 +102,17 @@ def load_velocity_caps(gait_yaml: str | Path) -> VelocityCaps:
     as its strategy class is registered; ``gait.yaml`` only contributes
     the gait-agnostic knobs (``stride_length``, ``min_swing_time``,
     ``angular_z_max``, ``yaw_bias``).
+
+    ``overlay`` is the optional tuning-overlay ``gait`` block
+    (``hexa_gait.load_tuning_block("gait")``); when given, its keys
+    override the file's before the caps are derived. Defaulted off so
+    tests that pass an explicit ``gait_yaml`` path are unaffected.
     """
     path = Path(gait_yaml)
     with path.open() as f:
         raw = yaml.safe_load(f)
+    if overlay:
+        deep_merge(raw, dict(overlay))
 
     stride_length = float(raw["stride_length"])
     min_swing_time = float(raw["min_swing_time"])

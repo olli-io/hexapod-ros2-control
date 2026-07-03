@@ -1,0 +1,75 @@
+# Shared config for the sim and pico services. Both run the same hexa-sim
+# image against Gazebo and differ only in the launch they run as PID 1; they
+# are mutually exclusive (the CLI only ever brings one up at a time).
+x-hexa-base: &hexa_base
+  build:
+    context: .
+    dockerfile: sim.Dockerfile
+    args:
+      USER_UID: "${UID:-1000}"
+      USER_GID: "${GID:-1000}"
+  image: hexa-sim:jazzy
+  network_mode: host
+  ipc: host
+  working_dir: /workspace
+  # Supplementary GIDs for the container user. INPUT_GID is the host's
+  # `input` group, needed so joy_node can open /dev/input/event* under
+  # the joystick passthrough below. Defaults to 992 (Arch / typical
+  # Ubuntu); override per-host via env if your distro differs.
+  group_add:
+    - "${INPUT_GID:-992}"
+  environment:
+    DISPLAY: "${DISPLAY:-:0}"
+    QT_X11_NO_MITSHM: "1"
+    ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+    XDG_RUNTIME_DIR: "/tmp/runtime-dev"
+    # gz-transport advertises endpoints by IP. With network_mode: host and a
+    # custom container hostname, the hostname doesn't resolve, so processes
+    # fail to find each other ("create" loops on "list of world names").
+    # Pin to loopback — all gz processes are co-located in this container.
+    GZ_IP: "127.0.0.1"
+    # C++-port toggle: sim.launch.py reads HEXA_CPP as the default of its
+    # use_cpp_* args. `hexa sim up --cpp` sets this at `compose up` time.
+    HEXA_CPP: "${HEXA_CPP:-false}"
+  volumes:
+    - .:/workspace
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - ${XAUTHORITY:-${HOME}/.Xauthority}:/home/dev/.Xauthority:ro
+    # Joystick passthrough for hexa_teleop (any X-input controller,
+    # e.g. Xbox or 8BitDo). Bind mount with rshared propagation so a
+    # controller plugged in *after* container start becomes visible
+    # inside — Docker's `devices:` snapshots /dev/input at start and
+    # misses hot-plug. Pair with device_cgroup_rules below for
+    # char-device access; group_add covers filesystem perms.
+    - type: bind
+      source: /dev/input
+      target: /dev/input
+      bind:
+        propagation: rshared
+  # Linux input subsystem (major 13: js*, event*). The bind mount
+  # above grants visibility; this grants cgroup permission to read
+  # the char devices.
+  device_cgroup_rules:
+    - 'c 13:* rmw'
+  # Uncomment when the Pimoroni Servo 2040 is plugged in:
+  # devices:
+  #   - "/dev/ttyACM0:/dev/ttyACM0"
+
+services:
+  # Desktop sim stack. PID 1 is the composed launch (Gazebo + node chain +
+  # gamepad/web teleop), so `docker compose up -d sim` / `logs` / `down`
+  # own the whole lifecycle — no in-container process supervision. No restart
+  # policy: in dev a crash should stay down for inspection, not loop.
+  sim:
+    <<: *hexa_base
+    container_name: hexa-sim
+    hostname: hexa-sim
+    command: ["ros2", "launch", "hexa_bringup", "sim_bringup.launch.py"]
+
+  # Firmware-in-sim: the Pi Pico firmware brain walks the Gazebo hexapod
+  # (sim + joy publisher + firmware bridge). Mutually exclusive with `sim`.
+  pico:
+    <<: *hexa_base
+    container_name: hexa-pico
+    hostname: hexa-pico
+    command: ["ros2", "launch", "hexa_pico_bridge", "bridge.launch.py"]

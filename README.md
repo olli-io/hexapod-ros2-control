@@ -28,13 +28,13 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
    ```
    git clone git@github.com:olli-io/hexapod-ros2-control.git
    cd hexapod-ros2-control
-   ./hexa sim --launch
+   ./hexa sim up
    ```
 
-   The first run builds the `hexa-sim` image (a few minutes), creates a
-   long-lived `hexa-sim` container, then opens a shell and launches the desktop
-   sim environment (sim + webteleop + teleop in one pane). ROS2 is already
-   sourced.
+   The first run builds the `hexa-sim` image (a few minutes), builds the
+   workspace, then brings the desktop sim stack (sim + webteleop + teleop) up
+   **detached** — the container's PID 1 is the launch itself. Stream it with
+   `./hexa sim logs -f`, stop it with `./hexa sim down`.
 
 3. **Control the hex in sim**
    - Connect an XBox or XBox-equivalent controller to your setup (wired or bt) and control the hex.
@@ -51,18 +51,22 @@ for the pieces.
 Development container ( simulation in Gazebo ) - [`docs/sim-environment.md`](docs/sim-environment.md).
 Robot container ( build, deploy and run on rPi ) - [`docs/robot-environment.md`](docs/robot-environment.md).
 
-All host-side commands go through the `hexa` dispatcher in the repo root:
+All host-side commands go through the `hexa` dispatcher in the repo root. Both
+the sim and the robot share the same `up` / `down` lifecycle verbs — the sim
+stack and the robot stack each run as their container's PID 1, managed by
+`docker compose`:
 
-- `./hexa sim` — drop into the ROS2 Jazzy sim container (`--clean` rebuilds it first, `--launch` runs the full sim stack instead of a shell).
+- `./hexa sim <up|down|logs|build|shell|status|cmd...>` — sim-container lifecycle. `up [--cpp] [--clean]` brings the stack up detached, `down` tears it down, `logs -f` streams it, `build` runs a colcon build in an ephemeral container, `shell` opens a ROS2-sourced shell, and any other command (e.g. `ros2 topic list`) runs as a one-off.
+- `./hexa pico <up|down|logs|status>` — firmware-in-sim: the Pi Pico firmware brain walks the Gazebo hexapod. Mutually exclusive with the sim stack.
 - `./hexa deploy <subcommand>` — cross-build (`build`) and ship (`push <host>`) the production image to the robot.
-- `./hexa robot <subcommand>` — operate the running robot container (`activate`, `deactivate`, `teleop`, `start`/`stop`/`restart`, `status`, `logs`, `shell`); runs on the Pi, or `-H user@host` to target it from the workstation.
-- `./hexa kill` — stop and remove a running sim container.
+- `./hexa robot <subcommand>` — operate the running robot container (`up`, `down`, `restart`, `status`, `logs`, `shell`); `up` boots cold then energizes the servos (teleop is part of the launch, so the robot is drivable once `up` finishes), `down` is the safe-stop. Runs on the Pi, or `-H user@host` to target it from the workstation.
+- `./hexa kill` — stop and remove the sim + pico containers.
 
 See docs and `./hexa --help` 
 
 ## Configuration
 
-All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`pod build` re-links instantly), relaunch.
+All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`colcon build --symlink-install` re-links instantly), relaunch.
 
 - [`src/hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — body dimensions, leg segment lengths / radii / masses, foot, per-leg hip mounts, and per-joint-type (coxa / femur / tibia) servo center, lower / upper travel limits, effort, and velocity. Single source of truth for the robot's shape and joint travel; loaded into the URDF via xacro.
 - [`src/hexa_description/config/standing_pose.yaml`](src/hexa_description/config/standing_pose.yaml) — per-joint angles (coxa / femur / tibia) at rest. Drives nominal foot targets via FK; kept separate from servo center so an asymmetric build can diverge.

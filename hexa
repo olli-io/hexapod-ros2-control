@@ -11,34 +11,37 @@ usage() {
 Usage: ./hexa <command> [args...]
 
 Commands:
-  sim [--clean] [--cpp] [--launch] [args...]
-                              Drop into the ROS2 Jazzy sim container (forwards args to the container).
-                              --clean tears down the existing container, rebuilds the image,
-                              and runs 'pod build' before opening the shell.
-                              --cpp sets HEXA_CPP=1 in the container so the bringup launch
-                              files default to the C++ ports (hexa_kinematics_cpp /
-                              hexa_gait_cpp) instead of the Python nodes.
-                              --launch runs 'pod launch' (sim + webteleop + teleop) instead
-                              of opening a shell.
-  pico [--clean] [--launch] [args...]
-                              Build the Pico firmware-in-sim bridge (hexa_pico_bridge)
-                              inside the sim container — the "pico linux build". With
-                              --launch, also run it against Gazebo (sim + joy + the
-                              firmware bridge), so the firmware brain walks the simulated
-                              hexapod. --clean tears down the existing container and
-                              rebuilds the image first (same as 'sim --clean'). Also
-                              accepts --restart / --kill. Extra args forward to the bridge
-                              launch.
+  sim <up|down|refresh|restart|logs|build|shell|status|cmd...>
+                              Sim-container lifecycle via docker compose. The sim stack
+                              runs as the container's PID 1, so:
+                                up [--cpp] [--clean]  bring it up detached
+                                down                  stop and remove it
+                                refresh [args...]     rebuild + restart the running stack
+                                restart               restart without rebuild (apply config edits)
+                                logs [-f]             show / stream logs
+                                build [args...]       colcon build (ephemeral container)
+                                shell                 interactive ROS2-sourced shell
+                                status                compose ps (+ node list when up)
+                                <cmd...>              one-off command, e.g. 'ros2 topic list'
+                              --cpp sets HEXA_CPP=1 so the launch files default to the C++
+                              ports (hexa_kinematics_cpp / hexa_gait_cpp); --clean rebuilds
+                              the image. See 'hexa sim --help'.
+  pico <up|down|logs|status>
+                              Firmware-in-sim: the Pi Pico firmware brain walks the Gazebo
+                              hexapod (sim + joy + firmware bridge). 'up' builds
+                              hexa_pico_bridge then brings the pico service up detached;
+                              mutually exclusive with the sim stack.
   deploy <subcommand> [args]  Cross-build + ship the production image to the robot.
                               Subcommands: build, push <host>. Run with no
                               subcommand for the full list.
   robot [-H user@host] <subcommand> [args]
-                              Operate the running robot container. Subcommands: start,
-                              stop, restart, status, logs [-f], shell, activate,
-                              deactivate, teleop. Runs locally (on the Pi) by default;
-                              -H/--host re-dispatches over ssh to a remote Pi. Run with
-                              no subcommand for the full list.
-  kill                        Stop and remove the sim container.
+                              Operate the running robot container. Subcommands: up, down,
+                              restart, status, logs [-f], shell. 'up' boots the container
+                              cold then energizes (relay on) — teleop is part of the launch,
+                              so the robot is drivable once 'up' finishes; 'down' is the
+                              safe-stop. Runs locally (on the Pi) by default; -H/--host
+                              re-dispatches over ssh to a remote Pi.
+  kill                        Stop and remove the sim + pico containers.
   -h, --help                  Show this help message.
 EOF
 }
@@ -53,53 +56,15 @@ shift
 
 case "${cmd}" in
     sim)
-        clean=0
-        launch=0
-        cpp=0
-        sim_args=()
-        for arg in "$@"; do
-            case "${arg}" in
-                --clean)  clean=1 ;;
-                --cpp)    cpp=1; sim_args+=("${arg}") ;;
-                --launch) launch=1 ;;
-                *)        sim_args+=("${arg}") ;;
-            esac
-        done
-        # --cpp is a sim.sh flag; the --launch path skips sim_args, so pass it
-        # through explicitly there.
-        cpp_flag=()
-        [[ ${cpp} -eq 1 ]] && cpp_flag=(--cpp)
-        if [[ ${clean} -eq 1 ]]; then
-            "${REPO_ROOT}/scripts/kill.sh"
-            "${REPO_ROOT}/scripts/sim.sh" pod build
-        fi
-        if [[ ${launch} -eq 1 ]]; then
-            exec "${REPO_ROOT}/scripts/sim.sh" "${cpp_flag[@]}" pod launch
-        fi
-        exec "${REPO_ROOT}/scripts/sim.sh" "${sim_args[@]}"
+        # Thin passthrough: scripts/sim.sh is the docker compose lifecycle
+        # dispatcher (up / down / logs / build / shell / status / one-off cmd).
+        exec "${REPO_ROOT}/scripts/sim.sh" "$@"
         ;;
     pico)
-        # Build (and optionally launch) the firmware-in-sim bridge in the sim
-        # container. sim.sh owns the container lifecycle; pod pico does the
-        # colcon build + the Gazebo launch.
-        #
-        # --clean is a host-side container-lifecycle flag (like `sim --clean`),
-        # not a `pod pico` flag: peel it here so it never leaks into the
-        # container, where `pod pico` would append it to `ros2 launch` as a
-        # bogus argument and the launch would die after the build.
-        clean=0
-        pico_args=()
-        for arg in "$@"; do
-            case "${arg}" in
-                --clean) clean=1 ;;
-                *)       pico_args+=("${arg}") ;;
-            esac
-        done
-        if [[ ${clean} -eq 1 ]]; then
-            "${REPO_ROOT}/scripts/kill.sh"
-            "${REPO_ROOT}/scripts/sim.sh" pod build
-        fi
-        exec "${REPO_ROOT}/scripts/sim.sh" pod pico "${pico_args[@]}"
+        # Firmware-in-sim, run as its own compose service. scripts/sim.sh owns
+        # the pico verbs (up / down / logs / status) since it shares the image
+        # and the compose helper.
+        exec "${REPO_ROOT}/scripts/sim.sh" pico "$@"
         ;;
     deploy)
         exec "${REPO_ROOT}/scripts/deploy.sh" "$@"

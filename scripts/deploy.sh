@@ -55,7 +55,7 @@ cmd_build() {
     echo ">> Building ${tag_sha} for linux/arm64"
     docker buildx build \
         --platform linux/arm64 \
-        -f Dockerfile.robot \
+        -f robot.Dockerfile \
         -t "${tag_sha}" \
         -t "${tag_latest}" \
         --output type=docker \
@@ -101,6 +101,12 @@ cmd_push() {
         "hexa" \
         "${host}:~/hexa-robot/"
     scp "scripts/robot.sh" "${host}:~/hexa-robot/scripts/"
+    # Runtime-tuning overlay: ship as a .default seed. The compose bind-mounts
+    # ~/hexa-robot/tuning.yaml over the image's copy so edits apply on a bare
+    # `hexa robot restart` (no image rebuild). Shipped as a seed — like .env —
+    # so a re-deploy never clobbers the operator's on-Pi tuning.
+    scp "src/hexa_description/config/tuning.yaml" \
+        "${host}:~/hexa-robot/tuning.yaml.default"
 
     echo ">> Loading image and bringing service up (cold) on ${host}"
     # shellcheck disable=SC2087
@@ -110,12 +116,14 @@ cd ~/hexa-robot
 gunzip -c "${basename_tar}" | docker load
 # First-time provisioning: drop a .env from the sample if there isn't one.
 [ -f .env ] || cp .env.robot.sample .env
+# Same for the tuning overlay — seed it once, then leave operator edits alone.
+[ -f tuning.yaml ] || cp tuning.yaml.default tuning.yaml
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 
     echo ">> Deployed. Service is up but the servo rail is cold."
-    echo "   Activate with:  ssh ${host} 'cd ~/hexa-robot && ./hexa robot activate'"
-    echo "   or from here:   hexa robot -H ${host} activate"
+    echo "   Energize with:  ssh ${host} 'cd ~/hexa-robot && ./hexa robot up'"
+    echo "   or from here:   hexa robot -H ${host} up"
 }
 
 if [[ $# -lt 1 ]]; then

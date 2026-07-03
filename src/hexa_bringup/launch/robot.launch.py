@@ -46,6 +46,25 @@ def _display_params(transport: str) -> tuple[dict, bool]:
     return params, bool(params.pop("enabled", True))
 
 
+def _tuning_block(domain: str) -> dict:
+    """The ``domain`` block of hexa_description's tuning overlay, or ``{}``.
+
+    Layered on top of a node's base params file (later param sources win)
+    so an uncommented knob in config/tuning.yaml overrides it. A missing
+    file / block / key yields ``{}`` (no override).
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_description"), "config", "tuning.yaml"
+    )
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    block = data.get(domain, {})
+    return block if isinstance(block, dict) else {}
+
+
 def _bringup(context, *args, **kwargs):
     pkg_hexa_bringup = FindPackageShare("hexa_bringup")
     pkg_hexa_description = FindPackageShare("hexa_description")
@@ -111,7 +130,7 @@ def _bringup(context, *args, **kwargs):
     cm_parameters = [robot_description, controllers_yaml]
 
     # Cold-start: bring the hardware to `inactive` only. The relay stays open
-    # until `hexa robot activate` activates the component.
+    # until `hexa robot up` energizes the component.
     if not engage:
         cm_parameters.append({
             "hardware_components_initial_state": {
@@ -130,11 +149,18 @@ def _bringup(context, *args, **kwargs):
     posture_config = PathJoinSubstitution([
         pkg_hexa_posture, "config", "posture.yaml",
     ])
+    # Layer the tuning overlay's posture block on top of posture.yaml (last
+    # param source wins). Appended only when non-empty so the base file is
+    # untouched in the normal override-nothing case.
+    posture_params = [posture_config]
+    posture_overlay = _tuning_block("posture")
+    if posture_overlay:
+        posture_params.append(posture_overlay)
     posture_node = Node(
         package=posture_pkg,
         executable="posture_node",
         output="screen",
-        parameters=[posture_config],
+        parameters=posture_params,
     )
 
     ik_node = Node(
@@ -217,10 +243,10 @@ def generate_launch_description():
             description=(
                 "If true, activate the hardware and spawn controllers at "
                 "launch. If false, boot cold (inactive, relay open, no "
-                "controllers); `hexa robot activate` flips it live."
+                "controllers); `hexa robot up` energizes it live."
             ),
         ),
-        # Defaults honour the HEXA_CPP env var (set by `hexa sim --cpp`), so the
+        # Defaults honour the HEXA_CPP env var (set by `hexa sim up --cpp`), so the
         # whole chain flips to the C++ ports without per-command args. An
         # explicit `use_cpp_*:=...` on the command line still overrides.
         DeclareLaunchArgument(

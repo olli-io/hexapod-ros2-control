@@ -12,40 +12,57 @@ Everything below explains the pieces.
 
 ## The `hexa` host script
 
-`./hexa` is the top-level dispatcher you run on the host:
+`./hexa` is the top-level dispatcher you run on the host. The sim stack runs as
+the container's PID 1 (the composed `sim_bringup.launch.py`), so its lifecycle
+is docker-native — the same `up` / `down` model the robot container uses:
 
-- `./hexa sim` — drop into a shell in the sim container. The first call builds
-  the image and creates the container; later calls `docker exec` into the same
-  one.
-- `./hexa sim --launch` — open a shell and immediately run the full sim stack
-  (`pod launch`).
-- `./hexa sim --test` — build, then run the full colcon test suite.
-- `./hexa sim --clean` — rebuild the image from scratch (after Dockerfile
-  edits): kills the container, rebuilds, runs `pod build`, drops you into a
-  shell.
-- `./hexa kill` — stop and remove the sim container.
+- `./hexa sim up` — build the workspace if needed, then bring the sim stack up
+  **detached** (`docker compose up -d`). `--cpp` sets `HEXA_CPP=1` so the launch
+  files default to the C++ ports (hexa_kinematics_cpp / hexa_gait_cpp); `--clean`
+  rebuilds the image (after sim.Dockerfile edits).
+- `./hexa sim logs -f` — stream the stack's logs (native `docker logs`, no
+  in-container redirection).
+- `./hexa sim down` — stop and remove the container.
+- `./hexa sim build` — colcon build in an ephemeral `compose run --rm` container;
+  no running stack needed. `install/` persists via the workspace bind-mount.
+- `./hexa sim shell` — a ROS2-sourced shell: `docker exec` into the running
+  stack if it's up, else an ephemeral `compose run --rm` container.
+- `./hexa sim status` — `compose ps`, plus `ros2 node list` when the stack is up.
 - `./hexa sim <cmd>` — run a one-off command in the container, e.g.
-  `./hexa sim rviz2`.
+  `./hexa sim rviz2` or `./hexa sim ros2 topic list` (exec if up, else run --rm).
+- `./hexa pico up` — firmware-in-sim (see below); `./hexa pico down` / `logs -f`.
+- `./hexa kill` — stop and remove the sim + pico containers.
 
 Outside the container, on the host, the same workspace files are visible — edit
 with whatever editor you like; nothing in the container is privileged to write
 outside `/workspace`.
 
-## The `pod` CLI (inside the container)
+Tests run as one-off commands, e.g.
+`./hexa sim python3 -m pytest src/hexa_gait/test -q` or `./hexa sim colcon test`.
 
-`./hexa sim --launch` is enough for the daily loop, but inside the container the
-`pod` CLI gives you finer control:
+## Building the workspace
+
+Stack lifecycle lives host-side (`hexa sim up/down`); the build runs *inside*
+the container via colcon:
 
 ```
-pod build                       # colcon build --symlink-install
-pod sim                         # ros2 launch hexa_bringup sim.launch.py
-pod teleop                      # ros2 launch hexa_teleop teleop.launch.py
-pod webteleop                   # ros2 launch hexa_webteleop webteleop.launch.py
-pod launch                      # sim + webteleop + teleop, once /clock is up
+hexa sim build                                  # colcon build --symlink-install
+hexa sim build --packages-select hexa_kinematics   # extra args forward to colcon
 ```
 
-Extra args are forwarded, e.g. `pod build --packages-select hexa_kinematics`.
-`install/setup.bash` is already sourced in new shells.
+In an interactive container shell the `cb` alias is the same
+`colcon build --symlink-install`. `install/setup.bash` is already sourced in new
+shells.
+
+## Firmware-in-sim (`./hexa pico`)
+
+`./hexa pico up` runs the Pi Pico firmware brain against the Gazebo model
+(sim + joy publisher + firmware bridge) as its own compose service — the same
+teleop input should walk the sim hexapod identically to the ROS2 node chain. It
+first builds `hexa_pico_bridge`, then `docker compose up -d pico`. It is mutually
+exclusive with the sim stack (both drive the same Gazebo world), so bring one
+down before the other up. `./hexa pico logs -f` streams it; `./hexa pico down`
+tears it down.
 
 ## GUI smoke check
 
@@ -62,15 +79,19 @@ try again. The wrapper does this for you, but a fresh login may reset the rule.
 ## Layout
 
 ```
-Dockerfile               # image definition: jazzy-desktop + ros_gz + ros2_control + dev user
-docker/entrypoint.sh     # sources /opt/ros/jazzy/setup.bash, then install/setup.bash if built
-docker-compose.yml       # mounts workspace, X11 socket, host network for DDS
-hexa                     # top-level host dispatcher (sim, deploy, kill)
-pod                      # in-container workspace CLI (build / sim / teleop / webteleop / launch)
-scripts/sim.sh           # ensure single long-lived sim container, then docker exec into it
-scripts/kill.sh          # stop and remove the sim container
-.dockerignore            # keeps build/, install/, .git/ out of the build context
+sim.Dockerfile                          # image definition: jazzy-desktop + ros_gz + ros2_control + dev user
+docker/entrypoint.sh                    # sources /opt/ros/jazzy/setup.bash, then install/setup.bash if built
+docker-compose.sim.yaml                 # sim + pico services; each runs a composed launch as PID 1
+hexa                                    # top-level host dispatcher (sim, pico, deploy, robot, kill)
+src/hexa_bringup/launch/sim_bringup.launch.py  # the sim container's PID 1: sim + teleop + webteleop
+scripts/sim.sh                          # docker compose lifecycle dispatcher (up/down/logs/build/shell/pico)
+scripts/kill.sh                         # compose down the sim + pico containers
+.dockerignore                           # keeps build/, install/, .git/ out of the build context
 ```
+
+The sim container's PID 1 is the stack itself (via `sim_bringup.launch.py`),
+mirroring the robot container (whose PID 1 is `bringup.launch.py`). Docker owns
+supervision, detaching, log capture, and teardown for both.
 
 ## DDS / networking
 
@@ -89,8 +110,8 @@ When the Pimoroni Servo 2040 is connected:
 
 1. Plug it in; confirm with `lsusb` on the host. Note the device path
    (typically `/dev/ttyACM0`).
-2. Uncomment the `devices:` block in `docker-compose.yml`.
-3. Rebuild from scratch: `./hexa sim --clean`.
+2. Uncomment the `devices:` block in `docker-compose.sim.yaml`.
+3. Rebuild the image: `./hexa sim up --clean`.
 
 `usbutils` is already installed in the image, so `lsusb` inside the container
 works once the device is mapped in.
@@ -103,7 +124,7 @@ container can read it without root.
 
 The sim container is x86_64, Gazebo-heavy, and built around a live source
 bind-mount — none of that fits the Pi. The robot path is a separate
-`Dockerfile.robot` cross-built for `linux/arm64`, shipped to the robot as a saved
+`robot.Dockerfile` cross-built for `linux/arm64`, shipped to the robot as a saved
 image tarball, and run as a long-lived service.
 
 Prerequisites on the workstation:
@@ -138,13 +159,20 @@ Operate the running container (`./hexa robot`, on the Pi — or from the
 workstation with `-H user@host`, which re-dispatches over `ssh` in
 `~/hexa-robot`):
 
-- `./hexa robot activate` — transitions the hardware component to `active` (relay
-  click), then spawns `joint_state_broadcaster` and
-  `joint_group_position_controller`. After this the robot is drivable.
-- `./hexa robot deactivate` — unloads the controllers and drops the hardware back
-  to `inactive`. Relay opens; the robot goes limp.
-- `./hexa robot {start|stop|restart|status|logs|shell|teleop}` — routine
-  container ops against the local `hexa-robot` service.
+- `./hexa robot up` — `compose up -d` (the container boots cold), waits for
+  `controller_manager`, then transitions the hardware component to `active` (relay
+  click) and spawns `joint_state_broadcaster` + `joint_group_position_controller`.
+  After this the robot is drivable. This is the one attended action that energizes.
+- `./hexa robot down` — safe-stop: unloads the controllers, drops the hardware
+  back to `inactive` (relay opens; the robot goes limp), then `compose down`.
+- `./hexa robot {restart|status|logs|shell}` — routine container ops against the
+  local `hexa-robot` service. Teleop (gamepad + web) is part of the container's
+  launch, so the robot is drivable as soon as `up` finishes — no separate verb.
+
+Because energizing is a CLI step in `up` — never the container's CMD — a
+`restart: unless-stopped` auto-restart (crash / power blip) brings the stack back
+**cold** (relay open), so the servos never flail unattended. See
+[`robot-environment.md`](robot-environment.md).
 
 The cold-start gate is implemented by passing the
 `hardware_components_initial_state` parameter to `controller_manager` from
@@ -158,8 +186,8 @@ externally.
 - **`cannot open display`** — `xhost +local:docker` on the host. The wrapper
   attempts this but silently ignores failures.
 - **Files in `build/` / `install/` owned by root** — your host UID/GID didn't
-  match what was baked into the image. Rebuild from scratch with
-  `./hexa sim --clean`, which forwards `UID`/`GID`/`INPUT_GID` into the build.
+  match what was baked into the image. Rebuild the image with
+  `./hexa sim up --clean`, which forwards `UID`/`GID`/`INPUT_GID` into the build.
   The issue only appears if you call `docker compose` directly without those env
   vars set.
 - **`ros2 topic list` empty across containers** — check `ROS_DOMAIN_ID` is the

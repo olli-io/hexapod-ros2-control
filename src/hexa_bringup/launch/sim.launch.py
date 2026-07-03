@@ -33,6 +33,25 @@ def _display_params(transport: str) -> tuple[dict, bool]:
     return params, bool(params.pop("enabled", True))
 
 
+def _tuning_block(domain: str) -> dict:
+    """The ``domain`` block of hexa_description's tuning overlay, or ``{}``.
+
+    Layered on top of a node's base params file (later param sources win)
+    so an uncommented knob in config/tuning.yaml overrides it. A missing
+    file / block / key yields ``{}`` (no override).
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_description"), "config", "tuning.yaml"
+    )
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    block = data.get(domain, {})
+    return block if isinstance(block, dict) else {}
+
+
 def generate_launch_description():
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -80,11 +99,18 @@ def generate_launch_description():
     posture_config = PathJoinSubstitution([
         FindPackageShare(posture_pkg), "config", "posture.yaml",
     ])
+    # Layer the tuning overlay's posture block on top of posture.yaml (last
+    # param source wins). Appended only when non-empty so the base file is
+    # untouched in the normal override-nothing case.
+    posture_params = common_params + [posture_config]
+    posture_overlay = _tuning_block("posture")
+    if posture_overlay:
+        posture_params.append(posture_overlay)
     posture_node = Node(
         package=posture_pkg,
         executable="posture_node",
         output="screen",
-        parameters=common_params + [posture_config],
+        parameters=posture_params,
     )
 
     control_node = Node(
@@ -102,7 +128,7 @@ def generate_launch_description():
     )
 
     actions = [
-        # Defaults honour the HEXA_CPP env var (set by `hexa sim --cpp`), so the
+        # Defaults honour the HEXA_CPP env var (set by `hexa sim up --cpp`), so the
         # whole sim stack flips to the C++ ports without per-command args. An
         # explicit `use_cpp_*:=...` on the command line still overrides.
         DeclareLaunchArgument(

@@ -65,6 +65,6 @@ Carried over from the Python package:
 ## Build & test
 
     ./hexa sim
-    pod build   # or: colcon build --packages-select hexa_kinematics_cpp
+    colcon build --symlink-install --packages-select hexa_kinematics_cpp
     colcon test --packages-select hexa_kinematics_cpp
     ros2 run hexa_kinematics_cpp ik_node

@@ -4,7 +4,7 @@ Pure module: importable without pyserial (``SerialTransport`` imports
 it lazily inside ``open()``) and without rclpy. The node picks the
 transport from the ``transport`` parameter: ``serial`` on the robot,
 ``stub`` in sim, where it decodes outgoing frames and logs them so
-``pod sim`` shows the face transitions.
+``hexa sim logs`` shows the face transitions.
 """
 
 from __future__ import annotations

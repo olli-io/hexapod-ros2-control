@@ -14,7 +14,7 @@ chain (ik_node + gait_node + posture_node) in the same world (sim-first).
 
 Launch args:
   sim      (default true)  — include the Gazebo sim launch. Set false to run the
-                             bridge against an already-running sim (e.g. `pod sim`).
+                             bridge against an already-running sim (e.g. `hexa sim up`).
   joy      (default true)  — start the joy publisher. Set false to feed /joy
                              yourself (a host joystick, ros2 topic pub, a bag).
   headless (default false) — forwarded to the sim launch.

@@ -1,0 +1,47 @@
+# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE VALUES HERE ARE NOT
+# SENSIBLE. THIS OVERLAY OVERRIDES THE ENGINE KNOBS WITH NO SAFEGUARDS.
+
+# Runtime-tuning overlay — the one place to tinker with feel/tuning knobs
+# and hot-apply them WITHOUT a rebuild.
+#
+# OVERRIDE-ONLY: this file holds only the knobs you are actively
+# overriding. Anything NOT set here (the normal case) falls through to
+# the owning package's base YAML, which stays the single source of truth
+# for the default value and its documentation — so no value is defined in
+# two places. Uncomment a line to override it; delete/re-comment it to go
+# back to the base default. An absent block, or this whole file missing,
+# is fine (no overrides).
+#
+# Only flat scalar knobs are overridable here. STRUCTURAL config
+# (geometry, servo table, joystick bindings, the nested initialize:/
+# reseat: ladders) lives in its base YAML and is not exposed.
+#
+# Apply after editing:
+#   sim   — `hexa sim restart`   (no rebuild; symlink-install keeps this live)
+#   robot — edit ~/hexa-robot/tuning.yaml, then `hexa robot restart`
+#   pico  — needs a reflash regardless (values baked at build time)
+#
+# Units: m, s, rad.
+
+# ─── Gait engine — overrides hexa_gait{,_cpp}/config/gait.yaml ───────
+gait:
+  # stride_length: 0.1      # design per-leg stride magnitude (m)
+  # step_height: 0.08       # swing-arc apex clearance (m)
+  # swing_width: 0.0        # lateral swing offset (m)
+  # min_swing_time: 0.3     # swing-phase duration lower bound (s)
+  # max_swing_time: 0.4     # swing-phase duration upper bound (s)
+  # angular_z_max: 3.0      # body yaw-rate ceiling (rad/s)
+  # yaw_bias: 0.6           # yaw-vs-translation bias at envelope overrun
+
+# ─── Control velocity shaping — overrides hexa_control/config/control.yaml ─
+control:
+  # vmax_ramp_time_linear: 0.8    # rest → linear_max ramp (s)
+  # vmax_ramp_time_angular: 1.0   # yaw rest → angular_max ramp (s)
+
+# ─── Posture animations — overrides hexa_posture{,_cpp}/config/posture.yaml ─
+# (the posture_node ros__parameters knobs; flat scalars only)
+posture:
+  # gait_sway_gain: 1.0            # centroid feedforward gain
+  # gait_sway_strength: 0.4        # user attenuator [0, 1]
+  # gait_bounce_arc_height: 0.02   # vertical bob arc (m)
+  # gait_bounce_step_height_ref: 0.06  # bob reference vs gait step_height (m)
