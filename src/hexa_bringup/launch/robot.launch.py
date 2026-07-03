@@ -65,6 +65,25 @@ def _tuning_block(domain: str) -> dict:
     return block if isinstance(block, dict) else {}
 
 
+def _gait_params() -> dict:
+    """gait_node's knobs from config/gait.yaml with the tuning overlay merged.
+
+    Returned as a single dict, not the file path plus a dict overlay: an
+    exact-name YAML params file (``gait_node:``) outranks a dict layered on
+    top of it, so the overlay would silently lose (same reasoning as
+    ``_display_params``). The ``gait`` overlay block is flat scalars only, so a
+    shallow update suffices. gait.yaml is byte-identical across the Python and
+    C++ packages, so hexa_gait's copy is authoritative for either node.
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_gait"), "config", "gait.yaml"
+    )
+    with open(path) as f:
+        params = yaml.safe_load(f)["gait_node"]["ros__parameters"]
+    params.update(_tuning_block("gait"))
+    return params
+
+
 def _bringup(context, *args, **kwargs):
     pkg_hexa_bringup = FindPackageShare("hexa_bringup")
     pkg_hexa_description = FindPackageShare("hexa_description")
@@ -180,8 +199,11 @@ def _bringup(context, *args, **kwargs):
         package="hexa_control", executable="control_node", output="screen",
         parameters=control_params,
     )
+    # gait_node's knobs are passed as one merged dict (see _gait_params) so the
+    # tuning overlay reliably wins over the base gait.yaml values.
     gait_node = Node(
         package=gait_pkg, executable="gait_node", output="screen",
+        parameters=[_gait_params()],
     )
 
     actions = [

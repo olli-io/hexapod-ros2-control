@@ -9,7 +9,10 @@
 namespace hexa_gait {
 
 VelocityCaps load_velocity_caps(const std::string& gait_yaml) {
-  const YAML::Node raw = YAML::LoadFile(gait_yaml);
+  // gait.yaml is a ros2 params file; unwrap to the flat knob block the caps
+  // are derived from (mirrors the gait node's ros params and gen_config.py).
+  const YAML::Node raw =
+      YAML::LoadFile(gait_yaml)["gait_node"]["ros__parameters"];
 
   const double stride_length = raw["stride_length"].as<double>();
   const double min_swing_time = raw["min_swing_time"].as<double>();

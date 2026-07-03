@@ -10,14 +10,19 @@ Run with::
     ros2 launch hexa_gait gait.launch.py
 """
 from launch import LaunchDescription
+from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    gait_config = PathJoinSubstitution([
+        FindPackageShare("hexa_gait"), "config", "gait.yaml",
+    ])
     gait_node = Node(
         package="hexa_gait",
         executable="gait_node",
         output="screen",
-        parameters=[{"use_sim_time": False}],
+        parameters=[{"use_sim_time": False}, gait_config],
     )
     return LaunchDescription([gait_node])

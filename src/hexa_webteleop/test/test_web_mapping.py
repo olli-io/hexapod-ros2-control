@@ -107,12 +107,14 @@ arbitration:
 """
 
 _GAIT_YAML = """
-stride_length: 0.1
-min_swing_time: 0.30
-max_swing_time: 0.4
-angular_z_max: 3.00
-yaw_bias: 0.6
-default_gait: tripod
+gait_node:
+  ros__parameters:
+    stride_length: 0.1
+    min_swing_time: 0.30
+    max_swing_time: 0.4
+    angular_z_max: 3.00
+    yaw_bias: 0.6
+    default_gait: tripod
 """
 
 _POSTURE_YAML = """

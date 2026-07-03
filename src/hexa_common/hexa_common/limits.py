@@ -113,6 +113,10 @@ def load_velocity_caps(
     path = Path(envelope_yaml)
     with path.open() as f:
         raw = yaml.safe_load(f)
+    # gait.yaml is a ros2 params file; unwrap to the flat knob block the caps
+    # are derived from (mirrors the gait node's ros params). The overlay's
+    # ``gait`` block stays flat and merges into the unwrapped dict.
+    raw = raw["gait_node"]["ros__parameters"]
     if overlay:
         deep_merge(raw, dict(overlay))
 

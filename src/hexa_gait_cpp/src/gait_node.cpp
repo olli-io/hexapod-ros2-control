@@ -3,9 +3,10 @@
 // Subscribes to /gait/params (last-write-wins), /gait/initialize, and
 // /body/pose (height axis only); publishes /legs/targets and /gait/state at
 // 50 Hz. Builds an Engine at init from hexa_description's YAML (single source of
-// truth for body geometry and standing pose) and this package's config/gait.yaml
-// (engine-internal knobs). All gait logic lives in the pure Engine; this file
-// owns only the ROS plumbing.
+// truth for body geometry and standing pose) and its own ROS parameters
+// (engine-internal knobs; defaults mirror config/gait.yaml, which the launch
+// files pass as the param source). All gait logic lives in the pure Engine;
+// this file owns only the ROS plumbing.
 
 #include <chrono>
 #include <cstdint>
@@ -35,81 +36,6 @@ namespace {
 
 constexpr double kPublishRateHz = 50.0;
 
-// Runtime-tuning overlay: hexa_description/config/tuning.yaml, a sparse
-// override whose per-domain block (here "gait") wins over the base gait.yaml.
-// A missing package / file / block yields an undefined node (no override), so
-// the overlay is safe to omit. Mirrors hexa_gait/overlay.py.
-YAML::Node load_tuning_block(const std::string& domain) {
-  try {
-    const std::string path =
-        ament_index_cpp::get_package_share_directory("hexa_description") +
-        "/config/tuning.yaml";
-    const YAML::Node data = YAML::LoadFile(path);
-    if (data[domain]) {
-      return data[domain];
-    }
-  } catch (const std::exception&) {
-    // package or file absent — fall through to no overlay.
-  }
-  return YAML::Node(YAML::NodeType::Undefined);
-}
-
-// Recursively merge scalar/leaf keys from `overlay` into `base`; overlay wins.
-void merge_into(YAML::Node base, const YAML::Node& overlay) {
-  if (!overlay || !overlay.IsMap()) {
-    return;
-  }
-  for (const auto& kv : overlay) {
-    const std::string key = kv.first.as<std::string>();
-    if (base[key] && base[key].IsMap() && kv.second.IsMap()) {
-      merge_into(base[key], kv.second);
-    } else {
-      base[key] = kv.second;
-    }
-  }
-}
-
-hexa_gait::EngineConfig load_engine_config(const std::string& path,
-                                           std::string& default_gait_out) {
-  YAML::Node raw = YAML::LoadFile(path);
-  merge_into(raw, load_tuning_block("gait"));
-  const YAML::Node init_cfg = raw["initialize"];
-  const YAML::Node reseat_cfg = raw["reseat"];
-
-  hexa_gait::EngineConfig cfg;
-  cfg.stride_length = raw["stride_length"].as<double>();
-  cfg.min_swing_time = raw["min_swing_time"].as<double>();
-  cfg.max_swing_time = raw["max_swing_time"].as<double>();
-  cfg.step_height = raw["step_height"].as<double>();
-  cfg.swing_width = raw["swing_width"].as<double>();
-  cfg.controller_dt = raw["controller_dt"].as<double>();
-  cfg.cmd_zero_tol = raw["cmd_zero_tol"].as<double>();
-  cfg.pause_debounce_delay = raw["pause_debounce_delay"].as<double>();
-  cfg.pause_to_reseat_delay = raw["pause_to_reseat_delay"].as<double>();
-  cfg.gait_change_pause_to_reseat_delay =
-      raw["gait_change_pause_to_reseat_delay"].as<double>();
-  cfg.max_reset_time = raw["max_reset_time"].as<double>();
-  cfg.init_pair_swing_time = init_cfg["pair_swing_time"].as<double>();
-  cfg.init_lift_body_time = init_cfg["lift_body_time"].as<double>();
-  cfg.init_swing_clearance = init_cfg["swing_clearance"].as<double>();
-  cfg.init_place_feet_clearance = init_cfg["place_feet_clearance"].as<double>();
-  cfg.reseat_pose_settle_delay = reseat_cfg["pose_settle_delay"].as<double>();
-  cfg.reseat_height_change_threshold =
-      reseat_cfg["height_change_threshold"].as<double>();
-  cfg.reseat_pair_swing_time = reseat_cfg["pair_swing_time"].as<double>();
-  cfg.reseat_pair_dwell_time = reseat_cfg["pair_dwell_time"].as<double>();
-  cfg.reseat_swing_clearance = reseat_cfg["swing_clearance"].as<double>();
-
-  default_gait_out =
-      raw["default_gait"] ? raw["default_gait"].as<std::string>() : "tripod";
-  if (hexa_gait::strategies().find(default_gait_out) ==
-      hexa_gait::strategies().end()) {
-    throw std::runtime_error("default_gait=" + default_gait_out +
-                             " not in STRATEGIES");
-  }
-  return cfg;
-}
-
 double load_coxa_to_bottom(const std::string& geometry_path) {
   const YAML::Node raw = YAML::LoadFile(geometry_path);
   return raw["body"]["coxa_to_bottom"].as<double>();
@@ -118,9 +44,6 @@ double load_coxa_to_bottom(const std::string& geometry_path) {
 class GaitNode : public rclcpp::Node {
  public:
   GaitNode() : rclcpp::Node("gait_node") {
-    const std::string gait_share =
-        ament_index_cpp::get_package_share_directory("hexa_gait_cpp") +
-        "/config";
     const std::string desc_share =
         ament_index_cpp::get_package_share_directory("hexa_description") +
         "/config";
@@ -128,7 +51,7 @@ class GaitNode : public rclcpp::Node {
     const std::string standing = desc_share + "/standing_pose.yaml";
 
     std::string default_gait;
-    cfg_ = load_engine_config(gait_share + "/gait.yaml", default_gait);
+    cfg_ = read_engine_config(default_gait);
 
     auto nominal = hexa_gait::nominal_stance_from_yaml(geometry, standing);
     auto initial = hexa_gait::initial_stance_from_yaml(geometry);
@@ -179,6 +102,55 @@ class GaitNode : public rclcpp::Node {
   }
 
  private:
+  // Declare and read the engine knobs from this node's ros params. Defaults
+  // mirror config/gait.yaml; the launch files pass that file (plus the "gait"
+  // tuning-overlay block, layered last) as the param source, so a bare
+  // `ros2 run` still boots on these defaults. The nested initialize:/reseat:
+  // blocks in the YAML surface as dotted parameter names.
+  hexa_gait::EngineConfig read_engine_config(std::string& default_gait_out) {
+    hexa_gait::EngineConfig cfg;
+    cfg.stride_length = declare_parameter<double>("stride_length", 0.1);
+    cfg.min_swing_time = declare_parameter<double>("min_swing_time", 0.30);
+    cfg.max_swing_time = declare_parameter<double>("max_swing_time", 0.4);
+    cfg.step_height = declare_parameter<double>("step_height", 0.08);
+    cfg.swing_width = declare_parameter<double>("swing_width", 0.0);
+    cfg.controller_dt = declare_parameter<double>("controller_dt", 0.005);
+    cfg.cmd_zero_tol = declare_parameter<double>("cmd_zero_tol", 1.0e-4);
+    cfg.pause_debounce_delay =
+        declare_parameter<double>("pause_debounce_delay", 0.4);
+    cfg.pause_to_reseat_delay =
+        declare_parameter<double>("pause_to_reseat_delay", 0.2);
+    cfg.gait_change_pause_to_reseat_delay =
+        declare_parameter<double>("gait_change_pause_to_reseat_delay", 0.1);
+    cfg.max_reset_time = declare_parameter<double>("max_reset_time", 1.2);
+    cfg.init_pair_swing_time =
+        declare_parameter<double>("initialize.pair_swing_time", 0.4);
+    cfg.init_lift_body_time =
+        declare_parameter<double>("initialize.lift_body_time", 0.6);
+    cfg.init_swing_clearance =
+        declare_parameter<double>("initialize.swing_clearance", 0.04);
+    cfg.init_place_feet_clearance =
+        declare_parameter<double>("initialize.place_feet_clearance", 0.012);
+    cfg.reseat_pose_settle_delay =
+        declare_parameter<double>("reseat.pose_settle_delay", 0.5);
+    cfg.reseat_height_change_threshold =
+        declare_parameter<double>("reseat.height_change_threshold", 0.002);
+    cfg.reseat_pair_swing_time =
+        declare_parameter<double>("reseat.pair_swing_time", 0.2);
+    cfg.reseat_pair_dwell_time =
+        declare_parameter<double>("reseat.pair_dwell_time", 0.05);
+    cfg.reseat_swing_clearance =
+        declare_parameter<double>("reseat.swing_clearance", 0.025);
+
+    default_gait_out = declare_parameter<std::string>("default_gait", "tripod");
+    if (hexa_gait::strategies().find(default_gait_out) ==
+        hexa_gait::strategies().end()) {
+      throw std::runtime_error("default_gait=" + default_gait_out +
+                               " not in STRATEGIES");
+    }
+    return cfg;
+  }
+
   void on_init(const std_msgs::msg::Empty&) {
     if (engine_->start_initialize()) {
       RCLCPP_INFO(get_logger(),

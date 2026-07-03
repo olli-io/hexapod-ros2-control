@@ -3,8 +3,10 @@
 Subscribes to ``/gait/params`` (last-write-wins, no queue replay) and
 publishes ``/legs/targets`` at 200 Hz. Builds an ``Engine`` + ``Tripod``
 at init using the YAML in ``hexa_description`` (single source of truth
-for body geometry and standing pose) and this package's ``config/gait.yaml``
-(engine-internal knobs + cold-start fallbacks).
+for body geometry and standing pose) and its own ROS parameters
+(engine-internal knobs), whose defaults mirror ``config/gait.yaml`` — the
+launch files pass that file (plus the ``gait`` tuning overlay) as the
+parameter source.
 
 The node is intentionally thin: all gait logic lives in the pure-python
 ``Engine``. Tests live alongside the engine modules; this file owns
@@ -35,46 +37,68 @@ from .engine import (
     reseat_geometry_from_yaml,
 )
 from .gaits import STRATEGIES
-from .overlay import deep_merge, load_tuning_block
 
 
 PUBLISH_RATE_HZ = 200.0
 
 
-def _load_engine_config(
-    path: Path, overlay: dict | None = None
-) -> tuple[EngineConfig, str]:
-    with path.open() as f:
-        raw = yaml.safe_load(f)
-    if overlay:
-        deep_merge(raw, overlay)
-    init_cfg = raw["initialize"]
-    reseat_cfg = raw["reseat"]
+def _read_engine_config(node: Node) -> tuple[EngineConfig, str]:
+    """Declare and read ``gait_node``'s ros params into an ``EngineConfig``.
+
+    Defaults mirror ``config/gait.yaml``; the launch files pass that file
+    (plus the ``gait`` tuning-overlay block, layered last) so the YAML is
+    authoritative in the normal composed run, while a bare ``ros2 run`` still
+    starts on the built-in defaults. The nested ``initialize:`` / ``reseat:``
+    blocks in the YAML surface as dotted parameter names.
+    """
+    node.declare_parameter("default_gait", "tripod")
+    node.declare_parameter("stride_length", 0.1)
+    node.declare_parameter("min_swing_time", 0.30)
+    node.declare_parameter("max_swing_time", 0.4)
+    node.declare_parameter("step_height", 0.08)
+    node.declare_parameter("swing_width", 0.0)
+    node.declare_parameter("controller_dt", 0.005)
+    node.declare_parameter("cmd_zero_tol", 1.0e-4)
+    node.declare_parameter("pause_debounce_delay", 0.4)
+    node.declare_parameter("pause_to_reseat_delay", 0.2)
+    node.declare_parameter("gait_change_pause_to_reseat_delay", 0.1)
+    node.declare_parameter("max_reset_time", 1.2)
+    node.declare_parameter("initialize.pair_swing_time", 0.4)
+    node.declare_parameter("initialize.lift_body_time", 0.6)
+    node.declare_parameter("initialize.swing_clearance", 0.04)
+    node.declare_parameter("initialize.place_feet_clearance", 0.012)
+    node.declare_parameter("reseat.pose_settle_delay", 0.5)
+    node.declare_parameter("reseat.height_change_threshold", 0.002)
+    node.declare_parameter("reseat.pair_swing_time", 0.2)
+    node.declare_parameter("reseat.pair_dwell_time", 0.05)
+    node.declare_parameter("reseat.swing_clearance", 0.025)
+
+    def _f(name: str) -> float:
+        return float(node.get_parameter(name).value)
+
     cfg = EngineConfig(
-        stride_length=float(raw["stride_length"]),
-        min_swing_time=float(raw["min_swing_time"]),
-        max_swing_time=float(raw["max_swing_time"]),
-        step_height=float(raw["step_height"]),
-        swing_width=float(raw["swing_width"]),
-        controller_dt=float(raw["controller_dt"]),
-        cmd_zero_tol=float(raw["cmd_zero_tol"]),
-        pause_debounce_delay=float(raw["pause_debounce_delay"]),
-        pause_to_reseat_delay=float(raw["pause_to_reseat_delay"]),
-        gait_change_pause_to_reseat_delay=float(
-            raw["gait_change_pause_to_reseat_delay"]
-        ),
-        max_reset_time=float(raw["max_reset_time"]),
-        init_pair_swing_time=float(init_cfg["pair_swing_time"]),
-        init_lift_body_time=float(init_cfg["lift_body_time"]),
-        init_swing_clearance=float(init_cfg["swing_clearance"]),
-        init_place_feet_clearance=float(init_cfg["place_feet_clearance"]),
-        reseat_pose_settle_delay=float(reseat_cfg["pose_settle_delay"]),
-        reseat_height_change_threshold=float(reseat_cfg["height_change_threshold"]),
-        reseat_pair_swing_time=float(reseat_cfg["pair_swing_time"]),
-        reseat_pair_dwell_time=float(reseat_cfg["pair_dwell_time"]),
-        reseat_swing_clearance=float(reseat_cfg["swing_clearance"]),
+        stride_length=_f("stride_length"),
+        min_swing_time=_f("min_swing_time"),
+        max_swing_time=_f("max_swing_time"),
+        step_height=_f("step_height"),
+        swing_width=_f("swing_width"),
+        controller_dt=_f("controller_dt"),
+        cmd_zero_tol=_f("cmd_zero_tol"),
+        pause_debounce_delay=_f("pause_debounce_delay"),
+        pause_to_reseat_delay=_f("pause_to_reseat_delay"),
+        gait_change_pause_to_reseat_delay=_f("gait_change_pause_to_reseat_delay"),
+        max_reset_time=_f("max_reset_time"),
+        init_pair_swing_time=_f("initialize.pair_swing_time"),
+        init_lift_body_time=_f("initialize.lift_body_time"),
+        init_swing_clearance=_f("initialize.swing_clearance"),
+        init_place_feet_clearance=_f("initialize.place_feet_clearance"),
+        reseat_pose_settle_delay=_f("reseat.pose_settle_delay"),
+        reseat_height_change_threshold=_f("reseat.height_change_threshold"),
+        reseat_pair_swing_time=_f("reseat.pair_swing_time"),
+        reseat_pair_dwell_time=_f("reseat.pair_dwell_time"),
+        reseat_swing_clearance=_f("reseat.swing_clearance"),
     )
-    default_gait = str(raw.get("default_gait", "tripod"))
+    default_gait = str(node.get_parameter("default_gait").value)
     if default_gait not in STRATEGIES:
         raise ValueError(
             f"default_gait={default_gait!r} not in STRATEGIES "
@@ -93,12 +117,9 @@ class GaitNode(Node):
     def __init__(self) -> None:
         super().__init__("gait_node")
 
-        gait_share = Path(get_package_share_directory("hexa_gait")) / "config"
         desc_share = Path(get_package_share_directory("hexa_description")) / "config"
 
-        self._cfg, default_gait = _load_engine_config(
-            gait_share / "gait.yaml", load_tuning_block("gait")
-        )
+        self._cfg, default_gait = _read_engine_config(self)
         nominal = nominal_stance_from_yaml(
             desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
         )

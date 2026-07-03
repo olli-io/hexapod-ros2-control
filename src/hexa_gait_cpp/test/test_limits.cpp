@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <sstream>
 #include <string>
 #include <tuple>
 
@@ -42,23 +43,35 @@ std::string write_yaml(const GaitYaml& g = {}) {
   const std::string path = std::string(::testing::TempDir()) + "/gait.yaml";
   std::ofstream f(path);
   f << std::setprecision(17);
-  f << "stride_length: " << g.stride_length << "\n";
-  f << "min_swing_time: " << g.min_swing_time << "\n";
-  f << "max_swing_time: " << g.max_swing_time << "\n";
-  f << "step_height: " << g.step_height << "\n";
-  f << "swing_width: " << g.swing_width << "\n";
-  f << "controller_dt: " << g.controller_dt << "\n";
-  f << "cmd_zero_tol: " << g.cmd_zero_tol << "\n";
-  f << "max_reset_time: " << g.max_reset_time << "\n";
-  f << "angular_z_max: " << g.angular_z_max << "\n";
-  f << "yaw_bias: " << g.yaw_bias << "\n";
+  // gait.yaml is a ros2 params file; load_velocity_caps unwraps this.
+  f << "gait_node:\n  ros__parameters:\n";
+  f << "    stride_length: " << g.stride_length << "\n";
+  f << "    min_swing_time: " << g.min_swing_time << "\n";
+  f << "    max_swing_time: " << g.max_swing_time << "\n";
+  f << "    step_height: " << g.step_height << "\n";
+  f << "    swing_width: " << g.swing_width << "\n";
+  f << "    controller_dt: " << g.controller_dt << "\n";
+  f << "    cmd_zero_tol: " << g.cmd_zero_tol << "\n";
+  f << "    max_reset_time: " << g.max_reset_time << "\n";
+  f << "    angular_z_max: " << g.angular_z_max << "\n";
+  f << "    yaw_bias: " << g.yaw_bias << "\n";
   return path;
 }
 
-// Write an arbitrary raw YAML body (for the missing-key tests).
+// Write an arbitrary raw YAML body (for the missing-key tests). The body's
+// flat lines are indented under the gait_node/ros__parameters wrapper so the
+// loader's unwrap applies, matching the real gait.yaml layout.
 std::string write_raw(const std::string& body) {
   const std::string path = std::string(::testing::TempDir()) + "/gait.yaml";
-  std::ofstream(path) << body;
+  std::ofstream f(path);
+  f << "gait_node:\n  ros__parameters:\n";
+  std::istringstream in(body);
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty()) {
+      f << "    " << line << "\n";
+    }
+  }
   return path;
 }
 

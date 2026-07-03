@@ -51,8 +51,10 @@ The engine is stateful (it owns the phase clock) but the gait strategies
 themselves are pure functions of `(phase, params) → foot_target`.
 
 Gait-agnostic walk-cycle knobs (`stride_length`, `min_swing_time`,
-`max_swing_time`, `step_height`, ...) live in `config/gait.yaml` —
-they are not on the wire. Per-gait `duty_factor` (β) is a class
+`max_swing_time`, `step_height`, ...) are `gait_node` ROS parameters
+whose defaults live in `config/gait.yaml` (a `gait_node:` /
+`ros__parameters:` file the launch files pass in, with the `gait`
+tuning overlay layered last) — they are not on the wire. Per-gait `duty_factor` (β) is a class
 attribute on each strategy in `hexa_gait/hexa_gait/gaits/` — the
 single source of truth — and the engine reads it from the active
 strategy each tick. The engine derives both cycle-time bounds per

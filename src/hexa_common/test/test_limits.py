@@ -25,7 +25,8 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
     )
     base.update(overrides)
     path = tmp_path / "gait.yaml"
-    path.write_text(yaml.safe_dump(base))
+    # gait.yaml is a ros2 params file; load_velocity_caps unwraps this.
+    path.write_text(yaml.safe_dump({"gait_node": {"ros__parameters": base}}))
     return path
 
 
@@ -124,7 +125,7 @@ def test_missing_angular_z_max_raises(tmp_path):
         "yaw_bias": 0.75,
     }
     path = tmp_path / "gait.yaml"
-    path.write_text(yaml.safe_dump(raw))
+    path.write_text(yaml.safe_dump({"gait_node": {"ros__parameters": raw}}))
     with pytest.raises(KeyError):
         load_velocity_caps(path)
 
@@ -136,7 +137,7 @@ def test_missing_yaw_bias_raises(tmp_path):
         "angular_z_max": 1.0,
     }
     path = tmp_path / "gait.yaml"
-    path.write_text(yaml.safe_dump(raw))
+    path.write_text(yaml.safe_dump({"gait_node": {"ros__parameters": raw}}))
     with pytest.raises(KeyError):
         load_velocity_caps(path)
 

@@ -176,6 +176,8 @@ def main() -> int:
 
     teleop = yaml.safe_load(open(f"{src}/hexa_teleop/config/teleop_joy.yaml"))
     gait = yaml.safe_load(open(f"{src}/hexa_gait_cpp/config/gait.yaml"))
+    # gait.yaml is a ros2 params file; unwrap to the flat knob block.
+    gait = gait["gait_node"]["ros__parameters"]
     posture = yaml.safe_load(open(f"{src}/hexa_posture/config/posture.yaml"))
 
     base_raw = teleop["base"]
