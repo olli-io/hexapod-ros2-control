@@ -57,6 +57,11 @@ def generate_launch_description() -> LaunchDescription:
         executable="firmware_bridge_node",
         name="firmware_bridge",
         output="screen",
+        # Pace the pipeline off sim time so it stays in lockstep with the
+        # gz_ros2_control controller_manager (also use_sim_time). On a wall clock
+        # the firmware brain drifts against Gazebo's real-time factor and the
+        # synchronized body motions (stand/sit ramp, breathing) stutter.
+        parameters=[{"use_sim_time": True}],
     )
 
     return LaunchDescription(

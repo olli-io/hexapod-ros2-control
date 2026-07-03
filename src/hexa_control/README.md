@@ -4,7 +4,7 @@ Velocity shaping between teleop / autonomy and the gait engine.
 
 - Subscribes to `/cmd_vel`, clamps against the caps in
   `hexa_gait/config/gait.yaml`, and republishes as `GaitParams` on
-  `/gait/params` at 50 Hz.
+  `/gait/params` at 200 Hz.
 - Subscribes to `/cmd_gait` (`transient_local`) for the active gait
   name; unknown names are warned and dropped.
 - Subscribes to `/gait/state` and resets the body-velocity filter to

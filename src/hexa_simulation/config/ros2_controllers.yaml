@@ -9,7 +9,7 @@
 
 controller_manager:
   ros__parameters:
-    update_rate: 100  # Hz. Matches the typical IK/gait command rate.
+    update_rate: 200  # Hz. Matches the typical IK/gait command rate.
     use_sim_time: true
 
     joint_state_broadcaster:

@@ -2,7 +2,7 @@
 
 Subscribes to ``/cmd_vel``, runs it through ``scale_to_envelope`` and
 the ``BodyVelocityLimiter`` rate-cap slew, and republishes as
-``GaitParams`` on ``/gait/params`` at 50 Hz. ``/cmd_gait`` multiplexes
+``GaitParams`` on ``/gait/params`` at 200 Hz. ``/cmd_gait`` multiplexes
 the active gait name (validated against the ``STRATEGIES`` registry); on every
 gait switch the limiter's ``accel_linear`` is recomputed from
 ``linear_max(gait) / vmax_ramp_time_linear`` so the ramp time stays
@@ -31,7 +31,7 @@ from std_msgs.msg import String
 from hexa_control.body_velocity_limiter import BodyVelocityLimiter
 
 
-PUBLISH_RATE_HZ = 50.0
+PUBLISH_RATE_HZ = 200.0
 
 # Engine states in which cmd_vel is actively driving the body.
 _WALKING_STATES: frozenset[str] = frozenset({"engaging", "gait"})

@@ -3,7 +3,7 @@
 Plan part 10, **Tier 3**. Runs the Pico 2 W firmware's control brain against the
 **simulated** hexapod, with no hardware. It links the target-agnostic firmware
 pipeline sources (`pico-2-firmware/src`) **directly** — the exact same float
-source compiled for the RP2350 — and runs the real 50 Hz control tick, so the
+source compiled for the RP2350 — and runs the real 200 Hz control tick, so the
 firmware walks the Gazebo model. This honors the repo's **sim-first** rule:
 every feature runs against the Gazebo model before any servo code is touched.
 
@@ -85,7 +85,7 @@ the regression gate; the Gazebo run is the behavioral confirmation.
 ## Not covered here (Tier 4, optional/deferred)
 
 A firmware-**binary** smoke sim (Wokwi / Renode running the actual RP2350 `.elf`)
-would validate the Pico boot banner, USB-CDC `stdio`, the 50 Hz scheduler
+would validate the Pico boot banner, USB-CDC `stdio`, the 200 Hz scheduler
 cadence, and the Chica UART framing — the things a host/Gazebo run can't. It
 needs the ARM build from part 01 and pinned `wokwi-cli` / Renode RP2350 support;
 **Bluetooth / CYW43 cannot be simulated** (stub BT input). It is explicitly

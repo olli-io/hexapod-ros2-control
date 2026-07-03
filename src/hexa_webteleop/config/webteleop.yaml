@@ -16,7 +16,7 @@
 initial_mode: gait # "gait" | "posture" | "animation"
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
 default_gait: tripod
-allow_unstable_gaits: false
+allow_unstable_gaits: true
 
 server:
   port: 8080 # HTTP + WebSocket on the same port

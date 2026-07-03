@@ -23,12 +23,15 @@ Commands:
                               --tmux opens a tmux session with two panes sharing one dev container:
                               pane 0 runs sim + teleop + webteleop together, pane 1 is an idle
                               'hexa dev' shell. Add 'horizontal' to split the panes side-by-side.
-  pico [--launch] [args...]   Build the Pico firmware-in-sim bridge (hexa_pico_bridge)
+  pico [--clean] [--launch] [args...]
+                              Build the Pico firmware-in-sim bridge (hexa_pico_bridge)
                               inside the dev container — the "pico linux build". With
                               --launch, also run it against Gazebo (sim + joy + the
                               firmware bridge), so the firmware brain walks the simulated
-                              hexapod. Also accepts --restart / --kill. Extra args forward
-                              to the bridge launch.
+                              hexapod. --clean tears down the existing container and
+                              rebuilds the image first (same as 'dev --clean'). Also
+                              accepts --restart / --kill. Extra args forward to the bridge
+                              launch.
   prod <subcommand> [args]    Cross-build + deploy + operate the production image on the robot.
                               Subcommands: build, deploy <host>, start, stop, restart, status,
                               logs [-f], shell, engage, disengage, teleop. Run with no
@@ -83,7 +86,24 @@ case "${cmd}" in
         # Build (and optionally launch) the firmware-in-sim bridge in the dev
         # container. dev.sh owns the container lifecycle; pod pico does the
         # colcon build + the Gazebo launch.
-        exec "${REPO_ROOT}/scripts/dev.sh" pod pico "$@"
+        #
+        # --clean is a host-side container-lifecycle flag (like `dev --clean`),
+        # not a `pod pico` flag: peel it here so it never leaks into the
+        # container, where `pod pico` would append it to `ros2 launch` as a
+        # bogus argument and the launch would die after the build.
+        clean=0
+        pico_args=()
+        for arg in "$@"; do
+            case "${arg}" in
+                --clean) clean=1 ;;
+                *)       pico_args+=("${arg}") ;;
+            esac
+        done
+        if [[ ${clean} -eq 1 ]]; then
+            "${REPO_ROOT}/scripts/kill.sh"
+            "${REPO_ROOT}/scripts/dev.sh" pod build
+        fi
+        exec "${REPO_ROOT}/scripts/dev.sh" pod pico "${pico_args[@]}"
         ;;
     prod)
         exec "${REPO_ROOT}/scripts/prod.sh" "$@"

@@ -10,7 +10,7 @@ See `../.tmp/plan/pi-pico-2-w/` for the full plan. This tree implements:
 - **part 00** — shared project layout / conventions.
 - **part 01** — skeleton & toolchain: USB-CDC stdio, `cyw43_arch` onboard-LED
   blink, boot banner + 1 Hz heartbeat, and a `time_us_64()` loop stub that later
-  becomes the 50 Hz control scheduler.
+  becomes the 200 Hz control scheduler.
 - **part 02** — Bluetooth teleop (`bt_teleop.{hpp,cpp}`, `btstack_config.h`):
   Bluepad32 pairs a gamepad over the CYW43439 and adapts its state into the exact
   raw `axes[]`/`buttons[]` layout `hexa_teleop/config/teleop_joy.yaml` expects, so
@@ -102,7 +102,7 @@ See `../.tmp/plan/pi-pico-2-w/` for the full plan. This tree implements:
   The remaining two failsafes were already in place: the **IK guard** (hold
   last-good angle on `UnreachableTarget`, part 05) and the **boot-FOLDED**
   startup that runs `InitializeController` before any gait (part 06). The
-  heartbeat also logs **tick jitter** (measured inter-tick spread vs the 20 ms
+  heartbeat also logs **tick jitter** (measured inter-tick spread vs the 5 ms
   budget + deadline overruns) and the **free-heap** low-water mark (the
   `std::map`-keyed engine's fragmentation drift over a soak).
 
@@ -268,7 +268,7 @@ Wire the Pico's GP0→Servo 2040 UART RX, GP1←Servo 2040 UART TX, and share gr
 - **Battery** — the 1 Hz `[servo]` line prints decoded `batt=<V> <A>`; cross-check
   against a multimeter. `batt=-- (no reply)` means the GET timed out (link/baud).
 - **Timing** — the same `[servo]` line reports `SET burst` and `GET rt` in µs;
-  confirm both sit well inside the 20 ms tick budget.
+  confirm both sit well inside the 5 ms tick budget.
 
 Host-side, the Chica framing + float calibration + run-grouping are checked
 independent of hardware (center → 1500 µs, ±π/4 → 2000/1000 µs, clamps, framing
@@ -363,5 +363,5 @@ or physical board is needed.
   chain (`ik_node` + `gait_node` + `posture_node`) in the same world. Headless,
   the seam is checked end-to-end by feeding `/joy` and watching
   `/joint_group_position_controller/commands`: neutral input holds the folded
-  pose at a steady 50 Hz, and an init press drives the 18 joints up to the
+  pose at a steady 200 Hz, and an init press drives the 18 joints up to the
   standing pose. See `src/hexa_pico_bridge/README.md`.

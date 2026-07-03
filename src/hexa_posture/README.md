@@ -46,7 +46,7 @@ Mirrors the library/node split used by `hexa_kinematics`:
     chains stay decoupled per the architectural rule in
     `CLAUDE.md`.
 - Publishes:
-  - `/body/pose_target` (`hexa_interfaces/BodyPose`) at 50 Hz — the
+  - `/body/pose_target` (`hexa_interfaces/BodyPose`) at 200 Hz — the
     final clamped pose for the IK node to apply via
     `apply_body_pose`.
 

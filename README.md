@@ -73,7 +73,7 @@ All tunable parameters live in YAML files under each package's `config/` directo
 - [`src/hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring (transport, device, per-pin joint assignment), pulse-width calibration endpoints, electrical clamps, and aux ADC scales. Real-robot only.
 - [`src/hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face relay: `enabled` master switch (false = bringup skips the display node), transport (serial/stub), UART device + baud, gait-state → expression map, battery thresholds, and gaze deadband / hysteresis knobs.
 - [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and joint-group controller's joint ordering. Sim-only.
-- [`src/hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — real-robot mirror of the sim controllers config, with `use_sim_time: false` and the 100 Hz update rate the gait/IK stack publishes at.
+- [`src/hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — real-robot mirror of the sim controllers config, with `use_sim_time: false` and the 200 Hz update rate the gait/IK stack publishes at.
 
 ## Design principles
 

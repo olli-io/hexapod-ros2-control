@@ -24,7 +24,7 @@ offset with the per-leg foot targets before solving IK.
   `POSTURE_ACTIVE_STATES` / `is_posture_active`, `twist_is_zero`,
   `stance_centroid_xy`, `max_swing_lift_z`, and the low-pass filters.
   Consolidates the free functions from `posture_node.py`.
-- `src/posture_node.cpp` — the `rclcpp` node: parameters, QoS, the 50 Hz tick,
+- `src/posture_node.cpp` — the `rclcpp` node: parameters, QoS, the 200 Hz tick,
   and message ↔ pure-type conversions.
 
 ## Topics
@@ -35,7 +35,7 @@ offset with the per-leg foot targets before solving IK.
   (`hexa_interfaces/GaitParams`, active gait name); `/legs/targets`
   (`hexa_interfaces/LegTargets`, support centroid / swing lift / master phase);
   `/animation/mode` (`std_msgs/String`, depth-1 transient-local).
-- **publishes** — `/body/pose_target` (`hexa_interfaces/BodyPose`) at 50 Hz.
+- **publishes** — `/body/pose_target` (`hexa_interfaces/BodyPose`) at 200 Hz.
 
 ## Config
 

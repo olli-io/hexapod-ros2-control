@@ -36,7 +36,7 @@ constexpr uint kTxPin = 0;
 constexpr uint kRxPin = 1;
 // 921600 8N1 → ~11.1 µs/byte. A 18-servo SET frame is 3 + 36 = 39 bytes
 // (~0.43 ms); a battery GET round-trip adds the Servo 2040's reply latency.
-// Both sit far inside the 20 ms tick budget (measured in main.cpp).
+// Both sit far inside the 5 ms tick budget (measured in main.cpp).
 constexpr uint kBaud = 921600;
 
 // ── Chica protocol constants (from servo2040_protocol.hpp) ───────────────────

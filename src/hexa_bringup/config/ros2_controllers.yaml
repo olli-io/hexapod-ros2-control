@@ -3,14 +3,14 @@
 # Loaded by ros2_control_node (controller_manager package) in
 # hexa_bringup/launch/robot.launch.py. Mirrors hexa_simulation's
 # ros2_controllers.yaml except that use_sim_time is false and the
-# update_rate is the same 100 Hz cycle the gait/IK stack publishes at.
+# update_rate is the same 200 Hz cycle the gait/IK stack publishes at.
 #
 # Joint names mirror the URDF macro instantiations: {side}_{name}_{seg}_joint
 # where side ∈ {l, r}, name ∈ {front, middle, rear}, seg ∈ {coxa, femur, tibia}.
 
 controller_manager:
   ros__parameters:
-    update_rate: 100  # Hz
+    update_rate: 200  # Hz
     use_sim_time: false
 
     joint_state_broadcaster:

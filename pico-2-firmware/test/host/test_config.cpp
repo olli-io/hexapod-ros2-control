@@ -109,7 +109,7 @@ TEST(Engine, GaitYamlKnobs) {
   EXPECT_NEAR(cfg::kEngine.stride_length, 0.1f, kTol);
   EXPECT_NEAR(cfg::kEngine.step_height, 0.08f, kTol);
   EXPECT_NEAR(cfg::kEngine.min_swing_time, 0.3f, kTol);
-  EXPECT_NEAR(cfg::kEngine.controller_dt, 0.02f, kTol);
+  EXPECT_NEAR(cfg::kEngine.controller_dt, 0.005f, kTol);
   EXPECT_NEAR(cfg::kEngine.init_pair_swing_time, 0.4f, kTol);
   EXPECT_NEAR(cfg::kEngine.reseat_swing_clearance, 0.025f, kTol);
 }
@@ -152,13 +152,16 @@ TEST(Teleop, HardwareIdentity) {
   EXPECT_NEAR(cfg::kTriggerThreshold, 0.5f, kTol);
   EXPECT_EQ(cfg::kInitialMode, "gait");
   // kGaitCycle is the runtime rotation, already filtered by
-  // allow_unstable_gaits (surf + crawl are unstable and dropped), so the
-  // firmware cycler matches the ROS teleop node's accepted set.
-  EXPECT_FALSE(cfg::kAllowUnstableGaits);
-  ASSERT_EQ(cfg::kGaitCycle.size(), 3u);
+  // allow_unstable_gaits. With unstable gaits enabled, surf + crawl stay
+  // in the cycle, so the firmware cycler matches the ROS teleop node's
+  // accepted set.
+  EXPECT_TRUE(cfg::kAllowUnstableGaits);
+  ASSERT_EQ(cfg::kGaitCycle.size(), 5u);
   EXPECT_EQ(cfg::kGaitCycle[0], "tripod");
-  EXPECT_EQ(cfg::kGaitCycle[1], "tetrapod");
-  EXPECT_EQ(cfg::kGaitCycle[2], "ripple");
+  EXPECT_EQ(cfg::kGaitCycle[1], "surf");
+  EXPECT_EQ(cfg::kGaitCycle[2], "tetrapod");
+  EXPECT_EQ(cfg::kGaitCycle[3], "crawl");
+  EXPECT_EQ(cfg::kGaitCycle[4], "ripple");
 }
 
 TEST(Teleop, PostureLimits) {

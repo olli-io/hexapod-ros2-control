@@ -1,7 +1,7 @@
 """Gait engine ROS node.
 
 Subscribes to ``/gait/params`` (last-write-wins, no queue replay) and
-publishes ``/legs/targets`` at 50 Hz. Builds an ``Engine`` + ``Tripod``
+publishes ``/legs/targets`` at 200 Hz. Builds an ``Engine`` + ``Tripod``
 at init using the YAML in ``hexa_description`` (single source of truth
 for body geometry and standing pose) and this package's ``config/gait.yaml``
 (engine-internal knobs + cold-start fallbacks).
@@ -37,7 +37,7 @@ from .engine import (
 from .gaits import STRATEGIES
 
 
-PUBLISH_RATE_HZ = 50.0
+PUBLISH_RATE_HZ = 200.0
 
 
 def _load_engine_config(path: Path) -> tuple[EngineConfig, str]:
@@ -148,7 +148,7 @@ class GaitNode(Node):
         # pose application on this so the user can't push the chassis
         # around while the legs are folded or mid-INITIALIZE / mid-FOLD.
         # Published every tick so late subscribers converge within one
-        # 50 Hz interval — cheaper than configuring transient_local QoS
+        # 200 Hz interval — cheaper than configuring transient_local QoS
         # on both ends.
         self._pub_state = self.create_publisher(String, "/gait/state", 10)
 

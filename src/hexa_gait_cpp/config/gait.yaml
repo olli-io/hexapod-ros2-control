@@ -12,7 +12,7 @@
 # ─── Engine basics ──────────────────────────────────────────────────
 
 # Engine tick period (s).
-controller_dt: 0.02
+controller_dt: 0.005
 
 # Magnitude below which a cmd_vel component is treated as zero.
 cmd_zero_tol: 1e-4

@@ -1,4 +1,4 @@
-// Target-agnostic 50 Hz control brain (plan part 10, Tier 2).
+// Target-agnostic 200 Hz control brain (plan part 10, Tier 2).
 //
 // The whole velocity / posture / compose / IK pipeline plus the failsafe
 // supervisor, factored out of main.cpp into ONE class with no Pico SDK, no ROS,
@@ -34,13 +34,13 @@
 
 namespace hexa::pipeline {
 
-// The 50 Hz tick contract shared by every caller: 20 ms period (matches the ROS
-// node rate and the engine controller_dt), 4 ms of slack before an inter-tick
+// The 200 Hz tick contract shared by every caller: 5 ms period (matches the ROS
+// node rate and the engine controller_dt), 1 ms of slack before an inter-tick
 // interval counts as a deadline overrun. kDt is the same period in seconds, fed
 // to the engine / filters.
-inline constexpr std::uint64_t kTickPeriodUs = 20'000;   // 20 ms -> 50 Hz
-inline constexpr std::uint64_t kTickMarginUs = 4'000;    // overrun slack
-inline constexpr float kDt = 0.02f;                      // engine tick, seconds
+inline constexpr std::uint64_t kTickPeriodUs = 5'000;    // 5 ms -> 200 Hz
+inline constexpr std::uint64_t kTickMarginUs = 1'000;    // overrun slack
+inline constexpr float kDt = 0.005f;                     // engine tick, seconds
 
 // What the caller sampled for this tick from its input / clock / telemetry seam.
 struct TickInput {
@@ -98,7 +98,7 @@ class Pipeline {
   // default gait, initial teleop mode, standing-pose last-good seed.
   Pipeline();
 
-  // Run one 50 Hz control tick. Also records the tick edge for jitter accounting
+  // Run one 200 Hz control tick. Also records the tick edge for jitter accounting
   // (supervisor.record_tick), so the caller need only feed now_us once.
   TickResult tick(const TickInput& in);
 

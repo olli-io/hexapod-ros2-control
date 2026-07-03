@@ -45,7 +45,7 @@ from .animations import (
 )
 from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp
 
-PUBLISH_RATE_HZ = 50.0
+PUBLISH_RATE_HZ = 200.0
 CMD_VEL_ZERO_TOL = 1e-4
 
 # Gait engine states in which body posture is meaningful. In the other

@@ -3,7 +3,7 @@
 // Brings up the toolchain-critical surfaces every later part depends on:
 //   - USB-CDC stdio for debug logging,
 //   - cyw43_arch (onboard LED; Bluetooth via Bluepad32 in part 02),
-//   - a time_us_64()-based 50 Hz cooperative control loop.
+//   - a time_us_64()-based 200 Hz cooperative control loop.
 //
 // Part 02 adds Bluetooth teleop (bt_teleop). Part 03 adds the Servo 2040 slave
 // link (servo_out) over the Chica UART. Parts 05-09 build up the control brain
@@ -15,7 +15,7 @@
 // the hardware seam. main.cpp is now the Pico composition of that seam: it owns
 // the input source (bt_teleop over Bluepad32/BTstack), the servo sink (servo_out
 // over the Chica UART), the clock (time_us_64), the onboard LED, and all the
-// USB-CDC logging. Each 50 Hz tick it samples the seam into a TickInput, runs
+// USB-CDC logging. Each 200 Hz tick it samples the seam into a TickInput, runs
 // Pipeline::tick(), and applies the TickResult — command the 18 joints, drive
 // the relay + status LED, and log the teleop / gait / safety events.
 //
@@ -43,8 +43,8 @@
 
 namespace {
 
-// The 50 Hz tick geometry is the pipeline's shared contract (20 ms period, 4 ms
-// overrun slack, 0.02 s dt). Reuse those so the scheduler here and the engine /
+// The 200 Hz tick geometry is the pipeline's shared contract (5 ms period, 1 ms
+// overrun slack, 0.005 s dt). Reuse those so the scheduler here and the engine /
 // supervisor inside the pipeline never drift apart.
 using hexa::pipeline::kDt;
 using hexa::pipeline::kTickPeriodUs;
@@ -173,7 +173,7 @@ int main() {
         // Service hook (no-op in the background-serviced build).
         bt_teleop::pump();
 
-        // 50 Hz control tick: sample the seam (gamepad, battery, clock), run the
+        // 200 Hz control tick: sample the seam (gamepad, battery, clock), run the
         // shared pipeline, and apply its result over the same servo_out path
         // part 05 established.
         if (now_us >= next_tick_us) {
@@ -312,7 +312,7 @@ int main() {
                    (double)theta[l_front], (double)theta[l_front + 1],
                    (double)theta[l_front + 2], last_unreachable);
             // Safety / health: relay + BT + battery flags, tick jitter (measured
-            // interval spread vs the 20 ms budget + deadline overruns), and the
+            // interval spread vs the 5 ms budget + deadline overruns), and the
             // soak free-heap low-water mark (fragmentation drift).
             const auto& ts = pipeline.supervisor().tick_stats();
             printf("[safety] relay=%s bt=%s batt=%s jitter(last=%llu min=%llu "

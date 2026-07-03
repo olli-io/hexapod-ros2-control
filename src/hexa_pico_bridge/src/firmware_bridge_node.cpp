@@ -31,6 +31,7 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/create_timer.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 
@@ -81,11 +82,17 @@ class FirmwareBridgeNode : public rclcpp::Node {
         joy_topic, 10,
         [this](Joy::SharedPtr msg) { on_joy(*msg); });
 
-    // Real 50 Hz control tick — the firmware's scheduler rate. Driven off wall
-    // time (a monotonic steady clock), independent of sim time, exactly as the
-    // Pico loop runs off time_us_64().
-    boot_ = std::chrono::steady_clock::now();
-    timer_ = create_wall_timer(
+    // Control tick on the SIM clock (use_sim_time). The Pico paces off
+    // time_us_64() — real wall time — but Gazebo runs on sim time and its
+    // real-time factor drifts from 1.0, so a wall-clock timer here would deliver
+    // the command stream mispaced against the physics: global body motions (the
+    // stand/sit body-Z ramp, the idle breathing bob) would stutter across all
+    // legs at once. Driving the timer and now_us() off get_clock() keeps the
+    // pipeline in lockstep with the controller_manager (also use_sim_time), just
+    // as the ROS gait/ik nodes do (create_timer + get_clock()).
+    boot_ = get_clock()->now();
+    timer_ = rclcpp::create_timer(
+        this, get_clock(),
         std::chrono::microseconds(hexa::pipeline::kTickPeriodUs),
         [this]() { on_tick(); });
 
@@ -96,12 +103,12 @@ class FirmwareBridgeNode : public rclcpp::Node {
   }
 
  private:
-  // Monotonic microseconds since construction — the bridge's clock seam.
+  // Monotonic microseconds since construction — the bridge's clock seam. Reads
+  // the node clock (sim time under use_sim_time), so the pipeline advances in
+  // lockstep with Gazebo instead of drifting against it on wall time.
   std::uint64_t now_us() const {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - boot_)
-            .count());
+    const std::int64_t ns = (get_clock()->now() - boot_).nanoseconds();
+    return ns > 0 ? static_cast<std::uint64_t>(ns / 1000) : 0;
   }
 
   void on_joy(const Joy& msg) {
@@ -204,7 +211,7 @@ class FirmwareBridgeNode : public rclcpp::Node {
   bool have_joy_ = false;
   std::uint64_t last_joy_us_ = 0;
 
-  std::chrono::steady_clock::time_point boot_;
+  rclcpp::Time boot_;
   rclcpp::Subscription<Joy>::SharedPtr sub_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;

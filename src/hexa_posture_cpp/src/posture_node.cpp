@@ -3,7 +3,7 @@
 // Subscribes to the user pose (/body/pose), the latest body velocity command
 // (/cmd_vel), the gait engine state (/gait/state), the active gait params
 // (/gait/params), the per-leg foot targets (/legs/targets), and the animation
-// mode selection (/animation/mode). On a fixed 50 Hz timer it runs the
+// mode selection (/animation/mode). On a fixed 200 Hz timer it runs the
 // animation stack with the current context, sums in the user pose, clamps to
 // the static safety envelope, and publishes the result on /body/pose_target.
 //
@@ -53,7 +53,7 @@ using LegTargets = hexa_interfaces::msg::LegTargets;
 using Twist = geometry_msgs::msg::Twist;
 using StringMsg = std_msgs::msg::String;
 
-constexpr double kPublishRateHz = 50.0;
+constexpr double kPublishRateHz = 200.0;
 constexpr double kDegToRad = M_PI / 180.0;
 
 BodyPose msg_to_pose(const BodyPoseMsg& m) {

@@ -1,4 +1,4 @@
-// Target-agnostic 50 Hz control brain (plan part 10, Tier 2). See pipeline.hpp.
+// Target-agnostic 200 Hz control brain (plan part 10, Tier 2). See pipeline.hpp.
 //
 // This is a straight lift of main.cpp's per-tick body (parts 07-09), with the
 // I/O removed: map_joy -> supervisor -> control.shape -> engine.update ->

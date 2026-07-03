@@ -2,7 +2,7 @@
 // part 08).
 //
 // The ROS node's timer callback becomes a per-tick update() call driven by the
-// firmware's 50 Hz loop. Its /body/pose, /cmd_vel, /gait/state, /gait/params,
+// firmware's 200 Hz loop. Its /body/pose, /cmd_vel, /gait/state, /gait/params,
 // /legs/targets, and /animation/mode subscriptions collapse into direct inputs:
 // the user pose and animation-mode selection arrive via setters (they change
 // only on teleop events); the per-tick signals (engine leg outputs, master
