@@ -90,6 +90,12 @@ struct TickResult {
   float master_phase = 0.0f;
   bool walking = false;                  // shaped-command non-zero (posture gate)
 
+  // Raw teleop intent surfaced for an on-board face policy — the unshaped
+  // command velocity and the user body pose, mirroring the ROS face's /cmd_vel
+  // and /body/pose inputs (pre-shaping, so gaze tracks the stick not the slew).
+  float cmd_vx = 0.0f, cmd_vy = 0.0f, cmd_wz = 0.0f;
+  float pose_roll = 0.0f, pose_pitch = 0.0f, pose_yaw = 0.0f;
+
   // Teleop events — the caller's log surface (main's [teleop]/[safety] lines).
   bool mode_changed = false;
   hexa::teleop::Mode mode = hexa::teleop::Mode::Posture;

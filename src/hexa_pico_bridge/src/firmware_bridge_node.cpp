@@ -1,27 +1,41 @@
-// Gazebo-in-the-loop firmware bridge (plan part 10, Tier 3).
+// Gazebo-in-the-loop firmware seam smoke.
 //
 // Runs the Pico 2 W firmware's control brain — the exact same
 // hexa::pipeline::Pipeline source compiled for the RP2350 — against the
-// simulated hexapod, with no hardware. It is the ROS composition of the
-// firmware's hardware seam (see shared/hexa_pipeline/pipeline.hpp):
+// simulated hexapod, with no hardware.
 //
-//   - Input  seam: subscribe /joy (sensor_msgs/Joy) and convert it into the
-//     exact raw int16 axes[] / button bitmask the firmware's bt_teleop emits, so
-//     map_joy runs identically to on-hardware. /joy is the layout the existing
+// The control brain itself (velocity -> gait -> posture -> compose/IK) is shared
+// verbatim with hexa_locomotion, which is the production sim locomotion path and
+// already runs that brain against Gazebo off /cmd_vel. What this bridge uniquely
+// exercises are the two firmware-specific seams hexa_locomotion deliberately
+// bypasses, giving them an in-Gazebo smoke before the Pico is flashed:
+//
+//   - Input seam: map_joy. Subscribe /joy (sensor_msgs/Joy) and convert it into
+//     the exact raw int16 axes[] / button bitmask the firmware's bt_teleop
+//     emits, then call the pipeline's joy overload so map_joy runs identically to
+//     on-hardware. (hexa_locomotion instead builds a CommandIntent from /cmd_vel
+//     and calls the core tick, skipping map_joy.) /joy is the layout the existing
 //     joy_publisher already produces (teleop_joy.yaml base block); the firmware
 //     applies the axis signs itself, so we only rescale [-1,1] -> int16.
+//   - Config seam: baked constexpr. The build bakes config_generated.hpp via
+//     gen_config.py — the same constants the RP2350 compiles — instead of
+//     loading geometry.yaml + tuning.yaml at runtime the way hexa_locomotion
+//     does.
+//
+// Everything else is a straight tap of the shared pipeline:
+//
 //   - Output seam: tap the pipeline at the JointAngles stage (before to_pulse_us
 //     — the Pico's servo_out) and publish std_msgs/Float64MultiArray (radians)
 //     on /joint_group_position_controller/commands. The firmware's joint order
 //     (l_front,l_middle,l_rear,r_front,r_middle,r_rear x coxa,femur,tibia) is
 //     identical to the controller's joints: list (ros2_controllers.yaml), so the
 //     array publishes directly with no remap.
-//   - Clock seam: a std::chrono steady clock stands in for time_us_64().
+//   - Clock seam: the node clock (sim time under use_sim_time) stands in for
+//     time_us_64(), keeping the tick in lockstep with Gazebo (see on_tick).
 //
-// Launch it alongside `ros2 launch hexa_simulation sim.launch.py` (or `pod
-// sim`): the firmware brain now walks the Gazebo hexapod. Cross-check against the
-// ROS2 node chain (ik_node + gait_node + posture_node) in the same world — the
-// same teleop input should produce visually identical motion.
+// Launch it alongside `ros2 launch hexa_simulation sim.launch.py`: the firmware
+// brain, driven through its own joy + baked-config seams, walks the Gazebo
+// hexapod.
 
 #include <algorithm>
 #include <array>
@@ -97,7 +111,7 @@ class FirmwareBridgeNode : public rclcpp::Node {
         [this]() { on_tick(); });
 
     RCLCPP_INFO(get_logger(),
-                "firmware bridge up: /joy -> Pipeline -> %s (50 Hz). Press the "
+                "firmware bridge up: /joy -> Pipeline -> %s (200 Hz). Press the "
                 "init (start) button to stand, then drive.",
                 command_topic.c_str());
   }

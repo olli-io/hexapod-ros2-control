@@ -3,7 +3,7 @@ project(hexa_locomotion CXX)
 
 # ── Consolidated single-node locomotion controller ─────────────────────────
 #
-# Links the target-agnostic control-brain sources (shared/hexa_pipeline) DIRECTLY
+# Links the target-agnostic control-brain sources (shared/motion_core) DIRECTLY
 # — the same float source the Pico firmware and hexa_pico_bridge compile — and
 # wraps them in one 200 Hz ROS node with /cmd_vel-native seams. The only thing
 # that differs vs the Pico build is the seam: input is /cmd_vel + the discrete
@@ -25,7 +25,7 @@ find_package(yaml-cpp REQUIRED)
 
 # ── Shared control-brain source tree ────────────────────────────────────────
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
-set(FW_SRC ${REPO_ROOT}/shared/hexa_pipeline)
+set(FW_SRC ${REPO_ROOT}/shared/motion_core)
 set(GEN_CONFIG ${FW_SRC}/config_generated.hpp)
 
 # ── Build-time config codegen (baked defaults for PipelineConfig::baked()) ───

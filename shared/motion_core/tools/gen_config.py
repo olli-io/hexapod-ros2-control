@@ -37,6 +37,15 @@ except ImportError:  # pragma: no cover - dependency is present in the dev image
 # Canonical six-leg order — must match leg_index.hpp / the libs' LEG_NAMES.
 LEG_NAMES = ["l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear"]
 
+# Face expression names — lowercase of the Expression enum in
+# src/hexa_display/vendor/core/Expression.h (the SSoT). Used only to fail the
+# build fast on an expression-name typo in display.yaml; the name→enum mapping
+# itself happens at runtime in the firmware via face::parseExpression, so this
+# header never depends on Expression.h. Keep in sync if the enum grows.
+EXPRESSION_NAMES = {
+    "neutral", "happy", "sleepy", "dead", "greedy", "woozy", "angry", "love",
+}
+
 # Virtual D-pad directions — port of joy_mapping.DPAD_DIRECTIONS. Maps the
 # bindable key name to (physical axis name, sign after normalisation that counts
 # as "pressed").
@@ -674,6 +683,80 @@ def emit(geometry, gait, teleop, posture, control, hardware,
           "battery_hysteresis_v", "battery_hold_s")) + "};")
     w("")
 
+    # ── Face expression/gaze policy + SH1122 panel (part 11) ──
+    # The eye policy runs on core0 and the SH1122 render loop on core1 (see
+    # pi-pico-firmware/src/face.cpp). Expression names resolve to the Expression
+    # enum at RUNTIME via face::parseExpression, so this header stays free of the
+    # vendored eye core; names are validated here only to fail the build on a typo.
+    pico_panel = display.get("pico_panel", {}) or {}
+
+    def face_expr(param: str) -> str:
+        name = str(dp[param]).lower()
+        if name not in EXPRESSION_NAMES:
+            raise ValueError(
+                f"display.yaml {param}: unknown expression {name!r} "
+                f"(valid: {', '.join(sorted(EXPRESSION_NAMES))})")
+        return name
+
+    w("// ── Face policy + panel (hexa_display/config/display.yaml) ──")
+    w(f"inline constexpr bool kFaceEnabled = "
+      f"{'true' if pico_panel.get('enabled', True) else 'false'};")
+    w(f"inline constexpr float kFaceUpdateRateHz = {fl(dp['update_rate_hz'])};"
+      "  // policy tick (core0)")
+    w(f"inline constexpr float kFaceRenderHz = {fl(dp['render_hz'])};"
+      "  // EyeAnim/raster (core1)")
+    w("")
+    w("// Gait-state -> expression. Resolve `expression` with face::parseExpression.")
+    w("struct FaceExpressionEntry { std::string_view state; std::string_view expression; };")
+    states = [k[len("expression_map."):] for k in dp
+              if k.startswith("expression_map.")]
+    w(f"inline constexpr std::array<FaceExpressionEntry, {len(states)}> "
+      "kFaceExpressionMap = {{")
+    for st in states:
+        w(f"    {{{cstr(st)}, {cstr(face_expr('expression_map.' + st))}}},")
+    w("}};")
+    w("")
+    w(f"inline constexpr std::string_view kFaceAnimationExpression = "
+      f"{cstr(face_expr('animation_expression'))};")
+    w(f"inline constexpr std::string_view kFaceBatteryWarningExpression = "
+      f"{cstr(face_expr('battery_warning_expression'))};")
+    w(f"inline constexpr std::string_view kFaceBatteryCriticalExpression = "
+      f"{cstr(face_expr('battery_critical_expression'))};")
+    w("")
+    w("struct FaceGazeConfig {")
+    gaze_fields = [
+        ("gaze_deadband", dp["gaze_deadband"]),
+        ("gaze_exit_ratio", dp["gaze_exit_ratio"]),
+        ("gaze_wz_weight", dp["gaze_wz_weight"]),
+        ("gaze_vy_max", dp["gaze_vy_max"]),
+        ("gaze_wz_max", dp["gaze_wz_max"]),
+        ("pose_pitch_threshold_rad", dp["pose_pitch_threshold_rad"]),
+        ("pose_tilt_threshold_rad", dp["pose_tilt_threshold_rad"]),
+        ("idling_start_delay_s", dp["idling_start_delay_s"]),
+    ]
+    for fname, _ in gaze_fields:
+        w(f"  float {fname};")
+    w("};")
+    w("inline constexpr FaceGazeConfig kFaceGaze = {"
+      + ", ".join(fl(v) for _, v in gaze_fields) + "};")
+    w("")
+    w("// SH1122 panel wiring on the Pico (display.yaml pico_panel:, firmware-only).")
+    w("struct FacePanel {")
+    w("  std::uint8_t spi_index;  // 0 = spi0, 1 = spi1")
+    w("  std::uint8_t sck;")
+    w("  std::uint8_t mosi;")
+    w("  std::uint8_t cs;")
+    w("  std::uint8_t dc;")
+    w("  std::uint8_t rst;")
+    w("  std::uint32_t spi_hz;")
+    w("};")
+    w("inline constexpr FacePanel kFacePanel = {"
+      f"{int(pico_panel.get('spi_index', 0))}, {int(pico_panel.get('sck', 18))}, "
+      f"{int(pico_panel.get('mosi', 19))}, {int(pico_panel.get('cs', 17))}, "
+      f"{int(pico_panel.get('dc', 20))}, {int(pico_panel.get('rst', 21))}, "
+      f"{int(pico_panel.get('spi_hz', 8_000_000))}u}};")
+    w("")
+
     w("}  // namespace hexa::config")
     w("")
     return "\n".join(L)
@@ -682,8 +765,8 @@ def emit(geometry, gait, teleop, posture, control, hardware,
 # ── entry point ─────────────────────────────────────────────────────────────
 
 def main() -> int:
-    here = os.path.dirname(os.path.abspath(__file__))  # shared/hexa_pipeline/tools
-    shared_pkg = os.path.dirname(here)                  # shared/hexa_pipeline
+    here = os.path.dirname(os.path.abspath(__file__))  # shared/motion_core/tools
+    shared_pkg = os.path.dirname(here)                  # shared/motion_core
     default_repo = os.path.dirname(os.path.dirname(shared_pkg))  # workspace root
     default_out = os.path.join(shared_pkg, "config_generated.hpp")
 
@@ -692,7 +775,7 @@ def main() -> int:
                     help="workspace root containing src/hexa_* (default: auto)")
     ap.add_argument("--out", default=default_out,
                     help="output header path "
-                         "(default: shared/hexa_pipeline/config_generated.hpp)")
+                         "(default: shared/motion_core/config_generated.hpp)")
     args = ap.parse_args()
 
     cfg_dir = os.path.join(args.repo_root, "src")

@@ -5,7 +5,7 @@
 // on-demand sink of the same robot-state topics. It runs the *identical*
 // expression/gaze/blink policy + EyeAnim pipeline as display_node.cpp (the pure
 // logic is shared via hexa_display_support), but rasterizes the eyes into a
-// terminal framebuffer painted with Unicode quadrant / Braille blocks instead of
+// terminal framebuffer painted with Unicode Braille blocks instead of
 // driving SPI. Attach it to a running sim with `hexa sim face`; press `q` (or
 // Ctrl-C) to detach — it is a sibling process of the sim launch, so closing it
 // leaves the stack untouched.
@@ -25,7 +25,6 @@
 #include <stdexcept>
 #include <string>
 
-#include <sys/ioctl.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -109,7 +108,7 @@ void setupTerminal() {
 
 // ---------------------------------------------------------------------------
 // Rendering. Even at max gaze (±20 px) plus the 3 px brush, the eyes stay inside
-// x ∈ [34, 222], so only that 192 px window is shown (96 columns).
+// x ∈ [34, 222], so only that 192 px window is shown (96 Braille columns).
 // ---------------------------------------------------------------------------
 constexpr int kCropX = 32;
 constexpr int kCropW = 192;
@@ -120,45 +119,26 @@ void sink(void*, int x, int y) { g_fb[y][x] = 1; }
 
 int px(int x, int y) { return g_fb[y][x + kCropX]; }
 
-const char* kQuad[16] = {
-    " ", "▘", "▝", "▀", "▖", "▌", "▞", "▛",
-    "▗", "▚", "▐", "▜", "▄", "▙", "▟",
-    "█"};
-
+// Each Braille glyph packs a 2×4 pixel block (8 dots) as U+2800 + bitmask, so
+// the crop shrinks 2× horizontally and 4× vertically: kCropW/2 columns by
+// kH/4 rows. Dot bit order is the Unicode Braille layout (columns then rows).
 void drawFrame(const RenderState& state) {
-    winsize ws{};
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
-    // Quadrant blocks need 32 rows + status; fall back to Braille (16 rows).
-    const bool braille = ws.ws_row != 0 && ws.ws_row < eyes::kH / 2 + 2;
-
     static char out[32 * 1024];
     char* p = out;
     p += sprintf(p, "\x1b[H");
-    if (braille) {
-        for (int cy = 0; cy < eyes::kH / 4; ++cy) {
-            for (int cx = 0; cx < kCropW / 2; ++cx) {
-                const int x = cx * 2, y = cy * 4;
-                const int b = px(x, y) | px(x, y + 1) << 1 | px(x, y + 2) << 2 |
-                              px(x + 1, y) << 3 | px(x + 1, y + 1) << 4 |
-                              px(x + 1, y + 2) << 5 | px(x, y + 3) << 6 |
-                              px(x + 1, y + 3) << 7;
-                // UTF-8 for U+2800 + b
-                *p++ = '\xE2';
-                *p++ = static_cast<char>(0xA0 | (b >> 6));
-                *p++ = static_cast<char>(0x80 | (b & 0x3F));
-            }
-            p += sprintf(p, "\x1b[K\n");
+    for (int cy = 0; cy < eyes::kH / 4; ++cy) {
+        for (int cx = 0; cx < kCropW / 2; ++cx) {
+            const int x = cx * 2, y = cy * 4;
+            const int b = px(x, y) | px(x, y + 1) << 1 | px(x, y + 2) << 2 |
+                          px(x + 1, y) << 3 | px(x + 1, y + 1) << 4 |
+                          px(x + 1, y + 2) << 5 | px(x, y + 3) << 6 |
+                          px(x + 1, y + 3) << 7;
+            // UTF-8 for U+2800 + b
+            *p++ = '\xE2';
+            *p++ = static_cast<char>(0xA0 | (b >> 6));
+            *p++ = static_cast<char>(0x80 | (b & 0x3F));
         }
-    } else {
-        for (int cy = 0; cy < eyes::kH / 2; ++cy) {
-            for (int cx = 0; cx < kCropW / 2; ++cx) {
-                const int x   = cx * 2, y = cy * 2;
-                const int idx = px(x, y) | px(x + 1, y) << 1 |
-                                px(x, y + 1) << 2 | px(x + 1, y + 1) << 3;
-                p += sprintf(p, "%s", kQuad[idx]);
-            }
-            p += sprintf(p, "\x1b[K\n");
-        }
+        p += sprintf(p, "\x1b[K\n");
     }
     p += sprintf(p,
                  "\x1b[K EXPR %-7s GAZE %-10s "

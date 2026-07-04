@@ -28,7 +28,7 @@ Commands:
                                 <cmd...>              one-off command, e.g. 'ros2 topic list'
                               The node implementation (C++ ports by default) is chosen by
                               the hexa_launch block of ros2_controllers.yaml, not a flag;
-                              --clean rebuilds the image. 'up --pico' walks the Gazebo
+                              --clean rebuilds the image and workspace. 'up --pico' walks the Gazebo
                               hexapod with the Pi Pico firmware brain (builds
                               hexa_pico_bridge first; mutually exclusive with the plain sim
                               stack). See 'hexa sim --help'.

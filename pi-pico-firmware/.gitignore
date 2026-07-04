@@ -2,7 +2,7 @@
 build*/
 
 # The target-agnostic control brain, its host test harness, and the generated
-# config header now live in ../shared/hexa_pipeline (see shared/.gitignore).
+# config header now live in ../shared/motion_core (see shared/.gitignore).
 
 # Vendored Bluepad32 checkout (part 02) — pulled as a submodule or via
 # BLUEPAD32_ROOT, not committed here.

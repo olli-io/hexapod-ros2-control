@@ -160,7 +160,7 @@ def emit(frames, expected) -> str:
 
 
 def main() -> int:
-    here = os.path.dirname(os.path.abspath(__file__))  # shared/hexa_pipeline/test
+    here = os.path.dirname(os.path.abspath(__file__))  # shared/motion_core/test
     shared_dir = os.path.dirname(os.path.dirname(here))  # shared/
     default_repo = os.path.dirname(shared_dir)           # workspace root
 

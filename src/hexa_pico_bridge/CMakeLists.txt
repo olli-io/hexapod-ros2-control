@@ -3,13 +3,13 @@ project(hexa_pico_bridge CXX)
 
 # ── Gazebo-in-the-loop firmware bridge (plan part 10, Tier 3) ───────────────
 #
-# Links the target-agnostic control-brain sources (shared/hexa_pipeline) DIRECTLY
+# Links the target-agnostic control-brain sources (shared/motion_core) DIRECTLY
 # — the same float source compiled for the RP2350 — and runs the real 200 Hz
 # control tick against the simulated hexapod. The only thing that changes vs the
 # Pico build is the hardware seam: input comes from /joy instead of Bluepad32,
 # output goes to the sim controller instead of the Chica UART, and the clock is a
 # std::chrono steady clock instead of time_us_64(). No #ifdefs — a link-time swap
-# (see shared/hexa_pipeline/pipeline.hpp).
+# (see shared/motion_core/pipeline.hpp).
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 20)
@@ -22,12 +22,12 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 # ── Shared control-brain source tree ────────────────────────────────────────
-# The target-agnostic firmware brain lives in shared/hexa_pipeline at the
+# The target-agnostic firmware brain lives in shared/motion_core at the
 # workspace root (shared with the Pico build, the host tests, and
 # hexa_locomotion). REPO_ROOT feeds the config generator the same repo YAMLs
 # every target bakes from. FW_SRC is kept as the variable name for the sources.
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
-set(FW_SRC ${REPO_ROOT}/shared/hexa_pipeline)
+set(FW_SRC ${REPO_ROOT}/shared/motion_core)
 set(GEN_CONFIG ${FW_SRC}/config_generated.hpp)
 
 # ── Build-time config codegen ───────────────────────────────────────────────

@@ -81,3 +81,24 @@ display_node:
 
     # Run the full pipeline without touching SPI/GPIO (dev box / CI / bring-up).
     headless: false
+
+# --- Pi Pico 2 W firmware panel wiring ---
+#
+# Consumed ONLY by the firmware config codegen (motion_core/tools/gen_config.py),
+# NOT by the ROS display_node (which uses the spidev/gpiochip params above). Kept
+# here so display.yaml stays the single source of truth for the face; this block
+# sits outside display_node so the ROS node never sees it.
+#
+# The Pico drives the SH1122 over one hardware SPI block. GP0/GP1 (uart0) are the
+# Servo 2040 Chica link and the CYW43 radio owns its dedicated pins, so spi0 on
+# GP16-19 (+ two control GPIOs) is free. The eyes render on core1; see
+# pi-pico-firmware/src/face.cpp.
+pico_panel:
+  enabled: true      # false skips the core1 launch (robot comes up faceless)
+  spi_index: 0       # 0 = spi0, 1 = spi1
+  sck: 18            # SPI SCK  (spi0: GP18)
+  mosi: 19           # SPI MOSI (spi0: GP19)
+  cs: 17             # chip select (manual, GPIO)
+  dc: 20             # data/command
+  rst: 21            # reset
+  spi_hz: 8000000    # SH1122 rated to 40 MHz; 8 MHz is a conservative default

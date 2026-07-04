@@ -76,7 +76,7 @@ Colcon workspace; all packages live under `src/`. Build type in parentheses.
 - `hexa_description` (ament_cmake) — URDF (via xacro), meshes, joint limits. Source of truth for kinematics.
 - `hexa_hardware` (ament_cmake) — C++ `hardware_interface` plugin for ros2_control (real Servo 2040 + sim/mock).
 - `hexa_locomotion` (ament_cmake) — the locomotion controller: one node running the whole velocity → gait → posture → compose/IK pipeline in a single 200 Hz loop. Compiles the shared control brain directly; publishes joint commands. Replaced the former `hexa_control`/`hexa_gait`/`hexa_posture`/`hexa_kinematics` node chain.
-- `shared/hexa_pipeline` (source tree, not a package) — target-agnostic float control brain (`hexa::pipeline`/`gait`/`posture`/`control`/`supervisor`), compiled directly by the Pico firmware, `hexa_pico_bridge`, and `hexa_locomotion`. Host tests under `shared/hexa_pipeline/test/`.
+- `shared/motion_core` (source tree, not a package) — target-agnostic float control brain (`hexa::pipeline`/`gait`/`posture`/`control`/`supervisor`), compiled directly by the Pico firmware, `hexa_pico_bridge`, and `hexa_locomotion`. Host tests under `shared/motion_core/test/`.
 - `hexa_teleop` (ament_python) — joystick/keyboard → `cmd_vel` and `/body/pose`.
 - `hexa_webteleop` (ament_python) — HTTP + WebSocket server for phone/tablet control; arbitrates with the gamepad over `/teleop/owner`.
 - `hexa_display` (ament_cmake) — face: maps robot state through an expression/gaze policy and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim), in one process. Pure sink; nothing imports it. Owns all panel/SPI/GPIO code and the vendored eye core.
@@ -87,7 +87,7 @@ Colcon workspace; all packages live under `src/`. Build type in parentheses.
 
 Each arrow is "depends on" — the higher-level package imports the lower one (or subscribes to its topics).
 
-- Locomotion: `hexa_teleop` → `cmd_vel` (+ command topics) → `hexa_locomotion` → `/joint_group_position_controller/commands` → `hexa_hardware` → Servo 2040 / Gazebo. `hexa_locomotion` runs the whole velocity → gait → posture → compose/IK pipeline in-process (compiling `shared/hexa_pipeline`), so there is no separate gait/posture/kinematics node chain.
+- Locomotion: `hexa_teleop` → `cmd_vel` (+ command topics) → `hexa_locomotion` → `/joint_group_position_controller/commands` → `hexa_hardware` → Servo 2040 / Gazebo. `hexa_locomotion` runs the whole velocity → gait → posture → compose/IK pipeline in-process (compiling `shared/motion_core`), so there is no separate gait/posture/kinematics node chain.
 - Web teleop: `hexa_webteleop` → `hexa_teleop` (shared mapping) → `cmd_vel` / `/body/pose`
 - `hexa_bringup` → `hexa_locomotion`, `hexa_display` (composes the launch)
 - Face: `hexa_display` subscribes to `hexa_locomotion`'s `/gait/state` (+ hardware topics) and rasterizes the eyes on the SH1122 OLED in one process. Nothing else depends on it.

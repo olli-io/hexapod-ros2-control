@@ -38,13 +38,20 @@ pico_sdk_init()
 
 # ── Build-time config codegen (part 04) ────────────────────────────────────
 # The Pico has no filesystem, so the repo's runtime YAML config is baked into
-# shared/hexa_pipeline/config_generated.hpp by hexa_pipeline/tools/gen_config.py
+# shared/motion_core/config_generated.hpp by motion_core/tools/gen_config.py
 # before the build. Same header the host test harness and the ROS bridge /
 # hexa_locomotion builds generate, so every target shares one baked config.
 # Re-runs whenever the generator or any source YAML changes.
 find_program(PYTHON3 python3 REQUIRED)
 set(HEXA_REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
-set(HEXA_SHARED ${HEXA_REPO_ROOT}/shared/hexa_pipeline)
+set(HEXA_SHARED ${HEXA_REPO_ROOT}/shared/motion_core)
+
+# Face (part 11): the eye core + pure policy library are vendored/shared under
+# hexa_display and compiled directly (like motion_core), plus the u8g2 C core.
+# u8g2 is globbed exactly as the ROS package does (curated subset, no fonts);
+# the unused display drivers are stripped by --gc-sections at link.
+set(HEXA_DISPLAY ${HEXA_REPO_ROOT}/src/hexa_display)
+file(GLOB U8G2_SRCS "${HEXA_DISPLAY}/vendor/u8g2/*.c")
 set(HEXA_GEN_CONFIG ${HEXA_SHARED}/config_generated.hpp)
 set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/geometry.yaml
@@ -63,7 +70,7 @@ add_custom_command(
 add_custom_target(hexa_gen_config DEPENDS ${HEXA_GEN_CONFIG})
 
 # ── Firmware executable ────────────────────────────────────────────────────
-# The target-agnostic control brain lives in ../shared/hexa_pipeline (shared with
+# The target-agnostic control brain lives in ../shared/motion_core (shared with
 # the host tests, hexa_pico_bridge, and hexa_locomotion). This target composes
 # the Pico hardware seam (src/main.cpp, bt_teleop.cpp, servo_out.cpp) around it.
 add_executable(hexa_pico
@@ -90,17 +97,30 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/posture/animations.cpp  # animation stack (part 08)
     ${HEXA_SHARED}/posture/posture.cpp     # posture controller / signal derivation (part 08)
     ${HEXA_SHARED}/supervisor.cpp    # failsafes / telemetry / status LED (part 09)
+    # ── Face: SH1122 eyes on core1 (part 11) ──
+    src/face.cpp                     # core0 policy step + core1 render loop
+    src/Sh1122PanelPico.cpp          # SH1122 panel over Pico hardware SPI
+    ${HEXA_DISPLAY}/vendor/core/EyeAnim.cpp        # eased gaze/blink state machine
+    ${HEXA_DISPLAY}/vendor/core/EyeRaster.cpp      # 1-bit eye rasterizer
+    ${HEXA_DISPLAY}/vendor/core/ExpressionController.cpp  # expressionName()/gazeName()
+    ${HEXA_DISPLAY}/src/expression_policy.cpp      # pure expression/gaze policy
+    ${HEXA_DISPLAY}/src/face_animation.cpp         # breathing/idling step sequences
+    ${HEXA_DISPLAY}/src/face_animation_runner.cpp  # face-animation clock
+    ${U8G2_SRCS}                     # u8g2 C core (sh1122 driver + buffer/hvline)
 )
 add_dependencies(hexa_pico hexa_gen_config)
 
 # btstack_config.h lives in the firmware root; BTstack (pulled in by Bluepad32)
-# locates it on the include path. ../shared/hexa_pipeline carries the shared
+# locates it on the include path. ../shared/motion_core carries the shared
 # foundations (vec3.hpp, leg_index.hpp, generated config — part 04) and the
 # control brain; src/ still holds the Pico-only seam headers (dbg.hpp).
 target_include_directories(hexa_pico PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/src
-    ${HEXA_SHARED})
+    ${HEXA_SHARED}
+    ${HEXA_DISPLAY}/src           # expression_policy / face_animation headers
+    ${HEXA_DISPLAY}/vendor/core   # EyeAnim / EyeRaster / Expression / FaceNames
+    ${HEXA_DISPLAY}/vendor/u8g2)  # u8g2.h
 
 # C++ exceptions: IK throws UnreachableTarget, reseat throws invalid_argument
 # (see overview part 00 / kinematics part 05). Enabled globally so the forked
@@ -117,6 +137,8 @@ target_compile_definitions(hexa_pico PRIVATE
 target_link_libraries(hexa_pico
     pico_stdlib                             # core runtime, timers, GPIO, flash
     hardware_uart                           # Servo 2040 Chica link (part 03)
+    hardware_spi                            # SH1122 face panel on core1 (part 11)
+    pico_multicore                          # core1 render loop (part 11)
     pico_cyw43_arch_threadsafe_background   # CYW43 driver + onboard LED; runs the
                                             # BTstack run loop in the background so
                                             # the cooperative loop stays clean

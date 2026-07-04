@@ -1,4 +1,4 @@
-"""Gazebo-in-the-loop firmware bridge (plan part 10, Tier 3).
+"""Gazebo-in-the-loop firmware seam smoke.
 
 Brings up the firmware brain driving the simulated hexapod:
 
@@ -6,11 +6,13 @@ Brings up the firmware brain driving the simulated hexapod:
     gz_ros2_control joint_group_position_controller,
   - the joy publisher (hexa_teleop/joy_publisher) — sensor_msgs/Joy on /joy in
     the exact layout the firmware's bt_teleop emits,
-  - firmware_bridge_node — runs hexa::pipeline::Pipeline at 50 Hz and publishes
+  - firmware_bridge_node — runs hexa::pipeline::Pipeline at 200 Hz and publishes
     joint commands to the controller.
 
-Same teleop input should walk the Gazebo hexapod identically to the ROS2 node
-chain (ik_node + gait_node + posture_node) in the same world (sim-first).
+The control brain is shared verbatim with hexa_locomotion (the production sim
+path, driven off /cmd_vel); this launch drives it through the firmware's own
+map_joy input + baked-config seams instead, as a sim-first smoke of those seams
+before the Pico is flashed. See the package README.
 
 Launch args:
   sim      (default true)  — include the Gazebo sim launch. Set false to run the

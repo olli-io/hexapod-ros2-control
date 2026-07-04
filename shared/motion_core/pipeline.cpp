@@ -221,6 +221,15 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   r.engine_state = st;
   r.master_phase = engine_->master_phase();
   r.walking = walking;
+
+  // Raw teleop intent for the on-board face policy: the unshaped command (as the
+  // ROS display node saw /cmd_vel) and the user body pose (as it saw /body/pose).
+  r.cmd_vx = jo.linear_x;
+  r.cmd_vy = jo.linear_y;
+  r.cmd_wz = jo.angular_z;
+  r.pose_roll = jo.pose_roll;
+  r.pose_pitch = jo.pose_pitch;
+  r.pose_yaw = jo.pose_yaw;
   return r;
 }
 

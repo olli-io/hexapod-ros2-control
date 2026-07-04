@@ -133,6 +133,36 @@ See `../.tmp/plan/pi-pico-2-w/` for the full plan. This tree implements:
   (a Wokwi / Renode firmware-binary smoke sim) is **deferred** — it needs the
   ARM build and can't simulate the CYW43 Bluetooth radio.
 
+- **part 11** — the face (`src/face.{hpp,cpp}`, `src/Sh1122PanelPico.{h,cpp}`,
+  `src/face_policy.hpp`): the 256×64 SH1122 OLED eyes, closing the LED-face gap
+  part 09 left (its status LED "stands in for the dropped `hexa_display` face").
+  Reuses the **same shared source** as the sim/ROS face — the vendored eye core
+  (`hexa_display/vendor/core` `EyeAnim`/`EyeRaster`) plus the pure policy library
+  (`expression_policy` / `face_animation` / `face_animation_runner`), compiled
+  directly like `motion_core`; the only target-specific piece is
+  `Sh1122PanelPico`, a link-time swap of the Linux spidev/GPIO-chardev transport
+  for Pico hardware SPI + `gpio_put`.
+
+  Split across the two RP2350 cores so the ~8 ms full-frame SPI flush never
+  touches the 5 ms / 200 Hz control tick:
+  - **core0** runs the expression/gaze **policy** at `kFaceUpdateRateHz` off the
+    pipeline state it already holds (gait state, unshaped `cmd_vel` + user pose
+    from `TickResult`, supervisor battery flags) and publishes a tiny render
+    target (`{Expression, GazeDirection, blink_pending}`) under a mutex — it only
+    ever holds the lock for a struct copy, so the control loop's timing is
+    preserved;
+  - **core1** (`multicore_launch_core1`, previously idle) runs the 60 Hz
+    `EyeAnim` + raster + flush against that target, owning the SPI block. The
+    flush is a full-width dirty **tile-row band** (`u8g2_UpdateDisplayArea`, the
+    sh1122 driver's tested addressing path), so a static face costs no bus
+    traffic and a blink/gaze move flushes only the eye band.
+
+  Config bakes from `hexa_display/config/display.yaml` via `gen_config.py`
+  (`kFaceExpressionMap` / `kFaceGaze` / `kFacePanel`, panel pins from a
+  firmware-only `pico_panel:` block); expression names resolve to the enum at
+  runtime so the generated header stays free of the eye core. `pico_panel.enabled:
+  false` skips the core1 launch — the robot comes up faceless with no regression.
+
 This completes the plan. The remaining work — cutover of the ROS2 workspace to
 the C++ ports, on-target bring-up (flashing, servo wiring), and the optional
 Tier 4 binary sim — is tracked outside this tree.
@@ -342,7 +372,7 @@ or physical board is needed.
 - **Host harness (Tier 1/2)** — the whole port's logic, natively:
 
   ```sh
-  cd shared/hexa_pipeline/test
+  cd shared/motion_core/test
   cmake -S . -B build && cmake --build build -j
   ctest --test-dir build --output-on-failure
   ```
@@ -365,3 +395,34 @@ or physical board is needed.
   `/joint_group_position_controller/commands`: neutral input holds the folded
   pose at a steady 200 Hz, and an init press drives the 18 joints up to the
   standing pose. See `src/hexa_pico_bridge/README.md`.
+
+## Verify (part 11) — the face
+
+Host-side, no hardware (inside `./hexa sim`):
+
+- **Config wiring** — `display.yaml` → `gen_config.py` → `config_generated.hpp`
+  → `face::buildPolicyConfig()` → the shared policy:
+
+  ```sh
+  cd pi-pico-firmware/test/host
+  cmake -S . -B build && cmake --build build && ctest --test-dir build
+  ```
+
+  `test_face_policy` asserts the baked expression map resolves per gait state
+  (gait → happy, folded/paused → sleepy), the precedence (battery-critical → dead
+  + centered gaze outranks the animation-mode and gait-map expressions), and the
+  boot "breathing" selection before the pad pairs. The eye policy / animation /
+  rasterizer themselves are the exact source `hexa_display`'s gtest covers.
+
+On-target (bench, feet clear, an OLED wired per the `pico_panel:` pins):
+
+- **Boot** — the banner logs `face: core1 render launched`; the eyes **breathe**
+  (slow vertical gaze drift) while unpaired. Set `pico_panel.enabled: false` and
+  the line reads `face: disabled` — the robot comes up faceless, rest unaffected.
+- **Idle / walk** — once paired and standing idle+level, the eyes run the
+  **idling** look-around; drive the sticks and the gaze follows `cmd_vel` (REP-103
+  left → eyes left), pose-mode body pitch drives vertical gaze, and the
+  expression tracks the gait state. Blink on every expression change.
+- **Regression guard (the whole point)** — the 1 Hz `[safety]` heartbeat's tick
+  `jitter` / `overruns` must be **unchanged** vs a pre-face build: core1
+  rendering must not perturb the 200 Hz control loop on core0.

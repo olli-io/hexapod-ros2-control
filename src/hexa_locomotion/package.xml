@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>
     Consolidated single-node locomotion controller. Compiles the target-agnostic
-    control brain (shared/hexa_pipeline) directly and runs the whole
+    control brain (shared/motion_core) directly and runs the whole
     velocity-shaping -> gait -> posture -> compose/IK pipeline in one 200 Hz tick,
     mirroring the Pi Pico firmware's single loop but with ROS seams: /cmd_vel +
     the discrete command topics in, joint commands out. Replaces the

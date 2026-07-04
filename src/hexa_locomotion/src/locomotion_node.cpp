@@ -1,5 +1,5 @@
 // Consolidated single-node locomotion controller (the ROS seam around the shared
-// control brain, shared/hexa_pipeline).
+// control brain, shared/motion_core).
 //
 // Mirrors the Pi Pico firmware's single 200 Hz loop, but with ROS seams instead
 // of the gamepad / servo hardware:

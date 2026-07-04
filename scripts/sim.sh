@@ -33,7 +33,8 @@ Commands:
   up [--clean] [--pico] Bring the sim stack up detached (compose up -d). The
                         node implementation (C++ ports by default) is chosen by
                         the hexa_launch block of ros2_controllers.yaml, not a
-                        flag; --clean rebuilds the image. --pico instead brings
+                        flag; --clean rebuilds the image and the workspace.
+                        --pico instead brings
                         up the firmware-in-sim brain (the Pi Pico firmware walks
                         the Gazebo hexapod); it builds hexa_pico_bridge first and
                         is mutually exclusive with the plain sim stack.
@@ -94,18 +95,24 @@ sim_running()  { container_running "${CONTAINER_NAME}"; }
 pico_running() { container_running "${PICO_CONTAINER_NAME}"; }
 
 cmd_up() {
-    local build_flags=() service="${SERVICE}" pico=""
+    local build_flags=() service="${SERVICE}" pico="" clean=""
     for a in "$@"; do
         case "$a" in
-            --clean) build_flags=(--build) ;;
+            --clean) build_flags=(--build); clean=1 ;;
             --pico)  pico=1; service="${PICO_SERVICE}" ;;
             *)       die "up: unknown flag '$a' (expected --clean or --pico)" ;;
         esac
     done
     # The image carries no built workspace (install/ is bind-mounted from the
     # host and built at runtime). On a fresh checkout, build once so the launch
-    # can find the packages; later `up`s reuse the persisted install/.
-    if [ ! -f install/setup.bash ]; then
+    # can find the packages; later `up`s reuse the persisted install/. --clean
+    # also forces a full workspace rebuild so source edits always take effect —
+    # rebuilding the image (--build) recompiles nothing in the bind-mounted
+    # install/, so C++ changes would otherwise be silently ignored.
+    if [ -n "${clean}" ]; then
+        echo "hexa sim: --clean — rebuilding the workspace..."
+        cmd_build
+    elif [ ! -f install/setup.bash ]; then
         echo "hexa sim: no install/ yet — running an initial build..."
         cmd_build
     fi
