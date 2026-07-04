@@ -109,14 +109,21 @@ int Pipeline::compose_gait(
 }
 
 TickResult Pipeline::tick(const TickInput& in) {
+  // Joy path: map the gamepad snapshot (axes/buttons) to a CommandIntent using
+  // the pipeline's own JoyConfig/JoyState, then run the core tick. The Pico and
+  // the /joy Gazebo bridge come in here; hexa_locomotion calls the core directly.
+  const CommandIntent cmd =
+      hexa::teleop::map_joy(in.axes, in.buttons, joycfg_, joystate_, in.dt);
+  return tick(cmd, in);
+}
+
+TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   // Jitter accounting at the tick edge (independent of the rate-limited battery
   // sample), then the control pipeline proper.
   supervisor_.record_tick(in.now_us);
 
   TickResult r;
 
-  const hexa::teleop::JoyOutput jo =
-      hexa::teleop::map_joy(in.axes, in.buttons, joycfg_, joystate_, in.dt);
   r.mode_changed = jo.mode_changed;
   r.mode = joystate_.mode;
 

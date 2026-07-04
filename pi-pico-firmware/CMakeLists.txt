@@ -38,12 +38,14 @@ pico_sdk_init()
 
 # ── Build-time config codegen (part 04) ────────────────────────────────────
 # The Pico has no filesystem, so the repo's runtime YAML config is baked into
-# src/config_generated.hpp by tools/gen_config.py before the build. Same header
-# the host test harness (test/host) generates, so host and target share one
-# baked config. Re-runs whenever the generator or any source YAML changes.
+# shared/hexa_pipeline/config_generated.hpp by hexa_pipeline/tools/gen_config.py
+# before the build. Same header the host test harness and the ROS bridge /
+# hexa_locomotion builds generate, so every target shares one baked config.
+# Re-runs whenever the generator or any source YAML changes.
 find_program(PYTHON3 python3 REQUIRED)
 set(HEXA_REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
-set(HEXA_GEN_CONFIG ${CMAKE_CURRENT_LIST_DIR}/src/config_generated.hpp)
+set(HEXA_SHARED ${HEXA_REPO_ROOT}/shared/hexa_pipeline)
+set(HEXA_GEN_CONFIG ${HEXA_SHARED}/config_generated.hpp)
 set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/geometry.yaml
     ${HEXA_REPO_ROOT}/src/hexa_description/config/tuning.yaml
@@ -53,46 +55,51 @@ set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_display/config/display.yaml)
 add_custom_command(
     OUTPUT ${HEXA_GEN_CONFIG}
-    COMMAND ${PYTHON3} ${CMAKE_CURRENT_LIST_DIR}/tools/gen_config.py
+    COMMAND ${PYTHON3} ${HEXA_SHARED}/tools/gen_config.py
             --repo-root ${HEXA_REPO_ROOT} --out ${HEXA_GEN_CONFIG}
-    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/tools/gen_config.py ${HEXA_CONFIG_YAMLS}
+    DEPENDS ${HEXA_SHARED}/tools/gen_config.py ${HEXA_CONFIG_YAMLS}
     COMMENT "Generating config_generated.hpp from repo YAMLs"
     VERBATIM)
 add_custom_target(hexa_gen_config DEPENDS ${HEXA_GEN_CONFIG})
 
 # ── Firmware executable ────────────────────────────────────────────────────
+# The target-agnostic control brain lives in ../shared/hexa_pipeline (shared with
+# the host tests, hexa_pico_bridge, and hexa_locomotion). This target composes
+# the Pico hardware seam (src/main.cpp, bt_teleop.cpp, servo_out.cpp) around it.
 add_executable(hexa_pico
     src/main.cpp
-    src/pipeline.cpp                 # target-agnostic 50 Hz control brain (part 10)
     src/bt_teleop.cpp
-    src/joy_mapping.cpp              # gamepad -> high-level command (part 07)
-    src/control.cpp                  # velocity shaping (scale + slew) (part 07)
     src/servo_out.cpp                # Servo 2040 Chica link over UART (part 03)
-    src/kinematics/leg_ik.cpp        # FK/IK, float fork (part 05)
-    src/kinematics/body_transform.cpp # body<->leg + BodyPose compose (part 05)
-    src/gait/clock.cpp               # gait engine, float fork (part 06)
-    src/gait/trajectory.cpp
-    src/gait/gaits/base.cpp
-    src/gait/gaits/registry.cpp
-    src/gait/engagement.cpp
-    src/gait/pause.cpp
-    src/gait/stand_transition.cpp
-    src/gait/reseat.cpp
-    src/gait/limits.cpp
-    src/gait/engine.cpp
-    src/posture/pose.cpp             # body-pose algebra, float fork (part 08)
-    src/posture/animations.cpp       # animation stack (part 08)
-    src/posture/posture.cpp          # posture controller / signal derivation (part 08)
-    src/supervisor.cpp               # failsafes / telemetry / status LED (part 09)
+    ${HEXA_SHARED}/pipeline.cpp      # target-agnostic 200 Hz control brain (part 10)
+    ${HEXA_SHARED}/joy_mapping.cpp   # gamepad -> high-level command (part 07)
+    ${HEXA_SHARED}/control.cpp       # velocity shaping (scale + slew) (part 07)
+    ${HEXA_SHARED}/kinematics/leg_ik.cpp        # FK/IK, float fork (part 05)
+    ${HEXA_SHARED}/kinematics/body_transform.cpp # body<->leg + BodyPose compose (part 05)
+    ${HEXA_SHARED}/gait/clock.cpp    # gait engine, float fork (part 06)
+    ${HEXA_SHARED}/gait/trajectory.cpp
+    ${HEXA_SHARED}/gait/gaits/base.cpp
+    ${HEXA_SHARED}/gait/gaits/registry.cpp
+    ${HEXA_SHARED}/gait/engagement.cpp
+    ${HEXA_SHARED}/gait/pause.cpp
+    ${HEXA_SHARED}/gait/stand_transition.cpp
+    ${HEXA_SHARED}/gait/reseat.cpp
+    ${HEXA_SHARED}/gait/limits.cpp
+    ${HEXA_SHARED}/gait/engine.cpp
+    ${HEXA_SHARED}/posture/pose.cpp        # body-pose algebra, float fork (part 08)
+    ${HEXA_SHARED}/posture/animations.cpp  # animation stack (part 08)
+    ${HEXA_SHARED}/posture/posture.cpp     # posture controller / signal derivation (part 08)
+    ${HEXA_SHARED}/supervisor.cpp    # failsafes / telemetry / status LED (part 09)
 )
 add_dependencies(hexa_pico hexa_gen_config)
 
 # btstack_config.h lives in the firmware root; BTstack (pulled in by Bluepad32)
-# locates it on the include path. src/ carries the shared foundations
-# (vec3.hpp, leg_index.hpp, generated config — part 04).
+# locates it on the include path. ../shared/hexa_pipeline carries the shared
+# foundations (vec3.hpp, leg_index.hpp, generated config — part 04) and the
+# control brain; src/ still holds the Pico-only seam headers (dbg.hpp).
 target_include_directories(hexa_pico PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
-    ${CMAKE_CURRENT_LIST_DIR}/src)
+    ${CMAKE_CURRENT_LIST_DIR}/src
+    ${HEXA_SHARED})
 
 # C++ exceptions: IK throws UnreachableTarget, reseat throws invalid_argument
 # (see overview part 00 / kinematics part 05). Enabled globally so the forked

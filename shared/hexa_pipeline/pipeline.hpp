@@ -42,6 +42,15 @@ inline constexpr std::uint64_t kTickPeriodUs = 5'000;    // 5 ms -> 200 Hz
 inline constexpr std::uint64_t kTickMarginUs = 1'000;    // overrun slack
 inline constexpr float kDt = 0.005f;                     // engine tick, seconds
 
+// The high-level command the tick consumes: the velocity/pose/gait/animation
+// intent for this tick, decoupled from *where* it came from. The Pico and the
+// Gazebo /joy bridge produce it with map_joy() off a gamepad snapshot; the ROS
+// hexa_locomotion node builds it from /cmd_vel + /cmd_gait + /gait/initialize +
+// /body/pose + /animation/mode. Both feed the same core tick — this is the
+// command seam (see the two-arg tick() overload below). It is exactly
+// map_joy's output type, so the joy path passes its result straight through.
+using CommandIntent = hexa::teleop::JoyOutput;
+
 // What the caller sampled for this tick from its input / clock / telemetry seam.
 struct TickInput {
   std::uint64_t now_us = 0;              // monotonic clock (caller's seam)
@@ -98,9 +107,19 @@ class Pipeline {
   // default gait, initial teleop mode, standing-pose last-good seed.
   Pipeline();
 
-  // Run one 200 Hz control tick. Also records the tick edge for jitter accounting
-  // (supervisor.record_tick), so the caller need only feed now_us once.
+  // Joy-path convenience: map the raw gamepad snapshot in `in` (axes/buttons)
+  // through map_joy() using the pipeline's own JoyConfig/JoyState, then run the
+  // core tick. The Pico firmware and the /joy Gazebo bridge use this overload.
   TickResult tick(const TickInput& in);
+
+  // Core control tick — the command seam. Runs supervisor -> control.shape ->
+  // engine.update -> posture.update -> compose/IK on an already-mapped command,
+  // independent of input source. hexa_locomotion builds `cmd` from ROS topics
+  // (/cmd_vel etc.) and calls this directly; the joy overload above builds `cmd`
+  // via map_joy and delegates here. `in` supplies the clock/link/battery/dt seam
+  // (its axes/buttons are ignored on this path). Records the tick edge for jitter
+  // accounting (supervisor.record_tick), so the caller need only feed now_us once.
+  TickResult tick(const CommandIntent& cmd, const TickInput& in);
 
   // Accessors for the caller's heartbeat / diagnostics (main's [gait]/[safety]
   // heartbeat reads engine state + master phase and the supervisor tick stats).

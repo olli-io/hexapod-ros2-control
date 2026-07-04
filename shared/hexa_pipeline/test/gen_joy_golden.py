@@ -160,9 +160,9 @@ def emit(frames, expected) -> str:
 
 
 def main() -> int:
-    here = os.path.dirname(os.path.abspath(__file__))
-    firmware_root = os.path.dirname(os.path.dirname(here))  # pi-pico-firmware/
-    default_repo = os.path.dirname(firmware_root)
+    here = os.path.dirname(os.path.abspath(__file__))  # shared/hexa_pipeline/test
+    shared_dir = os.path.dirname(os.path.dirname(here))  # shared/
+    default_repo = os.path.dirname(shared_dir)           # workspace root
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo-root", default=default_repo)

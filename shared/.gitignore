@@ -1,0 +1,8 @@
+# Generated at build time by hexa_pipeline/tools/gen_config.py from the repo
+# YAMLs (single source of truth stays in hexa_description / the config packages).
+# Baked by the Pico firmware, the hexa_pico_bridge / hexa_locomotion ROS builds,
+# and the host test harness alike.
+hexa_pipeline/config_generated.hpp
+
+# CMake / build output (host test harness under hexa_pipeline/test).
+**/build*/

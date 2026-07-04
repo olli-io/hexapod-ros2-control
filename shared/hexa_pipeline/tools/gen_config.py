@@ -682,16 +682,17 @@ def emit(geometry, gait, teleop, posture, control, hardware,
 # ── entry point ─────────────────────────────────────────────────────────────
 
 def main() -> int:
-    here = os.path.dirname(os.path.abspath(__file__))
-    firmware_root = os.path.dirname(here)          # pi-pico-firmware/
-    default_repo = os.path.dirname(firmware_root)  # workspace root
-    default_out = os.path.join(firmware_root, "src", "config_generated.hpp")
+    here = os.path.dirname(os.path.abspath(__file__))  # shared/hexa_pipeline/tools
+    shared_pkg = os.path.dirname(here)                  # shared/hexa_pipeline
+    default_repo = os.path.dirname(os.path.dirname(shared_pkg))  # workspace root
+    default_out = os.path.join(shared_pkg, "config_generated.hpp")
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo-root", default=default_repo,
                     help="workspace root containing src/hexa_* (default: auto)")
     ap.add_argument("--out", default=default_out,
-                    help="output header path (default: src/config_generated.hpp)")
+                    help="output header path "
+                         "(default: shared/hexa_pipeline/config_generated.hpp)")
     args = ap.parse_args()
 
     cfg_dir = os.path.join(args.repo_root, "src")

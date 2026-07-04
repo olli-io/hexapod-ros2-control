@@ -16,17 +16,17 @@ project(hexa_pico_host_test CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Firmware sources live two levels up (pi-pico-firmware/src). The generated
-# config header is emitted there by tools/gen_config.py.
-set(FW_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
-set(FW_SRC ${FW_ROOT}/src)
+# The target-agnostic control brain is the parent dir (shared/hexa_pipeline).
+# FW_SRC is kept as the variable name for the shared sources throughout. The
+# generated config header is emitted there by tools/gen_config.py.
+set(FW_SRC ${CMAKE_CURRENT_LIST_DIR}/..)
 set(GEN_CONFIG ${FW_SRC}/config_generated.hpp)
 
 # ── Regenerate config_generated.hpp from the repo YAMLs before building ──
 # Mirrors the Pico build's pre-build codegen so host and target share one baked
 # config. Re-runs whenever the generator or any source YAML changes.
 find_program(PYTHON3 python3 REQUIRED)
-set(REPO_ROOT ${FW_ROOT}/..)
+set(REPO_ROOT ${FW_SRC}/../..)
 file(GLOB_RECURSE CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_description/config/geometry.yaml
   ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
@@ -36,9 +36,9 @@ file(GLOB_RECURSE CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_display/config/display.yaml)
 add_custom_command(
   OUTPUT ${GEN_CONFIG}
-  COMMAND ${PYTHON3} ${FW_ROOT}/tools/gen_config.py
+  COMMAND ${PYTHON3} ${FW_SRC}/tools/gen_config.py
           --repo-root ${REPO_ROOT} --out ${GEN_CONFIG}
-  DEPENDS ${FW_ROOT}/tools/gen_config.py ${CONFIG_YAMLS}
+  DEPENDS ${FW_SRC}/tools/gen_config.py ${CONFIG_YAMLS}
   COMMENT "Generating config_generated.hpp from repo YAMLs"
   VERBATIM)
 add_custom_target(gen_config DEPENDS ${GEN_CONFIG})

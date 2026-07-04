@@ -2,7 +2,7 @@
 
 Plan part 10, **Tier 3**. Runs the Pico 2 W firmware's control brain against the
 **simulated** hexapod, with no hardware. It links the target-agnostic firmware
-pipeline sources (`pi-pico-firmware/src`) **directly** — the exact same float
+pipeline sources (`shared/hexa_pipeline`) **directly** — the exact same float
 source compiled for the RP2350 — and runs the real 200 Hz control tick, so the
 firmware walks the Gazebo model. This honors the repo's **sim-first** rule:
 every feature runs against the Gazebo model before any servo code is touched.
@@ -12,7 +12,7 @@ every feature runs against the Gazebo model before any servo code is touched.
 The firmware factors its whole control brain — teleop mapping → velocity shaping
 → gait engine → posture → compose/IK, plus the failsafe supervisor — into one
 Pico-SDK-free, ROS-free class, `hexa::pipeline::Pipeline` (see
-`pi-pico-firmware/src/pipeline.hpp`). The only thing that differs between the Pico
+`shared/hexa_pipeline/pipeline.hpp`). The only thing that differs between the Pico
 firmware and this bridge is the **hardware seam**, swapped at link time (no
 `#ifdef`s):
 
@@ -77,7 +77,7 @@ to `≤1e-3 rad` by the host golden suites.
 ## Where the port risk is actually tested
 
 The bridge is a thin ROS shell; the logic it runs is the firmware pipeline, which
-is exercised off-target by the host harness (`pi-pico-firmware/test/host`) — the
+is exercised off-target by the host harness (`shared/hexa_pipeline/test`) — the
 golden-trace suites (`test_gait`, `test_kinematics`, `test_joy_mapping`,
 `test_posture`) against the untouched `double` ROS2 engines, and `test_pipeline`,
 which drives the whole composed brain (stand → walk → safe-stop). That harness is

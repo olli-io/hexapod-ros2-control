@@ -342,7 +342,7 @@ or physical board is needed.
 - **Host harness (Tier 1/2)** — the whole port's logic, natively:
 
   ```sh
-  cd pi-pico-firmware/test/host
+  cd shared/hexa_pipeline/test
   cmake -S . -B build && cmake --build build -j
   ctest --test-dir build --output-on-failure
   ```
