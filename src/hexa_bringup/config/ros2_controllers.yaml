@@ -18,11 +18,11 @@
 # always the Python node regardless of this setting.
 hexa_launch:
   ros__parameters:
-    node_implementation: cpp
+    node_implementation: python
 
 controller_manager:
   ros__parameters:
-    update_rate: 200  # Hz
+    update_rate: 200 # Hz
     use_sim_time: false
 
     joint_state_broadcaster:

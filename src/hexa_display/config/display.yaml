@@ -1,28 +1,13 @@
 display_node:
   ros__parameters:
     # Master switch, read by the bringup launch files: set to false to
-    # bring the stack up without the display node (no face fitted, or
-    # the UART is needed for something else).
+    # bring the stack up without the face (the single face node is
+    # skipped — no face fitted, or the display is not wanted).
     enabled: true
 
-    # Transport: "serial" on the robot, "stub" in sim (launch overrides).
-    transport: serial
-    serial_device: /dev/serial0
-    serial_baud: 921600
-    reconnect_period_s: 2.0
-
-    # The firmware animates blinks/easing autonomously — the node only
-    # sets target state, so a low rate suffices.
+    # Policy tick rate. The renderer half eases gaze / blinks
+    # autonomously on top, so a low rate suffices.
     update_rate_hz: 10.0
-    # Resend full state periodically so an ESP32 reboot resyncs.
-    refresh_period_s: 5.0
-    # UART heartbeat: the firmware falls back to a DEAD face after 3 s
-    # without a valid frame (LINK_TIMEOUT_MS), so send a PING whenever
-    # nothing else has been written for this long. Keep well under 3 s.
-    ping_period_s: 1.0
-    # The firmware echoes each PING back as a PONG; log a ROS error
-    # (throttled) when none arrives within this long.
-    pong_timeout_s: 1.0
 
     # Gait-state → expression map. One dotted param per canonical gait
     # state (rclpy has no string-map parameter type). Valid values:
@@ -74,3 +59,25 @@ display_node:
     # cycle) runs once the robot has stood idle and level for the start
     # delay. Battery warning/critical suppress both animations.
     idling_start_delay_s: 4.0
+
+    # --- Renderer half: SH1122 OLED panel ---
+
+    # SH1122 SPI bus (kernel spidev).
+    spi_device: "/dev/spidev0.0"
+    spi_speed_hz: 8000000
+
+    # Control pins on the GPIO character device, by chip + line offset (BCM
+    # numbering on a Raspberry Pi). CS is driven manually; set cs_line: -1 to
+    # disable it (panel CS tied low, or hardware CE used instead).
+    gpio_chip: "/dev/gpiochip0"
+    dc_line: 24
+    rst_line: 25
+    cs_line: 8
+
+    # Render loop rate (Hz), decoupled from update_rate_hz. Animation timing is
+    # wall-clock regardless. Frames are only pushed over SPI when they actually
+    # change, so a static face costs no bus traffic between blinks/gaze moves.
+    render_hz: 60
+
+    # Run the full pipeline without touching SPI/GPIO (dev box / CI / bring-up).
+    headless: false

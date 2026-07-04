@@ -16,28 +16,24 @@ Everything below explains the pieces.
 the container's PID 1 (the composed `sim_bringup.launch.py`), so its lifecycle
 is docker-native — the same `up` / `down` model the robot container uses:
 
-```
-./hexa sim up          # build the workspace if needed, then bring the sim stack up
-                       # detached (docker compose up -d). Which port of the
-                       # kinematics/gait/posture nodes runs (the C++ ports by default)
-                       # is set by the hexa_launch block of
-                       # hexa_bringup/config/ros2_controllers.yaml, read at launch — not
-                       # a flag; --clean rebuilds the image (after sim.Dockerfile edits).
-./hexa sim logs -f     # stream the stack's logs (native docker logs, no in-container
-                       # redirection).
-./hexa sim down        # stop and remove the container.
-./hexa sim build       # colcon build in an ephemeral compose run --rm container; no
-                       # running stack needed. install/ persists via the workspace
-                       # bind-mount.
-./hexa sim shell       # a ROS2-sourced shell: docker exec into the running stack if
-                       # it's up, else an ephemeral compose run --rm container.
-./hexa sim status      # compose ps, plus ros2 node list when the stack is up.
-./hexa sim <cmd>       # run a one-off command in the container, e.g. ./hexa sim rviz2
-                       # or ./hexa sim ros2 topic list (exec if up, else run --rm).
-./hexa sim up --pico   # firmware-in-sim (see below); tear down / stream with the usual
-                       # ./hexa sim down and ./hexa sim logs -f.
-./hexa kill            # stop and remove the sim + pico containers.
-```
+- `./hexa sim up` — build the workspace if needed, then bring the sim stack up
+  **detached** (`docker compose up -d`). Which port of the kinematics/gait/posture
+  nodes runs (the C++ ports by default) is set by the `hexa_launch` block of
+  `hexa_bringup/config/ros2_controllers.yaml`, read at launch — not a flag;
+  `--clean` rebuilds the image (after sim.Dockerfile edits).
+- `./hexa sim logs -f` — stream the stack's logs (native `docker logs`, no
+  in-container redirection).
+- `./hexa sim down` — stop and remove the container.
+- `./hexa sim build` — colcon build in an ephemeral `compose run --rm` container;
+  no running stack needed. `install/` persists via the workspace bind-mount.
+- `./hexa sim shell` — a ROS2-sourced shell: `docker exec` into the running
+  stack if it's up, else an ephemeral `compose run --rm` container.
+- `./hexa sim status` — `compose ps`, plus `ros2 node list` when the stack is up.
+- `./hexa sim <cmd>` — run a one-off command in the container, e.g.
+  `./hexa sim rviz2` or `./hexa sim ros2 topic list` (exec if up, else run --rm).
+- `./hexa sim up --pico` — firmware-in-sim (see below); tear down / stream with
+  the usual `./hexa sim down` and `./hexa sim logs -f`.
+- `./hexa kill` — stop and remove the sim + pico containers.
 
 Outside the container, on the host, the same workspace files are visible — edit
 with whatever editor you like; nothing in the container is privileged to write
@@ -52,6 +48,12 @@ Stack lifecycle lives host-side (`hexa sim up/down`); the build runs *inside*
 the container via colcon:
 
 ```
+
+Pelasta Kivikon metsä
+Mira Grönroos
+832 allekirjoitusta
+762 Allekirjoitukset / 30 päivää
+04.06.2026
 hexa sim build                                  # colcon build --symlink-install
 hexa sim build --packages-select hexa_kinematics   # extra args forward to colcon
 ```

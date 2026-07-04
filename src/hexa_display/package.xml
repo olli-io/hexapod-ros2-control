@@ -1,22 +1,32 @@
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>hexa_display</name>
-  <version>0.0.1</version>
-  <description>Face relay: maps gait state, cmd_vel, posture and battery into expression/gaze commands for the ESP32 OLED display over UART.</description>
+  <version>0.1.0</version>
+  <description>
+    Hexapod "face" node. Maps robot state (gait, cmd_vel, posture, battery) into
+    an expression/gaze/blink policy and rasterizes the eyes on a 256x64 SH1122
+    OLED directly from a Raspberry Pi (spidev + the kernel GPIO character
+    device), in one process. A pure sink of robot state: nothing imports it. The
+    platform-free eye animation core (EyeAnim/EyeRaster, shared with the ESP32 /
+    Pico firmware) and the u8g2 C driver are vendored under vendor/ (see
+    vendor/README.md), so the package builds without a firmware checkout. No
+    external GPIO library.
+  </description>
   <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
   <license>Apache-2.0</license>
 
-  <depend>rclpy</depend>
-  <depend>geometry_msgs</depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
   <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>hexa_interfaces</depend>
 
-  <exec_depend>python3-serial</exec_depend>
-
-  <test_depend>python3-pytest</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

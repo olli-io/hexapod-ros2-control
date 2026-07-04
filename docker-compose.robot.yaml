@@ -11,6 +11,11 @@ services:
     # `input` group so joy_node can read /dev/input/event* (the joystick).
     group_add:
       - "${INPUT_GID:-994}"
+      # SPI + GPIO groups so hexa_display can open the OLED bus and control
+      # lines. Set SPI_GID / GPIO_GID in .env from the Pi's actual group
+      # IDs (`getent group spi|gpio`); see docs/robot-environment.md.
+      - "${SPI_GID:-999}"
+      - "${GPIO_GID:-993}"
     # Process-level environment for the ROS stack, sourced from .env (the same
     # file deploy seeds from .env.robot.sample, at ~/hexa-robot/.env). Any
     # ROS-facing var added there flows into the container without editing this
@@ -27,11 +32,11 @@ services:
     # is known, so a re-enumerated bus number doesn't break startup.
     devices:
       - "${SERVO_DEVICE:-/dev/ttyACM0}:/dev/ttyACM0"
-      # ESP32 face on the Pi UART header. Map the resolved PL011 node
-      # (not the /dev/serial0 symlink) into the container under the
-      # name the display node expects. Requires enable_uart=1 +
-      # dtoverlay=disable-bt on the Pi; see docs/robot-environment.md.
-      - "${DISPLAY_DEVICE:-/dev/ttyAMA0}:/dev/serial0"
+      # SH1122 OLED face: hexa_display renders the eyes directly from the Pi
+      # over spidev + the kernel GPIO character device. Requires
+      # dtparam=spi=on on the Pi; see docs/robot-environment.md.
+      - "${SPI_DEVICE:-/dev/spidev0.0}:/dev/spidev0.0"
+      - "${GPIO_CHIP:-/dev/gpiochip0}:/dev/gpiochip0"
     # Joystick passthrough (same shape as the dev compose): bind /dev/input
     # rshared so hot-plugged controllers become visible without restarting
     # the container; device_cgroup_rules grants char-device access.

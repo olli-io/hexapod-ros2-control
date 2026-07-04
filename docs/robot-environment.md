@@ -16,8 +16,8 @@ image tarball, and run as a long-lived service.
 - Pimoroni Servo 2040 over USB (enumerates as `/dev/ttyACM0`).
 - Servo rail PSU behind the Servo 2040's relay.
 - Wired Ethernet or Wi-Fi.
-- Optional: ESP32 OLED face on the Pi UART header (GPIO14/15,
-  firmware in the `hexapod-esp32-display` repo).
+- Optional: 256×64 SH1122 OLED face on the Pi SPI bus (spidev0.0 +
+  DC/RST/CS on GPIO), rendered directly by `hexa_display`.
 
 ## 1. Flash the OS
 
@@ -45,26 +45,34 @@ You may need to run:
 sudo usermod -aG docker <your_username>
 ```
 
-## 2b. Enable the display UART (optional)
+## 2b. Enable the display SPI (optional)
 
-Only needed if the ESP32 face is fitted. Free the PL011 UART from
-Bluetooth so `/dev/serial0` points at the header pins:
+Only needed if the SH1122 OLED face is fitted. `hexa_display` drives the
+panel directly over spidev + the kernel GPIO character device. Enable
+the SPI bus:
 
 ```
 # /boot/firmware/config.txt
-enable_uart=1
-dtoverlay=disable-bt
+dtparam=spi=on
 ```
 
-Reboot, then verify `/dev/serial0` resolves to `ttyAMA0`:
+Reboot, then verify the device nodes exist and note the group IDs:
 
 ```
-ls -l /dev/serial0
+ls -l /dev/spidev0.0 /dev/gpiochip0
+getent group spi  | cut -d: -f3            # note for SPI_GID
+getent group gpio | cut -d: -f3            # note for GPIO_GID
 ```
 
-The robot compose maps the resolved device (`DISPLAY_DEVICE`, default
-`/dev/ttyAMA0`) into the container as `/dev/serial0`. Without the
-display fitted the node simply keeps retrying in the background.
+The robot compose maps both device nodes into the container and
+forwards the Pi's `spi` / `gpio` group GIDs (`SPI_GID` / `GPIO_GID` in
+`.env`) so the node can open them. Wiring (SPI0 + control pins) and
+the render rate are configured in `hexa_display`'s `config/display.yaml`.
+
+Without the display fitted, set `enabled: false` in
+`hexa_display/config/display.yaml` (the bringup gate skips the face
+node); otherwise `hexa_display` aborts at startup when it cannot open
+the panel.
 
 ## 3. Note hardware IDs
 

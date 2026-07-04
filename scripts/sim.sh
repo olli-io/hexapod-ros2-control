@@ -48,6 +48,9 @@ Commands:
   logs [-f]             Show / stream the stack's logs.
   build [args...]       colcon build in an ephemeral container (no stack needed).
   shell                 Interactive ROS2-sourced shell (exec if up, else run --rm).
+  face                  Terminal eye emulator: attach a live mirror of the face to
+                        the running sim (the OLED is headless in sim). 'q' to detach;
+                        closing it leaves the stack running.
   status                compose ps, plus 'ros2 node list' when the stack is up.
   <cmd...>              Run a one-off command in the container, e.g. 'ros2 topic list'.
 EOF
@@ -161,6 +164,17 @@ cmd_shell() {
     fi
 }
 
+# Terminal eye emulator. Execs the face_sim mirror into the running stack over a
+# TTY, so it renders full-screen and 'q'/Ctrl-C closes only this sibling process
+# — PID 1 (the sim launch) is untouched. use_sim_time so the policy clock tracks
+# Gazebo; the policy params default to display.yaml's shipped values.
+cmd_face() {
+    sim_running || die "face: sim stack isn't running — use 'hexa sim up' first."
+    # shellcheck disable=SC2046
+    docker exec $(tty_flags) "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
+        ros2 run hexa_display face_sim --ros-args -p use_sim_time:=true
+}
+
 cmd_status() {
     compose ps
     local cname=""
@@ -201,6 +215,7 @@ case "${sub}" in
     logs)       cmd_logs "$@" ;;
     build)      cmd_build "$@" ;;
     status)     cmd_status ;;
+    face)       cmd_face ;;
     shell|"")   cmd_shell ;;
     -h|--help)  usage ;;
     *)          cmd_passthrough "${sub}" "$@" ;;

@@ -11,7 +11,7 @@ usage() {
 Usage: ./hexa <command> [args...]
 
 Commands:
-  sim <up|down|refresh|restart|logs|build|shell|status|cmd...>
+  sim <up|down|refresh|restart|logs|build|shell|face|status|cmd...>
                               Sim-container lifecycle via docker compose. The sim stack
                               runs as the container's PID 1, so:
                                 up [--clean] [--pico] bring it up detached (--pico runs the
@@ -22,6 +22,8 @@ Commands:
                                 logs [-f]             show / stream logs
                                 build [args...]       colcon build (ephemeral container)
                                 shell                 interactive ROS2-sourced shell
+                                face                  attach the terminal eye emulator
+                                                      (live mirror of the face; 'q' to detach)
                                 status                compose ps (+ node list when up)
                                 <cmd...>              one-off command, e.g. 'ros2 topic list'
                               The node implementation (C++ ports by default) is chosen by

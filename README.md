@@ -8,12 +8,11 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 
 Part of a multi-repo stack:
 - [olli-io/hexapod-servo2040-driver](https://github.com/olli-io/hexapod-servo2040-driver) — Pimoroni Servo 2040 firmware.
-- [olli-io/hexapod-esp32-display](https://github.com/olli-io/hexapod-esp32-display) — ESP32 OLED face firmware.
 
 ## Hardware target
 
 - Raspberry Pi 4 or 5 (Pi OS Lite), driving servos over a Pimoroni Servo 2040 via USB serial. Tested on a 4 GB Pi 4.
-- (Optional) Seeed XIAO ESP32-C3 driving a front display for eye animations.
+- (Optional) 256×64 SH1122 OLED on the Pi's SPI bus for eye animations, driven directly by `hexa_display`.
 
 ## Quickstart (Gazebo)
 
@@ -41,7 +40,7 @@ All host commands go through the `hexa` dispatcher in the repo root. The sim and
 robot stacks each run as their container's PID 1, managed by `docker compose`, so
 they share the same `up` / `down` lifecycle.
 
-- `./hexa sim <up|down|logs|build|shell|status|cmd...>` — sim-container lifecycle. `up [--clean]` brings the stack up detached; `up --pico` runs the firmware-in-sim brain (the Pi Pico firmware walks the Gazebo hexapod) instead, mutually exclusive with the plain sim stack; `build` runs a colcon build in an ephemeral container; `shell` opens a ROS 2-sourced shell; any other command (e.g. `ros2 topic list`) runs one-off.
+- `./hexa sim <up|down|logs|build|shell|face|status|cmd...>` — sim-container lifecycle. `up [--clean]` brings the stack up detached; `up --pico` runs the firmware-in-sim brain (the Pi Pico firmware walks the Gazebo hexapod) instead, mutually exclusive with the plain sim stack; `build` runs a colcon build in an ephemeral container; `shell` opens a ROS 2-sourced shell; `face` attaches the terminal eye emulator (a live mirror of the face, headless in sim; `q` to detach); any other command (e.g. `ros2 topic list`) runs one-off.
 - `./hexa deploy <build|push <host>>` — cross-build and ship the production image to the robot.
 - `./hexa robot <up|down|restart|status|logs|shell>` — operate the robot container on the Pi (or `-H user@host` to target it remotely). `up` boots and energizes servos (teleop included); `down` is the safe-stop.
 - `./hexa kill` — stop and remove the sim + pico containers.
@@ -59,7 +58,7 @@ nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 - [`hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick mapping, deadband, posture↔gait toggle, and per-mode `cmd_vel` / posture limits.
 - [`hexa_webteleop/config/webteleop.yaml`](src/hexa_webteleop/config/webteleop.yaml) — web teleop server + shared teleop mapping.
 - [`hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring, pulse-width calibration, electrical clamps, ADC scales. Real-robot only.
-- [`hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face relay: enable switch, transport, UART device, gait-state → expression map, gaze / battery knobs.
+- [`hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face: enable switch, gait-state → expression map, gaze / battery knobs, and the SH1122 SPI/GPIO pins, render rate, headless switch.
 - [`hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) and [`hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — controller-manager rate and joint ordering, for sim and real-robot respectively.
 
 ## Design principles
@@ -82,7 +81,7 @@ Colcon workspace; all packages live under `src/`. Build type in parentheses.
 - `hexa_control` (ament_python) — velocity shaping + gait selection: maps `cmd_vel` to gait params.
 - `hexa_teleop` (ament_python) — joystick/keyboard → `cmd_vel` and `/body/pose`.
 - `hexa_webteleop` (ament_python) — HTTP + WebSocket server for phone/tablet control; arbitrates with the gamepad over `/teleop/owner`.
-- `hexa_display` (ament_python) — face relay to the ESP32 OLED over UART (stub in sim). Pure sink.
+- `hexa_display` (ament_cmake) — face: maps robot state through an expression/gaze policy and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim), in one process. Pure sink; nothing imports it. Owns all panel/SPI/GPIO code and the vendored eye core.
 - `hexa_simulation` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
 - `hexa_bringup` (ament_cmake) — top-level launch files: `robot.launch.py`, `sim.launch.py`.
 
@@ -94,5 +93,5 @@ Each arrow is "depends on" — the higher-level package imports the lower one (o
 - Body-pose side channel: `hexa_teleop` → `hexa_posture` → `hexa_kinematics` (composed in the IK node)
 - Web teleop: `hexa_webteleop` → `hexa_teleop` (shared mapping) → `cmd_vel` / `/body/pose`
 - `hexa_bringup` → `hexa_control`, `hexa_posture`, `hexa_display` (composes both chains via launch)
-- Sink: `hexa_display` subscribes to gait/posture/hardware topics; nothing depends on it.
+- Face: `hexa_display` subscribes to gait/posture/hardware topics and rasterizes the eyes on the SH1122 OLED in one process. Nothing else depends on it.
 - Leaves: `hexa_description`, `hexa_interfaces`, `hexa_simulation`.

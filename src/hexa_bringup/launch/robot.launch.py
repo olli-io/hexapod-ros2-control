@@ -31,18 +31,13 @@ from launch_ros.substitutions import FindPackageShare
 HARDWARE_COMPONENT_NAME = "HexaSystem"
 
 
-def _display_params(transport: str) -> tuple[dict, bool]:
-    """hexa_display's display.yaml params (transport forced) and `enabled` flag.
-
-    Returned as a dict, not a file path: exact-name YAML entries would
-    outrank a transport override layered on top of the params file.
-    """
+def _display_params() -> tuple[dict, bool]:
+    """hexa_display's params and the `enabled` gate."""
     path = os.path.join(
         get_package_share_directory("hexa_display"), "config", "display.yaml"
     )
     with open(path) as f:
         params = yaml.safe_load(f)["display_node"]["ros__parameters"]
-    params["transport"] = transport
     return params, bool(params.pop("enabled", True))
 
 
@@ -172,7 +167,9 @@ def _bringup(context, *args, **kwargs):
         gait_node,
     ]
 
-    display_params, display_enabled = _display_params(transport="serial")
+    # Face: one node maps robot state to an expression/gaze policy and
+    # rasterizes the eyes on the SH1122 OLED (spidev + GPIO).
+    display_params, display_enabled = _display_params()
     if display_enabled:
         actions.append(Node(
             package="hexa_display",

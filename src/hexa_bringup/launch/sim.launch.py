@@ -18,18 +18,17 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-def _display_params(transport: str) -> tuple[dict, bool]:
-    """hexa_display's display.yaml params (transport forced) and `enabled` flag.
+def _display_params() -> tuple[dict, bool]:
+    """hexa_display's params and the `enabled` gate.
 
-    Returned as a dict, not a file path: exact-name YAML entries would
-    outrank a transport override layered on top of the params file.
+    Returned as a dict so callers can layer overrides (e.g. use_sim_time,
+    headless) without an exact-name YAML file outranking them.
     """
     path = os.path.join(
         get_package_share_directory("hexa_display"), "config", "display.yaml"
     )
     with open(path) as f:
         params = yaml.safe_load(f)["display_node"]["ros__parameters"]
-    params["transport"] = transport
     return params, bool(params.pop("enabled", True))
 
 
@@ -142,8 +141,12 @@ def generate_launch_description():
         gait_node,
     ]
 
-    display_params, display_enabled = _display_params(transport="stub")
+    # Face: one node maps robot state to an expression/gaze policy and
+    # rasterizes the eyes. No OLED in the sim container, so it runs headless
+    # (full pipeline, no SPI/GPIO).
+    display_params, display_enabled = _display_params()
     if display_enabled:
+        display_params["headless"] = True
         actions.append(Node(
             package="hexa_display",
             executable="display_node",
