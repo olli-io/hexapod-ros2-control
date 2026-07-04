@@ -62,14 +62,13 @@ std::map<std::string, kin::LegSpec> legSpecs(const std::string& dir) {
 }
 
 ReseatGeometry yamlGeometry(const std::string& dir) {
-  return reseat_geometry_from_yaml(dir + "/geometry.yaml",
-                                   dir + "/standing_pose.yaml");
+  return reseat_geometry_from_yaml(dir + "/geometry.yaml", kin::StandingPoseDeg{});
 }
 
 std::map<std::string, Vec3> yamlNominal(const std::string& dir) {
   const auto legs = legSpecs(dir);
   const auto angles =
-      kin::load_standing_pose(dir + "/standing_pose.yaml", dir + "/geometry.yaml");
+      kin::load_standing_pose(kin::StandingPoseDeg{}, dir + "/geometry.yaml");
   std::map<std::string, Vec3> out;
   for (const auto& n : LEG_NAMES) {
     out[n] = kin::leg_to_body(kin::forward_kinematics(angles, legs.at(n)),
@@ -168,11 +167,11 @@ TEST(ReseatNominalStance, DefaultGeometryFromPoseMatchesYamlHelper) {
   if (dir.empty()) GTEST_SKIP() << "hexa_description is not installed";
   const auto legs = legSpecs(dir);
   const auto angles =
-      kin::load_standing_pose(dir + "/standing_pose.yaml", dir + "/geometry.yaml");
+      kin::load_standing_pose(kin::StandingPoseDeg{}, dir + "/geometry.yaml");
   const ReseatGeometry direct =
       default_geometry_from_pose(angles, legs.at(LEG_NAMES[0]));
   const ReseatGeometry yaml_helper =
-      reseat_geometry_from_yaml(dir + "/geometry.yaml", dir + "/standing_pose.yaml");
+      reseat_geometry_from_yaml(dir + "/geometry.yaml", kin::StandingPoseDeg{});
   EXPECT_EQ(direct.coxa_len, yaml_helper.coxa_len);
   EXPECT_EQ(direct.femur_len, yaml_helper.femur_len);
   EXPECT_EQ(direct.tibia_len, yaml_helper.tibia_len);

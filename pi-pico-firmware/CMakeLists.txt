@@ -46,7 +46,6 @@ set(HEXA_REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
 set(HEXA_GEN_CONFIG ${CMAKE_CURRENT_LIST_DIR}/src/config_generated.hpp)
 set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/geometry.yaml
-    ${HEXA_REPO_ROOT}/src/hexa_description/config/standing_pose.yaml
     ${HEXA_REPO_ROOT}/src/hexa_description/config/tuning.yaml
     ${HEXA_REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
     ${HEXA_REPO_ROOT}/src/hexa_hardware/config/hardware.yaml

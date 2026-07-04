@@ -29,7 +29,7 @@ from hexa_gait.reseat import (
     reseat_nominal_stance,
 )
 from hexa_kinematics.body_transform import leg_to_body
-from hexa_kinematics.joint_config import load_standing_pose
+from hexa_kinematics.joint_config import StandingPoseDeg, load_standing_pose
 from hexa_kinematics.leg_geometry import LegSpec
 from hexa_kinematics.leg_ik import forward_kinematics
 from hexa_kinematics.leg_specs import load_leg_specs
@@ -50,13 +50,13 @@ def _leg_specs() -> dict[str, LegSpec]:
 
 def _yaml_geometry() -> ReseatGeometry:
     desc = Path(__file__).resolve().parents[2] / "hexa_description" / "config"
-    return reseat_geometry_from_yaml(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    return reseat_geometry_from_yaml(desc / "geometry.yaml", StandingPoseDeg())
 
 
 def _yaml_nominal() -> dict[str, tuple[float, float, float]]:
     desc = Path(__file__).resolve().parents[2] / "hexa_description" / "config"
     legs = _leg_specs()
-    angles = load_standing_pose(desc / "standing_pose.yaml", desc / "geometry.yaml")
+    angles = load_standing_pose(StandingPoseDeg(), desc / "geometry.yaml")
     return {n: leg_to_body(forward_kinematics(angles, legs[n]), legs[n]) for n in LEG_NAMES}
 
 
@@ -140,11 +140,9 @@ def test_default_geometry_from_pose_matches_yaml_helper():
     # function, or through the engine-level YAML helper — must agree.
     desc = Path(__file__).resolve().parents[2] / "hexa_description" / "config"
     legs = _leg_specs()
-    angles = load_standing_pose(desc / "standing_pose.yaml", desc / "geometry.yaml")
+    angles = load_standing_pose(StandingPoseDeg(), desc / "geometry.yaml")
     direct = default_geometry_from_pose(angles, legs[LEG_NAMES[0]])
-    yaml_helper = reseat_geometry_from_yaml(
-        desc / "geometry.yaml", desc / "standing_pose.yaml"
-    )
+    yaml_helper = reseat_geometry_from_yaml(desc / "geometry.yaml", StandingPoseDeg())
     assert direct.coxa_len == yaml_helper.coxa_len
     assert direct.femur_len == yaml_helper.femur_len
     assert direct.tibia_len == yaml_helper.tibia_len

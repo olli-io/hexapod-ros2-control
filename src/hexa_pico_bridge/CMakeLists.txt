@@ -36,7 +36,6 @@ set(GEN_CONFIG ${FW_SRC}/config_generated.hpp)
 find_program(PYTHON3 python3 REQUIRED)
 set(CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_description/config/geometry.yaml
-  ${REPO_ROOT}/src/hexa_description/config/standing_pose.yaml
   ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
   ${REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
   ${REPO_ROOT}/src/hexa_hardware/config/hardware.yaml

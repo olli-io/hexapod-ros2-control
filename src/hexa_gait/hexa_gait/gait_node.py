@@ -2,11 +2,11 @@
 
 Subscribes to ``/gait/params`` (last-write-wins, no queue replay) and
 publishes ``/legs/targets`` at 200 Hz. Builds an ``Engine`` + ``Tripod``
-at init using the YAML in ``hexa_description`` (single source of truth
-for body geometry and standing pose) and its own ROS parameters
-(engine-internal knobs), whose defaults mirror hexa_description's
-``config/tuning.yaml`` (the ``gait_node`` block) — the launch files pass
-that file as the parameter source.
+at init using ``geometry.yaml`` in ``hexa_description`` (single source of
+truth for body geometry) and its own ROS parameters (engine-internal
+knobs plus the ``standing_pose`` angles), whose defaults mirror
+hexa_description's ``config/tuning.yaml`` (the ``gait_node`` block) — the
+launch files pass that file as the parameter source.
 
 The node is intentionally thin: all gait logic lives in the pure-python
 ``Engine``. Tests live alongside the engine modules; this file owns
@@ -23,6 +23,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from hexa_interfaces.msg import GaitParams, LegState, LegTargets
+from hexa_kinematics.joint_config import StandingPoseDeg
 from hexa_kinematics.leg_specs import load_leg_specs
 from rclpy.node import Node
 from std_msgs.msg import Empty, String
@@ -107,6 +108,28 @@ def _read_engine_config(node: Node) -> tuple[EngineConfig, str]:
     return cfg, default_gait
 
 
+def _read_standing_pose(node: Node) -> StandingPoseDeg:
+    """Declare and read ``gait_node``'s ``standing_pose`` ros params.
+
+    Defaults mirror hexa_description's ``config/tuning.yaml`` (the
+    ``gait_node`` ``standing_pose`` block). Angles are in intuitive
+    per-joint degrees; :func:`load_standing_pose` converts and validates
+    them against ``geometry.yaml``.
+    """
+    node.declare_parameter("standing_pose.coxa_deg", 0.0)
+    node.declare_parameter("standing_pose.femur_above_horizontal_deg", 35.0)
+    node.declare_parameter("standing_pose.tibia_interior_deg", 68.0)
+    return StandingPoseDeg(
+        coxa_deg=float(node.get_parameter("standing_pose.coxa_deg").value),
+        femur_above_horizontal_deg=float(
+            node.get_parameter("standing_pose.femur_above_horizontal_deg").value
+        ),
+        tibia_interior_deg=float(
+            node.get_parameter("standing_pose.tibia_interior_deg").value
+        ),
+    )
+
+
 def _load_coxa_to_bottom(geometry_path: Path) -> float:
     with geometry_path.open() as f:
         raw = yaml.safe_load(f)
@@ -120,17 +143,14 @@ class GaitNode(Node):
         desc_share = Path(get_package_share_directory("hexa_description")) / "config"
 
         self._cfg, default_gait = _read_engine_config(self)
-        nominal = nominal_stance_from_yaml(
-            desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
-        )
+        standing = _read_standing_pose(self)
+        nominal = nominal_stance_from_yaml(desc_share / "geometry.yaml", standing)
         initial = initial_stance_from_yaml(desc_share / "geometry.yaml")
         coxa_to_bottom = _load_coxa_to_bottom(desc_share / "geometry.yaml")
-        leg_contexts = build_leg_contexts(
-            desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
-        )
+        leg_contexts = build_leg_contexts(desc_share / "geometry.yaml", standing)
         leg_specs = load_leg_specs(desc_share / "geometry.yaml")
         reseat_geometry = reseat_geometry_from_yaml(
-            desc_share / "geometry.yaml", desc_share / "standing_pose.yaml"
+            desc_share / "geometry.yaml", standing
         )
         self._engine = Engine(
             config=self._cfg,

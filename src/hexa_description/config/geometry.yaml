@@ -1,35 +1,27 @@
-# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
-# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
-# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
-# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.
-
-# Hexapod geometry — body, leg, and foot dimensions, per-leg mounts,
-# per-joint-type servo limits, and startup pose. See
-# src/hexa_description/README.md for how the URDF consumes these.
+# -- DISCLAIMER -- Bad geometry can physically damage your hexapod. Only
+# change these values if you know they are sensible.
 #
-# Units: metres (lengths), degrees (angles), kilograms (mass), Nm
-# (effort), rad/s (velocity). Angles are in each joint's own intuitive
-# sense; deg→rad happens at load time.
-# Coordinate frame: REP-103 — +x forward, +y left, +z up.
+# Units: metres (length), degrees (angle), kilograms (mass), Nm (effort),
+# rad/s (velocity). Angles use each joint's own intuitive sense; deg→rad
+# conversion happens at load time.
+# Frame: REP-103 — +x forward, +y left, +z up.
 
 body:
-  # Vertical extent is split around the coxa joint plane (= base_link
-  # origin, z=0), letting the stack-up be asymmetric (battery and
-  # electronics above the coxa plane, nothing much below).
-  coxa_to_bottom: 0.03 # +z half from coxa plane down to body bottom
-  coxa_to_top: 0.02 # +z half from coxa plane up to body top
-  mass: 1.0
+  # z=0 is the coxa rotation-axis plane; all coxas sit at this level.
+  coxa_to_bottom: 0.03 # coxa plane down to body bottom (+z half-height)
+  coxa_to_top: 0.02 # coxa plane up to body top (+z half-height)
+  mass: 1.0 # sim only
 
 leg:
-  # Segment lengths (m) along the leg, hip outward to foot tip.
+  # Segment lengths (m), hip outward to foot tip.
   coxa_length: 0.042
   femur_length: 0.08
   tibia_length: 0.134
-  # Per-segment visual + collision radius (m) of the cylindrical segments.
+  # Visual radii (m) — sim only.
   coxa_radius: 0.02
   femur_radius: 0.015
   tibia_radius: 0.01
-  # Per-segment masses (kg) (dominated by the servo at the proximal end).
+  # Segment masses (kg) — sim only.
   coxa_mass: 0.05
   femur_mass: 0.08
   tibia_mass: 0.06
@@ -38,67 +30,49 @@ foot:
   radius: 0.01 # ground-contact sphere radius (m)
   mass: 0.01 # foot tip mass (kg)
 
-# Reference mounts for the left-front and left-middle legs. (x, y) is
-# the hip position in metres from body centre; yaw_deg is the direction
-# the leg points outward, counter-clockwise from forward (+x). The
-# other four legs are derived by symmetry in the URDF; never add
-# l_rear / r_* entries — they'd be ignored.
 mounts:
-  l_front: {x: 0.083, y: 0.0575, yaw_deg: 30}
-  l_middle: {x: 0.00, y: 0.082, yaw_deg: 90}
+  # Hip mounts for the left-front and left-middle legs; symmetry fills in the rest.
+  #   x, y   — hip position (m) from body centre.
+  #   yaw_deg — leg direction, counter-clockwise from forward.
+  l_front: { x: 0.083, y: 0.0575, yaw_deg: 30 }
+  l_middle: { x: 0.00, y: 0.082, yaw_deg: 90 }
 
-# Per-joint-type servo configuration. All 18 joints (6 legs x
-# {coxa, femur, tibia}) share the configuration of their type.
-#
-# Per-joint intuitive convention:
-#   coxa.deg                   — rotation about coxa-mount +z; 0 puts the
-#                                leg radial.
-#   femur.above_horizontal_deg — degrees the femur is lifted above
-#                                horizontal; positive raises the knee.
-#   tibia.interior_deg         — interior angle at the knee between
-#                                femur and tibia; 180 = fully extended.
-#
-# lower_limit_deg / upper_limit_deg are absolute angles in the same
-# intuitive units (not signed offsets from center), letting asymmetric
-# builds bias travel toward one direction.
 joints:
+  # Each joint's value is measured in its own intuitive sense:
+  #   coxa.deg                    — fore/aft sweep about the coxa +z axis; 0 = centered.
+  #   femur.above_horizontal_deg  — femur lift above horizontal; positive raises the knee.
+  #   tibia.interior_deg          — knee angle between femur and tibia; 179 = fully extended.
+  # lower/upper_limit_deg are absolute bounds in that same sense.
+  # ( ds3235sg servo: 35 kg·cm @ 6.8V × 0.9 ) converted to Nm
+  # ( ds3235sg: 0.13 s/60° @ 6.8V × 0.9 ) converted to rad/s
+  # effort (Nm) and velocity (rad/s) are sim only.
   coxa:
-    deg: 0 # 0° — coxa centered (no fore/aft sweep)
-    lower_limit_deg: -90 # absolute lower bound in coxa.deg
-    upper_limit_deg: 90 # absolute upper bound in coxa.deg
-    effort: 3.09 # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
-    velocity: 7.25 # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
-
+    deg: 0
+    lower_limit_deg: -90
+    upper_limit_deg: 90
+    effort: 3.09
+    velocity: 7.25
   femur:
-    above_horizontal_deg: 35 # 35° — femur tilted above horizontal at servo zero
-    lower_limit_deg: -55 # absolute lower bound in above_horizontal_deg
-    upper_limit_deg: 125 # absolute upper bound in above_horizontal_deg
-    effort: 3.09 # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
-    velocity: 7.25 # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
-
+    above_horizontal_deg: 35
+    lower_limit_deg: -55
+    upper_limit_deg: 125
+    effort: 3.09
+    velocity: 7.25
   tibia:
-    interior_deg: 68 # 68° — interior femur-tibia knee angle at servo zero
-    lower_limit_deg: -22 # absolute lower bound in interior_deg
-    upper_limit_deg: 158 # absolute upper bound in interior_deg
-    effort: 3.09 # DS3235SG: 35 kg·cm @ 6.8V × 0.9 derate
-    velocity: 7.25 # DS3235SG: 0.13 s/60° @ 6.8V × 0.9 derate
+    interior_deg: 68
+    lower_limit_deg: -22
+    upper_limit_deg: 158
+    effort: 3.09
+    velocity: 7.25
 
-# Joint angles assumed at startup, before any commanded motion. In
-# sim the model spawns in this pose; on the real robot the operator
-# is responsible for placing the hexapod in roughly this pose at
-# power-on. Same intuitive-degrees convention as `joints:`. Femur and
-# tibia apply uniformly to all six legs; coxa is per-leg-type and the
-# URDF derives the other four by left/right and front/rear symmetry.
 initial_pose:
+  # Joint angles held at startup, before any commanded motion.
+  # WARNING: this controller assumes no-feedback servos — they jump to these
+  # positions instantly on power-up.
   coxa:
-    l_front_deg: 60 # 30° mount yaw + 60° coxa → leg points at body-yaw 90°
-    l_middle_deg: 0 # 90° mount yaw + 0° coxa → leg points straight outward
+    l_front_deg: 60 # 30° mount + 60° coxa → leg points at body-yaw 90°
+    l_middle_deg: 0 # 90° mount + 0° coxa → leg points straight outward
   femur:
-    above_horizontal_deg: 100 # femur tucked steeply above horizontal
+    above_horizontal_deg: 100 # femur tucked steeply up
   tibia:
     interior_deg: 40 # knee folded tight
-
-# -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE DEFAULT SETTING ARE
-# NOT SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH
-# YOUR ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE
-# CONFIGURATION. IT WILL RUN AND DESTROY IF THE VALUES ARE NOT SENSIBLE.

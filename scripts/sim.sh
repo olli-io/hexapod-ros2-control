@@ -6,7 +6,7 @@
 # one-off commands run in ephemeral `compose run --rm` containers — there is no
 # long-lived idle shell to attach to.
 #
-#   ./scripts/sim.sh up [--cpp] [--clean]  -> bring the sim stack up detached
+#   ./scripts/sim.sh up [--clean]          -> bring the sim stack up detached
 #   ./scripts/sim.sh logs [-f]             -> show / stream its logs
 #   ./scripts/sim.sh down                  -> stop and remove it
 #   ./scripts/sim.sh build [args...]       -> colcon build in an ephemeral container
@@ -21,6 +21,7 @@ cd "${REPO_ROOT}"
 SERVICE="sim"
 CONTAINER_NAME="hexa-sim"
 PICO_SERVICE="pico"
+PICO_CONTAINER_NAME="hexa-pico"
 
 die() { echo "hexa sim: $*" >&2; exit 1; }
 
@@ -29,8 +30,13 @@ usage() {
 Usage: ./hexa sim <command> [args...]
 
 Commands:
-  up [--cpp] [--clean]  Bring the sim stack up detached (compose up -d). --cpp
-                        runs the C++ ports (HEXA_CPP=1); --clean rebuilds the image.
+  up [--clean] [--pico] Bring the sim stack up detached (compose up -d). The
+                        node implementation (C++ ports by default) is chosen by
+                        the hexa_launch block of ros2_controllers.yaml, not a
+                        flag; --clean rebuilds the image. --pico instead brings
+                        up the firmware-in-sim brain (the Pi Pico firmware walks
+                        the Gazebo hexapod); it builds hexa_pico_bridge first and
+                        is mutually exclusive with the plain sim stack.
   down                  Stop and remove the sim container (compose down).
   refresh [args...]     Rebuild the workspace, then restart the running stack so it
                         picks up the changes. args pass through to colcon build
@@ -57,8 +63,7 @@ input_gid() {
 
 # `docker compose` with UID/GID/INPUT_GID pinned. `UID` is a readonly bash
 # builtin, so it can't be exported — pass all three inline as env vars, which
-# docker compose reads for the interpolations in docker-compose.sim.yaml. Any
-# HEXA_CPP already exported by the caller rides along.
+# docker compose reads for the interpolations in docker-compose.sim.yaml.
 compose() {
     env UID="$(id -u)" GID="$(id -g)" INPUT_GID="$(input_gid)" \
         docker compose -f docker-compose.sim.yaml "$@"
@@ -78,17 +83,20 @@ compose_run() {
     compose run "${flags[@]}" "${SERVICE}" "$@"
 }
 
-sim_running() {
-    [[ "$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)" == "running" ]]
+container_running() {
+    [[ "$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || true)" == "running" ]]
 }
 
+sim_running()  { container_running "${CONTAINER_NAME}"; }
+pico_running() { container_running "${PICO_CONTAINER_NAME}"; }
+
 cmd_up() {
-    local build_flags=()
+    local build_flags=() service="${SERVICE}" pico=""
     for a in "$@"; do
         case "$a" in
             --clean) build_flags=(--build) ;;
-            --cpp)   export HEXA_CPP=1 ;;
-            *)       die "up: unknown flag '$a' (expected --cpp / --clean)" ;;
+            --pico)  pico=1; service="${PICO_SERVICE}" ;;
+            *)       die "up: unknown flag '$a' (expected --clean or --pico)" ;;
         esac
     done
     # The image carries no built workspace (install/ is bind-mounted from the
@@ -98,13 +106,25 @@ cmd_up() {
         echo "hexa sim: no install/ yet — running an initial build..."
         cmd_build
     fi
-    compose up -d "${build_flags[@]}" "${SERVICE}"
-    echo "hexa sim: up (detached). Stream logs with 'hexa sim logs -f', stop with 'hexa sim down'."
+    # --pico brings up the firmware-in-sim brain instead of the ROS2 node chain
+    # (both drive the same Gazebo world, so they're mutually exclusive). Build
+    # hexa_pico_bridge first so the launch can find it.
+    if [ -n "${pico}" ]; then
+        echo "hexa sim: building hexa_pico_bridge..."
+        compose_run colcon build --symlink-install --packages-select hexa_pico_bridge
+    fi
+    compose up -d "${build_flags[@]}" "${service}"
+    echo "hexa sim: up (detached, ${service}). Stream logs with 'hexa sim logs -f', stop with 'hexa sim down'."
 }
 
 cmd_down() { compose down; }
 
-cmd_logs() { compose logs "$@" "${SERVICE}"; }
+# Stream logs for whichever service is up (the pico brain if running, else sim).
+cmd_logs() {
+    local service="${SERVICE}"
+    pico_running && service="${PICO_SERVICE}"
+    compose logs "$@" "${service}"
+}
 
 cmd_build() { compose_run colcon build --symlink-install "$@"; }
 
@@ -143,39 +163,15 @@ cmd_shell() {
 
 cmd_status() {
     compose ps
-    if sim_running; then
+    local cname=""
+    sim_running  && cname="${CONTAINER_NAME}"
+    pico_running && cname="${PICO_CONTAINER_NAME}"
+    if [ -n "${cname}" ]; then
         echo
         echo "Nodes:"
-        docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
+        docker exec "${cname}" /usr/local/bin/entrypoint.sh \
             ros2 node list 2>/dev/null || echo "  (ROS graph not responding yet)"
     fi
-}
-
-# `hexa pico <sub>`: the firmware-in-sim service (Gazebo + joy + firmware bridge).
-# Shares the sim image and this file's compose() helper.
-cmd_pico() {
-    local psub="${1:-up}"
-    [ $# -gt 0 ] && shift || true
-    case "${psub}" in
-        up)
-            local build_flags=()
-            for a in "$@"; do
-                case "$a" in
-                    --clean) build_flags=(--build) ;;
-                    *)       die "pico up: unknown flag '$a' (expected --clean)" ;;
-                esac
-            done
-            echo "hexa pico: building hexa_pico_bridge..."
-            compose_run colcon build --symlink-install --packages-select hexa_pico_bridge
-            compose up -d "${build_flags[@]}" "${PICO_SERVICE}"
-            echo "hexa pico: up (detached). Stream logs with 'hexa pico logs -f', stop with 'hexa pico down'."
-            ;;
-        down)       compose down ;;
-        logs)       compose logs "$@" "${PICO_SERVICE}" ;;
-        status)     compose ps ;;
-        -h|--help)  echo "Usage: ./hexa pico <up [--clean] | down | logs [-f] | status>" ;;
-        *)          die "pico: unknown command '${psub}' (expected up / down / logs / status)" ;;
-    esac
 }
 
 # One-off command: exec into the running stack if up, else an ephemeral run.
@@ -183,6 +179,9 @@ cmd_passthrough() {
     if sim_running; then
         # shellcheck disable=SC2046
         docker exec $(tty_flags) "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh "$@"
+    elif pico_running; then
+        # shellcheck disable=SC2046
+        docker exec $(tty_flags) "${PICO_CONTAINER_NAME}" /usr/local/bin/entrypoint.sh "$@"
     else
         compose_run "$@"
     fi
@@ -201,7 +200,6 @@ case "${sub}" in
     restart)    cmd_restart "$@" ;;
     logs)       cmd_logs "$@" ;;
     build)      cmd_build "$@" ;;
-    pico)       cmd_pico "$@" ;;
     status)     cmd_status ;;
     shell|"")   cmd_shell ;;
     -h|--help)  usage ;;

@@ -49,10 +49,10 @@ class GaitNode : public rclcpp::Node {
         ament_index_cpp::get_package_share_directory("hexa_description") +
         "/config";
     const std::string geometry = desc_share + "/geometry.yaml";
-    const std::string standing = desc_share + "/standing_pose.yaml";
 
     std::string default_gait;
     cfg_ = read_engine_config(default_gait);
+    const hexa_gait::kin::StandingPoseDeg standing = read_standing_pose();
 
     auto nominal = hexa_gait::nominal_stance_from_yaml(geometry, standing);
     auto initial = hexa_gait::initial_stance_from_yaml(geometry);
@@ -150,6 +150,20 @@ class GaitNode : public rclcpp::Node {
                                " not in STRATEGIES");
     }
     return cfg;
+  }
+
+  // Declare and read the standing_pose ros params. Defaults mirror
+  // hexa_description's config/tuning.yaml (the gait_node standing_pose block).
+  // Angles are in intuitive per-joint degrees; load_standing_pose converts and
+  // validates them against geometry.yaml.
+  hexa_gait::kin::StandingPoseDeg read_standing_pose() {
+    hexa_gait::kin::StandingPoseDeg pose;
+    pose.coxa_deg = declare_parameter<double>("standing_pose.coxa_deg", 0.0);
+    pose.femur_above_horizontal_deg =
+        declare_parameter<double>("standing_pose.femur_above_horizontal_deg", 35.0);
+    pose.tibia_interior_deg =
+        declare_parameter<double>("standing_pose.tibia_interior_deg", 68.0);
+    return pose;
   }
 
   void on_init(const std_msgs::msg::Empty&) {

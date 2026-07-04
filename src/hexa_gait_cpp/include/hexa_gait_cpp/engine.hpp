@@ -201,19 +201,21 @@ class Engine {
   double reseat_target_height_ = 0.0;
 };
 
-// ── YAML builders (backed by the hexa_kinematics_cpp library via kin::) ──
+// ── Geometry builders (backed by the hexa_kinematics_cpp library via kin::) ──
+// Segment geometry comes from geometry.yaml; the standing pose arrives as a
+// kin::StandingPoseDeg (the gait node's ros params), not a file.
 
 std::map<std::string, Vec3> nominal_stance_from_yaml(
-    const std::string& geometry_yaml, const std::string& standing_pose_yaml);
+    const std::string& geometry_yaml, const kin::StandingPoseDeg& standing);
 
 ReseatGeometry reseat_geometry_from_yaml(const std::string& geometry_yaml,
-                                         const std::string& standing_pose_yaml);
+                                         const kin::StandingPoseDeg& standing);
 
 std::map<std::string, Vec3> initial_stance_from_yaml(
     const std::string& geometry_yaml);
 
 std::map<std::string, LegContext> build_leg_contexts(
-    const std::string& geometry_yaml, const std::string& standing_pose_yaml);
+    const std::string& geometry_yaml, const kin::StandingPoseDeg& standing);
 
 // Wire string for /gait/state (folded, initialize, stand, ...). Mirrors the
 // Python EngineState enum's .value.

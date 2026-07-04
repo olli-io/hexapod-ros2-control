@@ -23,6 +23,7 @@ from hexa_gait.engine import (
     reseat_geometry_from_yaml,
 )
 from hexa_gait.gaits.tripod import Tripod
+from hexa_kinematics.joint_config import StandingPoseDeg
 from hexa_kinematics.leg_specs import load_leg_specs
 
 
@@ -64,11 +65,11 @@ def _config() -> EngineConfig:
 def _engine() -> Engine:
     desc = _desc()
     legs = load_leg_specs(desc / "geometry.yaml")
-    nominal = nominal_stance_from_yaml(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    nominal = nominal_stance_from_yaml(desc / "geometry.yaml", StandingPoseDeg())
     initial = initial_stance_from_yaml(desc / "geometry.yaml")
-    leg_contexts = build_leg_contexts(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    leg_contexts = build_leg_contexts(desc / "geometry.yaml", StandingPoseDeg())
     reseat_geometry = reseat_geometry_from_yaml(
-        desc / "geometry.yaml", desc / "standing_pose.yaml"
+        desc / "geometry.yaml", StandingPoseDeg()
     )
     # coxa_to_bottom — pluck directly from YAML to avoid duplicating the
     # _load_coxa_to_bottom helper.
@@ -331,9 +332,9 @@ def test_gait_change_during_height_reseat_commits_at_handoff():
 
 def test_engine_rejects_partial_reseat_kwargs():
     desc = _desc()
-    nominal = nominal_stance_from_yaml(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    nominal = nominal_stance_from_yaml(desc / "geometry.yaml", StandingPoseDeg())
     initial = initial_stance_from_yaml(desc / "geometry.yaml")
-    leg_contexts = build_leg_contexts(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    leg_contexts = build_leg_contexts(desc / "geometry.yaml", StandingPoseDeg())
     # leg_specs without reseat_geometry must raise.
     with pytest.raises(ValueError, match="must be supplied together"):
         Engine(
@@ -353,9 +354,9 @@ def test_engine_initializes_with_no_reseat_kwargs():
     # the RESEATING behaviour. This keeps the synthetic test_engine.py
     # / test_initialize.py / test_fold.py setups working.
     desc = _desc()
-    nominal = nominal_stance_from_yaml(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    nominal = nominal_stance_from_yaml(desc / "geometry.yaml", StandingPoseDeg())
     initial = initial_stance_from_yaml(desc / "geometry.yaml")
-    leg_contexts = build_leg_contexts(desc / "geometry.yaml", desc / "standing_pose.yaml")
+    leg_contexts = build_leg_contexts(desc / "geometry.yaml", StandingPoseDeg())
     engine = Engine(
         config=_config(),
         strategy=Tripod(),

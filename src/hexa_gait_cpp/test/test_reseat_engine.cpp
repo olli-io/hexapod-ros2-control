@@ -78,7 +78,7 @@ EngineConfig make_config() {
 // a yaml-cpp read here.
 Engine make_engine(const std::string& dir) {
   const std::string geo = dir + "/geometry.yaml";
-  const std::string sp = dir + "/standing_pose.yaml";
+  const kin::StandingPoseDeg sp{};
   auto legs = kin::load_leg_specs(geo);
   auto nominal = nominal_stance_from_yaml(geo, sp);
   auto initial = initial_stance_from_yaml(geo);
@@ -387,7 +387,7 @@ TEST(ReseatEngineCtor, RejectsPartialReseatKwargs) {
   const std::string dir = descriptionConfigDir();
   if (dir.empty()) GTEST_SKIP() << "hexa_description is not installed";
   const std::string geo = dir + "/geometry.yaml";
-  const std::string sp = dir + "/standing_pose.yaml";
+  const kin::StandingPoseDeg sp{};
   auto nominal = nominal_stance_from_yaml(geo, sp);
   auto initial = initial_stance_from_yaml(geo);
   auto leg_contexts = build_leg_contexts(geo, sp);
@@ -406,7 +406,7 @@ TEST(ReseatEngineCtor, InitializesWithNoReseatKwargs) {
   const std::string dir = descriptionConfigDir();
   if (dir.empty()) GTEST_SKIP() << "hexa_description is not installed";
   const std::string geo = dir + "/geometry.yaml";
-  const std::string sp = dir + "/standing_pose.yaml";
+  const kin::StandingPoseDeg sp{};
   auto nominal = nominal_stance_from_yaml(geo, sp);
   auto initial = initial_stance_from_yaml(geo);
   auto leg_contexts = build_leg_contexts(geo, sp);

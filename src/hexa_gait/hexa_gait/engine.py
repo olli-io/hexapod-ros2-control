@@ -1,70 +1,44 @@
-"""Gait engine — orchestrates clock, strategy, and the engagement /
-pause controllers.
+"""Gait engine — the only stateful component in the gait chain.
 
-The engine is the only stateful component in the gait chain. Strategies
-stay pure; the engagement and pause controllers each own a per-cycle
-slice of state. The engine itself routes between modes based on the
-commanded body velocity:
+Strategies stay pure; the engagement/pause/reseat controllers each own
+a per-cycle slice of state. The engine routes between modes on commanded
+body velocity:
 
-- **STAND**     — ``cmd_vel`` is zero (and no gait state to preserve).
-  Emit the nominal stance.
-- **ENGAGING**  — ``cmd_vel`` just went non-zero from STAND. Run the
-  ``EngagementController`` (engage mode) through one full master cycle.
-  Body velocity ramps from 0 to ``v_body`` along a smoothstep S-curve
-  over the earliest first-touchdown horizon, then holds at ``v_body``.
-  Each leg performs exactly one "from NOMINAL" swing during this cycle;
-  legs that have already completed their first swing follow the strategy
-  directly, so the engagement → GAIT handoff is continuous. Hands off
-  to GAIT at master = 1.0 (≡ 0.0 in the modular clock).
-- **GAIT**      — ``cmd_vel`` is non-zero. Advance the phase clock and
-  evaluate the active strategy.
-- **PAUSING**   — ``cmd_vel`` went zero (debounced from GAIT, immediate
-  from ENGAGING). The ``PauseController`` lowers the currently-airborne
-  legs straight down to ``nominal.z`` (XY frozen); stance legs hold.
-  Master phase / per-leg phase / β are preserved so the operator can
-  re-engage without resetting the cycle.
-- **PAUSED**    — every previously-airborne leg has landed. The engine
-  holds positions and ticks ``_paused_elapsed``. On cmd_vel non-zero it
-  routes to RESUMING; on ``_paused_elapsed >= pause_to_reseat_delay``
-  it kicks off the RESEATING ladder back to the nominal footprint.
-- **RESUMING**  — ``cmd_vel`` non-zero from PAUSING / PAUSED. Run the
-  ``EngagementController`` (resume mode) seeded from the paused master
-  phase and last_targets. Previously-airborne legs sweep custom merge
-  arcs from their lowered Z back up to the live AEP; previously-stance
-  legs integrate stance then swing through one swing window. Hands off
-  to GAIT once every leg has crossed into its strategy-driven branch.
+- **STAND**     — cmd zero, nothing to preserve. Emit nominal stance.
+- **ENGAGING**  — cmd just went non-zero from STAND. EngagementController
+  (engage mode) runs one full master cycle: v_body ramps 0→target on a
+  smoothstep over the earliest-touchdown horizon, each leg takes one
+  "from NOMINAL" swing, then hands off to GAIT at master=1.0 (≡0.0) with
+  every leg already on its strategy curve — a continuous handoff.
+- **GAIT**      — cmd non-zero. Advance the clock, evaluate the strategy.
+- **PAUSING**   — cmd went zero (debounced from GAIT, immediate from
+  ENGAGING). PauseController lowers airborne legs straight down to
+  nominal.z (XY frozen); stance legs hold. Master/per-leg phase/β kept
+  so re-engage doesn't reset the cycle.
+- **PAUSED**    — all airborne legs landed. Hold, tick _paused_elapsed;
+  cmd non-zero → RESUMING, else after pause_to_reseat_delay → RESEATING.
+- **RESUMING**  — cmd non-zero from PAUSING/PAUSED. EngagementController
+  (resume mode) seeded from paused phase + last_targets: previously
+  airborne legs merge-arc from lowered Z up to live AEP, previously
+  stance legs integrate then swing once. Hands off once every leg is on
+  its strategy branch.
 
-GAIT → PAUSING is debounced by ``pause_debounce_delay`` so brief
-joystick zero crossings don't trip a pause; ENGAGING → PAUSING is *not*
-debounced (see ``update``). PAUSING ↔ RESUMING are mutually
-interruptible — cmd_vel can flip on/off mid-transition without
-locking the engine.
+GAIT→PAUSING is debounced (pause_debounce_delay) against brief joystick
+zero-crossings; ENGAGING→PAUSING is not (see ``update``). PAUSING↔RESUMING
+are mutually interruptible.
 
-A gait change while walking (``set_strategy`` in GAIT, or mid
-PAUSING / PAUSED / RESEATING) latches a pending strategy name and
-runs PAUSING → PAUSED (short ``gait_change_pause_to_reseat_delay``
-dwell) → RESEATING immediately, suppressing the resume exits so a
-held stick cannot abort the sequence. The pending name commits at
-the RESEATING → STAND handoff; with cmd_vel still non-zero the next
-STAND tick re-engages in the new gait. Mid-sequence requests
-overwrite the pending name (cycling back to the original gait still
-completes the sequence); during ENGAGING and RESUMING the gait is
-locked — requests are dropped, not queued.
+A gait change while walking (``set_strategy`` in GAIT / PAUSING / PAUSED /
+RESEATING) latches a pending name and forces PAUSING → PAUSED (short
+gait_change_pause_to_reseat_delay dwell) → RESEATING, suppressing the
+resume exits so a held stick can't abort it. The name commits at the
+RESEATING→STAND handoff (re-engaging in the new gait if cmd is still
+non-zero). Mid-sequence requests overwrite the pending name; ENGAGING
+and RESUMING drop requests (gait locked).
 
-``cycle_time`` is not configured directly. The engine derives it each
-GAIT tick from the commanded velocity, ``stride_length``, and the
-active strategy's ``duty_factor`` (β): faster commands ⇒ shorter cycles
-at constant stride. Both bounds come from swing-phase knobs that scale
-with β so the swing-phase foot-velocity envelope is the same across
-gaits — only the cycle stretches to accommodate β:
-``min_cycle_time = min_swing_time / (1 − β)`` is the physical floor
-(per-leg foot velocity ceiling = ``stride_length / min_swing_time``);
-``max_cycle_time = max_swing_time / (1 − β)`` is a visual slow-end
-clamp so the gait stays brisk at zero command.
-
-The nominal-stance helper ``nominal_stance_from_yaml`` reuses
-``hexa_kinematics``'s FK and ``leg_to_body`` so the engine never
-duplicates the trig that lives in ``body_transform.leg_to_body``.
+``cycle_time`` is derived per GAIT tick from velocity, ``stride_length``,
+and the strategy's β: faster ⇒ shorter cycle at constant stride. Bounds
+come from swing-time knobs scaled by ``1/(1−β)`` so the swing-phase
+foot-velocity envelope is gait-agnostic — only the cycle stretches with β.
 """
 
 from __future__ import annotations
@@ -77,7 +51,11 @@ from pathlib import Path
 from typing import Mapping
 
 from hexa_kinematics.body_transform import leg_to_body
-from hexa_kinematics.joint_config import load_initial_pose, load_standing_pose
+from hexa_kinematics.joint_config import (
+    StandingPoseDeg,
+    load_initial_pose,
+    load_standing_pose,
+)
 from hexa_kinematics.leg_geometry import LegSpec
 from hexa_kinematics.leg_ik import forward_kinematics
 from hexa_kinematics.leg_specs import LEG_NAMES, load_leg_specs
@@ -102,24 +80,17 @@ from .pause import LegOutput, PauseController, PauseState
 from .reseat import ReseatController, ReseatGeometry, reseat_nominal_stance
 
 
-# Float-noise epsilon for "is the user still moving the D-pad?". The
-# teleop's height integrator runs at 0.05 m/s × 50 Hz = exactly 1 mm
-# per tick, which sits right on the YAML dead-band
-# (``reseat_height_change_threshold``). We need a much tighter bound
-# here so a held D-pad reliably resets the settle timer every tick;
-# the round-trip float noise is well below 1 µm in practice.
+# "Is the D-pad still moving?" epsilon. Must be well below the teleop's
+# 1 mm/tick height slew (0.05 m/s × 50 Hz) — which itself sits on the
+# YAML dead-band — so a held D-pad reliably resets the settle timer.
 _HEIGHT_NOISE_EPSILON: float = 1e-6
 
-# Inclusive tolerance for the swing→stance boundary. ``swing_end =
-# 1.0 - duty_factor`` is not exactly representable for several gaits
-# (e.g. 1 - 2/3 == 0.33333333333333337), while a foot whose true phase
-# is exactly the touchdown point can compute one ULP below it. A bare
-# ``phase >= swing_end`` then misflags that just-landed, load-bearing
-# foot as airborne for a single tick — at gaits whose touchdowns
-# coincide with another leg's lift-off (β = 2/3) this can momentarily
-# drop the support set onto a lopsided three-foot triangle with the CoM
-# on its edge. The epsilon is far below one phase tick (≈ dt/cycle_time
-# ≈ 0.02) so it only absorbs float noise, never a real swing tick.
+# Inclusive swing→stance boundary tolerance. ``swing_end = 1 - β`` isn't
+# exactly representable (1 - 2/3 == 0.3333…37), so a just-landed foot can
+# compute one ULP below it and a bare ``phase >= swing_end`` misflags it
+# airborne for a tick — dropping the support set onto a lopsided triangle
+# when touchdowns coincide with a lift-off (β = 2/3). Far below one phase
+# tick (≈0.02), so it absorbs only float noise.
 _STANCE_SEAM_EPSILON: float = 1e-9
 
 
@@ -140,17 +111,13 @@ Vec3 = tuple[float, float, float]
 
 
 class EngineState(Enum):
-    # FOLDED is the cold-start state: legs at initial_pose, body on its
-    # belly, awaiting an explicit operator trigger before the
-    # INITIALIZE ladder runs. cmd_vel is ignored in this state — the
-    # cold-start is operator-gated so the robot does not move on
-    # power-on while the user is still attaching the battery / cables.
-    # FOLDING is the symmetric warm-shutdown: STAND → FOLDED via the
-    # FoldController, also operator-gated.
-    # RESEATING is the standing-pose-restoration ladder: after the user
-    # lifts/lowers the chassis via /body/pose.z and the height settles,
-    # the engine walks each foot pair to a new nominal stance that
-    # restores the YAML default joint angles at the new body height.
+    # FOLDED: cold-start — legs at initial_pose, body on belly, awaiting
+    #   an operator trigger; cmd_vel ignored so power-on doesn't move the
+    #   robot while cables are attached.
+    # FOLDING: symmetric operator-gated warm shutdown, STAND → FOLDED.
+    # RESEATING: standing-pose restore — after a settled /body/pose.z
+    #   change, walk each foot pair to a nominal stance that restores the
+    #   YAML default joint angles at the new body height.
     FOLDED = "folded"
     INITIALIZE = "initialize"
     STAND = "stand"
@@ -165,15 +132,13 @@ class EngineState(Enum):
 
 @dataclass(frozen=True)
 class EngineConfig:
-    """Engine-internal knobs, sourced entirely from
-    ``hexa_description/config/tuning.yaml`` (the ``gait_node`` block). None
-    of these are on the wire.
+    """Engine-internal knobs from ``tuning.yaml`` (``gait_node`` block);
+    none are on the wire.
 
-    ``stride_length`` and ``min_swing_time`` / ``max_swing_time`` define
-    the velocity → cycle_time relationship the engine applies each
-    GAIT tick. ``duty_factor`` lives on the active ``Strategy`` (so it
-    can change with the gait); the engine reads it from there and
-    scales both swing-time bounds into per-gait cycle-time bounds.
+    ``stride_length`` + ``min/max_swing_time`` define the velocity →
+    cycle_time map applied each GAIT tick. β lives on the active
+    ``Strategy`` (varies with gait); the engine scales the swing-time
+    bounds by it into per-gait cycle-time bounds.
     """
 
     stride_length: float
@@ -183,52 +148,39 @@ class EngineConfig:
     swing_width: float
     controller_dt: float
     cmd_zero_tol: float
-    # Debounce window before GAIT → PAUSING fires. Brief joystick zero
-    # crossings under this window keep the engine in GAIT at zero stride.
+    # GAIT → PAUSING debounce; brief zero-crossings under it keep GAIT
+    # ticking at zero stride.
     pause_debounce_delay: float
-    # PAUSED → RESEATING dwell. Once the engine has been in PAUSED for
-    # this long with no cmd_vel, the reseat ladder walks the feet back
-    # to the nominal footprint so the operator sees the robot settle.
+    # PAUSED → RESEATING dwell (feet walk back to the nominal footprint
+    # so the robot visibly settles).
     pause_to_reseat_delay: float
-    # Short PAUSED → RESEATING dwell used while a gait change is
-    # pending, so a mid-walk gait switch feels immediate instead of
-    # waiting out the full ``pause_to_reseat_delay``.
+    # Shorter PAUSED → RESEATING dwell while a gait change is pending, so
+    # a mid-walk switch feels immediate.
     gait_change_pause_to_reseat_delay: float
-    # PAUSING / disengagement descent clamp. Each previously-airborne
-    # foot's straight-down lowering duration is
-    # ``distance_z / (stride_length / min_swing_time)``, clamped to
-    # ``[min_swing_time, max_reset_time]``. The descent-speed reference
-    # is derived in code from the fastest gait's per-leg foot-velocity
-    # ceiling so pause descents stay consistent with walking feel.
+    # Upper clamp on a paused foot's straight-down lowering time
+    # (``distance_z / (stride_length / min_swing_time)`` clamped to
+    # ``[min_swing_time, max_reset_time]``) — descent speed tracks the
+    # fastest gait's foot-velocity ceiling for consistent feel.
     max_reset_time: float
-    # INITIALIZE cold-start knobs. ``init_pair_swing_time`` is the
-    # per-pair duration during PLACE_FEET; ``init_lift_body_time`` is
-    # the LIFT_BODY z-ramp duration; ``init_swing_clearance`` is the
-    # arc clearance the PLACE_FEET pair adds above its endpoints;
-    # ``init_place_feet_clearance`` is the body-frame offset of the IK
-    # target above the floor (with body on belly) at the end of each
-    # PLACE_FEET swing; must absorb the URDF's vertical-tibia
-    # assumption so the foot sphere does not penetrate the floor (see
-    # tuning.yaml comment for the geometry behind the value).
+    # INITIALIZE cold-start knobs: PLACE_FEET per-pair duration, LIFT_BODY
+    # z-ramp duration, PLACE_FEET arc clearance, and the IK target's
+    # above-floor offset. The last must absorb the URDF's vertical-tibia
+    # assumption so the foot sphere doesn't penetrate the floor (geometry
+    # in the tuning.yaml comment).
     init_pair_swing_time: float
     init_lift_body_time: float
     init_swing_clearance: float
     init_place_feet_clearance: float
-    # RESEATING knobs. ``reseat_pose_settle_delay`` is the dwell the
-    # target pose.z must stay unchanged after the user lets go of the
-    # D-pad before the STAND → RESEATING ladder fires — distinct from
-    # ``pause_to_reseat_delay`` above, which covers the gait engine's
-    # own PAUSED → RESEATING dwell. ``reseat_height_change_threshold``
-    # is the dead-band for "target differs from applied enough to be
-    # worth reseating" (1 mm by default); the settle timer is reset by
-    # a much tighter float-noise epsilon so a held D-pad
-    # (1 mm-per-tick at 50 Hz × 0.05 m/s) keeps resetting it.
-    # ``reseat_pair_swing_time`` is the per-pair duration (matches
-    # initialize for visual symmetry). ``reseat_pair_dwell_time`` is
-    # the hold inserted between successive pair swings so each pair
-    # visibly settles before the next lifts. ``reseat_swing_clearance``
-    # is the arc clearance above the standing footprint — feet start
-    # planted, so a moderate arc just clears ground noise.
+    # RESEATING knobs. ``reseat_pose_settle_delay``: dwell pose.z must
+    # hold after D-pad release before STAND → RESEATING fires (distinct
+    # from the PAUSED → RESEATING dwell above).
+    # ``reseat_height_change_threshold``: dead-band for "target differs
+    # from applied enough to reseat" (1 mm) — the settle timer itself
+    # resets on the much tighter float-noise epsilon so a held D-pad
+    # keeps it pinned. ``reseat_pair_swing_time`` matches initialize for
+    # symmetry; ``reseat_pair_dwell_time`` lets each pair settle before
+    # the next lifts; ``reseat_swing_clearance`` clears ground noise (feet
+    # start planted).
     reseat_pose_settle_delay: float
     reseat_height_change_threshold: float
     reseat_pair_swing_time: float
@@ -238,49 +190,44 @@ class EngineConfig:
 
 def nominal_stance_from_yaml(
     geometry_yaml: str | Path,
-    standing_pose_yaml: str | Path,
+    standing: StandingPoseDeg,
 ) -> dict[str, Vec3]:
-    """Body-frame foot position per leg at the YAML-defined standing pose.
+    """Body-frame foot position per leg at the standing pose.
 
-    Mirrors the math previously inlined in
-    ``hexa_bringup/tools/stub_stance_publisher.py:51-62``, but routed
-    through ``hexa_kinematics.body_transform.leg_to_body`` so the trig
-    lives in exactly one place.
+    Segments from ``geometry.yaml``, standing angles from the gait node's
+    ros params. Routed through ``leg_to_body`` so the trig lives in one
+    place.
     """
     legs = load_leg_specs(geometry_yaml)
-    angles = load_standing_pose(standing_pose_yaml, geometry_yaml)
+    angles = load_standing_pose(standing, geometry_yaml)
     return {n: leg_to_body(forward_kinematics(angles, legs[n]), legs[n]) for n in LEG_NAMES}
 
 
 def reseat_geometry_from_yaml(
     geometry_yaml: str | Path,
-    standing_pose_yaml: str | Path,
+    standing: StandingPoseDeg,
 ) -> ReseatGeometry:
     """Build the ``ReseatGeometry`` snapshot used by the engine.
 
-    Reads ``standing_pose.yaml`` for the default joint angles and
-    ``geometry.yaml`` for segment lengths, then derives the
-    tibia-from-vertical angle and the default foot depth via the same
-    FK helper that ``nominal_stance_from_yaml`` uses. Any leg works as
-    the reference (all six share segment lengths); the first one in
-    ``LEG_NAMES`` is picked deterministically.
+    Derives the tibia-from-vertical angle and default foot depth via the
+    same FK helper as ``nominal_stance_from_yaml``. Any leg works as the
+    reference (all six share segment lengths); LEG_NAMES[0] is picked
+    deterministically.
     """
     from .reseat import default_geometry_from_pose
 
     legs = load_leg_specs(geometry_yaml)
-    angles = load_standing_pose(standing_pose_yaml, geometry_yaml)
+    angles = load_standing_pose(standing, geometry_yaml)
     return default_geometry_from_pose(angles, legs[LEG_NAMES[0]])
 
 
 def initial_stance_from_yaml(geometry_yaml: str | Path) -> dict[str, Vec3]:
-    """Body-frame foot position per leg at the YAML-defined ``initial_pose``.
+    """Body-frame foot position per leg at the YAML ``initial_pose``.
 
-    Sibling of ``nominal_stance_from_yaml``: same FK pipeline, but the
-    angles come from ``geometry.yaml``'s ``initial_pose:`` block instead
-    of ``standing_pose.yaml``. The engine seeds its INITIALIZE state's
-    PLACE_FEET swing origins from this map — these are the foot
-    positions in the body frame when the hexapod is sitting on its
-    belly with legs folded up at power-on.
+    Sibling of ``nominal_stance_from_yaml`` with angles from
+    ``geometry.yaml``'s ``initial_pose:`` block. Seeds INITIALIZE's
+    PLACE_FEET swing origins — the foot positions at power-on with the
+    body on its belly and legs folded up.
     """
     legs = load_leg_specs(geometry_yaml)
     angles_per_leg = load_initial_pose(geometry_yaml)
@@ -293,11 +240,10 @@ def initial_stance_from_yaml(geometry_yaml: str | Path) -> dict[str, Vec3]:
 def _cycle_time_bounds(cfg: "EngineConfig", beta: float) -> tuple[float, float]:
     """Per-gait cycle-time bounds derived from swing-phase bounds.
 
-    Both ends scale by the same ``1 / (1 − β)`` factor so the swing-phase
-    foot-velocity envelope is gait-agnostic; only the cycle stretches as
-    β grows. At ``β = 1`` (degenerate "all stance") both bounds collapse
-    to a single sentinel — gait engines should never reach this, but the
-    branch keeps the helper total.
+    Both ends scale by ``1/(1−β)`` so the swing-phase foot-velocity
+    envelope is gait-agnostic; only the cycle stretches as β grows. The
+    ``β >= 1`` branch (degenerate all-stance, never reached) keeps the
+    helper total.
     """
     if beta >= 1.0:
         return cfg.max_swing_time, cfg.max_swing_time
@@ -307,26 +253,19 @@ def _cycle_time_bounds(cfg: "EngineConfig", beta: float) -> tuple[float, float]:
 
 @dataclass
 class StanceIntegrator:
-    """Per-leg body-frame stance target as an integral from touchdown.
+    """Per-leg body-frame stance target integrated from touchdown.
 
-    The standard strategies rebuild PEP/AEP from the current stride each
-    tick, so a velocity change that does not coincide with lift-off
-    snaps every stance leg by ``(0.5 − s) · (stride_new − stride_old)``
-    in the body frame — a non-uniform shear across legs at different
-    stance phases. For tripod this is masked (β = 0.5, all stance legs
-    share s); for ripple and crawl it is visible foot scrubbing.
+    Problem: strategies rebuild PEP/AEP from live stride each tick, so a
+    velocity change off lift-off snaps every stance leg by
+    ``(0.5 − s)·Δstride`` — a non-uniform shear that's masked at tripod
+    (β = 0.5, shared s) but scrubs feet visibly at ripple/crawl.
 
-    The fix: at each leg's touchdown the body-frame foot position is
-    captured as the world-locked anchor, and every subsequent stance
-    tick decrements that anchor by ``v_leg · dt``. Stance is then
-    history-dependent (touchdown anchor + integrated body translation)
-    rather than rebuilt from instantaneous stride. Swing keeps using
-    the strategy's swing curve — it is a body-frame planning curve and
-    is unaffected by the slip.
-
-    Under constant velocity the integrator reproduces the closed-form
-    stance Bezier exactly (the Bezier's nodes are colinear and evenly
-    spaced, so it degenerates to a linear interpolation).
+    Fix: capture the body-frame foot position at touchdown as a
+    world-locked anchor, then decrement it by ``v_leg · dt`` each stance
+    tick — history-dependent instead of rebuilt from instantaneous
+    stride. Swing is unaffected (body-frame planning curve). Under
+    constant velocity this reproduces the closed-form stance Bezier
+    exactly (colinear, evenly-spaced nodes → linear interp).
     """
 
     leg_names: tuple[str, ...]
@@ -343,11 +282,11 @@ class StanceIntegrator:
         last_targets: Mapping[str, Vec3],
         last_stance: Mapping[str, bool],
     ) -> None:
-        """Capture current body-frame foot positions as stance anchors.
+        """Capture current foot positions as stance anchors.
 
-        Called at every entry to GAIT so legs that arrive mid-stance
-        (from ENGAGING or RESUMING) integrate from their current
-        position rather than waiting for their next swing.
+        Called on every GAIT entry so legs arriving mid-stance (from
+        ENGAGING/RESUMING) integrate from where they are, not from their
+        next swing.
         """
         for n in self.leg_names:
             self.anchor[n] = tuple(last_targets[n])  # type: ignore[assignment]
@@ -361,13 +300,11 @@ class StanceIntegrator:
         v_leg: tuple[float, float],
         dt: float,
     ) -> Vec3 | None:
-        """Advance the integrator one tick for a leg.
+        """Advance the integrator one tick.
 
-        Returns the integrated body-frame target if the leg is in
-        stance, else ``None`` (the caller falls back to the strategy's
-        swing curve). On the swing → stance edge, ``swing_target`` is
-        adopted as the new anchor and returned unchanged for this tick
-        — integration begins on the following tick.
+        Returns the integrated target if in stance, else ``None``. On the
+        swing → stance edge ``swing_target`` becomes the new anchor and is
+        returned as-is; integration starts next tick.
         """
         if not in_stance:
             self.is_stance[name] = False
@@ -387,43 +324,30 @@ class StanceIntegrator:
 
 @dataclass
 class SwingPlanner:
-    """Per-leg latched swing plan, captured at lift-off and held until touchdown.
+    """Per-leg swing plan latched at lift-off, held until touchdown.
 
-    The standard strategies rebuild PEP/AEP from the live stride each
-    tick, so a mid-swing velocity change re-evaluates the quartic Bezier
-    against a moved swing_origin and target — the airborne foot snaps in
-    body frame by a fraction of ``Δstride``. Tripod hides this because
-    ``stance_time = min_swing_time`` keeps strides short and there are
-    three concurrent swing legs; ripple (β = 5/6) has ``stance_time = 5 ·
-    min_swing_time`` so the shift is ~5× larger, and only one leg is
-    airborne to bear the discontinuity. The result is a visible body-
-    frame jump on the swing foot whenever the operator introduces ``v_y``
-    or ``ω_z`` on top of a steady ``v_x``.
+    Problem (swing-side mirror of ``StanceIntegrator``): strategies
+    rebuild PEP/AEP from live stride each tick, so a mid-swing velocity
+    change re-evaluates the Bezier against a moved origin/target and the
+    airborne foot jumps by a fraction of Δstride. Tripod hides it (short
+    strides, 3 swing legs); ripple (β = 5/6) has ~5× the shift on a
+    single airborne leg — visible whenever v_y or ω_z is added to v_x.
 
-    The fix mirrors ``StanceIntegrator`` on the swing side: at lift-off
-    capture
-      * ``origin``       — the foot's actual body-frame position (= the
-        last stance integrator anchor), giving C0 continuity into swing
-        even when the preceding stance integrated a varying velocity;
-      * ``target``       — the live AEP (``nominal + 0.5 · stride``);
-      * ``v_leg``        — used as both ``swing_origin_velocity`` and
-        ``swing_target_velocity`` so the swing arc launches and lands at
-        the stance-frame velocity ``-v_leg``. The default
-        ``-stride / swing_time = -v_leg · β / (1−β)`` is correct only at
-        β = 0.5; for crawl it is 2× and for ripple 5× too fast, producing
-        a body-frame velocity step at every lift-off and touchdown that
-        scrubs the loaded stance feet;
-      * ``swing_time`` and ``identity_y_sign`` — held alongside so the
-        Bezier control nodes stay fixed for the full swing.
-    During swing the engine evaluates ``swing_arc`` from these latched
-    values; at touchdown the integrator's new anchor is ``target`` (so
-    swing → stance is exact), and the planner releases the leg.
+    Fix: at lift-off capture
+      * ``origin`` — actual body-frame position (= last stance anchor),
+        for C0 continuity even after a varying-velocity stance;
+      * ``target`` — the live AEP (``nominal + 0.5·stride``);
+      * ``v_leg``  — used as both swing endpoint velocities so the arc
+        launches/lands at stance-frame velocity ``-v_leg``. The
+        ``-stride/swing_time`` default is right only at β = 0.5 (2× at
+        crawl, 5× at ripple), stepping velocity at every touchdown and
+        scrubbing the loaded feet;
+      * ``swing_time`` + ``identity_y_sign`` — fix the Bezier nodes.
+    ``evaluate`` reads these latched values; at touchdown the integrator
+    anchors on ``target`` (exact swing → stance) and the leg is released.
 
-    Engagement and resume each run their own swing planning, so the
-    planner is reset on every entry to GAIT — a leg that arrives
-    mid-swing (engagement → GAIT handoff) is then treated as a fresh
-    lift-off on its next swing tick, capturing the engagement's last
-    body-frame position as the new origin.
+    Reset on every GAIT entry: engagement/resume plan their own swings,
+    so a leg still airborne at handoff trips a fresh lift-off next tick.
     """
 
     leg_names: tuple[str, ...]
@@ -471,10 +395,9 @@ class SwingPlanner:
         controller_dt: float,
     ) -> Vec3:
         vx, vy = self.v_leg[name]
-        # Stance-frame foot velocity is -v_leg; pass it as both endpoints
-        # so the Bezier's C1 nodes match the stance-frame velocity at
-        # lift-off (origin) and touchdown (target). Defaults derived from
-        # ``-stride/swing_time`` only match this at β = 0.5.
+        # Stance-frame foot velocity is -v_leg; both endpoints so the
+        # Bezier's C1 nodes match it at lift-off and touchdown (the
+        # -stride/swing_time default only matches at β = 0.5).
         v_match = (-vx, -vy, 0.0)
         return swing_arc(
             phase_in_swing=phase_in_swing,
@@ -497,13 +420,9 @@ class SwingPlanner:
 class Engine:
     """Per-tick gait engine.
 
-    ``update(dt, v_body_xy, omega_z)`` returns one ``LegOutput`` per
-    leg. Cold start is ``STAND`` with the last-emitted targets seeded
-    to ``nominal_stance``, so the first tick matches the previous stub
-    publisher's behaviour exactly. ``cycle_time`` is derived per-tick
-    from the commanded velocity, ``stride_length``, the active
-    strategy's ``duty_factor``, and the engine's
-    ``min_swing_time`` / ``max_swing_time`` bounds.
+    ``update(dt, v_body_xy, omega_z)`` returns one ``LegOutput`` per leg.
+    Cold start is FOLDED; ``cycle_time`` is derived per tick from
+    velocity, ``stride_length``, β, and the swing-time bounds.
     """
 
     def __init__(
@@ -549,63 +468,46 @@ class Engine:
         self._pause = self._build_pause()
         self._engagement = self._build_engagement()
         self._initialize = self._build_initialize()
-        # Built lazily on the operator trigger so a fresh ladder runs
-        # each time the user requests a fold (STAND → FOLDING).
+        # Built fresh on each operator trigger so every fold gets a clean
+        # ladder.
         self._fold: FoldController | None = None
-        # Built each time the height settles to a new value while the
-        # engine is in STAND. Mid-cycle the engine commits to running
-        # this ladder to completion.
+        # Built each time the height settles to a new value in STAND;
+        # then run to completion.
         self._reseat: ReseatController | None = None
 
-        # Cold start: assume the operator placed the chassis in the
-        # folded initial_pose. The engine emits initial_stance and
-        # waits for an operator trigger (``start_initialize``) before
-        # running the INITIALIZE ladder to the standing pose. Until
-        # then cmd_vel is ignored — power-on must not move the robot.
+        # Cold start FOLDED: emit initial_stance, ignore cmd_vel until
+        # ``start_initialize``. Power-on must not move the robot.
         self._state = EngineState.FOLDED
         self._last_targets: dict[str, Vec3] = dict(self._initial)
         self._last_stance: dict[str, bool] = {n: True for n in LEG_NAMES}
-        # Debounce timer for cmd_vel → 0 while in GAIT. The engine
-        # only commits to PAUSING from GAIT after the command has
-        # stayed below cmd_zero_tol for ``pause_debounce_delay``
-        # seconds, so brief joystick-center crossings don't kick off
-        # the pause transition. ENGAGING bypasses this debounce — see
-        # ``update`` for why.
+        # cmd → 0 debounce timer; GAIT → PAUSING only fires once it
+        # exceeds ``pause_debounce_delay``. ENGAGING bypasses it (see
+        # ``update``).
         self._cmd_zero_elapsed = 0.0
-        # PAUSED dwell timer. Ticks while the engine sits in PAUSED;
-        # crossing ``pause_to_reseat_delay`` kicks off RESEATING. Reset
-        # on PAUSING entry so the soft-release flow has a fresh window
-        # to detect "operator really released the stick".
+        # PAUSED dwell timer; crossing ``pause_to_reseat_delay`` starts
+        # RESEATING. Reset on PAUSING entry.
         self._paused_elapsed: float = 0.0
-        # Originally-airborne legs at the most-recent PAUSING entry.
-        # Stashed so RESUMING knows which legs need merge arcs (from
-        # their lowered Z back up to the live AEP) rather than which
-        # are airborne mid-PAUSING.
+        # Airborne set at the most-recent PAUSING entry, handed to
+        # RESUMING so those legs get merge arcs (lowered Z → live AEP).
         self._last_swing_flags: dict[str, bool] = {n: False for n in LEG_NAMES}
 
-        # Reseat state. ``_applied_height`` is the pose.z the current
-        # ``_nominal`` was computed at — starts at 0 (the YAML-derived
-        # standing pose). ``_target_height`` tracks the latest
-        # operator-commanded height, updated via ``set_target_height``.
-        # The stability timer measures how long the target has been
-        # stable; once it passes the settle delay AND target differs
-        # from applied, the engine fires the reseat ladder.
+        # Reseat height tracking. ``_applied_height``: pose.z the current
+        # ``_nominal`` was computed at (0 = YAML standing pose).
+        # ``_target_height``: latest operator command. The stability
+        # timer fires the reseat ladder once it passes the settle delay
+        # with target ≠ applied.
         self._applied_height: float = 0.0
         self._target_height: float = 0.0
         self._height_stable_elapsed: float = 0.0
-        # Pending fold flag: latched by ``request_fold`` so a Start
-        # press during RESEATING (or any non-STAND state) is consumed
-        # when the engine next reaches STAND with the height at 0.
-        # Lets the teleop's two-press scheme work: press 1 snaps
-        # height → 0 (kicks off reseat); press 2 queues the fold.
+        # Latched by ``request_fold``; consumed on the next STAND with
+        # height at 0. Drives the teleop two-press scheme (press 1 snaps
+        # height → 0 / reseat, press 2 queues the fold).
         self._pending_fold: bool = False
-        # Pending gait-strategy name, latched by ``set_strategy`` while
-        # walking (GAIT) or mid pause/reseat. Committed at the
-        # RESEATING → STAND handoff in ``_tick_reseat``. Invariant:
-        # non-None only in GAIT (for at most one tick), PAUSING,
-        # PAUSED, and RESEATING — RESUMING is unreachable while
-        # pending (the pause exits are suppressed), and ENGAGING is
-        # unreachable because RESEATING clears it before STAND.
+        # Latched by ``set_strategy`` while walking / mid pause-reseat;
+        # committed at the RESEATING → STAND handoff. Invariant: non-None
+        # only in GAIT (≤1 tick), PAUSING, PAUSED, RESEATING — pause
+        # exits are suppressed while pending, and RESEATING clears it
+        # before STAND, so RESUMING/ENGAGING never see it.
         self._pending_strategy_name: str | None = None
 
     @property
@@ -614,17 +516,12 @@ class Engine:
 
     @property
     def master_phase(self) -> float:
-        """Master phase from the gait clock, in ``[0, 1)``.
+        """Master phase in ``[0, 1)``; ``0`` = reference-leg lift-off.
 
-        ``0`` is lift-off for the reference leg (phase_offset = 0).
-        Exposed for downstream nodes (posture) that need a single shared
-        phase signal rather than reconstructing it from per-leg phases.
-
-        During ENGAGING and RESUMING the engine's ``_clock`` is frozen
-        (only the engagement controller advances), so read the live
-        phase off the controller. ``exit_master`` is the same value the
-        engine seeds ``_clock`` with at the handoff, so continuity
-        across the ENGAGING/RESUMING → GAIT boundary is exact.
+        Exposed for posture (a single shared phase signal). During
+        ENGAGING/RESUMING ``_clock`` is frozen, so read the controller's
+        ``exit_master`` — the same value ``_clock`` is seeded with at the
+        handoff, so continuity across the boundary is exact.
         """
         if self._state in (EngineState.ENGAGING, EngineState.RESUMING):
             return self._engagement.exit_master
@@ -632,11 +529,10 @@ class Engine:
 
     @property
     def strategy_name(self) -> str:
-        """Name of the currently-active strategy from the registry.
+        """Active strategy's registry name.
 
-        Lookup is by identity (one entry in ``STRATEGIES`` per gait), so
-        a strategy not built from the registry returns its class name
-        lower-cased as a best-effort fallback.
+        Matched by type against ``STRATEGIES``; a strategy not from the
+        registry falls back to its lower-cased class name.
         """
         for name, factory in STRATEGIES.items():
             if isinstance(self._strategy, factory):  # type: ignore[arg-type]
@@ -650,9 +546,9 @@ class Engine:
         return self._pending_strategy_name
 
     def _apply_strategy(self, name: str) -> None:
-        """Install a strategy from the registry, rebuilding the
-        β-dependent engagement controller and the phase clock (offsets
-        change with the gait)."""
+        """Install a registry strategy, rebuilding the β-dependent
+        engagement controller and the phase clock (offsets change with
+        the gait)."""
         self._strategy = STRATEGIES[name]()
         self._clock = GaitClock(self._strategy.phase_offsets)
         self._engagement = self._build_engagement()
@@ -660,25 +556,16 @@ class Engine:
     def set_strategy(self, name: str) -> bool:
         """Swap the active gait strategy.
 
-        In ``STAND`` the swap is immediate. While walking (GAIT) or mid
-        pause/reseat (PAUSING / PAUSED / RESEATING) the name is latched
-        as pending: the engine enters PAUSING immediately (no pause
-        debounce), dwells in PAUSED for the short
-        ``gait_change_pause_to_reseat_delay``, runs RESEATING, and
-        commits the new gait at the RESEATING → STAND handoff; if
-        cmd_vel is still non-zero it re-engages in the new gait.
-        Further calls mid-sequence overwrite the pending name — even
-        back to the originally-active gait, in which case the sequence
-        still completes deterministically and the commit is a no-op.
+        STAND swaps immediately. Walking / mid pause-reseat (GAIT,
+        PAUSING, PAUSED, RESEATING) latches the name pending and forces
+        PAUSING → PAUSED (short dwell) → RESEATING → commit at the STAND
+        handoff (re-engaging if cmd is still non-zero). Mid-sequence
+        calls overwrite pending (even back to the current gait: sequence
+        still completes, commit is a no-op). ENGAGING/RESUMING/INITIALIZE/
+        FOLDING/FOLDED refuse.
 
-        During ENGAGING and RESUMING the gait is locked: the request is
-        dropped (``False``), not queued. INITIALIZE / FOLDING / FOLDED
-        likewise refuse.
-
-        Returns ``True`` when the swap was applied or latched (including
-        the no-op case where ``name`` matches the current strategy and
-        nothing is pending), ``False`` on an unknown name or a locked
-        state.
+        ``True`` when applied or latched (incl. the no-op match-current
+        case), ``False`` on unknown name or locked state.
         """
         if name not in STRATEGIES:
             return False
@@ -692,13 +579,13 @@ class Engine:
             EngineState.PAUSED,
             EngineState.RESEATING,
         ):
-            # Overwrite an already-pending name unconditionally — the
-            # cycle-back case (name == strategy_name) still completes
-            # the running sequence; only the commit becomes a no-op.
+            # Nothing to do if we'd latch the already-active gait with
+            # none pending; otherwise overwrite unconditionally (cycle-
+            # back still completes the sequence, commit becomes a no-op).
             if self._pending_strategy_name is None and name == self.strategy_name:
                 return True
-            # No state transition here: the next 50 Hz tick picks the
-            # pending name up (single-threaded executor, no race).
+            # No transition: the next tick picks the name up (single
+            # executor, no race).
             self._pending_strategy_name = name
             return True
         return False
@@ -706,13 +593,9 @@ class Engine:
     def start_initialize(self) -> bool:
         """Operator-gated trigger: FOLDED → INITIALIZE.
 
-        Returns ``True`` if the engine actually transitioned, ``False``
-        if it was in any other state (idempotent: stray triggers are a
-        no-op rather than a fault, so a re-pressed start button after
-        the cold-start has already run does not destabilise the gait).
-
-        Rebuilds the controller so the same engine instance can run a
-        second cold-start after a fold has returned it to FOLDED.
+        ``True`` if transitioned, ``False`` from any other state (stray
+        triggers are a safe no-op). Rebuilds the controller so a second
+        cold-start after a fold gets a clean ladder.
         """
         if self._state is not EngineState.FOLDED:
             return False
@@ -723,16 +606,10 @@ class Engine:
     def start_fold(self) -> bool:
         """Operator-gated trigger: STAND → FOLDING.
 
-        Symmetric to ``start_initialize``: returns ``True`` only when
-        the engine is in STAND, so a stray press while walking or
-        already folded is a safe no-op. Builds a fresh
-        ``FoldController`` so repeated fold cycles each get a clean
-        ladder.
-
-        Prefer ``request_fold`` from the ROS layer — it handles the
-        ``RESEATING`` case where the user has pressed Start twice
-        rapidly while the chassis is lifted. ``start_fold`` is kept
-        for tests that want the unconditional transition.
+        Symmetric to ``start_initialize``: ``True`` only from STAND,
+        fresh ``FoldController`` each time. Prefer ``request_fold`` from
+        the ROS layer (it handles the two-rapid-press-while-lifted case);
+        this is kept for tests wanting the unconditional transition.
         """
         if self._state is not EngineState.STAND:
             return False
@@ -743,16 +620,11 @@ class Engine:
     def request_fold(self) -> bool:
         """Idempotent fold request.
 
-        Latches ``_pending_fold``: the engine consumes the flag the
-        next time it lands in STAND with both applied and target
-        height at zero. Lets the teleop's two-press Start scheme work
-        — press 1 (while chassis lifted) snaps the height to 0 and
-        kicks off a reseat ladder; press 2 during that ladder queues
-        the fold, which fires automatically when reseat completes.
-
-        Returns ``True`` if the request was queued (engine isn't
-        already FOLDED or FOLDING), ``False`` otherwise so the ROS
-        layer can keep its existing log line tidy.
+        Latches ``_pending_fold``, consumed on the next STAND with both
+        heights at zero — so the teleop two-press scheme works (press 1
+        snaps height → 0 / reseat, press 2 queues the fold to fire when
+        reseat finishes). ``True`` if queued (not already FOLDED/FOLDING),
+        else ``False``.
         """
         if self._state is EngineState.FOLDED or self._state is EngineState.FOLDING:
             return False
@@ -760,20 +632,15 @@ class Engine:
         return True
 
     def set_target_height(self, target_height: float) -> None:
-        """Update the operator-commanded body height.
+        """Update the operator-commanded body height (``pose.z``).
 
-        Called by the ROS layer on every ``/body/pose`` message,
-        forwarding only ``pose.z``. Any change above the float-noise
-        epsilon resets the settle timer, so while the D-pad is held
-        the target slews 1 mm per tick and the timer never accrues;
-        once the user lets go the value stops moving and the timer
-        ticks up to ``reseat_pose_settle_delay``.
+        Any change above the float-noise epsilon resets the settle timer,
+        so a held D-pad (1 mm/tick) never lets it accrue; on release the
+        value stops and the timer runs to ``reseat_pose_settle_delay``.
 
-        Note: the YAML dead-band ``reseat_height_change_threshold``
-        is intentionally *not* applied here — it gates the "does
-        target differ from applied enough to reseat at all?" check
-        in ``update``, not the per-tick change detection. Using it
-        here would race with the integrator's per-tick step.
+        The YAML dead-band ``reseat_height_change_threshold`` is
+        deliberately not applied here — it gates the reseat-worthiness
+        check in ``update``; applying it per tick would race the slew.
         """
         if abs(target_height - self._target_height) > _HEIGHT_NOISE_EPSILON:
             self._height_stable_elapsed = 0.0
@@ -822,10 +689,6 @@ class Engine:
     def _build_engagement(self) -> EngagementController:
         cfg = self._config
         beta = self._strategy.duty_factor
-        # Per-gait cycle-time bounds derived from the gait-agnostic
-        # swing-phase bounds. β scales both ends the same way so the
-        # swing-phase foot-velocity envelope is identical across gaits;
-        # only the cycle stretches as β grows (ripple) or shrinks (tripod).
         min_cycle_time, max_cycle_time = _cycle_time_bounds(cfg, beta)
         return EngagementController(
             nominal_stance=self._nominal,
@@ -1376,16 +1239,16 @@ class Engine:
 
 def build_leg_contexts(
     geometry_yaml: str | Path,
-    standing_pose_yaml: str | Path,
+    standing: StandingPoseDeg,
 ) -> dict[str, LegContext]:
     """Build the per-leg ``LegContext`` map the engine needs at init.
 
-    Couples the kinematics' ``LegSpec`` (mount geometry) with the
-    YAML-derived nominal stance. Kept here rather than in ``leg_specs``
-    because ``LegContext`` is a gait-engine concept.
+    Couples the kinematics' ``LegSpec`` (mount geometry) with the nominal
+    stance derived from ``standing``. Kept here rather than in
+    ``leg_specs`` because ``LegContext`` is a gait-engine concept.
     """
     legs = load_leg_specs(geometry_yaml)
-    nominal = nominal_stance_from_yaml(geometry_yaml, standing_pose_yaml)
+    nominal = nominal_stance_from_yaml(geometry_yaml, standing)
     return {
         n: LegContext(
             name=n,

@@ -21,10 +21,13 @@
 #
 # STRUCTURAL config that is NOT a feel knob stays in its owning package:
 # body/leg geometry and joint limits (hexa_description geometry.yaml),
-# the standing pose (standing_pose.yaml), servo tables (hexa_hardware),
-# and joystick bindings (hexa_teleop teleop_joy.yaml).
+# servo tables (hexa_hardware), and joystick bindings (hexa_teleop
+# teleop_joy.yaml).
 #
-# Units: m, s, rad.
+# Units: m, s, rad — with one deliberate exception: the gait_node
+# ``standing_pose`` block below is in intuitive per-joint DEGREES, so it
+# reads the same way as geometry.yaml's joints: block it is validated
+# against.
 
 # ═══ Gait engine (gait_node) ════════════════════════════════════════
 #
@@ -52,6 +55,32 @@ gait_node:
     # classes in ``hexa_gait/hexa_gait/gaits/`` — the single source of
     # truth — and are read from the active strategy at runtime.
     default_gait: tripod
+
+    # ─── Standing pose ──────────────────────────────────────────────
+    #
+    # Per-joint angles when the robot is at rest. The engine derives the
+    # nominal foot targets (STAND footprint, reseat geometry) from these
+    # via forward kinematics. Angles are in intuitive per-joint DEGREES —
+    # the one exception to this file's rad convention — matching the
+    # geometry.yaml joints: block they are validated against. On startup
+    # ``load_standing_pose`` converts them to IK radians and checks each
+    # against that joint's [lower, upper] servo window, failing fast on an
+    # inconsistent edit rather than silently clipping in the URDF.
+    #
+    #   coxa_deg                   — rotation about the coxa-mount +z; 0
+    #                                puts the leg radial at rest.
+    #   femur_above_horizontal_deg — degrees the femur is lifted above
+    #                                horizontal; positive raises the knee.
+    #   tibia_interior_deg         — interior knee angle between femur and
+    #                                tibia; 180 = fully extended.
+    #
+    # Default servo center and standing pose coincide on this build but
+    # are kept independent so they can diverge — e.g. an asymmetric build
+    # with servos biased toward one direction of travel.
+    standing_pose:
+      coxa_deg: 0.0                    # 0° — leg radial at rest
+      femur_above_horizontal_deg: 35.0 # 35° — femur tilted above horizontal
+      tibia_interior_deg: 68.0         # 68° — interior femur-tibia knee angle
 
     # ─── Stride geometry ────────────────────────────────────────────
 

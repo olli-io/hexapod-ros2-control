@@ -1,8 +1,14 @@
 # Robot environment
 
 Steps to take a fresh Raspberry Pi 4 or 5 from a blank SD card to a host ready
-to receive `./hexa deploy push`. See [`sim-environment.md`](sim-environment.md)
-for the workstation side.
+to receive `./hexa deploy push`, plus the `./hexa deploy` / `./hexa robot`
+workflow that builds, ships, and drives it. See
+[`sim-environment.md`](sim-environment.md) for the sim/workstation side.
+
+The sim container is x86_64, Gazebo-heavy, and built around a live source
+bind-mount — none of that fits the Pi. The robot path is a separate
+`robot.Dockerfile` cross-built for `linux/arm64`, shipped to the Pi as a saved
+image tarball, and run as a long-lived service.
 
 ## Hardware
 
@@ -133,6 +139,19 @@ the command over ssh in `~/hexa-robot`:
 ./hexa robot -H pi@<host> up
 ./hexa robot -H pi@<host> down
 ```
+
+`./hexa robot {restart|status|logs|shell}` are the routine container ops against
+the local `hexa-robot` service (also `-H`-dispatchable from the workstation). `up`
+is the one attended action that energizes; everything else is safe.
+
+Because energizing is a CLI step in `up` — never the container's CMD — a
+`restart: unless-stopped` auto-restart (crash / power blip) brings the stack back
+**cold** (relay open), so the servos never flail unattended. The cold-start gate
+is implemented by passing `hardware_components_initial_state` to
+`controller_manager` from `robot.launch.py` when `engage_on_start:=false`, the
+only non-default setting in `bringup.launch.py`. No new C++ in `hexa_hardware` —
+the relay still toggles in `on_activate` / `on_deactivate`, and the lifecycle
+state is held back externally.
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
 

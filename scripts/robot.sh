@@ -1,40 +1,6 @@
 #!/usr/bin/env bash
 # Hexapod robot-container ops. Dispatched from `./hexa robot <cmd>`.
-#
-# The robot-side container ops CLI: it operates the running hexa-robot container,
-# whereas scripts/deploy.sh (`hexa deploy`) cross-builds and ships the image.
-#
-# Commands (run against the local hexa-robot container):
-#   up                 docker compose up -d, then energize (relay on + spawn
-#                      controllers). The one attended action that makes the
-#                      robot drivable.
-#   down               safe-stop: relay off + unload controllers, then compose down
-#   restart            down && up
-#   status             container + hardware-component state summary
-#   logs [-f]          docker compose logs
-#   shell              interactive ROS2-sourced shell in the container
-#
-# Teleop (gamepad + web) is part of the container's launch (bringup.launch.py),
-# so the robot is drivable as soon as `up` finishes — there is no separate teleop
-# verb.
-#
-# Cold-boot safety gate: the container boots cold (robot.Dockerfile CMD runs
-# bringup.launch.py with engage_on_start:=false — relay open, hardware inactive).
-# Energizing is a step in `up` here in the CLI, never the container CMD, so a
-# `restart: unless-stopped` auto-restart (crash / power blip) brings the stack
-# back cold — the servos never flail unattended. `up` is the deliberate
-# energize; `down` is the safe-stop.
-#
-# By default these run against the container on *this* host (i.e. on the Pi).
-# From the workstation, target a remote Pi with a leading -H/--host:
-#   ./hexa robot -H pi@hexapod.local up
-# which re-dispatches `./hexa robot up` over ssh in ~/hexa-robot (the
-# launcher is shipped there by `hexa deploy push`).
-set -euo pipefail
 
-# Remote targeting: peel a leading -H/--host <user@host> and re-dispatch on the
-# Pi. `hexa deploy push` ships hexa + scripts/robot.sh into ~/hexa-robot, so
-# `./hexa` exists there; the remote invocation carries no -H, so no recursion.
 if [[ "${1:-}" == "-H" || "${1:-}" == "--host" ]]; then
     [[ -n "${2:-}" ]] || { echo "hexa robot: -H/--host needs a <user@host>" >&2; exit 1; }
     host="$2"

@@ -205,10 +205,25 @@ def joint_limits(geometry: dict):
     return out
 
 
-def standing_pose(standing: dict) -> tuple:
-    """Uniform (coxa, femur, tibia) at-rest angles — port of load_standing_pose."""
-    return tuple(to_urdf_rad(jt, standing[jt][center_field(jt)])
-                 for jt in JOINT_TYPES)
+# tuning.yaml gait_node standing_pose leaf key per joint type. Distinct from
+# center_field() (the geometry.yaml joints: field names) — the ros params carry
+# the joint name in the key, e.g. standing_pose.coxa_deg.
+_STANDING_FIELD = {
+    "coxa": "coxa_deg",
+    "femur": "femur_above_horizontal_deg",
+    "tibia": "tibia_interior_deg",
+}
+
+
+def standing_pose(gait: dict) -> tuple:
+    """Uniform (coxa, femur, tibia) at-rest angles — port of load_standing_pose.
+
+    Reads the standing pose from tuning.yaml's gait_node standing_pose block
+    (passed in as the unwrapped ``gait`` ros params), matching how the gait
+    node now sources it as ros parameters.
+    """
+    sp = gait["standing_pose"]
+    return tuple(to_urdf_rad(jt, sp[_STANDING_FIELD[jt]]) for jt in JOINT_TYPES)
 
 
 def initial_pose(geometry: dict):
@@ -266,11 +281,11 @@ def hardware_joints(hw: dict):
 
 # ── header emission ─────────────────────────────────────────────────────────
 
-def emit(geometry, standing, gait, teleop, posture, control, hardware,
+def emit(geometry, gait, teleop, posture, control, hardware,
          webteleop, display, sources) -> str:
     specs = leg_specs(geometry)
     limits = joint_limits(geometry)
-    stand = standing_pose(standing)
+    stand = standing_pose(gait)
     initial = initial_pose(geometry)
     caps = velocity_caps(gait)
     joints = hardware_joints(hardware)
@@ -679,7 +694,6 @@ def main() -> int:
     tuning_yaml = f"{cfg_dir}/hexa_description/config/tuning.yaml"
     paths = {
         "geometry": f"{cfg_dir}/hexa_description/config/geometry.yaml",
-        "standing": f"{cfg_dir}/hexa_description/config/standing_pose.yaml",
         "gait": tuning_yaml,
         "teleop": f"{cfg_dir}/hexa_teleop/config/teleop_joy.yaml",
         "posture": tuning_yaml,
@@ -707,7 +721,7 @@ def main() -> int:
     sources = list(dict.fromkeys(
         os.path.relpath(p, args.repo_root) for p in paths.values()
     ))
-    header = emit(loaded["geometry"], loaded["standing"], loaded["gait"],
+    header = emit(loaded["geometry"], loaded["gait"],
                   loaded["teleop"], loaded["posture"], loaded["control"],
                   loaded["hardware"], loaded["webteleop"], loaded["display"],
                   sources)

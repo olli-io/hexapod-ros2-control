@@ -617,10 +617,10 @@ void Engine::capture_state(const std::map<std::string, LegOutput>& out) {
 // ───────────────────────────── YAML builders ───────────────────────────────
 
 std::map<std::string, Vec3> nominal_stance_from_yaml(
-    const std::string& geometry_yaml, const std::string& standing_pose_yaml) {
+    const std::string& geometry_yaml, const kin::StandingPoseDeg& standing) {
   const auto legs = kin::load_leg_specs(geometry_yaml);
   const JointAngles angles =
-      kin::load_standing_pose(standing_pose_yaml, geometry_yaml);
+      kin::load_standing_pose(standing, geometry_yaml);
   std::map<std::string, Vec3> out;
   for (const auto& n : LEG_NAMES) {
     out[n] = kin::leg_to_body(kin::forward_kinematics(angles, legs.at(n)),
@@ -630,10 +630,10 @@ std::map<std::string, Vec3> nominal_stance_from_yaml(
 }
 
 ReseatGeometry reseat_geometry_from_yaml(
-    const std::string& geometry_yaml, const std::string& standing_pose_yaml) {
+    const std::string& geometry_yaml, const kin::StandingPoseDeg& standing) {
   const auto legs = kin::load_leg_specs(geometry_yaml);
   const JointAngles angles =
-      kin::load_standing_pose(standing_pose_yaml, geometry_yaml);
+      kin::load_standing_pose(standing, geometry_yaml);
   return default_geometry_from_pose(angles, legs.at(LEG_NAMES[0]));
 }
 
@@ -650,10 +650,10 @@ std::map<std::string, Vec3> initial_stance_from_yaml(
 }
 
 std::map<std::string, LegContext> build_leg_contexts(
-    const std::string& geometry_yaml, const std::string& standing_pose_yaml) {
+    const std::string& geometry_yaml, const kin::StandingPoseDeg& standing) {
   const auto legs = kin::load_leg_specs(geometry_yaml);
   const auto nominal =
-      nominal_stance_from_yaml(geometry_yaml, standing_pose_yaml);
+      nominal_stance_from_yaml(geometry_yaml, standing);
   std::map<std::string, LegContext> out;
   for (const auto& n : LEG_NAMES) {
     LegContext ctx;

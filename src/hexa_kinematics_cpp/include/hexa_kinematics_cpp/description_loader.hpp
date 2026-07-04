@@ -1,12 +1,12 @@
 // Loaders that expand hexa_description's YAML into typed kinematics inputs.
 // Ports leg_specs.py and joint_config.py.
 //
-// Everything here parses config that lives in hexa_description/config/:
-//
-//   - geometry.yaml — leg segment lengths (leg:), the two reference coxa mounts
-//     (mounts.l_front / mounts.l_middle), per-joint-type servo config (joints:),
-//     and the initial_pose: block.
-//   - standing_pose.yaml — per-joint-type default at-rest angle.
+// Everything here parses geometry.yaml in hexa_description/config/: leg segment
+// lengths (leg:), the two reference coxa mounts (mounts.l_front /
+// mounts.l_middle), per-joint-type servo config (joints:), and the
+// initial_pose: block. The standing pose is no longer a file — it arrives as a
+// StandingPoseDeg (tuning.yaml's gait_node standing_pose ros params) that
+// load_standing_pose converts to IK radians and validates against geometry.yaml.
 //
 // Two families of output share this file because they share one concern (turn
 // hexa_description YAML into typed values) and one mechanism: the six-leg
@@ -66,10 +66,20 @@ struct JointLimits {
 // radians, with lower <= center <= upper.
 std::map<std::string, JointLimits> load_joint_limits(const std::string& geometry_path);
 
-// Parse standing_pose.yaml into (theta_coxa, theta_femur, theta_tibia) in
+// Per-joint at-rest angles in the intuitive per-joint DEGREE convention,
+// sourced from tuning.yaml's gait_node standing_pose ros params. Field names
+// match the ros param leaf names; defaults mirror that YAML block so a bare
+// `ros2 run` (and unit tests) start on the canonical pose.
+struct StandingPoseDeg {
+  double coxa_deg = 0.0;
+  double femur_above_horizontal_deg = 35.0;
+  double tibia_interior_deg = 68.0;
+};
+
+// Convert a StandingPoseDeg to (theta_coxa, theta_femur, theta_tibia) in
 // IK-convention radians. Each angle is validated against geometry.yaml's
 // [lower, upper] window; a value outside it throws.
-JointAngles load_standing_pose(const std::string& standing_pose_path,
+JointAngles load_standing_pose(const StandingPoseDeg& pose,
                                const std::string& geometry_path);
 
 // Parse geometry.yaml's initial_pose: block into per-leg JointAngles. The YAML

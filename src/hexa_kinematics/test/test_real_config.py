@@ -2,9 +2,11 @@
 
 Complements the inline-fixture tests in ``test_leg_specs.py``: those
 verify mirror logic with self-documenting numbers; these load the
-installed ``geometry.yaml`` and ``standing_pose.yaml`` and assert only
-that the loaders accept the real schema. Renamed keys or missing
-fields would break these even if the inline fixtures still pass.
+installed ``geometry.yaml`` and the standing pose from ``tuning.yaml``
+(the ``gait_node`` ``standing_pose`` ros params) and assert only that
+the loaders accept the real schema and the real values stay in range.
+Renamed keys or missing fields would break these even if the inline
+fixtures still pass.
 """
 
 from __future__ import annotations
@@ -23,7 +25,11 @@ from ament_index_python.packages import (  # noqa: E402
     get_package_share_directory,
 )
 
-from hexa_kinematics.joint_config import load_joint_limits, load_standing_pose  # noqa: E402
+from hexa_kinematics.joint_config import (  # noqa: E402
+    StandingPoseDeg,
+    load_joint_limits,
+    load_standing_pose,
+)
 from hexa_kinematics.leg_specs import LEG_NAMES, load_leg_specs  # noqa: E402
 
 
@@ -57,10 +63,17 @@ def test_load_joint_limits_against_real_geometry(description_config_dir: Path):
 
 
 def test_load_standing_pose_against_real_yaml(description_config_dir: Path):
-    angles = load_standing_pose(
-        description_config_dir / "standing_pose.yaml",
-        description_config_dir / "geometry.yaml",
+    import yaml
+
+    with open(description_config_dir / "tuning.yaml") as f:
+        tuning = yaml.safe_load(f)
+    sp = tuning["gait_node"]["ros__parameters"]["standing_pose"]
+    pose = StandingPoseDeg(
+        coxa_deg=sp["coxa_deg"],
+        femur_above_horizontal_deg=sp["femur_above_horizontal_deg"],
+        tibia_interior_deg=sp["tibia_interior_deg"],
     )
+    angles = load_standing_pose(pose, description_config_dir / "geometry.yaml")
     assert len(angles) == 3
     assert all(math.isfinite(a) for a in angles)
 

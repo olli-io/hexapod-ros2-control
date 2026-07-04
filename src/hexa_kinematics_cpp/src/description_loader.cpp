@@ -146,18 +146,16 @@ std::map<std::string, JointLimits> load_joint_limits(
   return out;
 }
 
-JointAngles load_standing_pose(const std::string& standing_pose_path,
+JointAngles load_standing_pose(const StandingPoseDeg& pose,
                                const std::string& geometry_path) {
-  const YAML::Node raw = load_file(standing_pose_path);
   const std::map<std::string, JointLimits> limits = load_joint_limits(geometry_path);
+  const std::array<double, 3> pose_deg = {
+      pose.coxa_deg, pose.femur_above_horizontal_deg, pose.tibia_interior_deg};
 
   std::array<double, 3> angles{};
   for (std::size_t i = 0; i < kJointTypes.size(); ++i) {
     const std::string& joint_type = kJointTypes[i];
-    const YAML::Node cfg = raw[joint_type];
-    const double theta = to_urdf_rad(
-        joint_type, require_scalar<double>(cfg, center_field(joint_type),
-                                           "standing_pose." + joint_type));
+    const double theta = to_urdf_rad(joint_type, pose_deg[i]);
     const JointLimits& lim = limits.at(joint_type);
     if (!(lim.lower <= theta && theta <= lim.upper)) {
       throw std::runtime_error("standing pose " + joint_type + " angle " +

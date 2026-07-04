@@ -67,13 +67,13 @@ Vec3 = tuple[float, float, float]
 
 
 class ReseatGeometry:
-    """Frozen snapshot of the YAML default standing pose's geometry.
+    """Frozen snapshot of the default standing pose's geometry.
 
-    Built once at engine startup from ``standing_pose.yaml`` /
-    ``geometry.yaml`` — captures the tibia-from-vertical angle and the
-    foot depth below the coxa joint at the default standing pose, so
+    Built once at engine startup from the ``standing_pose`` ros params
+    and ``geometry.yaml`` — captures the tibia-from-vertical angle and
+    the foot depth below the coxa joint at the default standing pose, so
     every reseat target can be computed from a single ``target_height``
-    scalar without re-reading the YAML.
+    scalar without re-deriving it.
     """
 
     __slots__ = (

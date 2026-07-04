@@ -5,8 +5,9 @@ kinematics/gait/posture/control node chain — with the gamepad and web teleop
 input sources, so the whole desktop sim stack runs as the container's single
 PID 1 process (docker-native lifecycle: `docker compose up -d` / `logs` / `down`).
 
-  1. sim.launch.py — Gazebo + the node chain. Its use_cpp_* args default from
-     the HEXA_CPP env var, so `hexa sim up --cpp` flips to the C++ ports.
+  1. sim.launch.py — Gazebo + the node chain. Which port of the
+     kinematics/gait/posture nodes it runs (C++ by default) is set by the
+     hexa_launch block of ros2_controllers.yaml, via its node_implementation arg.
   2. teleop.launch.py — gamepad -> /cmd_vel + /body/pose.
   3. webteleop.launch.py — web UI -> /cmd_vel, on port 8080. Coexists with the
      gamepad via /teleop/owner arbitration (gamepad owns by default).

@@ -28,9 +28,6 @@ x-hexa-base: &hexa_base
     # fail to find each other ("create" loops on "list of world names").
     # Pin to loopback — all gz processes are co-located in this container.
     GZ_IP: "127.0.0.1"
-    # C++-port toggle: sim.launch.py reads HEXA_CPP as the default of its
-    # use_cpp_* args. `hexa sim up --cpp` sets this at `compose up` time.
-    HEXA_CPP: "${HEXA_CPP:-false}"
   volumes:
     - .:/workspace
     - /tmp/.X11-unix:/tmp/.X11-unix:rw

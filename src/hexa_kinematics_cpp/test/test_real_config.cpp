@@ -2,8 +2,9 @@
 //
 // Schema-drift smoke tests against the installed hexa_description YAML.
 // Complements test_leg_specs.cpp (which verifies mirror logic with
-// self-documenting numbers): these load the real geometry.yaml /
-// standing_pose.yaml and assert only that the loaders accept the real schema.
+// self-documenting numbers): these load the real geometry.yaml and the standing
+// pose from tuning.yaml (the gait_node standing_pose ros params) and assert only
+// that the loaders accept the real schema and the real values stay in range.
 // Renamed keys or missing fields would break these even if the inline fixtures
 // still pass. Skips if hexa_description is not on the prefix path.
 #include <gtest/gtest.h>
@@ -12,6 +13,8 @@
 #include <cmath>
 #include <set>
 #include <string>
+
+#include <yaml-cpp/yaml.h>
 
 #include <ament_index_cpp/get_package_prefix.hpp>  // PackageNotFoundError
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -72,8 +75,14 @@ TEST(RealConfig, LoadJointLimitsAgainstRealGeometry) {
 TEST(RealConfig, LoadStandingPoseAgainstRealYaml) {
   const std::string dir = descriptionConfigDir();
   if (dir.empty()) GTEST_SKIP() << "hexa_description is not installed";
-  const auto angles = hexa_kinematics::load_standing_pose(
-      dir + "/standing_pose.yaml", dir + "/geometry.yaml");
+  const YAML::Node sp = YAML::LoadFile(dir + "/tuning.yaml")["gait_node"]
+                                      ["ros__parameters"]["standing_pose"];
+  hexa_kinematics::StandingPoseDeg pose;
+  pose.coxa_deg = sp["coxa_deg"].as<double>();
+  pose.femur_above_horizontal_deg = sp["femur_above_horizontal_deg"].as<double>();
+  pose.tibia_interior_deg = sp["tibia_interior_deg"].as<double>();
+  const auto angles =
+      hexa_kinematics::load_standing_pose(pose, dir + "/geometry.yaml");
   for (double a : angles) EXPECT_TRUE(std::isfinite(a));
 
   const auto limits = hexa_kinematics::load_joint_limits(dir + "/geometry.yaml");

@@ -3,113 +3,96 @@
 ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 
 > [!WARNING]
-> **Work in progress** — This project is under active development. APIs,
-> configuration, and behavior may change without notice, and some features are
-> incomplete or untested. Use at your own risk.
+> **Work in progress.** APIs, configuration, and behavior may change without
+> notice; some features are incomplete or untested.
 
-**This repository is part of a multi-repo hexapod stack:**
-- Driver firmware for Pimoroni servo2040 - ['olli-io/hexapod-servo2040-driver'](https://github.com/olli-io/hexapod-servo2040-driver)
-- Esp32 firmware to drive an oled screen - ['olli-io/hexapod-esp32-display'](https://github.com/olli-io/hexapod-esp32-display)
+Part of a multi-repo stack:
+- [olli-io/hexapod-servo2040-driver](https://github.com/olli-io/hexapod-servo2040-driver) — Pimoroni Servo 2040 firmware.
+- [olli-io/hexapod-esp32-display](https://github.com/olli-io/hexapod-esp32-display) — ESP32 OLED face firmware.
 
 ## Hardware target
 
-- Raspberry Pi 4 or 5 ( recommended OS: Pi OS lite ) driving servos over a Pimoroni Servo 2040 over USB serial. Current version tested on a 4GB rPi 4, but it may be runnable 2GB (no quarantees).
-- (Optional) Xiao Seeed ESP32-C3 for driving a front display (eye animations).
+- Raspberry Pi 4 or 5 (Pi OS Lite), driving servos over a Pimoroni Servo 2040 via USB serial. Tested on a 4 GB Pi 4.
+- (Optional) Seeed XIAO ESP32-C3 driving a front display for eye animations.
 
-## Quickstart ( Gazebo )
+## Quickstart (Gazebo)
 
-1. **Prerequisites**
-   - Docker and docker-compose installed on the platform you are running this on.
-   - An X server reachable as `$DISPLAY`. As an example, on Arch linux — `echo $DISPLAY` should print something like
-     `:0`. No native ROS2 install needed.
+Requires Docker + docker-compose and an X server on `$DISPLAY`. No native ROS 2 install needed.
 
-2. **First-time setup and launch**
+```
+git clone git@github.com:olli-io/hexapod-ros2-control.git
+cd hexapod-ros2-control
+./hexa sim up
+```
 
-   ```
-   git clone git@github.com:olli-io/hexapod-ros2-control.git
-   cd hexapod-ros2-control
-   ./hexa sim up
-   ```
+The first run builds the `hexa-sim` image (a few minutes) and the workspace,
+then brings the sim stack (sim + webteleop + teleop) up **detached**. Stream it
+with `./hexa sim logs -f`, stop it with `./hexa sim down`.
 
-   The first run builds the `hexa-sim` image (a few minutes), builds the
-   workspace, then brings the desktop sim stack (sim + webteleop + teleop) up
-   **detached** — the container's PID 1 is the launch itself. Stream it with
-   `./hexa sim logs -f`, stop it with `./hexa sim down`.
+Then drive the robot with an Xbox-style controller (wired or Bluetooth), or open
+`{local-pc-ip}:8080` on a phone on the same network for web teleop.
 
-3. **Control the hex in sim**
-   - Connect an XBox or XBox-equivalent controller to your setup (wired or bt) and control the hex.
-   - Alternatively, you can take your phone (on the same local network) and connect to {local-pc-ip}:8080 and control the hexapod via webteleop (you may need to adjust your firewall settings).
-
-That's the whole loop. See [`docs/sim-environment.md`](docs/sim-environment.md)
-for the pieces.
-
-> [!NOTICE]
-> This has only been run on arch linux so far. Should be fairly straightforward on linux. MacOs and Windows (WSL) success may vary.
+> [!NOTE]
+> Only tested on Arch Linux. Other Linux should be straightforward; macOS and Windows (WSL) may vary.
 
 ## Build / run
 
-Development container ( simulation in Gazebo ) - [`docs/sim-environment.md`](docs/sim-environment.md).
-Robot container ( build, deploy and run on rPi ) - [`docs/robot-environment.md`](docs/robot-environment.md).
+All host commands go through the `hexa` dispatcher in the repo root. The sim and
+robot stacks each run as their container's PID 1, managed by `docker compose`, so
+they share the same `up` / `down` lifecycle.
 
-All host-side commands go through the `hexa` dispatcher in the repo root. Both
-the sim and the robot share the same `up` / `down` lifecycle verbs — the sim
-stack and the robot stack each run as their container's PID 1, managed by
-`docker compose`:
-
-- `./hexa sim <up|down|logs|build|shell|status|cmd...>` — sim-container lifecycle. `up [--cpp] [--clean]` brings the stack up detached, `down` tears it down, `logs -f` streams it, `build` runs a colcon build in an ephemeral container, `shell` opens a ROS2-sourced shell, and any other command (e.g. `ros2 topic list`) runs as a one-off.
-- `./hexa pico <up|down|logs|status>` — firmware-in-sim: the Pi Pico firmware brain walks the Gazebo hexapod. Mutually exclusive with the sim stack.
-- `./hexa deploy <subcommand>` — cross-build (`build`) and ship (`push <host>`) the production image to the robot.
-- `./hexa robot <subcommand>` — operate the running robot container (`up`, `down`, `restart`, `status`, `logs`, `shell`); `up` boots cold then energizes the servos (teleop is part of the launch, so the robot is drivable once `up` finishes), `down` is the safe-stop. Runs on the Pi, or `-H user@host` to target it from the workstation.
+- `./hexa sim <up|down|logs|build|shell|status|cmd...>` — sim-container lifecycle. `up [--clean]` brings the stack up detached; `up --pico` runs the firmware-in-sim brain (the Pi Pico firmware walks the Gazebo hexapod) instead, mutually exclusive with the plain sim stack; `build` runs a colcon build in an ephemeral container; `shell` opens a ROS 2-sourced shell; any other command (e.g. `ros2 topic list`) runs one-off.
+- `./hexa deploy <build|push <host>>` — cross-build and ship the production image to the robot.
+- `./hexa robot <up|down|restart|status|logs|shell>` — operate the robot container on the Pi (or `-H user@host` to target it remotely). `up` boots and energizes servos (teleop included); `down` is the safe-stop.
 - `./hexa kill` — stop and remove the sim + pico containers.
 
-See docs and `./hexa --help` 
+Details: [`docs/sim-environment.md`](docs/sim-environment.md) (Gazebo) and
+[`docs/robot-environment.md`](docs/robot-environment.md) (Pi). See also `./hexa --help`.
 
 ## Configuration
 
-All tunable parameters live in YAML files under each package's `config/` directory — never hard-coded in node code. Edit the YAML, rebuild (`colcon build --symlink-install` re-links instantly), relaunch.
+Every tunable parameter lives in YAML under `config/` — never hard-coded in
+nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 
-- [`src/hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — body dimensions, leg segment lengths / radii / masses, foot, per-leg hip mounts, and per-joint-type (coxa / femur / tibia) servo center, lower / upper travel limits, effort, and velocity. Single source of truth for the robot's shape and joint travel; loaded into the URDF via xacro.
-- [`src/hexa_description/config/standing_pose.yaml`](src/hexa_description/config/standing_pose.yaml) — per-joint angles (coxa / femur / tibia) at rest. Drives nominal foot targets via FK; kept separate from servo center so an asymmetric build can diverge.
-- [`src/hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick axis / button mapping, deadband, posture↔gait toggle button, initial mode, and the max `cmd_vel` and posture offsets each mode emits.
-- [`src/hexa_control/config/control.yaml`](src/hexa_control/config/control.yaml) — default gait selection and `cmd_vel` ramp / snap tolerances used to shape teleop input before it hits the gait engine.
-- [`src/hexa_gait/config/gait.yaml`](src/hexa_gait/config/gait.yaml) — gait engine knobs: controller tick, default gait, stride length, step height, swing width, and swing-time bounds that anchor per-gait cycle-time limits.
-- [`src/hexa_posture/config/posture.yaml`](src/hexa_posture/config/posture.yaml) — posture node animation stack: which gait-coupled and animation-mode animations are enabled and their gain / strength / amplitude knobs.
-- [`src/hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring (transport, device, per-pin joint assignment), pulse-width calibration endpoints, electrical clamps, and aux ADC scales. Real-robot only.
-- [`src/hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face relay: `enabled` master switch (false = bringup skips the display node), transport (serial/stub), UART device + baud, gait-state → expression map, battery thresholds, and gaze deadband / hysteresis knobs.
-- [`src/hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) — ros2_control controller-manager rate and joint-group controller's joint ordering. Sim-only.
-- [`src/hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — real-robot mirror of the sim controllers config, with `use_sim_time: false` and the 200 Hz update rate the gait/IK stack publishes at.
+- [`hexa_description/config/geometry.yaml`](src/hexa_description/config/geometry.yaml) — single source of truth for the robot's shape: body dimensions, per-leg segment lengths / radii / masses, hip mounts, and per-joint-type servo center + travel / effort / velocity limits. Loaded into the URDF via xacro.
+- [`hexa_description/config/tuning.yaml`](src/hexa_description/config/tuning.yaml) — consolidated node parameters (node-key source of truth): gait engine knobs, `cmd_vel` shaping, posture animation stack, and the standing pose (per-joint rest angles under `gait_node`).
+- [`hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick mapping, deadband, posture↔gait toggle, and per-mode `cmd_vel` / posture limits.
+- [`hexa_webteleop/config/webteleop.yaml`](src/hexa_webteleop/config/webteleop.yaml) — web teleop server + shared teleop mapping.
+- [`hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring, pulse-width calibration, electrical clamps, ADC scales. Real-robot only.
+- [`hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face relay: enable switch, transport, UART device, gait-state → expression map, gaze / battery knobs.
+- [`hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) and [`hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — controller-manager rate and joint ordering, for sim and real-robot respectively.
 
 ## Design principles
 
-1. **Modular** — one ROS2 package per concern, with a one-way dependency graph (no cycles).
-2. **Configurable** — gait choice, body parameters, and leg geometry are config-driven, not hard-coded. Leg count is fixed at 6.
-3. **Controllable from anywhere** — the top of the stack listens to a standard `geometry_msgs/Twist` on `cmd_vel`, so teleop, autonomy, or external controllers are interchangeable.
-4. **Sim-first** — every package must be runnable against the Gazebo model before any servo moves.
+1. **Modular** — one package per concern, one-way dependency graph (no cycles).
+2. **Configurable** — gait, body, and geometry are config-driven. Leg count is fixed at 6.
+3. **Controllable from anywhere** — the stack listens to a standard `geometry_msgs/Twist` on `cmd_vel`, so teleop, autonomy, and external controllers are interchangeable.
+4. **Sim-first** — every package runs against the Gazebo model before any servo moves.
 
 ## Packages
 
-This is a colcon workspace; all ROS2 packages live under `src/`. Format: `src/<package>/` (build type) — purpose.
+Colcon workspace; all packages live under `src/`. Build type in parentheses.
 
-- `src/hexa_interfaces/` (interface) — Custom msg/srv/action definitions (LegState, GaitParams, FootTarget…) used across the stack.
-- `src/hexa_description/` (ament_cmake) — URDF (via xacro), meshes, joint limits, robot_state_publisher config. Source of truth for kinematics.
-- `src/hexa_kinematics/` (ament_python) — Pure-Python FK/IK library (per-leg + body); no ROS deps at the library level, plus a thin ROS node.
-- `src/hexa_hardware/` (ament_cmake) — C++ `hardware_interface` plugin for ros2_control. Real Servo 2040 + sim/mock variants.
-- `src/hexa_gait/` (ament_python) — Gait engine node; emits foot targets given a body velocity. Tripod first; ripple/crawl plug in via a strategy.
-- `src/hexa_posture/` (ament_python) — Posture engine node; turns user body-pose input + gait state into a clamped body pose target. Owns body-pose animations (sway, breathing, lean…).
-- `src/hexa_control/` (ament_python) — Velocity shaping + gait selection: maps `cmd_vel` to gait params and chooses which gait runs.
-- `src/hexa_teleop/` (ament_python) — Joystick/keyboard → `cmd_vel` and `/body/pose`.
-- `src/hexa_webteleop/` (ament_python) — Web-app teleop: hosts an HTTP + WebSocket server for phone/tablet control, publishing the same topics as `hexa_teleop` via a shared mapping; arbitrates with the gamepad over `/teleop/owner`.
-- `src/hexa_display/` (ament_python) — Face relay: maps gait state / `cmd_vel` / posture / battery to expression + gaze commands for the ESP32 OLED face over UART (stub transport in sim).
-- `src/hexa_simulation/` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
-- `src/hexa_bringup/` (ament_cmake) — Top-level launch files wiring everything together: `robot.launch.py`, `sim.launch.py`.
+- `hexa_interfaces` (interface) — custom msg/srv/action definitions used across the stack.
+- `hexa_description` (ament_cmake) — URDF (via xacro), meshes, joint limits. Source of truth for kinematics.
+- `hexa_kinematics` (ament_python) — pure-Python FK/IK library (no ROS deps) plus a thin ROS node.
+- `hexa_hardware` (ament_cmake) — C++ `hardware_interface` plugin for ros2_control (real Servo 2040 + sim/mock).
+- `hexa_gait` (ament_python) — gait engine; emits foot targets from a body velocity. Tripod first, others via strategy.
+- `hexa_posture` (ament_python) — posture engine; turns body-pose input + gait state into a clamped body pose. Owns body animations.
+- `hexa_control` (ament_python) — velocity shaping + gait selection: maps `cmd_vel` to gait params.
+- `hexa_teleop` (ament_python) — joystick/keyboard → `cmd_vel` and `/body/pose`.
+- `hexa_webteleop` (ament_python) — HTTP + WebSocket server for phone/tablet control; arbitrates with the gamepad over `/teleop/owner`.
+- `hexa_display` (ament_python) — face relay to the ESP32 OLED over UART (stub in sim). Pure sink.
+- `hexa_simulation` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
+- `hexa_bringup` (ament_cmake) — top-level launch files: `robot.launch.py`, `sim.launch.py`.
 
-## Package dependency direction
+## Dependency direction
 
-Each arrow is "depends on" — the higher-level package imports the lower-level one (or subscribes to its topics).
+Each arrow is "depends on" — the higher-level package imports the lower one (or subscribes to its topics).
 
 - Main chain: `hexa_teleop` → `hexa_control` → `hexa_gait` → `hexa_kinematics` → `hexa_hardware` → Servo 2040 / Gazebo
-- Body-pose side channel: `hexa_teleop` → `hexa_posture` → `hexa_kinematics` (parallel to the gait chain, composed in the IK node)
-- Web teleop: `hexa_webteleop` → `hexa_teleop` (reuses its mapping) → `cmd_vel` / `/body/pose` (interchangeable with the gamepad at the top of both chains)
-- `hexa_bringup` → `hexa_control`, `hexa_posture`, `hexa_display` (composes both chains via launch files)
+- Body-pose side channel: `hexa_teleop` → `hexa_posture` → `hexa_kinematics` (composed in the IK node)
+- Web teleop: `hexa_webteleop` → `hexa_teleop` (shared mapping) → `cmd_vel` / `/body/pose`
+- `hexa_bringup` → `hexa_control`, `hexa_posture`, `hexa_display` (composes both chains via launch)
 - Sink: `hexa_display` subscribes to gait/posture/hardware topics; nothing depends on it.
-- Leaves consumed by the above: `hexa_description`, `hexa_interfaces`, `hexa_simulation`
+- Leaves: `hexa_description`, `hexa_interfaces`, `hexa_simulation`.

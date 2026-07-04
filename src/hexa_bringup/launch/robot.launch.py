@@ -46,6 +46,23 @@ def _display_params(transport: str) -> tuple[dict, bool]:
     return params, bool(params.pop("enabled", True))
 
 
+def _node_implementation() -> str:
+    """Default node-implementation selector, read from hexa_bringup's
+    ros2_controllers.yaml (the `hexa_launch` block). "cpp" (default) selects
+    the C++ ports of kinematics/gait/posture; "python" the ament_python
+    originals. Used as the default of the `node_implementation` launch arg.
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_bringup"), "config", "ros2_controllers.yaml"
+    )
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    impl = cfg.get("hexa_launch", {}).get("ros__parameters", {}).get(
+        "node_implementation", "cpp"
+    )
+    return str(impl).lower()
+
+
 def _bringup(context, *args, **kwargs):
     pkg_hexa_bringup = FindPackageShare("hexa_bringup")
     pkg_hexa_description = FindPackageShare("hexa_description")
@@ -53,27 +70,16 @@ def _bringup(context, *args, **kwargs):
     engage_on_start = LaunchConfiguration("engage_on_start").perform(context)
     engage = engage_on_start.lower() in ("1", "true", "yes")
 
-    # Select the Python or C++ port of each subsystem. Default keeps the Python
-    # nodes; set the arg true to run the ament_cmake ports (built side-by-side).
-    # The ports are drop-in: same node names, topics, message types, and params.
-    use_cpp_kinematics = LaunchConfiguration("use_cpp_kinematics").perform(context)
-    use_cpp_gait = LaunchConfiguration("use_cpp_gait").perform(context)
-    use_cpp_posture = LaunchConfiguration("use_cpp_posture").perform(context)
-    kinematics_pkg = (
-        "hexa_kinematics_cpp"
-        if use_cpp_kinematics.lower() in ("1", "true", "yes")
-        else "hexa_kinematics"
-    )
-    gait_pkg = (
-        "hexa_gait_cpp"
-        if use_cpp_gait.lower() in ("1", "true", "yes")
-        else "hexa_gait"
-    )
-    posture_pkg = (
-        "hexa_posture_cpp"
-        if use_cpp_posture.lower() in ("1", "true", "yes")
-        else "hexa_posture"
-    )
+    # Select the C++ or Python port of each subsystem. Default is "cpp" (from
+    # the `hexa_launch` block of ros2_controllers.yaml): the *_cpp ports run and
+    # the Python nodes are NOT started. `node_implementation:=python` flips the
+    # whole chain back. The ports are drop-in: same node names, topics, message
+    # types, and params. hexa_control has no C++ port, so control_node below is
+    # always the Python node.
+    use_cpp = LaunchConfiguration("node_implementation").perform(context).lower() == "cpp"
+    kinematics_pkg = "hexa_kinematics_cpp" if use_cpp else "hexa_kinematics"
+    gait_pkg = "hexa_gait_cpp" if use_cpp else "hexa_gait"
+    posture_pkg = "hexa_posture_cpp" if use_cpp else "hexa_posture"
 
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -226,26 +232,16 @@ def generate_launch_description():
                 "controllers); `hexa robot up` energizes it live."
             ),
         ),
-        # Defaults honour the HEXA_CPP env var (set by `hexa sim up --cpp`), so the
-        # whole chain flips to the C++ ports without per-command args. An
-        # explicit `use_cpp_*:=...` on the command line still overrides.
+        # Which port of the kinematics/gait/posture nodes to launch. Default
+        # ("cpp") comes from the `hexa_launch` block of ros2_controllers.yaml;
+        # `node_implementation:=python` runs the ament_python originals instead.
         DeclareLaunchArgument(
-            "use_cpp_kinematics",
-            default_value=os.environ.get("HEXA_CPP", "false"),
-            description="Run the C++ hexa_kinematics_cpp nodes instead of the "
-                        "Python hexa_kinematics nodes.",
-        ),
-        DeclareLaunchArgument(
-            "use_cpp_gait",
-            default_value=os.environ.get("HEXA_CPP", "false"),
-            description="Run the C++ hexa_gait_cpp gait_node instead of the "
-                        "Python hexa_gait gait_node.",
-        ),
-        DeclareLaunchArgument(
-            "use_cpp_posture",
-            default_value=os.environ.get("HEXA_CPP", "false"),
-            description="Run the C++ hexa_posture_cpp posture_node instead of "
-                        "the Python hexa_posture posture_node.",
+            "node_implementation",
+            default_value=_node_implementation(),
+            description="Which implementation of the kinematics/gait/posture "
+                        "nodes to launch: 'cpp' (the hexa_*_cpp ports; Python "
+                        "nodes not started) or 'python' (the ament_python "
+                        "originals).",
         ),
         OpaqueFunction(function=_bringup),
     ])

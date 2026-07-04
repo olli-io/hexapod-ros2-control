@@ -1,31 +1,17 @@
 # Joystick teleop config — X-input controller (Xbox, 8BitDo, etc.).
-#
-# Each section enumerates a controller's physical keys and binds each
-# one to a *function name* (or "" for unbound). The function namespace
-# is fixed in code (see joy_mapping.ALL_FUNCTIONS); the loader rejects
-# unknown names. Controller hardware identity (button/axis indices,
-# sign conventions, trigger threshold) lives in ``base`` only — swap
-# controllers by editing that block.
+# Keys bind to function names (see joy_mapping.ALL_FUNCTIONS); "" is unbound.
+# Hardware identity (indices, signs, threshold) lives in ``base`` only.
 
-initial_mode: gait # "gait" | "posture" | "animation"
+initial_mode: gait # gait | posture | animation
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
 default_gait: tripod
-# Surf and crawl are inherently less stable than the other gaits
-# (marked ``unstable`` on their strategy classes in hexa_gait — the
-# single source of truth). When false, they are skipped in the D-pad
-# gait rotation above.
-allow_unstable_gaits: true
-# ANIMATION-mode cycler list comes from hexa_description/config/tuning.yaml
-# (posture_node ``animation_mode_animations``) — single source of truth. Entry into
-# ANIMATION snaps to index 0.
+allow_unstable_gaits: true # when false, surf and crawl are skipped
 
 base:
-  deadband: 0.1 # stick deadband applied after sign norm
-  trigger_threshold: 0.5 # analog triggers used as binary; press = axis < this
+  deadband: 0.1
+  trigger_threshold: 0.5 # analog triggers as binary; press = axis < this
 
-  # Linux joystick API indices — sensor_msgs/Joy.buttons[] and Joy.axes[].
-  # Edit these two blocks (and ``axis_signs`` below) to support a
-  # different controller.
+  # sensor_msgs/Joy indices — edit to support a different controller.
   buttons:
     a: 0
     b: 1
@@ -41,14 +27,12 @@ base:
     l2: 2 # analog trigger (rest=+1.0, pressed=-1.0)
     right_stick_x: 3
     right_stick_y: 4
-    r2: 5 # analog trigger
+    r2: 5
     dpad_x: 6
     dpad_y: 7
 
-  # Per-axis sign so a driver that reports the opposite direction can
-  # be normalised. After the sign: stick forward → +1, stick left → +1,
-  # dpad-up → +1, dpad-right → +1 (REP-103 body frame). Missing entries
-  # default to +1.0.
+  # Per-axis sign; missing entries default to +1.0.
+  # After signs: forward → +1, left → +1, dpad-up/right → +1 (REP-103).
   axis_signs:
     left_stick_x: -1.0
     left_stick_y: -1.0
@@ -57,8 +41,7 @@ base:
     dpad_x: -1.0
     dpad_y: -1.0
 
-  # Mode-agnostic bindings. Functions:
-  #   gait_mode | posture_mode | animation_mode | init | record
+  # Mode-agnostic: gait_mode | posture_mode | animation_mode | init | record
   bindings:
     a: gait_mode
     b: animation_mode
@@ -68,12 +51,6 @@ base:
     select: record
 
 gait:
-  # Functions allowed on button-class keys (l1/r1/l2/r2/dpad_*):
-  #   yaw_left | yaw_right | wiggle_left | wiggle_right |
-  #   height_up | height_down | gait_prev | gait_next |
-  #   animation_prev | animation_next
-  # Functions allowed on axis-class keys (sticks):
-  #   drive_x | drive_y | drive_yaw | pose_x | pose_y | tilt_roll | tilt_pitch
   bindings:
     l1: ""
     r1: ""
@@ -111,7 +88,7 @@ posture:
   yaw_max_deg: 20.0
   yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle
   revert_tau_s: 0.25 # low-pass for Start-button revert
-  wiggle_pivot_forward_m: 0.06 # forward pivot point for the wiggle
+  wiggle_pivot_forward_m: 0.06
   height:
     max_m: 0.04
     min_m: -0.04
@@ -132,15 +109,7 @@ animation:
     right_stick_x: drive_y
     right_stick_y: drive_x
 
-# Gait-mode stick scaling (linear and angular caps) comes from
-# hexa_description/config/tuning.yaml; the teleop node loads it at startup and
-# swaps in the active gait's cap whenever /cmd_gait updates.
-
-# Coexistence with the web teleop (hexa_webteleop). When enabled, the
-# gamepad node subscribes to /teleop/owner and only publishes /cmd_vel,
-# /body/pose, /cmd_gait, /animation/mode, /gait/initialize when it is
-# the current owner. Default owner is "gamepad"; the web node claims
-# control when a webapp requests it and releases on disconnect. Disable
-# only for a standalone gamepad session that must never yield control.
+# Web teleop coexistence: when enabled, gamepad publishes only while it owns
+# /teleop/owner (default owner "gamepad"). Disable for standalone gamepad.
 arbitration:
   enabled: true

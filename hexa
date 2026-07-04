@@ -14,7 +14,8 @@ Commands:
   sim <up|down|refresh|restart|logs|build|shell|status|cmd...>
                               Sim-container lifecycle via docker compose. The sim stack
                               runs as the container's PID 1, so:
-                                up [--cpp] [--clean]  bring it up detached
+                                up [--clean] [--pico] bring it up detached (--pico runs the
+                                                      firmware-in-sim brain instead)
                                 down                  stop and remove it
                                 refresh [args...]     rebuild + restart the running stack
                                 restart               restart without rebuild (apply config edits)
@@ -23,14 +24,12 @@ Commands:
                                 shell                 interactive ROS2-sourced shell
                                 status                compose ps (+ node list when up)
                                 <cmd...>              one-off command, e.g. 'ros2 topic list'
-                              --cpp sets HEXA_CPP=1 so the launch files default to the C++
-                              ports (hexa_kinematics_cpp / hexa_gait_cpp); --clean rebuilds
-                              the image. See 'hexa sim --help'.
-  pico <up|down|logs|status>
-                              Firmware-in-sim: the Pi Pico firmware brain walks the Gazebo
-                              hexapod (sim + joy + firmware bridge). 'up' builds
-                              hexa_pico_bridge then brings the pico service up detached;
-                              mutually exclusive with the sim stack.
+                              The node implementation (C++ ports by default) is chosen by
+                              the hexa_launch block of ros2_controllers.yaml, not a flag;
+                              --clean rebuilds the image. 'up --pico' walks the Gazebo
+                              hexapod with the Pi Pico firmware brain (builds
+                              hexa_pico_bridge first; mutually exclusive with the plain sim
+                              stack). See 'hexa sim --help'.
   deploy <subcommand> [args]  Cross-build + ship the production image to the robot.
                               Subcommands: build, push <host>. Run with no
                               subcommand for the full list.
@@ -59,12 +58,6 @@ case "${cmd}" in
         # Thin passthrough: scripts/sim.sh is the docker compose lifecycle
         # dispatcher (up / down / logs / build / shell / status / one-off cmd).
         exec "${REPO_ROOT}/scripts/sim.sh" "$@"
-        ;;
-    pico)
-        # Firmware-in-sim, run as its own compose service. scripts/sim.sh owns
-        # the pico verbs (up / down / logs / status) since it shares the image
-        # and the compose helper.
-        exec "${REPO_ROOT}/scripts/sim.sh" pico "$@"
         ;;
     deploy)
         exec "${REPO_ROOT}/scripts/deploy.sh" "$@"

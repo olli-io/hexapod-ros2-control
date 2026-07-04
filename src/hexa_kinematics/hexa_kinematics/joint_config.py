@@ -1,15 +1,20 @@
 """Per-joint servo configuration and default standing pose.
 
-Loads the two YAMLs that live in ``hexa_description/config/``:
+Loads ``geometry.yaml`` from ``hexa_description/config/``: under
+``joints:``, per-joint-type servo center (URDF angle at the servo's
+physical zero) plus absolute lower / upper travel limits, all in
+intuitive per-joint degrees.
 
-- ``geometry.yaml`` — under ``joints:``, per-joint-type servo center
-  (URDF angle at the servo's physical zero) plus absolute lower / upper
-  travel limits, all in intuitive per-joint degrees.
-- ``standing_pose.yaml`` — per-joint-type default at-rest angle.
+The standing pose (per-joint-type default at-rest angle) is no longer a
+file here — it lives in ``hexa_description/config/tuning.yaml`` as
+``gait_node`` ros params (``standing_pose.coxa_deg`` etc.), read by the
+gait node and passed to :func:`load_standing_pose` as a
+:class:`StandingPoseDeg`.
 
-Both files express angles in **degrees**, in each joint's intuitive
-sense. This module is the single source of truth for converting those
-intuitive degrees into the IK-convention radians used by
+Both the geometry limits and the standing pose express angles in
+**degrees**, in each joint's intuitive sense. This module is the single
+source of truth for converting those intuitive degrees into the
+IK-convention radians used by
 ``hexa_kinematics`` (see ``leg_geometry.py``). The same arithmetic is
 inlined inside ``hexapod.urdf.xacro`` so the URDF stays a pure
 mathematical presentation of the hexapod (joint zero = legs splayed
@@ -46,6 +51,21 @@ _CENTER_FIELD: dict[str, str] = {
     "femur": "above_horizontal_deg",
     "tibia": "interior_deg",
 }
+
+
+@dataclass(frozen=True)
+class StandingPoseDeg:
+    """Per-joint at-rest angles in the intuitive per-joint DEGREE convention.
+
+    Sourced from ``tuning.yaml``'s ``gait_node`` ``standing_pose`` ros
+    params. Field names match the ros param leaf names. Defaults mirror
+    that YAML block so a bare ``ros2 run`` (and unit tests) start on the
+    canonical pose without loading the file.
+    """
+
+    coxa_deg: float = 0.0
+    femur_above_horizontal_deg: float = 35.0
+    tibia_interior_deg: float = 68.0
 
 
 @dataclass(frozen=True)
@@ -110,10 +130,10 @@ def load_joint_limits(geometry_path: str | Path) -> dict[str, JointLimits]:
 
 
 def load_standing_pose(
-    standing_pose_path: str | Path,
+    pose: StandingPoseDeg,
     geometry_path: str | Path,
 ) -> JointAngles:
-    """Parse ``standing_pose.yaml`` into ``(theta_coxa, theta_femur, theta_tibia)``.
+    """Convert a :class:`StandingPoseDeg` to ``(theta_coxa, theta_femur, theta_tibia)``.
 
     Angles are in IK-convention radians. Each joint's standing angle is
     validated against ``geometry.yaml``'s ``[lower, upper]`` window; a
@@ -121,14 +141,16 @@ def load_standing_pose(
     edit fails fast at startup instead of silently clipping inside the
     URDF.
     """
-    with open(standing_pose_path) as f:
-        raw = yaml.safe_load(f)
     limits = load_joint_limits(geometry_path)
+    pose_deg = {
+        "coxa": pose.coxa_deg,
+        "femur": pose.femur_above_horizontal_deg,
+        "tibia": pose.tibia_interior_deg,
+    }
 
     angles: dict[str, float] = {}
     for joint_type in ("coxa", "femur", "tibia"):
-        cfg = raw[joint_type]
-        theta = _to_urdf_rad(joint_type, float(cfg[_CENTER_FIELD[joint_type]]))
+        theta = _to_urdf_rad(joint_type, float(pose_deg[joint_type]))
         lim = limits[joint_type]
         if not (lim.lower <= theta <= lim.upper):
             raise ValueError(

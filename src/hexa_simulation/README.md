@@ -20,25 +20,3 @@ sim-free.
   `JointGroupPositionController` covering all 18 joints.
 
 The real-robot bringup never loads this package.
-
-## Run
-
-From inside the sim container:
-
-```
-colcon build --symlink-install
-source install/setup.bash
-ros2 launch hexa_simulation sim.launch.py
-```
-
-The model spawns at `z=0.25` by default and falls onto the ground plane.
-Send a joint group command to verify ros2_control is alive:
-
-```
-ros2 topic pub --once /joint_group_position_controller/commands \
-  std_msgs/msg/Float64MultiArray "{data: [0,0,0, 0,0,0, 0,0,0, 0,0,0, 0,0,0, 0,0,0]}"
-```
-
-Joint order matches `config/ros2_controllers.yaml`:
-`l_front`, `l_middle`, `l_rear`, `r_front`, `r_middle`, `r_rear`, each
-`coxa, femur, tibia`.
