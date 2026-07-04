@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace hexa_display {
+namespace hexa::display {
 
 FaceAnimationRunner::FaceAnimationRunner(UniformFn uniform, GazeSink on_gaze,
                                          BlinkSink on_blink)
@@ -69,4 +69,4 @@ void FaceAnimationRunner::run(const FaceAnimation& animation, double now) {
     }
 }
 
-}  // namespace hexa_display
+}  // namespace hexa::display

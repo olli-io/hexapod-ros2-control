@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # Hexapod robot-image build + ship. Dispatched from `./hexa deploy <cmd>`.
 #
-# Workstation-only commands:
+# Two deploy targets:
+#   (default)          the Raspberry Pi robot — an ARM64 container image.
+#   --pico             the Pi Pico 2 W firmware — an RP2350 .uf2.
+#
+# Workstation-only commands (Pi target):
 #   build              cross-build ARM64 image, save to .deploy/<sha>.tar.gz
 #   push <host>        scp image + compose + launcher, ssh-load + start cold
 #
-# Once shipped, operate the running container with `hexa robot <cmd>` (see
-# scripts/robot.sh) — locally on the Pi or remotely with `hexa robot -H <host>`.
+# Pico target:
+#   --pico [args...]   cross-build pi-pico-firmware/ inside the hexa-sim
+#                      container (baked Pico SDK + ARM toolchain); the .uf2
+#                      lands in pi-pico-firmware/build/. args -> cmake --build.
+#
+# Once the Pi image is shipped, operate the running container with `hexa robot
+# <cmd>` (see scripts/robot.sh) — locally on the Pi or remotely with
+# `hexa robot -H <host>`.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,17 +24,23 @@ cd "${REPO_ROOT}"
 
 IMAGE_REPO="hexa-robot"
 COMPOSE_FILE="docker-compose.robot.yaml"
+SIM_COMPOSE_FILE="docker-compose.sim.yaml"
 DEPLOY_DIR=".deploy"
 
 usage() {
     cat <<EOF
-Usage: ./hexa deploy <command> [args...]
+Usage: ./hexa deploy [--pico] <command> [args...]
 
-Workstation:
+Raspberry Pi robot (ARM64 image):
   build                       Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
   push <host>                 scp + ssh-load the latest tarball to <host>, then start cold.
 
-Operate the shipped container with 'hexa robot <cmd>' (locally on the Pi, or
+Pi Pico 2 W firmware (RP2350 .uf2):
+  --pico [args...]            Cross-build pi-pico-firmware/ in the hexa-sim container
+                              (baked Pico SDK + ARM toolchain). The .uf2 lands in
+                              pi-pico-firmware/build/; args pass to 'cmake --build'.
+
+Operate the shipped Pi container with 'hexa robot <cmd>' (locally on the Pi, or
 'hexa robot -H <host> <cmd>' from the workstation).
 EOF
 }
@@ -70,6 +86,36 @@ cmd_build() {
     local size
     size="$(du -h "${tarball}" | cut -f1)"
     echo ">> Done: ${tarball} (${size})"
+}
+
+# Cross-build the RP2350 Pico firmware inside the hexa-sim container, whose image
+# carries the baked Pico SDK + ARM toolchain + Bluepad32 + picotool (see
+# sim.Dockerfile). The Pico 2 W is a deploy target like the Pi, so the build
+# lives under `deploy`. An ephemeral `compose run --rm`; the workspace is bind-
+# mounted, so hexa_pico.uf2 (+ .elf/.bin/.map) lands on the host under
+# pi-pico-firmware/build/. UID/GID are pinned so the artifacts stay host-owned.
+# Extra args forward to `cmake --build` (e.g. -v, --target clean). PICO_BOARD
+# defaults to pico2_w (the firmware CMakeLists default).
+cmd_pico() {
+    require_cmd docker
+
+    # `compose run` (ephemeral, one-shot) — NOT `compose up`, so this never
+    # launches the ROS2 sim stack; it only spins a throwaway container to run
+    # the cross-build. --build brings the hexa-sim image up to date first (so it
+    # picks up the baked Pico toolchain from sim.Dockerfile) without a separate
+    # image-build or sim-launch step; it's cached/fast when nothing changed.
+    local flags=(--rm --build)
+    [ -t 0 ] || flags+=(-T)
+
+    echo ">> Building the Pi Pico firmware (RP2350) in a one-shot hexa-sim container"
+    env UID="$(id -u)" GID="$(id -g)" \
+        docker compose -f "${SIM_COMPOSE_FILE}" run "${flags[@]}" sim \
+        bash -lc "set -e; cd pi-pico-firmware \
+            && cmake -B build -DPICO_BOARD=pico2_w \
+            && cmake --build build -j\"\$(nproc)\" $*"
+    echo ">> Done: pi-pico-firmware/build/hexa_pico.uf2"
+    echo "   Flash it by holding BOOTSEL and copying the .uf2 onto RPI-RP2,"
+    echo "   or with 'picotool load -f pi-pico-firmware/build/hexa_pico.uf2'."
 }
 
 cmd_push() {
@@ -129,6 +175,14 @@ EOF
 if [[ $# -lt 1 ]]; then
     usage
     exit 1
+fi
+
+# --pico selects the Pico firmware target (leading flag, e.g. `hexa deploy
+# --pico`); everything after it forwards to the firmware build.
+if [[ "${1}" == "--pico" ]]; then
+    shift
+    cmd_pico "$@"
+    exit 0
 fi
 
 sub="$1"

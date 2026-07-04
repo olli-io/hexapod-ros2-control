@@ -137,7 +137,7 @@ See `../.tmp/plan/pi-pico-2-w/` for the full plan. This tree implements:
   `src/face_policy.hpp`): the 256×64 SH1122 OLED eyes, closing the LED-face gap
   part 09 left (its status LED "stands in for the dropped `hexa_display` face").
   Reuses the **same shared source** as the sim/ROS face — the vendored eye core
-  (`hexa_display/vendor/core` `EyeAnim`/`EyeRaster`) plus the pure policy library
+  (`shared/display_core/core` `EyeAnim`/`EyeRaster`) plus the pure policy library
   (`expression_policy` / `face_animation` / `face_animation_runner`), compiled
   directly like `motion_core`; the only target-specific piece is
   `Sh1122PanelPico`, a link-time swap of the Linux spidev/GPIO-chardev transport
@@ -202,11 +202,17 @@ git submodule add https://github.com/ricardoquesada/bluepad32 external/bluepad32
 # or: export BLUEPAD32_ROOT=/path/to/bluepad32
 ```
 
-Needs a Bluepad32 with RP2350 / Pico 2 W support. `btstack_config.h` (firmware
-root) configures the BTstack HID-host + flow-control profile; keep it in sync
-with the vendored Bluepad32 / SDK BTstack version if pairing regresses. BTstack
-runs in the background (`pico_cyw43_arch_threadsafe_background`); the cooperative
-loop just calls `bt_teleop::read()` each tick.
+Needs a Bluepad32 with RP2350 / Pico 2 W support. The firmware root carries the
+two app-provided config headers Bluepad32 expects on the include path:
+`btstack_config.h` (BTstack HID-host + flow-control profile) and `sdkconfig.h`
+(Bluepad32 "menuconfig" defaults, mirrored from its `examples/pico_w`); keep both
+in sync with the vendored Bluepad32 / SDK BTstack version if pairing regresses.
+The component is pulled in with `add_subdirectory` (the `bluepad32` target),
+using BTstack from the Pico SDK — there is no `bluepad32_import.cmake`. BTstack
+runs in the background: the firmware links `pico_cyw43_arch_none` (the BT-only,
+`CYW43_LWIP=0` arch, which still runs the threadsafe_background async context and
+matches the arch Bluepad32's component links), so the cooperative loop just calls
+`bt_teleop::read()` each tick.
 
 ## Servo 2040 link (part 03)
 
@@ -234,23 +240,47 @@ YAMLs. No PWM code runs on the Pico.
 
 ## Toolchain
 
-- **Pico SDK** pinned to **2.1.1** (RP2350 + Bluepad32 require >= 2.1.0).
-  Provide it one of two ways:
-  - export `PICO_SDK_PATH` pointing at a local checkout of the SDK, **or**
-  - let CMake fetch the pinned tag from git: `-DPICO_SDK_FETCH_FROM_GIT=ON`.
-- **ARM GCC** — `arm-none-eabi-gcc` (the SDK-recommended toolchain; Arch:
-  `arm-none-eabi-gcc` + `arm-none-eabi-newlib`).
-- **CMake** >= 3.13, plus `picotool` for flashing over USB.
+The **sim container already carries the whole firmware toolchain** — the ARM
+cross compiler, a pinned Pico SDK, Bluepad32, and picotool are baked into the
+`hexa-sim` image (see `sim.Dockerfile`, "Pi Pico firmware toolchain"). Build
+inside it with `hexa deploy --pico` (below); nothing needs installing on the
+host. What the image provides:
+
+- **Pico SDK** pinned to **2.1.1** (RP2350 + Bluepad32 require >= 2.1.0), baked
+  at `/opt/pico-sdk` and exported as `PICO_SDK_PATH`.
+- **Bluepad32** pinned to **4.2.0** (the release that added Pico 2 W / RP2350
+  support), baked at `/opt/bluepad32` and exported as `BLUEPAD32_ROOT` (the
+  firmware's `btstack_config.h` stays the version sync point). Override with
+  `--build-arg BLUEPAD32_REF=<tag>` when building the image.
+- **ARM GCC** — `arm-none-eabi-gcc` (`gcc-arm-none-eabi` +
+  `libnewlib-arm-none-eabi` + `libstdc++-arm-none-eabi-newlib`).
+- **CMake** >= 3.13 and **picotool** (built against the SDK, installed to
+  `/usr/local`; `pico_add_extra_outputs` finds it via `picotool_DIR`).
+
+To build on a bare host instead, provide `PICO_SDK_PATH` (or
+`-DPICO_SDK_FETCH_FROM_GIT=ON`) and `BLUEPAD32_ROOT` yourself.
 
 ## Build
 
+The Pico 2 W is a deploy target (its shippable artifact is the `.uf2`), so the
+build lives under `hexa deploy`, in the sim container where the ARM toolchain
+already lives:
+
 ```sh
-cd pi-pico-2-w-firmware
-cmake -B build -DPICO_BOARD=pico2_w    # add -DPICO_SDK_FETCH_FROM_GIT=ON if no PICO_SDK_PATH
-cmake --build build -j
+./hexa deploy --pico          # cmake configure + build; extra args -> cmake --build
 ```
 
-Produces `build/hexa_pico.uf2` (plus `.elf`/`.bin`/`.map`).
+Produces `pi-pico-firmware/build/hexa_pico.uf2` (plus `.elf`/`.bin`/`.map`) on
+the host — the tree is bind-mounted. Equivalent raw invocation:
+
+```sh
+./hexa sim bash -lc 'cd pi-pico-firmware && cmake -B build -DPICO_BOARD=pico2_w && cmake --build build -j$(nproc)'
+```
+
+`hexa deploy --pico` runs in a one-shot `compose run --build` container — it
+(re)builds the `hexa-sim` image on demand (picking up the baked toolchain) and
+**never launches the ROS2 sim stack**, so building firmware is fully separate
+from `hexa sim up`.
 
 ## Flash
 

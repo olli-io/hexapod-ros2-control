@@ -44,14 +44,14 @@
 #include "face_animation.hpp"
 #include "face_animation_runner.hpp"
 
-using hexa_display::BatteryMonitor;
-using hexa_display::decide;
-using hexa_display::DisplayTarget;
-using hexa_display::FaceAnimation;
-using hexa_display::FaceAnimationRunner;
-using hexa_display::PolicyConfig;
-using hexa_display::PolicyInputs;
-using hexa_display::selectFaceAnimation;
+using hexa::display::BatteryMonitor;
+using hexa::display::decide;
+using hexa::display::DisplayTarget;
+using hexa::display::FaceAnimation;
+using hexa::display::FaceAnimationRunner;
+using hexa::display::PolicyConfig;
+using hexa::display::PolicyInputs;
+using hexa::display::selectFaceAnimation;
 
 namespace {
 
@@ -170,7 +170,7 @@ public:
         _rng.seed(std::random_device{}());
 
         const double update_rate_hz = declare_parameter<double>("update_rate_hz", 10.0);
-        for (const auto& [state, expression] : hexa_display::defaultExpressionMap()) {
+        for (const auto& [state, expression] : hexa::display::defaultExpressionMap()) {
             declare_parameter<std::string>("expression_map." + state,
                                            toLower(expressionName(expression)));
         }
@@ -192,7 +192,7 @@ public:
         declare_parameter<double>("pose_tilt_threshold_rad", 0.08);
         declare_parameter<double>("idling_start_delay_s", 4.0);
 
-        for (const auto& [state, expression] : hexa_display::defaultExpressionMap()) {
+        for (const auto& [state, expression] : hexa::display::defaultExpressionMap()) {
             (void)expression;
             _config.expression_map[state] = parseExpressionParam("expression_map." + state);
         }
@@ -298,7 +298,7 @@ private:
     PolicyConfig _config;
     BatteryMonitor _battery;
     FaceAnimationRunner _runner;
-    DisplayTarget _last_target = hexa_display::kIdleTarget;
+    DisplayTarget _last_target = hexa::display::kIdleTarget;
 
     std::optional<std::string> _gait_state;
     geometry_msgs::msg::Twist _cmd_vel;

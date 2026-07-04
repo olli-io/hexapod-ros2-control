@@ -23,8 +23,8 @@ inline Expression exprOrNeutral(std::string_view name) {
     return Expression::NEUTRAL;  // bake-time validated; defensive fallback
 }
 
-inline hexa_display::PolicyConfig buildPolicyConfig() {
-    hexa_display::PolicyConfig c;
+inline hexa::display::PolicyConfig buildPolicyConfig() {
+    hexa::display::PolicyConfig c;
     for (const auto& e : hexa::config::kFaceExpressionMap)
         c.expression_map[std::string(e.state)] = exprOrNeutral(e.expression);
     c.animation_expression = exprOrNeutral(hexa::config::kFaceAnimationExpression);

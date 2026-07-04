@@ -30,7 +30,7 @@
 
 #include "Expression.h"  // Expression, GazeDirection
 
-namespace hexa_display {
+namespace hexa::display {
 
 constexpr double kCmdVelZeroTol = 1e-4;
 
@@ -138,4 +138,4 @@ private:
     std::optional<double> below_critical_since_;
 };
 
-}  // namespace hexa_display
+}  // namespace hexa::display

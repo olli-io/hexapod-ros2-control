@@ -17,41 +17,46 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(hexa_interfaces REQUIRED)
 
-# This package is self-contained: everything it compiles lives under the
-# package directory. The shared firmware pieces and the u8g2 C core are
-# vendored under vendor/ (see vendor/README.md for provenance and re-sync).
+# The pure policy + the vendored eye core / u8g2 C core live in the shared
+# display core (shared/display_core), compiled directly here — the same source
+# the Pico firmware and the firmware host test build, so the eyes rasterize
+# bit-identically across targets (mirrors how hexa_locomotion consumes
+# shared/motion_core). This package keeps only the rclcpp nodes and the Linux
+# SH1122 panel driver. See shared/display_core/README.md for provenance.
+set(DISPLAY_CORE ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/display_core)
 
 # Vendored u8g2 C core (framework-independent), compiled into its own library
 # so --gc-sections can drop the unused device drivers. The 38 MB font-data
 # blobs are intentionally not vendored — the face draws no text.
-file(GLOB U8G2_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/u8g2/*.c")
+file(GLOB U8G2_SRCS "${DISPLAY_CORE}/u8g2/*.c")
 add_library(u8g2_core STATIC ${U8G2_SRCS})
-target_include_directories(u8g2_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/vendor/u8g2")
+target_include_directories(u8g2_core PUBLIC "${DISPLAY_CORE}/u8g2")
 
 # Platform-free pieces vendored from the firmware tree:
 #   EyeAnim/EyeRaster        - the animation + rasterizer (also host-tested)
 #   ExpressionController.cpp - only for expressionName()/gazeName(), the single
 #                              source of truth for the on-wire enum names
 set(CORE_SRCS
-  "${CMAKE_CURRENT_SOURCE_DIR}/vendor/core/EyeAnim.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/vendor/core/EyeRaster.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/vendor/core/ExpressionController.cpp"
+  "${DISPLAY_CORE}/core/EyeAnim.cpp"
+  "${DISPLAY_CORE}/core/EyeRaster.cpp"
+  "${DISPLAY_CORE}/core/ExpressionController.cpp"
 )
 
-# Pure support library: the expression/gaze policy, the face-animation
-# sequences + clock, and the SH1122 panel driver. No rclcpp — every piece is
-# unit-testable standalone (the gtest suites link this directly). Built on the
-# vendored eye core + u8g2.
+# Pure support library: the shared expression/gaze policy + face-animation
+# sequences/clock (from shared/display_core) and the Linux SH1122 panel driver.
+# No rclcpp — every piece is unit-testable standalone (the gtest suites link
+# this directly). Built on the vendored eye core + u8g2.
 add_library(hexa_display_support STATIC
-  src/expression_policy.cpp
-  src/face_animation.cpp
-  src/face_animation_runner.cpp
+  ${DISPLAY_CORE}/expression_policy.cpp
+  ${DISPLAY_CORE}/face_animation.cpp
+  ${DISPLAY_CORE}/face_animation_runner.cpp
   src/Sh1122Panel.cpp
   ${CORE_SRCS}
 )
 target_include_directories(hexa_display_support PUBLIC
   src
-  "${CMAKE_CURRENT_SOURCE_DIR}/vendor/core"
+  "${DISPLAY_CORE}"
+  "${DISPLAY_CORE}/core"
 )
 target_link_libraries(hexa_display_support u8g2_core)
 

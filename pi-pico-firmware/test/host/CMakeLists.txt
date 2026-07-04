@@ -18,7 +18,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../..)
 set(SHARED ${REPO_ROOT}/shared/motion_core)
-set(DISPLAY ${REPO_ROOT}/src/hexa_display)
+set(DISPLAY_CORE ${REPO_ROOT}/shared/display_core)
 set(FW_SRC ${CMAKE_CURRENT_LIST_DIR}/../../src)
 set(GEN_CONFIG ${SHARED}/config_generated.hpp)
 
@@ -30,7 +30,7 @@ add_custom_command(
   COMMAND ${PYTHON3} ${SHARED}/tools/gen_config.py
           --repo-root ${REPO_ROOT} --out ${GEN_CONFIG}
   DEPENDS ${SHARED}/tools/gen_config.py
-          ${DISPLAY}/config/display.yaml
+          ${REPO_ROOT}/src/hexa_display/config/display.yaml
   COMMENT "Generating config_generated.hpp from repo YAMLs"
   VERBATIM)
 add_custom_target(gen_config DEPENDS ${GEN_CONFIG})
@@ -41,12 +41,12 @@ enable_testing()
 # core + the expression/gaze policy + the face-animation clock.
 add_executable(test_face_policy
   test_face_policy.cpp
-  ${DISPLAY}/src/expression_policy.cpp
-  ${DISPLAY}/src/face_animation.cpp
-  ${DISPLAY}/src/face_animation_runner.cpp
-  ${DISPLAY}/vendor/core/ExpressionController.cpp)
+  ${DISPLAY_CORE}/expression_policy.cpp
+  ${DISPLAY_CORE}/face_animation.cpp
+  ${DISPLAY_CORE}/face_animation_runner.cpp
+  ${DISPLAY_CORE}/core/ExpressionController.cpp)
 add_dependencies(test_face_policy gen_config)
 target_include_directories(test_face_policy PRIVATE
-  ${SHARED} ${DISPLAY}/src ${DISPLAY}/vendor/core ${FW_SRC})
+  ${SHARED} ${DISPLAY_CORE} ${DISPLAY_CORE}/core ${FW_SRC})
 target_compile_options(test_face_policy PRIVATE -Wall -Wextra -fexceptions)
 add_test(NAME test_face_policy COMMAND test_face_policy)

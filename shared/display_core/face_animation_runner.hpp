@@ -16,7 +16,7 @@
 #include "Expression.h"  // GazeDirection
 #include "face_animation.hpp"
 
-namespace hexa_display {
+namespace hexa::display {
 
 class FaceAnimationRunner {
 public:
@@ -51,4 +51,4 @@ private:
     double pending_since_ = 0.0;
 };
 
-}  // namespace hexa_display
+}  // namespace hexa::display

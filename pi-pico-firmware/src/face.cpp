@@ -69,11 +69,11 @@ FaceRenderTarget snapshot(bool clear_blink) {
 // ── Config (built once from the baked hexa::config) ─────────────────────────
 bool                        g_enabled = false;
 PanelConfigPico             g_panel_cfg;
-hexa_display::PolicyConfig  g_cfg;
-std::optional<hexa_display::FaceAnimationRunner> g_runner;
+hexa::display::PolicyConfig  g_cfg;
+std::optional<hexa::display::FaceAnimationRunner> g_runner;
 
 // core0 policy state
-hexa_display::DisplayTarget g_last_target;
+hexa::display::DisplayTarget g_last_target;
 std::string                 g_animation_mode;  // current, tracked from selects
 bool                        g_link_ever = false;
 double                      g_next_policy_s = 0.0;
@@ -189,7 +189,7 @@ void tick(const FaceState& state, double now_s) {
     if (state.link_up) g_link_ever = true;
     if (state.animation_event) g_animation_mode = std::string(state.animation_name);
 
-    hexa_display::PolicyInputs in;
+    hexa::display::PolicyInputs in;
     if (g_link_ever) in.gait_state = hexa::gait::state_value(state.engine_state);
     in.vx = state.vx;
     in.vy = state.vy;
@@ -201,9 +201,9 @@ void tick(const FaceState& state, double now_s) {
     in.battery_low = state.battery_low;
     in.battery_critical = state.battery_critical;
 
-    g_last_target = hexa_display::decide(in, g_cfg, g_last_target);
-    const hexa_display::FaceAnimation* animation = g_runner->update(
-        hexa_display::selectFaceAnimation(in, g_cfg), now_s,
+    g_last_target = hexa::display::decide(in, g_cfg, g_last_target);
+    const hexa::display::FaceAnimation* animation = g_runner->update(
+        hexa::display::selectFaceAnimation(in, g_cfg), now_s,
         g_cfg.idling_start_delay_s);
 
     // Expression always comes from the policy; gaze too, unless a face animation

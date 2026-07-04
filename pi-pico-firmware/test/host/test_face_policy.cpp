@@ -31,14 +31,14 @@ int g_failures = 0;
 
 // A PolicyInputs shaped exactly as main.cpp's core0 assembler builds it: gait
 // state present (link up), everything else neutral.
-hexa_display::PolicyInputs walking(const std::string& state) {
-    hexa_display::PolicyInputs in;
+hexa::display::PolicyInputs walking(const std::string& state) {
+    hexa::display::PolicyInputs in;
     in.gait_state = state;
     return in;
 }
 
 void test_config_bake() {
-    const hexa_display::PolicyConfig c = face::buildPolicyConfig();
+    const hexa::display::PolicyConfig c = face::buildPolicyConfig();
 
     // Gait-state -> expression map, straight from display.yaml's defaults.
     CHECK(c.expression_map.at("gait") == Expression::HAPPY);
@@ -57,8 +57,8 @@ void test_config_bake() {
 }
 
 void test_decide_precedence() {
-    const hexa_display::PolicyConfig c = face::buildPolicyConfig();
-    const hexa_display::DisplayTarget prev;
+    const hexa::display::PolicyConfig c = face::buildPolicyConfig();
+    const hexa::display::DisplayTarget prev;
 
     // Gait-state map drives the expression through the baked config.
     CHECK(decide(walking("gait"), c, prev).expression == Expression::HAPPY);
@@ -66,24 +66,24 @@ void test_decide_precedence() {
     CHECK(decide(walking("stand"), c, prev).expression == Expression::NEUTRAL);
 
     // Animation mode outranks the gait map.
-    hexa_display::PolicyInputs anim = walking("gait");
+    hexa::display::PolicyInputs anim = walking("gait");
     anim.animation_mode = "wave";
     CHECK(decide(anim, c, prev).expression == Expression::WOOZY);
 
     // Battery-critical outranks everything and forces the gaze center.
-    hexa_display::PolicyInputs crit = walking("gait");
+    hexa::display::PolicyInputs crit = walking("gait");
     crit.battery_critical = true;
     crit.wz = 5.0;  // would otherwise pull the gaze hard left
-    const hexa_display::DisplayTarget t = decide(crit, c, prev);
+    const hexa::display::DisplayTarget t = decide(crit, c, prev);
     CHECK(t.expression == Expression::DEAD);
     CHECK(t.gaze == GazeDirection::CENTER);
 }
 
 void test_boot_breathing() {
-    const hexa_display::PolicyConfig c = face::buildPolicyConfig();
+    const hexa::display::PolicyConfig c = face::buildPolicyConfig();
     // Before the gamepad first pairs the assembler leaves gait_state unset — the
     // policy asks for the boot "breathing" animation.
-    hexa_display::PolicyInputs booting;  // gait_state == nullopt
+    hexa::display::PolicyInputs booting;  // gait_state == nullopt
     const std::optional<std::string> anim = selectFaceAnimation(booting, c);
     CHECK(anim.has_value() && *anim == "breathing");
 }

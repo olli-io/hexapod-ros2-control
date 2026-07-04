@@ -28,6 +28,9 @@
 #define ENABLE_MICRO_ECC_FOR_LE_SECURE_CONNECTIONS
 #define ENABLE_LOG_ERROR
 #define ENABLE_LOG_INFO
+// Required by btstack's hci_dump_embedded_stdout.c, which the Pico SDK btstack
+// build (pulled in by Bluepad32) compiles unconditionally.
+#define ENABLE_PRINTF_HEXDUMP
 
 // ── Buffers / sizes ────────────────────────────────────────────────────────
 #define HCI_OUTGOING_PRE_BUFFER_SIZE 4

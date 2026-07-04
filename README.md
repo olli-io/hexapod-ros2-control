@@ -9,10 +9,12 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 Part of a multi-repo stack:
 - [olli-io/hexapod-servo2040-driver](https://github.com/olli-io/hexapod-servo2040-driver) — Pimoroni Servo 2040 firmware.
 
-## Hardware target
+## Hardware
 
-- Raspberry Pi 4 or 5 (Pi OS Lite), driving servos over a Pimoroni Servo 2040 via USB serial. Tested on a 4 GB Pi 4.
-- (Optional) 256×64 SH1122 OLED on the Pi's SPI bus for eye animations, driven directly by `hexa_display`.
+- ROS2 : Raspberry Pi 4 or 5
+- Pico firmware: Raspberry Pi Pico 2 W
+- Pimoroni servo2040
+- (Optional) 256×64 SH1122 OLED via SPI for eye animations.
 
 ## Quickstart (Gazebo)
 
@@ -30,6 +32,9 @@ with `./hexa sim logs -f`, stop it with `./hexa sim down`.
 
 Then drive the robot with an Xbox-style controller (wired or Bluetooth), or open
 `{local-pc-ip}:8080` on a phone on the same network for web teleop.
+
+Watch the face with `./hexa sim face` — a live terminal mirror of the eyes (the
+sim has no OLED); press `q` to detach without stopping the stack.
 
 > [!NOTE]
 > Only tested on Arch Linux. Other Linux should be straightforward; macOS and Windows (WSL) may vary.
@@ -77,9 +82,10 @@ Colcon workspace; all packages live under `src/`. Build type in parentheses.
 - `hexa_hardware` (ament_cmake) — C++ `hardware_interface` plugin for ros2_control (real Servo 2040 + sim/mock).
 - `hexa_locomotion` (ament_cmake) — the locomotion controller: one node running the whole velocity → gait → posture → compose/IK pipeline in a single 200 Hz loop. Compiles the shared control brain directly; publishes joint commands. Replaced the former `hexa_control`/`hexa_gait`/`hexa_posture`/`hexa_kinematics` node chain.
 - `shared/motion_core` (source tree, not a package) — target-agnostic float control brain (`hexa::pipeline`/`gait`/`posture`/`control`/`supervisor`), compiled directly by the Pico firmware, `hexa_pico_bridge`, and `hexa_locomotion`. Host tests under `shared/motion_core/test/`.
+- `shared/display_core` (source tree, not a package) — target-agnostic face policy: the pure expression/gaze policy (`hexa::display`) plus the vendored eye core (`core/`) and u8g2 C core (`u8g2/`), compiled directly by `hexa_display`, the Pico firmware, and the firmware host test (`pi-pico-firmware/test/host`), so the eyes rasterize bit-identically across targets.
 - `hexa_teleop` (ament_python) — joystick/keyboard → `cmd_vel` and `/body/pose`.
 - `hexa_webteleop` (ament_python) — HTTP + WebSocket server for phone/tablet control; arbitrates with the gamepad over `/teleop/owner`.
-- `hexa_display` (ament_cmake) — face: maps robot state through an expression/gaze policy and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim), in one process. Pure sink; nothing imports it. Owns all panel/SPI/GPIO code and the vendored eye core.
+- `hexa_display` (ament_cmake) — face: maps robot state through an expression/gaze policy and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim), in one process. Pure sink; nothing imports it. Owns the Linux SH1122 panel/SPI/GPIO driver + the rclcpp nodes; the shared policy + eye core live in `shared/display_core`.
 - `hexa_simulation` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
 - `hexa_bringup` (ament_cmake) — top-level launch files: `robot.launch.py`, `sim.launch.py`.
 

@@ -4,7 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace hexa_display {
+namespace hexa::display {
 
 FaceAnimation::FaceAnimation(std::string name, double period_s,
                              std::vector<FaceAnimationStep> steps,
@@ -114,4 +114,4 @@ const FaceAnimation* findFaceAnimation(const std::string& name) {
     return it == registry.end() ? nullptr : it->second;
 }
 
-}  // namespace hexa_display
+}  // namespace hexa::display

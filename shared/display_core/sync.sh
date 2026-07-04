@@ -7,7 +7,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../../.." && pwd)"        # ros2/face/vendor -> repo root
+repo="$(cd "$here/../.." && pwd)"           # shared/display_core -> repo root
 comp="$repo/components"
 
 if [[ ! -d "$comp/u8g2/u8g2/csrc" ]]; then
@@ -40,4 +40,4 @@ done
 echo "synced."
 echo "  repo commit: $(git -C "$repo" rev-parse --short HEAD)"
 echo "  u8g2 commit: $(git -C "$comp/u8g2/u8g2" rev-parse --short HEAD 2>/dev/null || echo '?')"
-echo "Update the provenance commits in vendor/README.md if they changed."
+echo "Update the provenance commits in README.md if they changed."

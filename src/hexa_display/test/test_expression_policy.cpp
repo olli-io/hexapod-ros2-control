@@ -10,7 +10,7 @@
 #include "expression_policy.hpp"
 #include "face_animation.hpp"
 
-using namespace hexa_display;
+using namespace hexa::display;
 
 namespace {
 

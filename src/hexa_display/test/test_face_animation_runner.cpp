@@ -11,7 +11,7 @@
 #include "face_animation.hpp"
 #include "face_animation_runner.hpp"
 
-using namespace hexa_display;
+using namespace hexa::display;
 
 namespace {
 

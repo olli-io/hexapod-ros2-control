@@ -32,8 +32,11 @@ Commands:
                               hexapod with the Pi Pico firmware brain (builds
                               hexa_pico_bridge first; mutually exclusive with the plain sim
                               stack). See 'hexa sim --help'.
-  deploy <subcommand> [args]  Cross-build + ship the production image to the robot.
-                              Subcommands: build, push <host>. Run with no
+  deploy [--pico] <subcommand> [args]
+                              Cross-build + ship to a robot target. Default target is
+                              the Raspberry Pi (ARM64 image): subcommands build, push
+                              <host>. --pico instead cross-builds the Pi Pico 2 W
+                              firmware (RP2350 .uf2) in the sim container. Run with no
                               subcommand for the full list.
   robot [-H user@host] <subcommand> [args]
                               Operate the running robot container. Subcommands: up, down,

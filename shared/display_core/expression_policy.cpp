@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace hexa_display {
+namespace hexa::display {
 
 const std::set<std::string>& idleGaitStates() {
     static const std::set<std::string> kStates = {"folded", "stand", "paused"};
@@ -211,4 +211,4 @@ BatteryMonitor::Flags BatteryMonitor::update(double voltage, double t) {
     return {low_, critical_};
 }
 
-}  // namespace hexa_display
+}  // namespace hexa::display

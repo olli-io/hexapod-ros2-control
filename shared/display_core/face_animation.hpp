@@ -27,7 +27,7 @@
 
 #include "Expression.h"  // GazeDirection
 
-namespace hexa_display {
+namespace hexa::display {
 
 struct FaceAnimationStep {
     double at_s = 0.0;
@@ -80,4 +80,4 @@ const FaceAnimation& idling();
 const FaceAnimation* findFaceAnimation(const std::string& name);
 const std::map<std::string, const FaceAnimation*>& faceAnimations();
 
-}  // namespace hexa_display
+}  // namespace hexa::display

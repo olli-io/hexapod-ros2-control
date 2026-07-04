@@ -203,10 +203,10 @@ bool init() {
     }
     uni_platform_set_custom(get_platform());
     uni_init(0, nullptr);
-    // No btstack_run_loop_execute() here: with
-    // pico_cyw43_arch_threadsafe_background the run loop is driven by the cyw43
-    // async context in the background, and the caller's cooperative loop keeps
-    // running.
+    // No btstack_run_loop_execute() here: pico_cyw43_arch_none still runs the
+    // threadsafe_background async context (it's the BT-only, CYW43_LWIP=0 arch),
+    // so the BTstack run loop is driven in the background and the caller's
+    // cooperative loop keeps running.
     return true;
 }
 

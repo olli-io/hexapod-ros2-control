@@ -11,7 +11,7 @@
 #include "Expression.h"
 #include "face_animation.hpp"
 
-using namespace hexa_display;
+using namespace hexa::display;
 
 TEST(FaceAnimation, RegistryNamesMatch) {
     std::set<std::string> names;

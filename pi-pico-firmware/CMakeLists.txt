@@ -5,6 +5,15 @@ cmake_minimum_required(VERSION 3.13)
 # Bluepad32 + RP2350 require Pico SDK >= 2.1 (see README).
 set(PICO_BOARD pico2_w CACHE STRING "Target board")
 
+# C++ exceptions: the shared control brain throws/catches (IK UnreachableTarget,
+# reseat/control invalid_argument — see part 00/05). The Pico SDK compiles C++
+# with -fno-exceptions by default (via pico_cxx_options, pulled in by
+# pico_stdlib), which would override a bare -fexceptions on our target. Flip the
+# SDK's own toggle BEFORE pico_sdk_init() so it never adds -fno-exceptions and
+# the forked libs behave like the ROS2 sources. RTTI stays off (-fno-rtti) — GCC
+# exception type-matching doesn't need it, and it saves flash.
+set(PICO_CXX_ENABLE_EXCEPTIONS 1)
+
 # ── enable_usb_debugging ───────────────────────────────────────────────────
 # USB-CDC debug logging (all HEXA_DBG output + the USB stdio stack itself). ON
 # for bench development; turn OFF (-DHEXA_ENABLE_USB_DEBUGGING=OFF) for on-robot
@@ -16,17 +25,23 @@ include(pico_sdk_import.cmake)
 
 # ── Bluepad32 (Bluetooth gamepad, part 02) ─────────────────────────────────
 # Bare Pico SDK integration: the uni.h C "platform" API, NOT the Arduino
-# BP32/ControllerPtr API (that one needs the arduino-pico core). Vendor
-# Bluepad32 as a git submodule under external/bluepad32, or point BLUEPAD32_ROOT
-# at a checkout. Needs a Bluepad32 with RP2350 / Pico 2 W support and Pico
-# SDK >= 2.1. Included before project()/pico_sdk_init() per its import contract.
+# BP32/ControllerPtr API (that one needs the arduino-pico core). Point
+# BLUEPAD32_ROOT at a Bluepad32 checkout (the hexa-sim image bakes 4.2.0 and
+# exports it; see sim.Dockerfile). Needs Bluepad32 with Pico 2 W / RP2350
+# support and Pico SDK >= 2.1.
+#
+# Integration mirrors Bluepad32's own examples/pico_w: there is NO
+# "import.cmake" — BTstack comes from the Pico SDK (BTSTACK_ROOT, set before
+# project()), and the component is pulled in with add_subdirectory() *after*
+# pico_sdk_init() (it defines the `bluepad32` target). See the component wiring
+# just above target_link_libraries below.
 if (DEFINED ENV{BLUEPAD32_ROOT})
     set(BLUEPAD32_ROOT $ENV{BLUEPAD32_ROOT})
 else ()
     set(BLUEPAD32_ROOT ${CMAKE_CURRENT_LIST_DIR}/external/bluepad32)
 endif ()
 message(STATUS "Bluepad32 root: ${BLUEPAD32_ROOT}")
-include(${BLUEPAD32_ROOT}/src/components/bluepad32/bluepad32_import.cmake)
+set(BTSTACK_ROOT ${PICO_SDK_PATH}/lib/btstack)
 
 project(hexa_pico_firmware C CXX ASM)
 
@@ -46,12 +61,13 @@ find_program(PYTHON3 python3 REQUIRED)
 set(HEXA_REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
 set(HEXA_SHARED ${HEXA_REPO_ROOT}/shared/motion_core)
 
-# Face (part 11): the eye core + pure policy library are vendored/shared under
-# hexa_display and compiled directly (like motion_core), plus the u8g2 C core.
-# u8g2 is globbed exactly as the ROS package does (curated subset, no fonts);
-# the unused display drivers are stripped by --gc-sections at link.
-set(HEXA_DISPLAY ${HEXA_REPO_ROOT}/src/hexa_display)
-file(GLOB U8G2_SRCS "${HEXA_DISPLAY}/vendor/u8g2/*.c")
+# Face (part 11): the eye core + pure policy library live in the shared display
+# core (shared/display_core) and are compiled directly (like motion_core), plus
+# the u8g2 C core. u8g2 is globbed exactly as the ROS package does (curated
+# subset, no fonts); the unused display drivers are stripped by --gc-sections at
+# link.
+set(HEXA_DISPLAY_CORE ${HEXA_REPO_ROOT}/shared/display_core)
+file(GLOB U8G2_SRCS "${HEXA_DISPLAY_CORE}/u8g2/*.c")
 set(HEXA_GEN_CONFIG ${HEXA_SHARED}/config_generated.hpp)
 set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/geometry.yaml
@@ -100,12 +116,12 @@ add_executable(hexa_pico
     # ── Face: SH1122 eyes on core1 (part 11) ──
     src/face.cpp                     # core0 policy step + core1 render loop
     src/Sh1122PanelPico.cpp          # SH1122 panel over Pico hardware SPI
-    ${HEXA_DISPLAY}/vendor/core/EyeAnim.cpp        # eased gaze/blink state machine
-    ${HEXA_DISPLAY}/vendor/core/EyeRaster.cpp      # 1-bit eye rasterizer
-    ${HEXA_DISPLAY}/vendor/core/ExpressionController.cpp  # expressionName()/gazeName()
-    ${HEXA_DISPLAY}/src/expression_policy.cpp      # pure expression/gaze policy
-    ${HEXA_DISPLAY}/src/face_animation.cpp         # breathing/idling step sequences
-    ${HEXA_DISPLAY}/src/face_animation_runner.cpp  # face-animation clock
+    ${HEXA_DISPLAY_CORE}/core/EyeAnim.cpp        # eased gaze/blink state machine
+    ${HEXA_DISPLAY_CORE}/core/EyeRaster.cpp      # 1-bit eye rasterizer
+    ${HEXA_DISPLAY_CORE}/core/ExpressionController.cpp  # expressionName()/gazeName()
+    ${HEXA_DISPLAY_CORE}/expression_policy.cpp      # pure expression/gaze policy
+    ${HEXA_DISPLAY_CORE}/face_animation.cpp         # breathing/idling step sequences
+    ${HEXA_DISPLAY_CORE}/face_animation_runner.cpp  # face-animation clock
     ${U8G2_SRCS}                     # u8g2 C core (sh1122 driver + buffer/hvline)
 )
 add_dependencies(hexa_pico hexa_gen_config)
@@ -118,31 +134,56 @@ target_include_directories(hexa_pico PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${HEXA_SHARED}
-    ${HEXA_DISPLAY}/src           # expression_policy / face_animation headers
-    ${HEXA_DISPLAY}/vendor/core   # EyeAnim / EyeRaster / Expression / FaceNames
-    ${HEXA_DISPLAY}/vendor/u8g2)  # u8g2.h
+    ${HEXA_DISPLAY_CORE}           # expression_policy / face_animation / FaceNames headers
+    ${HEXA_DISPLAY_CORE}/core   # EyeAnim / EyeRaster / Expression
+    ${HEXA_DISPLAY_CORE}/u8g2)  # u8g2.h
 
-# C++ exceptions: IK throws UnreachableTarget, reseat throws invalid_argument
-# (see overview part 00 / kinematics part 05). Enabled globally so the forked
-# libs behave identically to the ROS2 sources.
+# C++ exceptions are enabled via PICO_CXX_ENABLE_EXCEPTIONS at the top of this
+# file (the SDK-level toggle). Keep -fexceptions explicit on the target too as a
+# belt-and-suspenders against any INTERFACE option ordering.
 target_compile_options(hexa_pico PRIVATE -fexceptions)
 
 # Single-precision FPU: keep doubles from silently sneaking in.
 target_compile_options(hexa_pico PRIVATE -Wdouble-promotion)
 
 # enable_usb_debugging: seen by src/dbg.hpp's HEXA_DBG / HEXA_DBG_INIT macros.
+#
+# U8X8_WITH_USER_PTR: u8g2's per-u8x8 user pointer (Sh1122PanelPico stashes
+# `this` there, like the Linux Sh1122Panel). u8x8.h only auto-enables it for
+# unix/__ARM_LINUX__ builds, so the bare-metal firmware must define it — on the
+# whole target, so the u8g2 C core and the panel agree on the struct layout.
 target_compile_definitions(hexa_pico PRIVATE
-    HEXA_ENABLE_USB_DEBUGGING=$<BOOL:${HEXA_ENABLE_USB_DEBUGGING}>)
+    HEXA_ENABLE_USB_DEBUGGING=$<BOOL:${HEXA_ENABLE_USB_DEBUGGING}>
+    U8X8_WITH_USER_PTR)
+
+# ── Bluepad32 component (part 02) ──────────────────────────────────────────
+# Build the vendored Bluepad32 as a sub-library (the `bluepad32` target); it
+# links BTstack from the Pico SDK. Its C sources #include the app-provided
+# btstack_config.h + sdkconfig.h off the include path, so expose the firmware
+# root (which holds both) to it with a directory-scoped include *before* the
+# add_subdirectory — that propagates into the sub-library. The btstack/bluedroid
+# include dirs mirror Bluepad32's examples/pico_w.
+include_directories(
+    ${CMAKE_CURRENT_LIST_DIR}                              # btstack_config.h + sdkconfig.h
+    ${BTSTACK_ROOT}/src
+    ${BTSTACK_ROOT}/3rd-party/bluedroid/encoder/include
+    ${BTSTACK_ROOT}/3rd-party/bluedroid/decoder/include)
+add_subdirectory(${BLUEPAD32_ROOT}/src/components/bluepad32 libbluepad32)
 
 target_link_libraries(hexa_pico
     pico_stdlib                             # core runtime, timers, GPIO, flash
     hardware_uart                           # Servo 2040 Chica link (part 03)
     hardware_spi                            # SH1122 face panel on core1 (part 11)
     pico_multicore                          # core1 render loop (part 11)
-    pico_cyw43_arch_threadsafe_background   # CYW43 driver + onboard LED; runs the
-                                            # BTstack run loop in the background so
-                                            # the cooperative loop stays clean
-    bluepad32                               # Bluepad32 + BTstack HID host (part 02)
+    # CYW43 driver + onboard LED. pico_cyw43_arch_none is the BT-only arch
+    # (CYW43_LWIP=0, no Wi-Fi): despite the name it still runs the
+    # threadsafe_background async context, so the BTstack run loop is serviced
+    # in the background and the cooperative loop stays clean. It also matches the
+    # arch Bluepad32's component links, so there's no cyw43_arch clash.
+    pico_cyw43_arch_none
+    pico_btstack_classic                    # BR/EDR HID host (PS4/PS5, part 02)
+    pico_btstack_cyw43                      # BTstack <-> CYW43 HCI transport
+    bluepad32                               # Bluepad32 gamepad platform (part 02)
 )
 
 # Debug channel: USB-CDC only (no UART stdio — GP0/GP1 UART is reserved for the
