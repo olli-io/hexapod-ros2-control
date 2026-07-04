@@ -62,6 +62,39 @@ Full definitions in `docs/leg-phases.md`. Do not introduce new synonyms.
 
 - **Kinematics (ported to C++).** `hexa_gait_cpp` consumes the `hexa_kinematics` surface (`LegSpec`, `load_leg_specs`, `leg_to_body`, `forward_kinematics`, `load_standing_pose`, `load_initial_pose`) from `hexa_kinematics_cpp` (namespace `hexa_kinematics`), a full C++ port built **side-by-side** with the Python `hexa_kinematics` (both compile; the Python nodes and `hexa_posture` still use the Python package until cutover). `src/hexa_gait_cpp/include/hexa_gait_cpp/kinematics.hpp` includes the real headers and aliases them as `hexa_gait::kin`; the former compile-only `kinematics_stub.hpp` is gone. Both packages share `Vec3 = Eigen::Vector3d` / `JointAngles = std::array<double, 3>`, so nominal / initial / reseat stance values are now **real geometry**. The kinematics loaders live in `hexa_kinematics_cpp` and read `hexa_description`'s YAML at runtime; `hexa_description` stays install-only (the single source of truth for the data, not compiled code).
 
+## Consolidated single-node locomotion (`hexa_locomotion` + `shared/hexa_pipeline`)
+
+An alternative to the multi-node locomotion chain: one node running the whole
+velocity → gait → posture → compose/IK pipeline in a single 200 Hz loop, mirroring
+the Pi Pico firmware's single loop. Built **side-by-side** with the chain; opt in
+with `node_implementation:=consolidated`.
+
+- **`shared/hexa_pipeline/`** is the target-agnostic **float** control brain
+  (`hexa::pipeline::Pipeline` + `hexa::gait`/`hexa::posture`/`hexa::control`/
+  `hexa::supervisor`), extracted from `pi-pico-firmware/` (which now keeps only its
+  Pico hardware seams). It is compiled directly — a link-time seam swap, no
+  `#ifdef` — by the Pico firmware, `hexa_pico_bridge`, and `hexa_locomotion`. One
+  brain, shared bug-for-bug across firmware and sim. Its host test harness lives in
+  `shared/hexa_pipeline/test/`. This is a **separate source tree** from the double
+  `hexa_gait_cpp`/`hexa_posture_cpp`/`hexa_kinematics_cpp` libraries (which back the
+  chain nodes and their gtests); the consolidated runtime is float, the chain is
+  double.
+- **Seams** (caller-owned, the only things that differ per target): the Pipeline
+  `tick` has a joy overload (Pico/bridge run `map_joy`) and a core
+  `tick(CommandIntent, TickInput)` (the ROS node builds `CommandIntent` from
+  `/cmd_vel` + `/cmd_gait` + `/gait/initialize` + `/body/pose` + `/animation/mode`,
+  bypassing `map_joy`); config comes from a `PipelineConfig` (baked constexpr on
+  the Pico, loaded from `geometry.yaml` + `tuning.yaml` at startup in
+  `hexa_locomotion`, scope = geometry+tuning only).
+- **`hexa_locomotion`** folds `ik_node` + `joint_command_bridge` (publishes
+  `Float64MultiArray` on `/joint_group_position_controller/commands` directly) and
+  re-publishes `/gait/state` for the face sink. Because it composes both the
+  velocity/gait and body-pose chains **in one process**, it deliberately
+  supersedes the "two chains never import each other / `hexa_bringup` composes via
+  launch only" rule for the `consolidated` implementation — the node is the
+  in-code composition point. `/cmd_vel` stays the entry point (Nav2/twist_mux
+  compatible); the runtime-YAML load honors the load-config-at-runtime rule.
+
 ## Documentation formatting
 
 - **No markdown tables in `.md` files.** Anywhere — package READMEs, `/docs/`, top-level README.

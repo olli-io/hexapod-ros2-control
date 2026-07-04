@@ -8,6 +8,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     LaunchConfiguration,
@@ -78,11 +79,21 @@ def generate_launch_description():
         ["'hexa_posture_cpp' if '", impl, "'.lower() == 'cpp' else 'hexa_posture'"]
     )
 
+    # `consolidated` runs the single hexa_locomotion node (the shared control
+    # brain, /cmd_vel-native) INSTEAD of the control/gait/posture/kinematics
+    # chain. It folds ik_node + joint_command_bridge (publishes joint commands
+    # directly) and re-publishes /gait/state for the face. The two conditions
+    # below are mutually exclusive, so exactly one of the two node sets launches.
+    consolidated = PythonExpression(
+        ["'", impl, "'.lower() == 'consolidated'"]
+    )
+
     ik_node = Node(
         package=kinematics_pkg,
         executable="ik_node",
         output="screen",
         parameters=common_params,
+        condition=UnlessCondition(consolidated),
     )
 
     joint_command_bridge = Node(
@@ -90,6 +101,15 @@ def generate_launch_description():
         executable="joint_command_bridge",
         output="screen",
         parameters=common_params,
+        condition=UnlessCondition(consolidated),
+    )
+
+    locomotion_node = Node(
+        package="hexa_locomotion",
+        executable="locomotion_node",
+        output="screen",
+        parameters=common_params,
+        condition=IfCondition(consolidated),
     )
 
     # Every subsystem reads its knobs from hexa_description's tuning.yaml —
@@ -105,6 +125,7 @@ def generate_launch_description():
         executable="posture_node",
         output="screen",
         parameters=common_params + [tuning_config],
+        condition=UnlessCondition(consolidated),
     )
 
     control_node = Node(
@@ -112,6 +133,7 @@ def generate_launch_description():
         executable="control_node",
         output="screen",
         parameters=common_params + [tuning_config],
+        condition=UnlessCondition(consolidated),
     )
 
     gait_node = Node(
@@ -119,6 +141,7 @@ def generate_launch_description():
         executable="gait_node",
         output="screen",
         parameters=common_params + [tuning_config],
+        condition=UnlessCondition(consolidated),
     )
 
     actions = [
@@ -128,14 +151,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "node_implementation",
             default_value=_node_implementation(),
-            description="Which implementation of the kinematics/gait/posture "
-                        "nodes to launch: 'cpp' (the hexa_*_cpp ports; Python "
-                        "nodes not started) or 'python' (the ament_python "
-                        "originals).",
+            description="Which implementation to launch: 'cpp' (the hexa_*_cpp "
+                        "ports; Python nodes not started), 'python' (the "
+                        "ament_python originals), or 'consolidated' (the single "
+                        "hexa_locomotion node replacing the whole chain).",
         ),
         sim,
         ik_node,
         joint_command_bridge,
+        locomotion_node,
         posture_node,
         control_node,
         gait_node,

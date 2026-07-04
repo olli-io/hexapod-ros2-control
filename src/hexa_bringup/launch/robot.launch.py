@@ -71,7 +71,12 @@ def _bringup(context, *args, **kwargs):
     # whole chain back. The ports are drop-in: same node names, topics, message
     # types, and params. hexa_control has no C++ port, so control_node below is
     # always the Python node.
-    use_cpp = LaunchConfiguration("node_implementation").perform(context).lower() == "cpp"
+    impl = LaunchConfiguration("node_implementation").perform(context).lower()
+    use_cpp = impl == "cpp"
+    # `consolidated` runs the single hexa_locomotion node (the shared control
+    # brain, /cmd_vel-native) instead of the control/gait/posture/kinematics
+    # chain — one process, one 200 Hz tick.
+    consolidated = impl == "consolidated"
     kinematics_pkg = "hexa_kinematics_cpp" if use_cpp else "hexa_kinematics"
     gait_pkg = "hexa_gait_cpp" if use_cpp else "hexa_gait"
     posture_pkg = "hexa_posture_cpp" if use_cpp else "hexa_posture"
@@ -157,14 +162,18 @@ def _bringup(context, *args, **kwargs):
         parameters=[tuning_config],
     )
 
+    # The consolidated node loads geometry+tuning from hexa_description's YAML at
+    # startup (PipelineConfig), so it needs no params file; it folds ik_node +
+    # joint_command_bridge and re-publishes /gait/state for the face.
+    locomotion_node = Node(
+        package="hexa_locomotion", executable="locomotion_node", output="screen",
+    )
+
+    chain = [ik_node, joint_command_bridge, posture_node, control_node, gait_node]
     actions = [
         description,
         controller_manager,
-        ik_node,
-        joint_command_bridge,
-        posture_node,
-        control_node,
-        gait_node,
+        *([locomotion_node] if consolidated else chain),
     ]
 
     # Face: one node maps robot state to an expression/gaze policy and
@@ -235,10 +244,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "node_implementation",
             default_value=_node_implementation(),
-            description="Which implementation of the kinematics/gait/posture "
-                        "nodes to launch: 'cpp' (the hexa_*_cpp ports; Python "
-                        "nodes not started) or 'python' (the ament_python "
-                        "originals).",
+            description="Which implementation to launch: 'cpp' (the hexa_*_cpp "
+                        "ports; Python nodes not started), 'python' (the "
+                        "ament_python originals), or 'consolidated' (the single "
+                        "hexa_locomotion node replacing the whole chain).",
         ),
         OpaqueFunction(function=_bringup),
     ])
