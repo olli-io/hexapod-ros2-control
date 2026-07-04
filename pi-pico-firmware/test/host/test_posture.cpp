@@ -102,6 +102,44 @@ TEST(PosturePose, ClampPassesThroughInEnvelopeValues) {
   expect_pose_eq(posture::clamp(inside, limits), inside);
 }
 
+TEST(PosturePose, LerpEndpointsAndMidpoint) {
+  BodyPose a{0.01f, -0.02f, 0.005f, 0.05f, -0.05f, 0.1f};
+  BodyPose b{0.04f, -0.01f, 0.03f, 0.2f, -0.1f, 0.3f};
+  expect_pose_eq(posture::lerp(a, b, 0.0f), a);  // t=0 returns a
+  expect_pose_eq(posture::lerp(a, b, 1.0f), b);  // t=1 returns b
+  BodyPose mid = posture::lerp(a, b, 0.5f);
+  expect_pose_eq(mid, BodyPose{0.025f, -0.015f, 0.0175f, 0.125f, -0.075f, 0.2f});
+}
+
+TEST(PosturePose, ComposeLayeredKeepsAnimationSymmetric) {
+  // A dialed-in posture beyond the reserved headroom must NOT clip the
+  // animation asymmetrically — the pre-fix clamp(add(user, anim)) bug.
+  posture::PoseLimits limits;               // x = 0.05
+  posture::PoseLimits reserve;              // only x matters here
+  reserve.x = 0.02f;
+  BodyPose user{0.045f};                     // beyond user_env (0.03)
+  const float xp =
+      posture::compose_layered(user, BodyPose{0.02f}, limits, reserve).x;
+  const float xn =
+      posture::compose_layered(user, BodyPose{-0.02f}, limits, reserve).x;
+  // Baseline is the user clamped to user_env (0.03); the animation swings a full
+  // symmetric +/-0.02 about it and stays inside the 0.05 envelope.
+  EXPECT_NEAR(xp, 0.05f, kTol);
+  EXPECT_NEAR(xn, 0.01f, kTol);
+  const float baseline = 0.5f * (xp + xn);
+  EXPECT_NEAR(xp - baseline, baseline - xn, kTol);
+  EXPECT_LE(xp, limits.x + kTol);
+}
+
+TEST(PosturePose, ComposeLayeredReserveExceedingLimitFloorsUserEnvelope) {
+  posture::PoseLimits limits;   // x = 0.05
+  posture::PoseLimits reserve;
+  reserve.x = 0.08f;            // > limit -> user_env.x = 0
+  BodyPose out =
+      posture::compose_layered(BodyPose{0.04f}, BodyPose{0.01f}, limits, reserve);
+  EXPECT_NEAR(out.x, 0.01f, kTol);  // user contributes 0; only the animation
+}
+
 // ── animations (port of test_animations.py) ─────────────────────────────────
 
 TEST(PostureAnimations, StillAlwaysIdentity) {
@@ -451,6 +489,31 @@ TEST(PostureGate, ActiveStatesMatchReference) {
     EXPECT_FALSE(posture::posture_active(e))
         << gait::state_value(e) << " should be inactive";
   }
+}
+
+// ── activation crossfade (_slew_toward) ─────────────────────────────────────
+
+TEST(PostureSlew, StepsTowardTargetByRateTimesDt) {
+  // rate 4/s, dt 0.005 -> step 0.02.
+  EXPECT_NEAR(posture::slew_toward(0.0f, 1.0f, 4.0f, 0.005f), 0.02f, kTol);
+  EXPECT_NEAR(posture::slew_toward(0.5f, 0.0f, 4.0f, 0.005f), 0.48f, kTol);
+}
+
+TEST(PostureSlew, ReachesTargetWithoutOvershoot) {
+  EXPECT_NEAR(posture::slew_toward(0.99f, 1.0f, 4.0f, 0.005f), 1.0f, kTol);
+  EXPECT_NEAR(posture::slew_toward(0.01f, 0.0f, 4.0f, 0.005f), 0.0f, kTol);
+}
+
+TEST(PostureSlew, IsSymmetricUpAndDown) {
+  const float up = posture::slew_toward(0.5f, 1.0f, 4.0f, 0.005f) - 0.5f;
+  const float down = 0.5f - posture::slew_toward(0.5f, 0.0f, 4.0f, 0.005f);
+  EXPECT_NEAR(up, down, kTol);
+}
+
+TEST(PostureSlew, HoldsOnNonPositiveRateOrDt) {
+  EXPECT_EQ(posture::slew_toward(0.3f, 1.0f, 0.0f, 0.005f), 0.3f);
+  EXPECT_EQ(posture::slew_toward(0.3f, 1.0f, 4.0f, 0.0f), 0.3f);
+  EXPECT_EQ(posture::slew_toward(0.3f, 1.0f, -4.0f, 0.005f), 0.3f);
 }
 
 // ── golden-trace integration ────────────────────────────────────────────────

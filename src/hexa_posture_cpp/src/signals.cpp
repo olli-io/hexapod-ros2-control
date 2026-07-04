@@ -1,12 +1,29 @@
 // Port of the pure free functions and constants in hexa_posture/posture_node.py.
 #include "hexa_posture_cpp/signals.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace hexa_posture {
 
 bool is_posture_active(const std::string& state) {
   return POSTURE_ACTIVE_STATES.find(state) != POSTURE_ACTIVE_STATES.end();
+}
+
+bool is_gait_engaged(const std::string& state) {
+  return GAIT_ENGAGED_STATES.find(state) != GAIT_ENGAGED_STATES.end();
+}
+
+double slew_toward(double current, double target, double rate_per_s,
+                   double dt) {
+  if (rate_per_s <= 0.0 || dt <= 0.0) {
+    return current;
+  }
+  const double step = rate_per_s * dt;
+  if (target > current) {
+    return std::min(target, current + step);
+  }
+  return std::max(target, current - step);
 }
 
 bool twist_is_zero(double linear_x, double linear_y, double linear_z,

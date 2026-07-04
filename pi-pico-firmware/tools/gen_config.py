@@ -575,6 +575,14 @@ def emit(geometry, gait, teleop, posture, control, hardware,
         ("gait_bounce_step_height_ref", pn["gait_bounce_step_height_ref"]),
         ("support_centroid_tau", pn["support_centroid_tau"]),
         ("swing_lift_tau", pn["swing_lift_tau"]),
+        # Gait-animation crossfade + layered clamp (posture layering fix).
+        ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
+        ("animation_reserve_x", pn["animation_reserve_x"]),
+        ("animation_reserve_y", pn["animation_reserve_y"]),
+        ("animation_reserve_z", pn["animation_reserve_z"]),
+        ("animation_reserve_roll", pn["animation_reserve_roll"]),
+        ("animation_reserve_pitch", pn["animation_reserve_pitch"]),
+        ("animation_reserve_yaw", pn["animation_reserve_yaw"]),
     ]
     for fname, _ in posture_fields:
         w(f"  float {fname};")

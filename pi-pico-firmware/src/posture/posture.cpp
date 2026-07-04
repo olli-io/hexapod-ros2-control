@@ -2,6 +2,7 @@
 // hexa_posture/posture_node.py.
 #include "posture/posture.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -168,8 +169,26 @@ bool posture_active(gait::EngineState state) {
   return false;
 }
 
+float slew_toward(float current, float target, float rate_per_s, float dt) {
+  if (rate_per_s <= 0.0f || dt <= 0.0f) {
+    return current;
+  }
+  const float step = rate_per_s * dt;
+  if (target > current) {
+    return std::min(target, current + step);
+  }
+  return std::max(target, current - step);
+}
+
 PostureController::PostureController()
-    : centroid_tau_(config::kPosture.support_centroid_tau),
+    : activation_slew_rate_(config::kPosture.gait_activation_slew_rate),
+      anim_reserve_{config::kPosture.animation_reserve_x,
+                    config::kPosture.animation_reserve_y,
+                    config::kPosture.animation_reserve_z,
+                    config::kPosture.animation_reserve_roll,
+                    config::kPosture.animation_reserve_pitch,
+                    config::kPosture.animation_reserve_yaw},
+      centroid_tau_(config::kPosture.support_centroid_tau),
       swing_lift_tau_(config::kPosture.swing_lift_tau) {
   std::vector<std::string_view> enabled(config::kEnabledAnimations.begin(),
                                         config::kEnabledAnimations.end());
@@ -234,13 +253,18 @@ BodyPose PostureController::update(
 
   if (!posture_active(state)) {
     // Legs aren't at nominal stance — a body-pose offset would compose against
-    // the wrong foot configuration. Hold IDENTITY.
+    // the wrong foot configuration. Hold IDENTITY and reset the crossfade so
+    // the gait animations start faded-out next time posture re-activates.
+    activation_ = 0.0f;
     return IDENTITY;
   }
 
+  // Ramp the gait animations in/out instead of stepping at the walking edge.
+  activation_ =
+      slew_toward(activation_, walking ? 1.0f : 0.0f, activation_slew_rate_, dt);
+
   AnimationContext ctx;
   ctx.t = t;
-  ctx.walking = walking;
   ctx.gait_name = gait_name;
   ctx.support_centroid_xy = support_centroid_xy_;
   ctx.swing_lift_z = swing_lift_z_;
@@ -249,8 +273,17 @@ BodyPose PostureController::update(
   const Stack& stack =
       animation_mode_.empty() ? default_stack_
                               : animation_stacks_.at(animation_mode_);
-  const BodyPose animated = stack.eval(ctx);
-  return clamp(add(user_pose_, animated), limits_);
+  // Evaluate the stack in both regimes and crossfade by the activation, so the
+  // gait-active animations fade against the idle ones (the node owns the
+  // transition, not the animations).
+  ctx.walking = true;
+  const BodyPose gait_out = stack.eval(ctx);
+  ctx.walking = false;
+  const BodyPose idle_out = stack.eval(ctx);
+  const BodyPose animated = lerp(idle_out, gait_out, activation_);
+
+  // Layered clamp: the user pose and the animation each get their own budget.
+  return compose_layered(user_pose_, animated, limits_, anim_reserve_);
 }
 
 }  // namespace hexa::posture

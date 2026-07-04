@@ -59,6 +59,22 @@ def scale(p: BodyPose, k: float) -> BodyPose:
     )
 
 
+def lerp(a: BodyPose, b: BodyPose, t: float) -> BodyPose:
+    """Component-wise linear interpolation: ``a + t*(b - a)``.
+
+    ``t`` is not clamped, but the posture node only ever passes ``t`` in
+    [0, 1] (the gait-animation activation crossfade).
+    """
+    return BodyPose(
+        x=a.x + t * (b.x - a.x),
+        y=a.y + t * (b.y - a.y),
+        z=a.z + t * (b.z - a.z),
+        roll=a.roll + t * (b.roll - a.roll),
+        pitch=a.pitch + t * (b.pitch - a.pitch),
+        yaw=a.yaw + t * (b.yaw - a.yaw),
+    )
+
+
 @dataclass(frozen=True)
 class PoseLimits:
     """Per-axis symmetric clamp envelope for the final pose target.
@@ -92,3 +108,31 @@ def clamp(pose: BodyPose, limits: PoseLimits) -> BodyPose:
         pitch=_c(pose.pitch, limits.pitch),
         yaw=_c(pose.yaw, limits.yaw),
     )
+
+
+def compose_layered(
+    user: BodyPose,
+    animated: BodyPose,
+    limits: PoseLimits,
+    anim_reserve: PoseLimits,
+) -> BodyPose:
+    """Layered clamp: give the static user pose and the (AC) animation
+    offset each their own budget so a dialed-in posture can never
+    asymmetrically clip the animation.
+
+    The user pose is clamped to ``(limits - anim_reserve)`` (floored at 0)
+    per axis, the animation to ``±anim_reserve``, then summed and clamped
+    to ``limits`` as a final guard (inert while
+    ``user_env + anim_reserve <= limits``). Trade-off: the user's static
+    range shrinks by ``anim_reserve`` per axis.
+    """
+    user_env = PoseLimits(
+        x=max(0.0, limits.x - anim_reserve.x),
+        y=max(0.0, limits.y - anim_reserve.y),
+        z=max(0.0, limits.z - anim_reserve.z),
+        roll=max(0.0, limits.roll - anim_reserve.roll),
+        pitch=max(0.0, limits.pitch - anim_reserve.pitch),
+        yaw=max(0.0, limits.yaw - anim_reserve.yaw),
+    )
+    summed = add(clamp(user, user_env), clamp(animated, anim_reserve))
+    return clamp(summed, limits)

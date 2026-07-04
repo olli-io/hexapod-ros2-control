@@ -28,6 +28,24 @@ inline const std::set<std::string> POSTURE_ACTIVE_STATES = {
 // True iff `state` is one in which the animation stack should run.
 bool is_posture_active(const std::string& state);
 
+// Gait engine states in which the walking gait is actually engaged: the
+// POSTURE_ACTIVE_STATES minus "stand". Used to drive the gait-animation
+// activation crossfade off the engine's real state rather than the raw
+// /cmd_vel edge — the pause trio and reseating stay engaged so the animation
+// fades out only as the feet settle to the nominal stance, not ~0.4 s earlier
+// when cmd_vel hits zero.
+inline const std::set<std::string> GAIT_ENGAGED_STATES = {
+    "engaging", "gait", "pausing", "paused", "resuming", "reseating"};
+
+// True iff `state` is one in which the walking gait is engaged.
+bool is_gait_engaged(const std::string& state);
+
+// Move `current` toward `target` by at most rate_per_s * dt (linear slew), never
+// overshooting. Returns `current` unchanged when rate_per_s <= 0 or dt <= 0.
+// Reaches the target exactly (unlike an LPF), so activation lands on 0.0/1.0
+// with no residual bias.
+double slew_toward(double current, double target, double rate_per_s, double dt);
+
 // Below this magnitude, every /cmd_vel component counts as zero.
 constexpr double CMD_VEL_ZERO_TOL = 1e-4;
 

@@ -12,12 +12,16 @@ the other.
 Mirrors the library/node split from `hexa_kinematics`:
 
 - **Library** (`hexa_posture/`) — pure Python, no ROS imports.
-  - `pose.py` — `BodyPose` dataclass, additive composition, safety-envelope clamp.
+  - `pose.py` — `BodyPose` dataclass, additive composition, `lerp`, the
+    safety-envelope `clamp`, and `compose_layered` (the layered clamp that gives
+    the user pose and the animation each their own budget).
   - `animations/` — strategy interface (`Animation`, `AnimationContext`, `Stack`)
     plus `Still`, `Breathing`, `GaitSway`, `GaitBounce`. Each is a pure function
     from context → pose offset.
-- **Node** (`posture_node.py`) — runs the animation stack on a timer, composes
-  user pose + animations, clamps to the envelope, publishes `/body/pose_target`.
+- **Node** (`posture_node.py`) — runs the animation stack on a timer,
+  cross-fades the gait animations in/out with an activation slewed off the gait
+  state, composes user pose + animations under the layered clamp, publishes
+  `/body/pose_target`.
 
 ## Topics
 
@@ -25,12 +29,15 @@ Subscribes:
 
 - `/body/pose` (`hexa_interfaces/BodyPose`) — user-commanded body offset. Latest
   sample wins.
-- `/cmd_vel` (`geometry_msgs/Twist`) — read for the walking-vs-idle distinction;
-  never modified.
-- `/gait/state` (`std_msgs/String`) — engine state name. User pose + animations
-  apply only in `stand` / `engaging` / `gait` / `stopping`; otherwise (or before
-  the first message) the node publishes IDENTITY. This stops the user translating
-  the chassis while legs are folded or mid-cold-start.
+- `/gait/state` (`std_msgs/String`) — engine state name, used for two things.
+  (1) Posture-active gate: user pose + animations apply only in `stand` /
+  `engaging` / `gait` / pause trio / `reseating`; otherwise (or before the first
+  message) the node publishes IDENTITY, so the user can't translate the chassis
+  while legs are folded or mid-cold-start. (2) Gait-animation crossfade gate:
+  walking-vs-idle is derived from this (the `GAIT_ENGAGED_STATES` set), **not**
+  from `/cmd_vel` — the animation contribution fades out as the engine settles to
+  `stand` rather than at the raw cmd_vel edge, so the feet keep cycling while the
+  body eases back.
 - `/legs/targets` (`hexa_interfaces/LegTargets`) — per-leg foot targets and stance
   flags, used to derive the support-polygon centroid and swing lift. Consumed via
   the topic contract only; `hexa_posture` does not import `hexa_gait` (keeps the
@@ -48,8 +55,11 @@ Animations are pure functions of an `AnimationContext`. All animation state
 must not call `time.time()` or read ROS clocks.
 
 - `t` — monotonic time (s), passed in explicitly for deterministic tests.
-- `walking` — True iff `/cmd_vel` is non-zero. Lets animations gate to pose mode
-  (`Breathing`) or gait-active mode (sway, bounce).
+- `walking` — whether the animation should render its gait-active or idle form.
+  The node evaluates the stack twice each tick (once with `walking=True`, once
+  `False`) and cross-fades between them by the gait-state-driven activation, so an
+  animation still just gates to pose mode (`Breathing`) or gait-active mode (sway,
+  bounce); the smooth in/out transition is the node's job, not the animation's.
 - `gait_phase` — reserved for phase-locked animations. Phase is not on the wire
   yet, so animations that want it fall back to a free-running sine on `t` or skip.
 - `support_centroid_xy` — low-pass-filtered XY centroid of the support polygon

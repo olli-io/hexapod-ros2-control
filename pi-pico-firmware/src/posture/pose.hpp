@@ -33,6 +33,11 @@ BodyPose add(const BodyPose& a, const BodyPose& b);
 // Uniform per-component scale. Mirrors pose.scale.
 BodyPose scale(const BodyPose& p, float k);
 
+// Component-wise linear interpolation: a + t*(b - a). t is not clamped, but the
+// posture tick only ever passes t in [0, 1] (the gait-animation activation
+// crossfade). Mirrors pose.lerp.
+BodyPose lerp(const BodyPose& a, const BodyPose& b, float t);
+
 // Per-axis symmetric clamp envelope for the final pose target. A blunt safety
 // first cut (the real reachable envelope is geometry-dependent); a cheap
 // upstream guard against runaway animation / teleop inputs. Mirrors
@@ -48,5 +53,15 @@ struct PoseLimits {
 
 // Clamp each axis to [-limit, +limit]. Mirrors pose.clamp.
 BodyPose clamp(const BodyPose& pose, const PoseLimits& limits);
+
+// Layered clamp: give the static user pose and the animation offset each their
+// own budget so a dialed-in posture can never asymmetrically clip the animation.
+// The user pose is clamped to (limits - anim_reserve, floored at 0) per axis, the
+// animation to +/-anim_reserve, then summed and clamped to limits as a final
+// guard (inert while user_env + anim_reserve <= limits). Trade-off: the user's
+// static range shrinks by anim_reserve per axis. Mirrors pose.compose_layered.
+BodyPose compose_layered(const BodyPose& user, const BodyPose& animated,
+                         const PoseLimits& limits,
+                         const PoseLimits& anim_reserve);
 
 }  // namespace hexa::posture

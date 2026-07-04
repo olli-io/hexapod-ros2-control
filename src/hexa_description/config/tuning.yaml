@@ -339,6 +339,31 @@ posture_node:
     # doesn't visibly lag the feet.
     swing_lift_tau: 0.04
 
+    # Linear slew rate (1/s) of the gait-animation activation
+    # crossfade. When the engine engages/disengages the gait, the
+    # animation contribution ramps in/out over ~1/rate seconds
+    # (4.0 -> ~0.25 s) instead of stepping at the /cmd_vel edge, so
+    # switching between pose mode and walking no longer jumps the
+    # body. Keyed off /gait/state, so the fade-out finishes as the
+    # feet settle to the nominal stance, not ~0.4 s earlier when
+    # cmd_vel hits zero.
+    gait_activation_slew_rate: 4.0
+
+    # Per-axis budget (m / rad) reserved for the animation layer in
+    # the layered clamp. The user posture is clamped to
+    # (PoseLimits - reserve) and the animation to +/-reserve, so a
+    # dialed-in posture can never asymmetrically clip the animation
+    # sinusoid (which would show up as gait jitter). Trade-off: the
+    # user's static-posture range shrinks by these amounts. Size to
+    # cover the animation amplitudes: body-roll pitch/yaw ~0.175 rad,
+    # roll + bounce z ~0.02+0.02, gait_sway x/y.
+    animation_reserve_x: 0.02
+    animation_reserve_y: 0.02
+    animation_reserve_z: 0.03
+    animation_reserve_roll: 0.20
+    animation_reserve_pitch: 0.20
+    animation_reserve_yaw: 0.20
+
 # -- DISCLAIMER -- YOU CAN BREAK YOUR HEXAPOD IF THE VALUES HERE ARE NOT
 # SENSIBLE OR THE JOINT PARAMETERS AND LIMIT ANGLES DO NOT MATCH YOUR
 # ROBOT. THIS CODEBASE CONTAINS NO SAFEGUARDS TO VALIDATE THE

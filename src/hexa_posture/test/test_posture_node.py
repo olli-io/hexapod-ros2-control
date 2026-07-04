@@ -5,10 +5,12 @@ import math
 from geometry_msgs.msg import Point
 from hexa_interfaces.msg import LegState, LegTargets
 from hexa_posture.posture_node import (
+    GAIT_ENGAGED_STATES,
     POSTURE_ACTIVE_STATES,
     _lpf_step_scalar,
     _lpf_step_xy,
     _max_swing_lift_z,
+    _slew_toward,
     _stance_centroid_xy,
 )
 
@@ -230,3 +232,42 @@ def test_lpf_settles_after_a_few_tau():
         state = _lpf_step_xy(state, (target, 0.0), tau=tau, dt=dt)
     assert abs(state[0] - target) <= 0.05 * target
     assert math.isclose(state[1], 0.0, abs_tol=1e-12)
+
+
+# --- GAIT_ENGAGED_STATES (gait-animation crossfade gate) ---
+
+
+def test_gait_engaged_covers_walk_and_pause_reseat():
+    for state in ("engaging", "gait", "pausing", "paused", "resuming", "reseating"):
+        assert state in GAIT_ENGAGED_STATES, state
+
+
+def test_gait_engaged_excludes_stand_and_pre_stand():
+    for state in ("stand", "folded", "initialize", "folding", ""):
+        assert state not in GAIT_ENGAGED_STATES, state
+
+
+# --- _slew_toward (linear activation crossfade) ---
+
+
+def test_slew_steps_toward_target_by_rate_times_dt():
+    # rate 4/s, dt 0.005 -> step 0.02.
+    assert math.isclose(_slew_toward(0.0, 1.0, 4.0, 0.005), 0.02)
+    assert math.isclose(_slew_toward(0.5, 0.0, 4.0, 0.005), 0.48)
+
+
+def test_slew_reaches_target_without_overshoot():
+    assert math.isclose(_slew_toward(0.99, 1.0, 4.0, 0.005), 1.0)
+    assert math.isclose(_slew_toward(0.01, 0.0, 4.0, 0.005), 0.0)
+
+
+def test_slew_is_symmetric_up_and_down():
+    up = _slew_toward(0.5, 1.0, 4.0, 0.005) - 0.5
+    down = 0.5 - _slew_toward(0.5, 0.0, 4.0, 0.005)
+    assert math.isclose(up, down)
+
+
+def test_slew_holds_on_non_positive_rate_or_dt():
+    assert _slew_toward(0.3, 1.0, 0.0, 0.005) == 0.3
+    assert _slew_toward(0.3, 1.0, 4.0, 0.0) == 0.3
+    assert _slew_toward(0.3, 1.0, -4.0, 0.005) == 0.3

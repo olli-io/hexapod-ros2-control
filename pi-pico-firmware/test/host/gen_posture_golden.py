@@ -86,6 +86,15 @@ def lpf_step_scalar(prev, raw, tau, dt):
     return prev + alpha * (raw - prev)
 
 
+def slew_toward(current, target, rate_per_s, dt):
+    if rate_per_s <= 0.0 or dt <= 0.0:
+        return current
+    step = rate_per_s * dt
+    if target > current:
+        return min(target, current + step)
+    return max(target, current - step)
+
+
 # ── trace ───────────────────────────────────────────────────────────────────
 
 def leg(x, y, z, stance):
@@ -127,12 +136,9 @@ def build_trace():
     frames.append((stance_all(), 0.0, False, "stand", "tripod",
                    (0.0, 0.0, 0.20, 0.0, 0.0, 0.0), "", DT))
 
-    # ── GAIT / tripod walk: left triad swings on the first half-cycle, right on
-    # the second. Foot z follows a simple sine arc; master phase advances. Feeds
-    # GaitSway (centroid) + GaitBounce (swing lift). ──
-    n_walk = 24
-    for i in range(n_walk):
-        phi = (i / 8.0) % 1.0  # ~8 frames per cycle
+    # Tripod swing pattern: left triad swings on the first half-cycle, right on
+    # the second. Foot z follows a simple sine arc.
+    def tripod_legs(phi):
         arc = 0.06 * math.sin(math.pi * ((phi * 2.0) % 1.0))  # per half-cycle
         left_swing = phi < 0.5
         legs = {}
@@ -146,7 +152,15 @@ def build_trace():
                 legs[name] = leg(bx, by, arc, False)
             else:
                 legs[name] = leg(bx, by, 0.0, True)
-        frames.append((legs, phi, True, "gait", "tripod", zero_pose, "", DT))
+        return legs
+
+    # ── GAIT / tripod walk: master phase advances. Feeds GaitSway (centroid) +
+    # GaitBounce (swing lift), and ramps the activation crossfade IN (0 -> 1). ──
+    n_walk = 24
+    for i in range(n_walk):
+        phi = (i / 8.0) % 1.0  # ~8 frames per cycle
+        frames.append((tripod_legs(phi), phi, True, "gait", "tripod", zero_pose,
+                       "", DT))
 
     # ── ANIMATION mode: vertical_body_roll (still + roll), keep walking so the
     # phase-locked roll is live. ──
@@ -154,6 +168,24 @@ def build_trace():
         phi = (i / 8.0) % 1.0
         frames.append((stance_all(), phi, True, "gait", "tripod", zero_pose,
                        "vertical_body_roll", DT))
+
+    # ── STAND tail: stop walking while still in vertical_body_roll mode. The
+    # phase-locked roll is live only for walking=True, so the activation crossfade
+    # fades it OUT (1 -> 0) against the idle stack — exercises the fade-out path.
+    for i in range(10):
+        phi = (i / 8.0) % 1.0
+        frames.append((stance_all(), phi, False, "stand", "tripod", zero_pose,
+                       "vertical_body_roll", DT))
+
+    # ── WALK with a dialed-in posture near the envelope: default stack, walking
+    # again (activation ramps back IN), user pose beyond the reserved user
+    # envelope on several axes. Exercises compose_layered's per-budget split — the
+    # old clamp(add(user, animated)) would clip the animation asymmetrically. ──
+    posed = (0.045, -0.045, 0.05, 0.25, -0.25, 0.4)
+    for i in range(12):
+        phi = (i / 8.0) % 1.0
+        frames.append((tripod_legs(phi), phi, True, "gait", "tripod", posed,
+                       "", DT))
 
     # ── back to default stack ──
     frames.append((stance_all(), 0.0, True, "gait", "tripod", zero_pose, "", DT))
@@ -288,6 +320,15 @@ def main():
 
     default_stack, animation_stacks = build_stacks(pose_mod, anim, pn)
     limits = pose_mod.PoseLimits()
+    reserve = pose_mod.PoseLimits(
+        x=pn["animation_reserve_x"],
+        y=pn["animation_reserve_y"],
+        z=pn["animation_reserve_z"],
+        roll=pn["animation_reserve_roll"],
+        pitch=pn["animation_reserve_pitch"],
+        yaw=pn["animation_reserve_yaw"],
+    )
+    activation_slew_rate = pn["gait_activation_slew_rate"]
     centroid_tau = pn["support_centroid_tau"]
     swing_lift_tau = pn["swing_lift_tau"]
 
@@ -299,6 +340,7 @@ def main():
     latest_raw_centroid = None
     swing_lift = None
     latest_raw_swing_lift = None
+    activation = 0.0
     t = 0.0
 
     for legs, mp, walking, state, gait_name, pose, mode, dt in frames:
@@ -314,23 +356,33 @@ def main():
             swing_lift, latest_raw_swing_lift, swing_lift_tau, dt)
 
         if state not in POSTURE_ACTIVE_STATES:
+            activation = 0.0  # reset the crossfade while inactive
             expected.append((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
             t += dt
             continue
 
-        ctx = anim.AnimationContext(
-            t=t,
-            walking=walking,
-            gait_name=gait_name,
-            support_centroid_xy=support_centroid,
-            swing_lift_z=swing_lift,
-            master_phase=mp % 1.0,
-        )
-        stack = animation_stacks[mode] if mode else default_stack
-        animated = stack(ctx)
+        # Ramp the gait animations in/out toward the walking flag.
+        activation = slew_toward(
+            activation, 1.0 if walking else 0.0, activation_slew_rate, dt)
+
+        def eval_stack(is_walking):
+            ctx = anim.AnimationContext(
+                t=t,
+                walking=is_walking,
+                gait_name=gait_name,
+                support_centroid_xy=support_centroid,
+                swing_lift_z=swing_lift,
+                master_phase=mp % 1.0,
+            )
+            stack = animation_stacks[mode] if mode else default_stack
+            return stack(ctx)
+
+        gait_out = eval_stack(True)
+        idle_out = eval_stack(False)
+        animated = pose_mod.lerp(idle_out, gait_out, activation)
         user = pose_mod.BodyPose(x=pose[0], y=pose[1], z=pose[2],
                                  roll=pose[3], pitch=pose[4], yaw=pose[5])
-        target = pose_mod.clamp(pose_mod.add(user, animated), limits)
+        target = pose_mod.compose_layered(user, animated, limits, reserve)
         expected.append((target.x, target.y, target.z,
                          target.roll, target.pitch, target.yaw))
         t += dt

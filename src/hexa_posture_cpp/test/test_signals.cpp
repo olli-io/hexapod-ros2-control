@@ -13,12 +13,14 @@
 
 namespace {
 
+using hexa_posture::is_gait_engaged;
 using hexa_posture::is_posture_active;
 using hexa_posture::LEG_COUNT;
 using hexa_posture::lpf_step_scalar;
 using hexa_posture::lpf_step_xy;
 using hexa_posture::max_swing_lift_z;
 using hexa_posture::POSTURE_ACTIVE_STATES;
+using hexa_posture::slew_toward;
 using hexa_posture::stance_centroid_xy;
 using hexa_posture::twist_is_zero;
 using hexa_posture::Vec3;
@@ -232,6 +234,49 @@ TEST(Signals, LpfSettlesAfterAFewTau) {
   ASSERT_TRUE(state.has_value());
   EXPECT_LE(std::abs(state->first - target), 0.05 * target);
   EXPECT_NEAR(state->second, 0.0, 1e-12);
+}
+
+// --- is_gait_engaged (gait-animation crossfade gate) ---
+
+TEST(Signals, GaitEngagedCoversWalkAndPauseReseat) {
+  for (const std::string state :
+       {"engaging", "gait", "pausing", "paused", "resuming", "reseating"}) {
+    EXPECT_TRUE(is_gait_engaged(state)) << state;
+  }
+}
+
+TEST(Signals, GaitEngagedExcludesStandAndPreStand) {
+  for (const std::string state :
+       {"stand", "folded", "initialize", "folding"}) {
+    EXPECT_FALSE(is_gait_engaged(state)) << state;
+  }
+  EXPECT_FALSE(is_gait_engaged(""));  // cold start, no state seen
+}
+
+// --- slew_toward (linear activation crossfade) ---
+
+TEST(Signals, SlewStepsTowardTargetByRateTimesDt) {
+  // rate 4/s, dt 0.005 -> step 0.02.
+  EXPECT_NEAR(slew_toward(0.0, 1.0, 4.0, 0.005), 0.02, 1e-12);
+  EXPECT_NEAR(slew_toward(0.5, 0.0, 4.0, 0.005), 0.48, 1e-12);
+}
+
+TEST(Signals, SlewReachesTargetWithoutOvershoot) {
+  // A step that would pass the target lands exactly on it.
+  EXPECT_NEAR(slew_toward(0.99, 1.0, 4.0, 0.005), 1.0, 1e-12);
+  EXPECT_NEAR(slew_toward(0.01, 0.0, 4.0, 0.005), 0.0, 1e-12);
+}
+
+TEST(Signals, SlewIsSymmetricUpAndDown) {
+  const double up = slew_toward(0.5, 1.0, 4.0, 0.005) - 0.5;
+  const double down = 0.5 - slew_toward(0.5, 0.0, 4.0, 0.005);
+  EXPECT_NEAR(up, down, 1e-12);
+}
+
+TEST(Signals, SlewHoldsOnNonPositiveRateOrDt) {
+  EXPECT_EQ(slew_toward(0.3, 1.0, 0.0, 0.005), 0.3);
+  EXPECT_EQ(slew_toward(0.3, 1.0, 4.0, 0.0), 0.3);
+  EXPECT_EQ(slew_toward(0.3, 1.0, -4.0, 0.005), 0.3);
 }
 
 }  // namespace

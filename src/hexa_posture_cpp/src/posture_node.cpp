@@ -1,16 +1,20 @@
 // ROS glue for the hexa_posture controller. Port of posture_node.py.
 //
-// Subscribes to the user pose (/body/pose), the latest body velocity command
-// (/cmd_vel), the gait engine state (/gait/state), the active gait params
-// (/gait/params), the per-leg foot targets (/legs/targets), and the animation
-// mode selection (/animation/mode). On a fixed 200 Hz timer it runs the
-// animation stack with the current context, sums in the user pose, clamps to
-// the static safety envelope, and publishes the result on /body/pose_target.
+// Subscribes to the user pose (/body/pose), the gait engine state
+// (/gait/state), the active gait params (/gait/params), the per-leg foot
+// targets (/legs/targets), and the animation mode selection (/animation/mode).
+// On a fixed 200 Hz timer it runs the animation stack with the current context,
+// cross-fades the gait animations in/out with an activation slewed off the
+// engine state, composes the result with the user pose under a layered clamp,
+// and publishes on /body/pose_target.
 //
-// The gait state gates the whole stack: in folded/initialize/folding the feet
-// are not at the nominal footprint, so a body-pose offset would be nonsense;
-// the node emits IDENTITY there. All pose/animation/signal math lives in the
-// pure library; this file owns only the ROS plumbing.
+// The gait state drives two things: (1) the posture-active gate — in
+// folded/initialize/folding the feet are not at the nominal footprint, so a
+// body-pose offset would be nonsense and the node emits IDENTITY; (2) the
+// gait-animation activation crossfade — the animations ramp in/out as the
+// engine engages/settles rather than stepping at the /cmd_vel edge. All
+// pose/animation/signal math lives in the pure library; this file owns only the
+// ROS plumbing.
 
 #include <algorithm>
 #include <array>
@@ -27,7 +31,6 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include <geometry_msgs/msg/twist.hpp>
 #include <hexa_interfaces/msg/body_pose.hpp>
 #include <hexa_interfaces/msg/gait_params.hpp>
 #include <hexa_interfaces/msg/leg_targets.hpp>
@@ -50,7 +53,6 @@ using hexa_posture::Vec3;
 using BodyPoseMsg = hexa_interfaces::msg::BodyPose;
 using GaitParams = hexa_interfaces::msg::GaitParams;
 using LegTargets = hexa_interfaces::msg::LegTargets;
-using Twist = geometry_msgs::msg::Twist;
 using StringMsg = std_msgs::msg::String;
 
 constexpr double kPublishRateHz = 200.0;
@@ -137,6 +139,21 @@ class PostureNode : public rclcpp::Node {
     centroid_tau_ = declare_parameter("support_centroid_tau", 0.1);
     swing_lift_tau_ = declare_parameter("swing_lift_tau", 0.04);
 
+    // Linear slew rate (1/s) of the gait-animation activation crossfade. The
+    // animation contribution ramps in/out over ~1/rate seconds when the engine
+    // engages/disengages the gait, instead of stepping at the /cmd_vel edge.
+    activation_slew_rate_ =
+        declare_parameter("gait_activation_slew_rate", 4.0);
+    // Per-axis budget reserved for the animation layer in the layered clamp, so
+    // a dialed-in user posture can never asymmetrically clip the animation. The
+    // user's static-posture range shrinks by these amounts (limits - reserve).
+    anim_reserve_.x = declare_parameter("animation_reserve_x", 0.02);
+    anim_reserve_.y = declare_parameter("animation_reserve_y", 0.02);
+    anim_reserve_.z = declare_parameter("animation_reserve_z", 0.03);
+    anim_reserve_.roll = declare_parameter("animation_reserve_roll", 0.20);
+    anim_reserve_.pitch = declare_parameter("animation_reserve_pitch", 0.20);
+    anim_reserve_.yaw = declare_parameter("animation_reserve_yaw", 0.20);
+
     // Parameterized animations override the default-constructed factory
     // instances; still/breathing are never overridden.
     const std::map<std::string, AnimationPtr> overrides = {
@@ -177,12 +194,6 @@ class PostureNode : public rclcpp::Node {
     sub_pose_ = create_subscription<BodyPoseMsg>(
         "/body/pose", 10,
         [this](BodyPoseMsg::SharedPtr msg) { user_pose_ = msg_to_pose(*msg); });
-    sub_vel_ = create_subscription<Twist>(
-        "/cmd_vel", 10, [this](Twist::SharedPtr msg) {
-          walking_ = !hexa_posture::twist_is_zero(
-              msg->linear.x, msg->linear.y, msg->linear.z, msg->angular.x,
-              msg->angular.y, msg->angular.z);
-        });
     sub_gait_state_ = create_subscription<StringMsg>(
         "/gait/state", 10,
         [this](StringMsg::SharedPtr msg) { gait_state_ = msg->data; });
@@ -298,32 +309,52 @@ class PostureNode : public rclcpp::Node {
 
     if (!hexa_posture::is_posture_active(gait_state_)) {
       // Engine is FOLDED / INITIALIZE / FOLDING (or no state seen yet): hold
-      // IDENTITY until posture is meaningful again.
+      // IDENTITY until posture is meaningful again. Reset the crossfade so a
+      // re-engage from a fold always ramps the gait animations in from idle.
+      activation_ = 0.0;
       pub_target_->publish(pose_to_msg(hexa_posture::IDENTITY, now));
       return;
     }
 
+    // Crossfade the gait-animation contribution in/out. Key off the engine's
+    // real state (not the raw /cmd_vel edge), so the fade-out finishes as the
+    // feet settle to the nominal stance rather than ~0.4 s earlier.
+    const double activation_target =
+        hexa_posture::is_gait_engaged(gait_state_) ? 1.0 : 0.0;
+    activation_ = hexa_posture::slew_toward(activation_, activation_target,
+                                            activation_slew_rate_, dt);
+
     AnimationContext ctx;
     ctx.t = now_ns * 1e-9;
-    ctx.walking = walking_;
     ctx.gait_name = gait_name_;
     ctx.support_centroid_xy = support_centroid_xy_;
     ctx.swing_lift_z = swing_lift_z_;
     ctx.master_phase = master_phase_;
 
+    // Evaluate the stack twice — gait-active (walking=true) and idle
+    // (walking=false, i.e. breathing) — and cross-fade. Animations self-gate on
+    // ctx.walking, so this cleanly separates the two contributions without a
+    // per-animation activation term (animations stay pure).
     const Stack& stack = animation_mode_.empty()
                              ? default_stack_
                              : animation_stacks_.at(animation_mode_);
-    const BodyPose animated = stack(ctx);
-    const BodyPose target =
-        hexa_posture::clamp(hexa_posture::add(user_pose_, animated), limits_);
+    ctx.walking = true;
+    const BodyPose gait_out = stack(ctx);
+    ctx.walking = false;
+    const BodyPose idle_out = stack(ctx);
+    const BodyPose animated = hexa_posture::lerp(idle_out, gait_out, activation_);
+
+    // Layered clamp: user posture and animation each get their own budget so a
+    // dialed-in posture never asymmetrically clips the animation.
+    const BodyPose target = hexa_posture::compose_layered(
+        user_pose_, animated, limits_, anim_reserve_);
     pub_target_->publish(pose_to_msg(target, now));
   }
 
   // --- Latest inputs ---
   BodyPose user_pose_ = hexa_posture::IDENTITY;
-  bool walking_ = false;
   // Empty until /gait/state arrives — treated as inactive (emits IDENTITY).
+  // Drives both the posture-active gate and the gait-animation crossfade.
   std::string gait_state_;
   std::optional<std::string> gait_name_;
   std::optional<std::pair<double, double>> support_centroid_xy_;
@@ -336,13 +367,17 @@ class PostureNode : public rclcpp::Node {
   // --- Config / derived state ---
   double centroid_tau_ = 0.1;
   double swing_lift_tau_ = 0.04;
+  // Gait-animation activation crossfade in [0, 1] and its slew rate (1/s).
+  double activation_ = 0.0;
+  double activation_slew_rate_ = 4.0;
   Stack default_stack_;
   std::map<std::string, Stack> animation_stacks_;
   std::string animation_mode_;
   PoseLimits limits_;
+  // Per-axis budget reserved for the animation layer in the layered clamp.
+  PoseLimits anim_reserve_;
 
   rclcpp::Subscription<BodyPoseMsg>::SharedPtr sub_pose_;
-  rclcpp::Subscription<Twist>::SharedPtr sub_vel_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_gait_state_;
   rclcpp::Subscription<GaitParams>::SharedPtr sub_gait_params_;
   rclcpp::Subscription<LegTargets>::SharedPtr sub_targets_;

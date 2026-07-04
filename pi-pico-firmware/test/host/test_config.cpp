@@ -178,6 +178,10 @@ TEST(Posture, AnimationStack) {
   EXPECT_NEAR(cfg::kPosture.gait_sway_strength, 0.4f, kTol);
   EXPECT_NEAR(cfg::kPosture.gait_bounce_arc_height, 0.02f, kTol);
   EXPECT_NEAR(cfg::kPosture.body_roll_3d_horizontal_phase_offset, 0.25f, kTol);
+  // Posture layering fix: crossfade slew rate + layered-clamp reserves.
+  EXPECT_NEAR(cfg::kPosture.gait_activation_slew_rate, 4.0f, kTol);
+  EXPECT_NEAR(cfg::kPosture.animation_reserve_x, 0.02f, kTol);
+  EXPECT_NEAR(cfg::kPosture.animation_reserve_roll, 0.20f, kTol);
 }
 
 TEST(Control, RampAndSnap) {

@@ -45,7 +45,20 @@ BodyPose add(const BodyPose& a, const BodyPose& b);
 // Uniform component-wise scalar multiply.
 BodyPose scale(const BodyPose& p, double k);
 
+// Component-wise linear interpolation: a + t*(b - a). t is not clamped, but the
+// posture node only ever passes t in [0, 1] (the activation crossfade).
+BodyPose lerp(const BodyPose& a, const BodyPose& b, double t);
+
 // Clamp each axis to [-limit, +limit].
 BodyPose clamp(const BodyPose& pose, const PoseLimits& limits);
+
+// Layered clamp: give the static user pose and the (AC) animation offset each
+// their own budget so a dialed-in posture can never asymmetrically clip the
+// animation. The user pose is clamped to (limits - anim_reserve, floored at 0)
+// per axis, the animation to +/-anim_reserve, then summed and clamped to limits
+// as a final guard (inert while user_env + anim_reserve <= limits). Trade-off:
+// the user's static range shrinks by anim_reserve per axis.
+BodyPose compose_layered(const BodyPose& user, const BodyPose& animated,
+                         const PoseLimits& limits, const PoseLimits& anim_reserve);
 
 }  // namespace hexa_posture

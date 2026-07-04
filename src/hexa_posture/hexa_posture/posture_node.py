@@ -1,10 +1,17 @@
 """Posture controller node.
 
-Subscribes to the user pose (`/body/pose`), the latest body velocity
-command (`/cmd_vel`), and the gait engine state (`/gait/state`). On a
-fixed timer, runs the animation stack with the current context, sums
-in the user pose, clamps to the static safety envelope, and publishes
-the result on `/body/pose_target` for the IK node to consume.
+Subscribes to the user pose (`/body/pose`) and the gait engine state
+(`/gait/state`). On a fixed timer, runs the animation stack with the
+current context, cross-fades the gait animations in/out with an
+activation slewed off the engine state, composes the result with the
+user pose under a layered clamp, and publishes on `/body/pose_target`
+for the IK node to consume.
+
+The gait state drives two things: the posture-active gate (below) and
+the gait-animation activation crossfade — the animations ramp in/out
+as the engine engages/settles rather than stepping at the /cmd_vel
+edge, so switching between pose mode and walking no longer jumps the
+body.
 
 The gait state gates the whole stack: posture is only meaningful when
 the legs are at (or transitioning around) the nominal stance
@@ -43,7 +50,7 @@ from .animations import (
     Still,
     VerticalBodyRoll,
 )
-from .pose import IDENTITY, BodyPose, PoseLimits, add, clamp
+from .pose import IDENTITY, BodyPose, PoseLimits, compose_layered, lerp
 
 PUBLISH_RATE_HZ = 200.0
 CMD_VEL_ZERO_TOL = 1e-4
@@ -62,6 +69,16 @@ CMD_VEL_ZERO_TOL = 1e-4
 # snap the body back to IDENTITY.
 POSTURE_ACTIVE_STATES: frozenset[str] = frozenset(
     {"stand", "engaging", "gait", "pausing", "paused", "resuming", "reseating"}
+)
+
+# Gait engine states in which the walking gait is actually engaged: the
+# POSTURE_ACTIVE_STATES minus `stand`. Drives the gait-animation
+# activation crossfade off the engine's real state rather than the raw
+# /cmd_vel edge — the pause trio and reseating stay engaged so the
+# animation fades out only as the feet settle to the nominal stance, not
+# ~0.4 s earlier when cmd_vel hits zero.
+GAIT_ENGAGED_STATES: frozenset[str] = frozenset(
+    {"engaging", "gait", "pausing", "paused", "resuming", "reseating"}
 )
 
 DEFAULT_ANIMATIONS: tuple[str, ...] = ("still", "breathing")
@@ -120,6 +137,20 @@ def _twist_is_zero(t: Twist) -> bool:
 
 def _msg_to_pose(m: BodyPoseMsg) -> BodyPose:
     return BodyPose(x=m.x, y=m.y, z=m.z, roll=m.roll, pitch=m.pitch, yaw=m.yaw)
+
+
+def _slew_toward(current: float, target: float, rate_per_s: float, dt: float) -> float:
+    """Move ``current`` toward ``target`` by at most ``rate_per_s * dt``
+    (linear slew), never overshooting. Returns ``current`` unchanged when
+    ``rate_per_s <= 0`` or ``dt <= 0``. Reaches the target exactly (unlike
+    an LPF), so the activation lands on 0.0/1.0 with no residual bias.
+    """
+    if rate_per_s <= 0.0 or dt <= 0.0:
+        return current
+    step = rate_per_s * dt
+    if target > current:
+        return min(target, current + step)
+    return max(target, current - step)
 
 
 def _lpf_step_xy(
@@ -237,9 +268,9 @@ class PostureNode(Node):
         super().__init__("posture_node")
 
         self._user_pose: BodyPose = IDENTITY
-        self._walking: bool = False
         # Cold-start default: until /gait/state arrives the engine could
-        # still be in FOLDED, so play it safe and emit IDENTITY.
+        # still be in FOLDED, so play it safe and emit IDENTITY. Drives both
+        # the posture-active gate and the gait-animation crossfade.
         self._gait_state: str | None = None
         # Active gait strategy name from /gait/params. Held None until
         # the first params message lands; animations that gate on a
@@ -264,6 +295,9 @@ class PostureNode(Node):
         # phase-locked animations can stay silent on cold start.
         self._master_phase: float | None = None
         self._last_tick_ns: int | None = None
+        # Gait-animation activation crossfade in [0, 1]; slewed each tick
+        # toward 1 when the gait is engaged, 0 otherwise.
+        self._activation: float = 0.0
 
         self.declare_parameter("enabled_animations", list(DEFAULT_ANIMATIONS))
         self.declare_parameter(
@@ -289,6 +323,13 @@ class PostureNode(Node):
         self.declare_parameter("body_roll_3d_yaw_phase_offset", 0.0)
         self.declare_parameter("support_centroid_tau", 0.1)
         self.declare_parameter("swing_lift_tau", 0.04)
+        self.declare_parameter("gait_activation_slew_rate", 4.0)
+        self.declare_parameter("animation_reserve_x", 0.02)
+        self.declare_parameter("animation_reserve_y", 0.02)
+        self.declare_parameter("animation_reserve_z", 0.03)
+        self.declare_parameter("animation_reserve_roll", 0.20)
+        self.declare_parameter("animation_reserve_pitch", 0.20)
+        self.declare_parameter("animation_reserve_yaw", 0.20)
         enabled = list(
             self.get_parameter("enabled_animations")
             .get_parameter_value()
@@ -392,6 +433,26 @@ class PostureNode(Node):
             .get_parameter_value()
             .double_value
         )
+        self._activation_slew_rate = (
+            self.get_parameter("gait_activation_slew_rate")
+            .get_parameter_value()
+            .double_value
+        )
+
+        def _reserve(name: str) -> float:
+            return self.get_parameter(name).get_parameter_value().double_value
+
+        # Per-axis budget reserved for the animation layer in the layered
+        # clamp, so a dialed-in user posture can never asymmetrically clip
+        # the animation. The user's static-posture range shrinks by these.
+        self._anim_reserve = PoseLimits(
+            x=_reserve("animation_reserve_x"),
+            y=_reserve("animation_reserve_y"),
+            z=_reserve("animation_reserve_z"),
+            roll=_reserve("animation_reserve_roll"),
+            pitch=_reserve("animation_reserve_pitch"),
+            yaw=_reserve("animation_reserve_yaw"),
+        )
         overrides: dict[str, Animation] = {
             "gait_sway": GaitSway(
                 gain=gait_sway_gain, strength=gait_sway_strength
@@ -446,9 +507,6 @@ class PostureNode(Node):
         self._sub_pose = self.create_subscription(
             BodyPoseMsg, "/body/pose", self._on_pose, 10
         )
-        self._sub_vel = self.create_subscription(
-            Twist, "/cmd_vel", self._on_vel, 10
-        )
         self._sub_gait_state = self.create_subscription(
             String, "/gait/state", self._on_gait_state, 10
         )
@@ -473,9 +531,6 @@ class PostureNode(Node):
 
     def _on_pose(self, msg: BodyPoseMsg) -> None:
         self._user_pose = _msg_to_pose(msg)
-
-    def _on_vel(self, msg: Twist) -> None:
-        self._walking = not _twist_is_zero(msg)
 
     def _on_gait_state(self, msg: String) -> None:
         self._gait_state = msg.data
@@ -548,25 +603,51 @@ class PostureNode(Node):
             # yet): the legs aren't at nominal stance, so applying any
             # body-pose offset would compose against the wrong foot
             # configuration. Hold IDENTITY until the engine reports a
-            # state in which posture is meaningful.
+            # state in which posture is meaningful. Reset the crossfade so
+            # a re-engage from a fold always ramps the animations in.
+            self._activation = 0.0
             self._pub_target.publish(_pose_to_msg(IDENTITY, now.to_msg()))
             return
-        t = now_ns * 1e-9
-        ctx = AnimationContext(
-            t=t,
-            walking=self._walking,
-            gait_name=self._gait_name,
-            support_centroid_xy=self._support_centroid_xy,
-            swing_lift_z=self._swing_lift_z,
-            master_phase=self._master_phase,
+
+        # Crossfade the gait-animation contribution in/out. Key off the
+        # engine's real state (not the raw /cmd_vel edge), so the fade-out
+        # finishes as the feet settle to the nominal stance rather than
+        # ~0.4 s earlier.
+        activation_target = 1.0 if self._gait_state in GAIT_ENGAGED_STATES else 0.0
+        self._activation = _slew_toward(
+            self._activation, activation_target, self._activation_slew_rate, dt
         )
+
+        t = now_ns * 1e-9
         stack = (
             self._animation_stacks[self._animation_mode]
             if self._animation_mode
             else self._default_stack
         )
-        animated = stack(ctx)
-        target = clamp(add(self._user_pose, animated), self._limits)
+
+        def _eval(walking: bool) -> BodyPose:
+            return stack(
+                AnimationContext(
+                    t=t,
+                    walking=walking,
+                    gait_name=self._gait_name,
+                    support_centroid_xy=self._support_centroid_xy,
+                    swing_lift_z=self._swing_lift_z,
+                    master_phase=self._master_phase,
+                )
+            )
+
+        # Evaluate the stack twice — gait-active (walking=True) and idle
+        # (walking=False, i.e. breathing) — and cross-fade. Animations
+        # self-gate on ctx.walking, so this cleanly separates the two
+        # contributions without a per-animation activation term.
+        animated = lerp(_eval(False), _eval(True), self._activation)
+        # Layered clamp: user posture and animation each get their own
+        # budget so a dialed-in posture never asymmetrically clips the
+        # animation.
+        target = compose_layered(
+            self._user_pose, animated, self._limits, self._anim_reserve
+        )
         self._pub_target.publish(_pose_to_msg(target, now.to_msg()))
 
 

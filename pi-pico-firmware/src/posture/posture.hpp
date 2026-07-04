@@ -64,6 +64,11 @@ std::optional<float> lpf_step_scalar(std::optional<float> prev,
 // POSTURE_ACTIVE_STATES.
 bool posture_active(gait::EngineState state);
 
+// Move current toward target by at most rate_per_s * dt (linear, no overshoot).
+// Returns current unchanged when rate_per_s <= 0 or dt <= 0. Drives the
+// gait-animation activation crossfade. Mirrors _slew_toward.
+float slew_toward(float current, float target, float rate_per_s, float dt);
+
 // Owns the animation stacks, the signal filters, the persistent user pose, and
 // the active animation-mode selection — the stateful half of the posture node.
 // The pure animations stay stateless; the clock (t) and walking flag are fed in
@@ -87,10 +92,13 @@ class PostureController {
 
   std::string_view animation_mode() const { return animation_mode_; }
 
-  // Advance the filters and evaluate the active stack for this tick. Returns the
-  // clamped body_pose_target (user pose + animated), or IDENTITY when the engine
-  // state is outside POSTURE_ACTIVE_STATES. Mirrors _tick (+ _on_leg_targets /
-  // _step_filters, which run in-line here since firmware has no wire).
+  // Advance the filters and evaluate the active stack for this tick. Slews the
+  // activation toward the walking flag, evaluates the stack twice (walking
+  // true/false), lerps between them, and composes the result with the user pose
+  // under the layered clamp — returning the body_pose_target, or IDENTITY when
+  // the engine state is outside POSTURE_ACTIVE_STATES. Mirrors _tick
+  // (+ _on_leg_targets / _step_filters, which run in-line here since firmware
+  // has no wire).
   //   legs         — the engine's per-leg output this tick.
   //   master_phase — engine master phase; wrapped to [0, 1) defensively.
   //   walking      — latest /cmd_vel non-zero (from map_joy output).
@@ -108,6 +116,15 @@ class PostureController {
 
   BodyPose user_pose_ = IDENTITY;
   PoseLimits limits_;
+
+  // Gait-animation crossfade: activation slews 0<->1 toward the walking flag so
+  // the gait animations ramp in/out instead of stepping. The stack is evaluated
+  // twice each tick (walking true/false) and lerp'd by this. Reset to 0 while
+  // the posture stack is inactive.
+  float activation_ = 0.0f;
+  float activation_slew_rate_;
+  // Per-axis animation budget for the layered clamp (compose_layered).
+  PoseLimits anim_reserve_;
 
   // Filter state (mirrors the node's _support_centroid_xy / _swing_lift_z and
   // their latest-raw holders).
