@@ -50,10 +50,17 @@ bool cmd_is_walking(float vx, float vy, float wz) {
 
 }  // namespace
 
-Pipeline::Pipeline()
+Pipeline::Pipeline() : Pipeline(PipelineConfig::baked()) {}
+
+Pipeline::Pipeline(const PipelineConfig& cfg)
     : engine_(hexa::gait::make_default_engine(
-          std::string(hexa::config::kDefaultGait))),
-      caps_(hexa::gait::load_velocity_caps_from_config()),
+          cfg.default_gait, cfg.leg_specs, cfg.engine, cfg.standing_pose,
+          cfg.initial_pose, cfg.coxa_to_bottom)),
+      caps_(cfg.caps),
+      control_(cfg.control, cfg.caps, cfg.leg_specs, cfg.default_gait),
+      posture_(cfg.posture),
+      // Supervisor safety stays baked (kInputTimeoutS / kBattery are from
+      // webteleop/display YAML, outside the geometry+tuning scope).
       supervisor_(hexa::supervisor::Config{
           hexa::config::kInputTimeoutS,
           hexa::config::kBattery.warning_v,
@@ -62,16 +69,16 @@ Pipeline::Pipeline()
           hexa::config::kBattery.hold_s,
           kTickPeriodUs,
           kTickMarginUs,
-      }) {
+      }),
+      leg_specs_(cfg.leg_specs) {
   // Teleop mapping + velocity shaping. The JoyConfig's stick scaling tracks the
   // active gait's caps; map_joy owns the mode FSM / posture baseline in
-  // JoyState.
-  joycfg_.gait_angular_z_max = hexa::config::kAngularMax;
-  joycfg_.gait_linear_max =
-      caps_.linear_max(std::string(hexa::config::kDefaultGait));
+  // JoyState. (Joy state is baked/unused on the ROS path.)
+  joycfg_.gait_angular_z_max = cfg.caps.angular_max;
+  joycfg_.gait_linear_max = cfg.caps.linear_max(cfg.default_gait);
   joystate_.mode = hexa::teleop::mode_from_string(hexa::config::kInitialMode);
   for (std::size_t i = 0; i < hexa::config::kGaitCycle.size(); ++i) {
-    if (hexa::config::kGaitCycle[i] == hexa::config::kDefaultGait) {
+    if (hexa::config::kGaitCycle[i] == cfg.default_gait) {
       joystate_.current_gait_idx = static_cast<int>(i);
       break;
     }
@@ -80,19 +87,19 @@ Pipeline::Pipeline()
   // Seed the last-good angles with the standing pose (uniform per leg) so a leg
   // held on the very first tick (before any successful compose) is valid.
   for (int i = 0; i < hexa::kNumLegs; ++i) {
-    theta_[i * 3 + 0] = hexa::config::kStandingPose[0];
-    theta_[i * 3 + 1] = hexa::config::kStandingPose[1];
-    theta_[i * 3 + 2] = hexa::config::kStandingPose[2];
+    theta_[i * 3 + 0] = cfg.standing_pose[0];
+    theta_[i * 3 + 1] = cfg.standing_pose[1];
+    theta_[i * 3 + 2] = cfg.standing_pose[2];
   }
 }
 
 int Pipeline::compose_gait(
     const std::map<std::string, hexa::gait::LegOutput>& out,
     const hexa::BodyPose& body_pose) {
-  namespace cfg = hexa::config;
   int unreachable = 0;
   for (int i = 0; i < hexa::kNumLegs; ++i) {
-    const cfg::LegSpec& spec = cfg::kLegSpecs[static_cast<std::size_t>(i)];
+    const hexa::config::LegSpec& spec =
+        leg_specs_[static_cast<std::size_t>(i)];
     const hexa::Vec3& target = out.at(hexa::gait::LEG_NAMES[i]).foot_target;
     const hexa::Vec3 in_offset = hexa::apply_body_pose(target, body_pose);
     const hexa::Vec3 in_leg = hexa::body_to_leg(in_offset, spec);

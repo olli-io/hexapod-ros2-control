@@ -639,45 +639,61 @@ EngineConfig engine_config_from_config() {
   return cfg;
 }
 
-std::map<std::string, Vec3> nominal_stance_from_config() {
+// The baked constants as std::arrays, so the no-arg builders can delegate to the
+// parameterized versions without repeating the constexpr wiring.
+namespace {
+std::array<kin::LegSpec, kNumLegs> baked_leg_specs() {
+  return ::hexa::config::kLegSpecs;
+}
+}  // namespace
+
+std::map<std::string, Vec3> nominal_stance_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const JointAngles& standing_pose) {
   std::map<std::string, Vec3> out;
   for (int i = 0; i < 6; ++i) {
-    const auto& spec = ::hexa::config::kLegSpecs[static_cast<std::size_t>(i)];
-    out[LEG_NAMES[i]] = kin::leg_to_body(
-        kin::forward_kinematics(::hexa::config::kStandingPose, spec), spec);
+    const auto& spec = specs[static_cast<std::size_t>(i)];
+    out[LEG_NAMES[i]] =
+        kin::leg_to_body(kin::forward_kinematics(standing_pose, spec), spec);
   }
   return out;
 }
 
-std::map<std::string, Vec3> initial_stance_from_config() {
+std::map<std::string, Vec3> initial_stance_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const std::array<JointAngles, kNumLegs>& initial_pose) {
   std::map<std::string, Vec3> out;
   for (int i = 0; i < 6; ++i) {
     const std::size_t idx = static_cast<std::size_t>(i);
-    const auto& spec = ::hexa::config::kLegSpecs[idx];
-    out[LEG_NAMES[i]] = kin::leg_to_body(
-        kin::forward_kinematics(::hexa::config::kInitialPose[idx], spec), spec);
+    const auto& spec = specs[idx];
+    out[LEG_NAMES[i]] =
+        kin::leg_to_body(kin::forward_kinematics(initial_pose[idx], spec), spec);
   }
   return out;
 }
 
-std::map<std::string, kin::LegSpec> leg_specs_from_config() {
+std::map<std::string, kin::LegSpec> leg_specs_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs) {
   std::map<std::string, kin::LegSpec> out;
   for (int i = 0; i < 6; ++i) {
-    out[LEG_NAMES[i]] = ::hexa::config::kLegSpecs[static_cast<std::size_t>(i)];
+    out[LEG_NAMES[i]] = specs[static_cast<std::size_t>(i)];
   }
   return out;
 }
 
-ReseatGeometry reseat_geometry_from_config() {
-  return default_geometry_from_pose(::hexa::config::kStandingPose,
-                                    ::hexa::config::kLegSpecs[0]);
+ReseatGeometry reseat_geometry_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const JointAngles& standing_pose) {
+  return default_geometry_from_pose(standing_pose, specs[0]);
 }
 
-std::map<std::string, LegContext> build_leg_contexts_from_config() {
-  const auto nominal = nominal_stance_from_config();
+std::map<std::string, LegContext> build_leg_contexts_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const JointAngles& standing_pose) {
+  const auto nominal = nominal_stance_from(specs, standing_pose);
   std::map<std::string, LegContext> out;
   for (int i = 0; i < 6; ++i) {
-    const auto& spec = ::hexa::config::kLegSpecs[static_cast<std::size_t>(i)];
+    const auto& spec = specs[static_cast<std::size_t>(i)];
     LegContext ctx;
     ctx.name = LEG_NAMES[i];
     ctx.mount_xyz = spec.mount_xyz;
@@ -688,16 +704,50 @@ std::map<std::string, LegContext> build_leg_contexts_from_config() {
   return out;
 }
 
-std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
+std::map<std::string, Vec3> nominal_stance_from_config() {
+  return nominal_stance_from(baked_leg_specs(), ::hexa::config::kStandingPose);
+}
+
+std::map<std::string, Vec3> initial_stance_from_config() {
+  return initial_stance_from(baked_leg_specs(), ::hexa::config::kInitialPose);
+}
+
+std::map<std::string, kin::LegSpec> leg_specs_from_config() {
+  return leg_specs_from(baked_leg_specs());
+}
+
+ReseatGeometry reseat_geometry_from_config() {
+  return reseat_geometry_from(baked_leg_specs(), ::hexa::config::kStandingPose);
+}
+
+std::map<std::string, LegContext> build_leg_contexts_from_config() {
+  return build_leg_contexts_from(baked_leg_specs(),
+                                 ::hexa::config::kStandingPose);
+}
+
+std::unique_ptr<Engine> make_default_engine(
+    const std::string& strategy_name,
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const EngineConfig& engine_cfg, const JointAngles& standing_pose,
+    const std::array<JointAngles, kNumLegs>& initial_pose,
+    float coxa_to_bottom) {
   auto factory = strategies().find(strategy_name);
   if (factory == strategies().end()) {
     throw std::invalid_argument("unknown strategy: " + strategy_name);
   }
   return std::make_unique<Engine>(
-      engine_config_from_config(), factory->second(), strategy_name,
-      nominal_stance_from_config(), initial_stance_from_config(),
-      ::hexa::config::kCoxaToBottom, build_leg_contexts_from_config(),
-      leg_specs_from_config(), reseat_geometry_from_config());
+      engine_cfg, factory->second(), strategy_name,
+      nominal_stance_from(specs, standing_pose),
+      initial_stance_from(specs, initial_pose), coxa_to_bottom,
+      build_leg_contexts_from(specs, standing_pose), leg_specs_from(specs),
+      reseat_geometry_from(specs, standing_pose));
+}
+
+std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
+  return make_default_engine(
+      strategy_name, baked_leg_specs(), engine_config_from_config(),
+      ::hexa::config::kStandingPose, ::hexa::config::kInitialPose,
+      ::hexa::config::kCoxaToBottom);
 }
 
 std::string state_value(EngineState s) {

@@ -17,17 +17,21 @@
 // harness (test/host/test_pipeline.cpp).
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
 
 #include "bt_teleop.hpp"                   // bt_teleop::kNumAxes
+#include "config_generated.hpp"            // hexa::config::LegSpec (leg_specs_)
 #include "control.hpp"                     // hexa::control::Control
 #include "gait/engine.hpp"                 // hexa::gait::Engine, EngineState
 #include "gait/limits.hpp"                 // hexa::gait::VelocityCaps
 #include "joy_mapping.hpp"                 // hexa::teleop::JoyConfig / JoyState / Mode
 #include "kinematics/body_transform.hpp"   // hexa::BodyPose
+#include "leg_index.hpp"                   // hexa::kNumLegs
+#include "pipeline_config.hpp"             // hexa::pipeline::PipelineConfig
 #include "posture/posture.hpp"             // hexa::posture::PostureController
 #include "servo_out.hpp"                   // servo_out::kNumJoints
 #include "supervisor.hpp"                  // hexa::supervisor::Supervisor
@@ -104,8 +108,15 @@ class Pipeline {
  public:
   // Builds the engine / control / posture / supervisor from the baked config
   // (config_generated.hpp) exactly as main.cpp used to: FOLDED cold-start,
-  // default gait, initial teleop mode, standing-pose last-good seed.
+  // default gait, initial teleop mode, standing-pose last-good seed. Delegates
+  // to the PipelineConfig ctor with PipelineConfig::baked().
   Pipeline();
+
+  // Build the engine / control / posture from a runtime-supplied geometry +
+  // tuning config (hexa_locomotion's YAML path). The supervisor and joy config
+  // stay baked (out of the geometry+tuning scope). PipelineConfig::baked()
+  // reproduces the no-arg behavior exactly.
+  explicit Pipeline(const PipelineConfig& config);
 
   // Joy-path convenience: map the raw gamepad snapshot in `in` (axes/buttons)
   // through map_joy() using the pipeline's own JoyConfig/JoyState, then run the
@@ -142,6 +153,10 @@ class Pipeline {
   hexa::teleop::JoyState joystate_;
   hexa::posture::PostureController posture_;
   hexa::supervisor::Supervisor supervisor_;
+
+  // Leg geometry for compose_gait's IK (was config::kLegSpecs; now held so a
+  // runtime PipelineConfig's geometry threads through to the per-leg solve).
+  std::array<hexa::config::LegSpec, hexa::kNumLegs> leg_specs_;
 
   // Last-good joint angles, persisted across ticks (seeded with the standing
   // pose so the very first tick's held legs are valid).

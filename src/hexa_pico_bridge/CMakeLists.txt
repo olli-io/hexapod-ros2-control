@@ -58,6 +58,7 @@ add_custom_target(hexa_pico_bridge_gen_config DEPENDS ${GEN_CONFIG})
 # link dependency on the Pico UART / Bluepad32 code.
 set(FW_PIPELINE_SOURCES
   ${FW_SRC}/pipeline.cpp
+  ${FW_SRC}/pipeline_config.cpp
   ${FW_SRC}/control.cpp
   ${FW_SRC}/joy_mapping.cpp
   ${FW_SRC}/supervisor.cpp

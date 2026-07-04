@@ -19,8 +19,8 @@ constexpr float kDegToRad = 0.017453292519943295f;
 // configured instance, unknown -> nullptr (the caller drops it, matching the
 // Python builder's rejection of unknown names — the config is trusted, so an
 // unknown name means a codegen/typo bug rather than user input).
-std::shared_ptr<const Animation> make_animation(std::string_view name) {
-  const auto& p = config::kPosture;
+std::shared_ptr<const Animation> make_animation(std::string_view name,
+                                                const config::PostureConfig& p) {
   if (name == "still") {
     return std::make_shared<Still>();
   }
@@ -61,11 +61,12 @@ std::shared_ptr<const Animation> make_animation(std::string_view name) {
 // Compose a stack from a list of animation names. Mirrors
 // _build_animation_stack (unknown names are skipped rather than raised — see
 // make_animation).
-Stack build_stack(const std::vector<std::string_view>& names) {
+Stack build_stack(const std::vector<std::string_view>& names,
+                  const config::PostureConfig& p) {
   std::vector<std::shared_ptr<const Animation>> layers;
   layers.reserve(names.size());
   for (const auto& name : names) {
-    if (auto a = make_animation(name)) {
+    if (auto a = make_animation(name, p)) {
       layers.push_back(std::move(a));
     }
   }
@@ -181,18 +182,18 @@ float slew_toward(float current, float target, float rate_per_s, float dt) {
 }
 
 PostureController::PostureController()
-    : activation_slew_rate_(config::kPosture.gait_activation_slew_rate),
-      anim_reserve_{config::kPosture.animation_reserve_x,
-                    config::kPosture.animation_reserve_y,
-                    config::kPosture.animation_reserve_z,
-                    config::kPosture.animation_reserve_roll,
-                    config::kPosture.animation_reserve_pitch,
-                    config::kPosture.animation_reserve_yaw},
-      centroid_tau_(config::kPosture.support_centroid_tau),
-      swing_lift_tau_(config::kPosture.swing_lift_tau) {
+    : PostureController(config::kPosture) {}
+
+PostureController::PostureController(const config::PostureConfig& p)
+    : activation_slew_rate_(p.gait_activation_slew_rate),
+      anim_reserve_{p.animation_reserve_x, p.animation_reserve_y,
+                    p.animation_reserve_z, p.animation_reserve_roll,
+                    p.animation_reserve_pitch, p.animation_reserve_yaw},
+      centroid_tau_(p.support_centroid_tau),
+      swing_lift_tau_(p.swing_lift_tau) {
   std::vector<std::string_view> enabled(config::kEnabledAnimations.begin(),
                                         config::kEnabledAnimations.end());
-  default_stack_ = build_stack(enabled);
+  default_stack_ = build_stack(enabled, p);
 
   // One dedicated stack per animation-mode entry: still + the named
   // animation(s), so gait_sway / gait_bounce don't bleed in while the user is
@@ -219,7 +220,7 @@ PostureController::PostureController()
       }
       start = comma + 1;
     }
-    animation_stacks_.emplace(std::string(entry), build_stack(names));
+    animation_stacks_.emplace(std::string(entry), build_stack(names, p));
   }
 }
 

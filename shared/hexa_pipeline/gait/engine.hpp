@@ -9,6 +9,7 @@
 // that read the baked config_generated.hpp (no filesystem on the RP2350).
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <optional>
@@ -218,6 +219,33 @@ std::map<std::string, LegContext> build_leg_contexts_from_config();
 // strategy_name must be a registry key (default "tripod").
 std::unique_ptr<Engine> make_default_engine(
     const std::string& strategy_name = "tripod");
+
+// ── Parameterized builders (runtime geometry, e.g. hexa_locomotion's YAML) ──
+//
+// Same construction as the *_from_config() versions but from explicit leg specs,
+// standing/initial pose, and engine config instead of the baked constexpr, so a
+// ROS caller can supply runtime-loaded values. The no-arg versions above delegate
+// to these with the config_generated.hpp constants (so the Pico is unchanged).
+std::map<std::string, Vec3> nominal_stance_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const JointAngles& standing_pose);
+std::map<std::string, Vec3> initial_stance_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const std::array<JointAngles, kNumLegs>& initial_pose);
+std::map<std::string, kin::LegSpec> leg_specs_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs);
+ReseatGeometry reseat_geometry_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const JointAngles& standing_pose);
+std::map<std::string, LegContext> build_leg_contexts_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const JointAngles& standing_pose);
+
+std::unique_ptr<Engine> make_default_engine(
+    const std::string& strategy_name,
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const EngineConfig& engine_cfg, const JointAngles& standing_pose,
+    const std::array<JointAngles, kNumLegs>& initial_pose, float coxa_to_bottom);
 
 // Wire string for /gait/state (folded, initialize, stand, ...).
 std::string state_value(EngineState s);

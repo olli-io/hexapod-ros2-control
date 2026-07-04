@@ -20,6 +20,7 @@
 #include <string_view>
 #include <utility>
 
+#include "config_generated.hpp"  // config::PostureConfig (parameterized ctor)
 #include "gait/engine.hpp"  // EngineState
 #include "gait/types.hpp"   // LegOutput, LEG_NAMES
 #include "posture/animations.hpp"
@@ -80,6 +81,13 @@ class PostureController {
   // config::kPosture amplitudes. Filter time constants come from the same
   // config.
   PostureController();
+
+  // Build with explicit posture tuning (hexa_locomotion's runtime-YAML path):
+  // the animation amplitudes, filter taus, activation slew rate, and per-axis
+  // animation reserve all come from `posture`. The enabled-animation SET stays
+  // baked (kEnabledAnimations / kAnimationModeAnimations — structural, not a
+  // tuning knob). The no-arg ctor delegates here with config::kPosture.
+  explicit PostureController(const ::hexa::config::PostureConfig& posture);
 
   // Persistent user pose from map_joy (the /body/pose subscription). Survives
   // across ticks until the next teleop update.

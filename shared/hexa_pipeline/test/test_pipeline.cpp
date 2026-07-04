@@ -173,4 +173,22 @@ TEST(Pipeline, LostLinkForcesStop) {
   EXPECT_FALSE(r.walking) << "a lost link must gate the posture animations off";
 }
 
+// The runtime PipelineConfig seam is actually consumed, not ignored: baked()
+// reproduces the default construction, and an override threads through to the
+// built engine. This is the off-target guard for hexa_locomotion's YAML path
+// (the ROS node fills a PipelineConfig from geometry.yaml / tuning.yaml).
+TEST(PipelineConfig, BakedMatchesDefaultAndOverrideThreads) {
+  pl::PipelineConfig cfg = pl::PipelineConfig::baked();
+  EXPECT_EQ(cfg.default_gait, "tripod") << "baked default gait";
+
+  pl::Pipeline baked_default;  // no-arg ctor delegates to baked()
+  EXPECT_EQ(baked_default.engine().strategy_name(), "tripod");
+
+  // A non-default gait in the config must build the engine on that strategy.
+  cfg.default_gait = "ripple";
+  pl::Pipeline overridden(cfg);
+  EXPECT_EQ(overridden.engine().strategy_name(), "ripple")
+      << "PipelineConfig.default_gait must thread through to the engine";
+}
+
 }  // namespace

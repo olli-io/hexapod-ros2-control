@@ -13,12 +13,15 @@
 // ({ENGAGING, GAIT}) so each STAND -> ENGAGING starts clean.
 #pragma once
 
+#include <array>
 #include <map>
 #include <string>
 #include <tuple>
 
+#include "config_generated.hpp"  // config::ControlConfig / LegSpec (parameterized ctor)
 #include "gait/engine.hpp"   // hexa::gait::EngineState
 #include "gait/limits.hpp"   // VelocityCaps, scale_to_envelope
+#include "leg_index.hpp"     // hexa::kNumLegs
 #include "vec3.hpp"
 
 namespace hexa::control {
@@ -61,7 +64,17 @@ class BodyVelocityLimiter {
 // once per tick with the raw teleop command and the current engine state.
 class Control {
  public:
+  // Build from the baked config_generated.hpp constants.
   Control();
+
+  // Build from explicit tuning/geometry (hexa_locomotion's runtime-YAML path):
+  // control ramp times + snap tolerances, the per-gait velocity caps, the leg
+  // mounts (for the envelope cut), and the starting gait. The no-arg ctor
+  // delegates here with the baked constants.
+  Control(const ::hexa::config::ControlConfig& control,
+          const hexa::gait::VelocityCaps& caps,
+          const std::array<::hexa::config::LegSpec, hexa::kNumLegs>& leg_specs,
+          const std::string& default_gait);
 
   // Cut to the active gait's envelope, then rate-cap toward it. Resets the
   // limiter on the engine leaving the walking set. Returns the shaped triple to

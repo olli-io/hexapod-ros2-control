@@ -91,21 +91,30 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
   return state();
 }
 
-Control::Control()
-    : caps_(hexa::gait::load_velocity_caps_from_config()),
-      vmax_ramp_time_linear_(::hexa::config::kControl.vmax_ramp_time_linear),
-      vmax_ramp_time_angular_(::hexa::config::kControl.vmax_ramp_time_angular),
-      // tuning.yaml's control_node default_gait is kept aligned with teleop's kDefaultGait
-      // (both "tripod") and the engine's make_default_engine default.
-      active_gait_(std::string(::hexa::config::kDefaultGait)),
+Control::Control(const ::hexa::config::ControlConfig& control,
+                 const hexa::gait::VelocityCaps& caps,
+                 const std::array<::hexa::config::LegSpec, hexa::kNumLegs>&
+                     leg_specs,
+                 const std::string& default_gait)
+    : caps_(caps),
+      vmax_ramp_time_linear_(control.vmax_ramp_time_linear),
+      vmax_ramp_time_angular_(control.vmax_ramp_time_angular),
+      active_gait_(default_gait),
       limiter_(accel_linear_for(active_gait_), accel_angular(),
-               ::hexa::config::kControl.snap_tol_linear,
-               ::hexa::config::kControl.snap_tol_angular) {
+               control.snap_tol_linear, control.snap_tol_angular) {
   for (int i = 0; i < hexa::kNumLegs; ++i) {
     leg_mounts_[hexa::gait::LEG_NAMES[static_cast<std::size_t>(i)]] =
-        ::hexa::config::kLegSpecs[static_cast<std::size_t>(i)].mount_xyz;
+        leg_specs[static_cast<std::size_t>(i)].mount_xyz;
   }
 }
+
+// tuning.yaml's control_node default_gait is kept aligned with teleop's
+// kDefaultGait (both "tripod") and the engine's make_default_engine default.
+Control::Control()
+    : Control(::hexa::config::kControl,
+              hexa::gait::load_velocity_caps_from_config(),
+              ::hexa::config::kLegSpecs,
+              std::string(::hexa::config::kDefaultGait)) {}
 
 float Control::accel_linear_for(const std::string& gait) const {
   return caps_.linear_max(gait) / vmax_ramp_time_linear_;

@@ -256,6 +256,7 @@ target_compile_options(test_posture PRIVATE -fexceptions)
 # suites' job.
 hexa_host_test(test_pipeline test_pipeline.cpp
   ${FW_SRC}/pipeline.cpp
+  ${FW_SRC}/pipeline_config.cpp
   ${FW_SRC}/control.cpp
   ${FW_SRC}/joy_mapping.cpp
   ${FW_SRC}/supervisor.cpp

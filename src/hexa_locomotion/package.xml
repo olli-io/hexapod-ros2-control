@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hexa_locomotion</name>
+  <version>0.1.0</version>
+  <description>
+    Consolidated single-node locomotion controller. Compiles the target-agnostic
+    control brain (shared/hexa_pipeline) directly and runs the whole
+    velocity-shaping -> gait -> posture -> compose/IK pipeline in one 200 Hz tick,
+    mirroring the Pi Pico firmware's single loop but with ROS seams: /cmd_vel +
+    the discrete command topics in, joint commands out. Replaces the
+    control_node -> gait_node -> posture_node -> ik_node -> joint_command_bridge
+    process chain; the geometry+tuning config is loaded from geometry.yaml /
+    tuning.yaml at startup (PipelineConfig), so runtime tuning is preserved.
+  </description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>hexa_interfaces</depend>
+
+  <!-- Runtime PipelineConfig loader reuses the double C++ loaders (geometry.yaml
+       leg specs / poses, tuning.yaml velocity caps) and reads the engine /
+       control / posture tuning blocks of tuning.yaml directly. -->
+  <depend>hexa_kinematics_cpp</depend>
+  <depend>hexa_gait_cpp</depend>
+  <depend>yaml-cpp</depend>
+
+  <!-- Build-time config codegen reads these packages' YAMLs (baked defaults for
+       PipelineConfig::baked(); the single source of truth stays here). -->
+  <build_depend>hexa_description</build_depend>
+  <exec_depend>hexa_description</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

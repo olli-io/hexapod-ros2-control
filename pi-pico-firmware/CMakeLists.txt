@@ -71,6 +71,7 @@ add_executable(hexa_pico
     src/bt_teleop.cpp
     src/servo_out.cpp                # Servo 2040 Chica link over UART (part 03)
     ${HEXA_SHARED}/pipeline.cpp      # target-agnostic 200 Hz control brain (part 10)
+    ${HEXA_SHARED}/pipeline_config.cpp  # geometry+tuning config seam (baked() factory)
     ${HEXA_SHARED}/joy_mapping.cpp   # gamepad -> high-level command (part 07)
     ${HEXA_SHARED}/control.cpp       # velocity shaping (scale + slew) (part 07)
     ${HEXA_SHARED}/kinematics/leg_ik.cpp        # FK/IK, float fork (part 05)
