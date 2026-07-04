@@ -73,45 +73,19 @@ add_dependencies(dump_config gen_config)
 target_include_directories(dump_config PRIVATE ${FW_SRC})
 target_compile_options(dump_config PRIVATE -Wall -Wextra -Wdouble-promotion)
 
-# ── Golden-trace tests (parts 05-08) ──
-# As each pure lib is forked into ../../src (kinematics/, gait/, posture/), add
-# its gtest suite here, plus the golden-trace driver that diffs the float port
-# against the double hexa_kinematics_cpp / hexa_gait_cpp engines (~1e-3 rad).
-# See README.md (Tier 1).
+# ── Unit + golden-trace tests (parts 05-08) ──
+# Each pure lib forked into ../.. (kinematics/, gait/, posture/) has its float-only
+# unit suite here, compiled under -Wdouble-promotion via hexa_host_test(). The
+# float-vs-double golden-trace diffs against the (now-deleted) hexa_kinematics_cpp /
+# hexa_gait_cpp / Python hexa_posture reference engines were retired when those
+# packages were removed at the consolidated-locomotion cutover; the float port is
+# the sole implementation and its behaviour is pinned by the unit + pipeline suites.
 
-# Kinematics (part 05). Compiles the float port (../../src/kinematics) alongside
-# the untouched double hexa_kinematics_cpp sources (namespace hexa_kinematics,
-# Eigen) and diffs FK/IK/body-transform/compose traces. This target is NOT built
-# through hexa_host_test(): it deliberately bridges float<->double, so it drops
-# -Wdouble-promotion (the firmware build is that gate for the port sources) and
-# needs Eigen + the double engine's headers.
 set(KIN_SRC ${FW_SRC}/kinematics)
-set(REF_KIN ${REPO_ROOT}/src/hexa_kinematics_cpp)
-
-find_package(Eigen3 QUIET)
-
-add_executable(test_kinematics
-  test_kinematics.cpp
-  ${KIN_SRC}/leg_ik.cpp
-  ${KIN_SRC}/body_transform.cpp
-  ${REF_KIN}/src/leg_ik.cpp
-  ${REF_KIN}/src/body_transform.cpp)
-add_dependencies(test_kinematics gen_config)
-target_include_directories(test_kinematics PRIVATE ${FW_SRC} ${REF_KIN}/include)
-target_compile_options(test_kinematics PRIVATE -Wall -Wextra)
-target_link_libraries(test_kinematics PRIVATE GTest::gtest GTest::gtest_main)
-if (TARGET Eigen3::Eigen)
-  target_link_libraries(test_kinematics PRIVATE Eigen3::Eigen)
-else()
-  # Fall back to the conventional system include path (Arch/Debian: eigen3).
-  target_include_directories(test_kinematics PRIVATE /usr/include/eigen3)
-endif()
-gtest_discover_tests(test_kinematics)
 
 # ── Gait engine (part 06) ──
-# The forked float engine (src/gait) plus its float kinematics dependency. This
-# list is shared by the double-promotion-gated unit test and the golden-trace
-# diff below.
+# The forked float engine (src/gait) plus its float kinematics dependency, shared
+# by the double-promotion-gated unit test below and the pipeline integration test.
 set(GAIT_SRC ${FW_SRC}/gait)
 set(FW_GAIT_SOURCES
   ${GAIT_SRC}/clock.cpp
@@ -132,45 +106,6 @@ set(FW_GAIT_SOURCES
 # clean compile here proves the port never silently promotes to double.
 hexa_host_test(test_gait_unit test_gait_unit.cpp ${FW_GAIT_SOURCES})
 target_compile_options(test_gait_unit PRIVATE -fexceptions)
-
-# Golden-trace diff: compiles the float port alongside the untouched double
-# hexa_gait_cpp engine (namespace hexa_gait, Eigen + yaml-cpp) and diffs a full
-# cmd_vel trace. Like test_kinematics it deliberately bridges float<->double, so
-# it drops -Wdouble-promotion and needs Eigen + yaml-cpp + the double engine's
-# and kinematics' headers/sources.
-set(REF_GAIT ${REPO_ROOT}/src/hexa_gait_cpp)
-find_package(yaml-cpp QUIET)
-
-add_executable(test_gait
-  test_gait.cpp
-  ${FW_GAIT_SOURCES}
-  ${REF_GAIT}/src/clock.cpp
-  ${REF_GAIT}/src/trajectory.cpp
-  ${REF_GAIT}/src/gaits/base.cpp
-  ${REF_GAIT}/src/gaits/registry.cpp
-  ${REF_GAIT}/src/engagement.cpp
-  ${REF_GAIT}/src/pause.cpp
-  ${REF_GAIT}/src/stand_transition.cpp
-  ${REF_GAIT}/src/reseat.cpp
-  ${REF_GAIT}/src/limits.cpp
-  ${REF_GAIT}/src/engine.cpp
-  # The double engine's YAML builders reference the kinematics description loader
-  # even though this test never calls them; compile it (and yaml-cpp) to satisfy
-  # the linker.
-  ${REF_KIN}/src/leg_ik.cpp
-  ${REF_KIN}/src/body_transform.cpp
-  ${REF_KIN}/src/description_loader.cpp)
-add_dependencies(test_gait gen_config)
-target_include_directories(test_gait PRIVATE
-  ${FW_SRC} ${REF_GAIT}/include ${REF_KIN}/include)
-target_compile_options(test_gait PRIVATE -Wall -Wextra -fexceptions)
-target_link_libraries(test_gait PRIVATE GTest::gtest GTest::gtest_main yaml-cpp)
-if (TARGET Eigen3::Eigen)
-  target_link_libraries(test_gait PRIVATE Eigen3::Eigen)
-else()
-  target_include_directories(test_gait PRIVATE /usr/include/eigen3)
-endif()
-gtest_discover_tests(test_gait)
 
 # ── Control velocity shaping (part 07) ──
 # BodyVelocityLimiter slew + Control scale-to-envelope / reset wiring. Float
@@ -208,43 +143,16 @@ add_dependencies(test_joy_mapping gen_joy_golden)
 target_include_directories(test_joy_mapping PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 # ── Posture (part 08) ──
-# The float posture port (src/posture) plus its gait/kinematics dependencies
-# (LegOutput, EngineState, state_value, pymod). Float-only, so it runs through
-# hexa_host_test() under -Wdouble-promotion. The golden trace is baked from the
-# real pure Python hexa_posture animation stack by gen_posture_golden.py.
+# The float posture port (src/posture). Its float-vs-Python golden trace
+# (gen_posture_golden.py imported the pure Python hexa_posture stack) was retired
+# with that package at the consolidated-locomotion cutover; posture behaviour is
+# now exercised through the pipeline integration test below. FW_POSTURE_SOURCES
+# stays — test_pipeline drives the same posture stack in-loop.
 set(POSTURE_SRC ${FW_SRC}/posture)
 set(FW_POSTURE_SOURCES
   ${POSTURE_SRC}/pose.cpp
   ${POSTURE_SRC}/animations.cpp
   ${POSTURE_SRC}/posture.cpp)
-
-set(POSTURE_GOLDEN ${CMAKE_CURRENT_BINARY_DIR}/posture_golden_generated.hpp)
-set(REF_POSTURE ${REPO_ROOT}/src/hexa_posture/hexa_posture)
-add_custom_command(
-  OUTPUT ${POSTURE_GOLDEN}
-  COMMAND ${PYTHON3} ${CMAKE_CURRENT_LIST_DIR}/gen_posture_golden.py
-          --repo-root ${REPO_ROOT} --out ${POSTURE_GOLDEN}
-  DEPENDS ${CMAKE_CURRENT_LIST_DIR}/gen_posture_golden.py
-          ${REF_POSTURE}/pose.py
-          ${REF_POSTURE}/animations/base.py
-          ${REF_POSTURE}/animations/still.py
-          ${REF_POSTURE}/animations/breathing.py
-          ${REF_POSTURE}/animations/gait_sway.py
-          ${REF_POSTURE}/animations/gait_bounce.py
-          ${REF_POSTURE}/animations/vertical_body_roll.py
-          ${REF_POSTURE}/animations/horizontal_body_roll.py
-          ${REF_POSTURE}/animations/body_roll_3d.py
-          ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
-  COMMENT "Generating posture_golden_generated.hpp from the Python reference"
-  VERBATIM)
-add_custom_target(gen_posture_golden DEPENDS ${POSTURE_GOLDEN})
-
-hexa_host_test(test_posture test_posture.cpp
-  ${FW_POSTURE_SOURCES}
-  ${FW_GAIT_SOURCES})
-add_dependencies(test_posture gen_posture_golden)
-target_include_directories(test_posture PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_options(test_posture PRIVATE -fexceptions)
 
 # ── Pipeline integration (part 10, Tier 2/3 seam) ──
 # Drives the whole target-agnostic control brain (src/pipeline.cpp) — teleop ->

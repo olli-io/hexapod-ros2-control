@@ -1,6 +1,7 @@
 # Leg phases and gait terminology
 
-Shared vocabulary for `hexa_gait`, `hexa_kinematics`, and `hexa_control`.
+Shared vocabulary for `hexa_locomotion` and the control brain in
+`shared/hexa_pipeline` (gait / kinematics / control / posture).
 This is the source for the names that appear in code (state enums,
 variables, docstrings, log messages).
 

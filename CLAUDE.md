@@ -12,17 +12,20 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 
 ## Architectural rules
 
-- Two parallel chains converge in `hexa_kinematics`:
-  - Velocity / gait chain: `hexa_teleop → hexa_control → hexa_gait → hexa_kinematics → hexa_hardware`.
-  - Body-pose chain: `hexa_teleop → hexa_posture → hexa_kinematics`.
-  No back-edges, no cycles. The two chains never import each other; `hexa_kinematics` composes their outputs. `hexa_bringup` composes both chains via launch files only.
+- Locomotion is a **single node**, `hexa_locomotion`, which compiles the shared
+  control brain (`shared/hexa_pipeline`) and runs the whole velocity → gait →
+  posture → compose/IK pipeline in one 200 Hz tick. It is the sole locomotion
+  path (the former `hexa_control → hexa_gait → hexa_posture → hexa_kinematics`
+  topic-wired node chain has been deleted). `hexa_teleop → /cmd_vel` (+ the
+  discrete command topics) is the entry point; `hexa_locomotion` publishes joint
+  commands. See the section below for `shared/hexa_pipeline`.
 - `hexa_interfaces` depends on nothing hexapod-specific (leaf).
 - `hexa_description` is the **single source of truth** for URDF, joint limits, and leg geometry. Never duplicate these values elsewhere — load them at runtime.
 - `hexa_simulation` owns **all** Gazebo-specific code. The real-robot bringup must not import it.
-- The face is a single-node sink (`hexa_display`, ament_cmake C++), launched only by `hexa_bringup`. It subscribes to topics from the existing chains, maps robot state through an expression/gaze policy, and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim) — all in one process, no intermediate `/display/*` topic hop. It is a **pure sink** of robot state; nothing imports it or subscribes to it. It owns **all** panel/SPI/GPIO code and the vendored firmware eye core (`src/hexa_display/vendor/`). The policy half (`expression_policy`, `face_animation`, `face_animation_runner`) is pure C++, unit-testable without rclcpp; the ROS glue and rendering live in `display_node.cpp`.
-- Library code in `hexa_kinematics/` and `hexa_posture/` must be importable without `rclpy` (pure Python, unit-testable standalone). ROS glue lives in separate node files (e.g. `ik_node.py`, `posture_node.py`).
+- The face is a single-node sink (`hexa_display`, ament_cmake C++), launched only by `hexa_bringup`. It subscribes to topics `hexa_locomotion` publishes (`/gait/state`, etc.), maps robot state through an expression/gaze policy, and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim) — all in one process, no intermediate `/display/*` topic hop. It is a **pure sink** of robot state; nothing imports it or subscribes to it. It owns **all** panel/SPI/GPIO code and the vendored firmware eye core (`src/hexa_display/vendor/`). The policy half (`expression_policy`, `face_animation`, `face_animation_runner`) is pure C++, unit-testable without rclcpp; the ROS glue and rendering live in `display_node.cpp`.
+- The control brain in `shared/hexa_pipeline/` is pure C++, importable without `rclcpp` (unit-testable standalone via `shared/hexa_pipeline/test/`). ROS glue lives only in `hexa_locomotion`'s node files (e.g. `locomotion_node.cpp`, `pipeline_config_loader.cpp`).
 - Gait strategies are pure functions: `(phase, params) → foot_target`. No state, no I/O, no clocks. The phase clock and per-leg transition state live in the gait engine, not in strategies.
-- Posture animations are pure functions: `AnimationContext → BodyPose`. No state outside the animation instance, no I/O, no clocks. The clock and walking-vs-idle state live in the posture node, not in animations.
+- Posture animations are pure functions: `AnimationContext → BodyPose`. No state outside the animation instance, no I/O, no clocks. The clock and walking-vs-idle state live in the posture stack, not in animations.
 
 ## Configurability
 
@@ -50,24 +53,19 @@ Use exactly these names in identifiers, log messages, and docstrings — not the
 - **cycle time** — duration of one full PEP → PEP cycle, in seconds.
 - **phase offset** — leg's cycle start relative to a reference leg.
 - **posture** — body pose state and the subsystem that controls it. Covers both static positioning (feet grounded, body translates/yaws/tilts) and gait-coupled body animation (sway, lean, bob). Not *body trim*, *body control*, *body animation* as standalone terms.
-- **animation** — a pure function from `AnimationContext` to a `BodyPose` offset; one ingredient in the posture stack. Use this word only inside `hexa_posture` for animation-stack layers, never for gait or kinematic motion.
+- **animation** — a pure function from `AnimationContext` to a `BodyPose` offset; one ingredient in the posture stack. Use this word only for the posture animation-stack layers (`shared/hexa_pipeline/posture`), never for gait or kinematic motion.
 - **pose mode** — `/cmd_vel` is zero, body posture changes while feet stay planted.
 - **gait-active** — `/cmd_vel` is non-zero; posture animations run on top of the walking gait.
 
 Full definitions in `docs/leg-phases.md`. Do not introduce new synonyms.
 
-## In-progress C++ port of hexa_gait
-
-`hexa_gait_cpp` is an `ament_cmake` C++ port of `hexa_gait`, built **side-by-side** with the Python package (both compile). `hexa_bringup` still launches the Python `gait_node`; cutover and deletion of the Python package are later tasks.
-
-- **Kinematics (ported to C++).** `hexa_gait_cpp` consumes the `hexa_kinematics` surface (`LegSpec`, `load_leg_specs`, `leg_to_body`, `forward_kinematics`, `load_standing_pose`, `load_initial_pose`) from `hexa_kinematics_cpp` (namespace `hexa_kinematics`), a full C++ port built **side-by-side** with the Python `hexa_kinematics` (both compile; the Python nodes and `hexa_posture` still use the Python package until cutover). `src/hexa_gait_cpp/include/hexa_gait_cpp/kinematics.hpp` includes the real headers and aliases them as `hexa_gait::kin`; the former compile-only `kinematics_stub.hpp` is gone. Both packages share `Vec3 = Eigen::Vector3d` / `JointAngles = std::array<double, 3>`, so nominal / initial / reseat stance values are now **real geometry**. The kinematics loaders live in `hexa_kinematics_cpp` and read `hexa_description`'s YAML at runtime; `hexa_description` stays install-only (the single source of truth for the data, not compiled code).
-
 ## Consolidated single-node locomotion (`hexa_locomotion` + `shared/hexa_pipeline`)
 
-An alternative to the multi-node locomotion chain: one node running the whole
+`hexa_locomotion` is the locomotion controller: one node running the whole
 velocity → gait → posture → compose/IK pipeline in a single 200 Hz loop, mirroring
-the Pi Pico firmware's single loop. Built **side-by-side** with the chain; opt in
-with `node_implementation:=consolidated`.
+the Pi Pico firmware's single loop. It replaced the old multi-node chain
+(`hexa_control` / `hexa_gait` / `hexa_posture` / `hexa_kinematics`, all now
+deleted, along with their `*_cpp` ports).
 
 - **`shared/hexa_pipeline/`** is the target-agnostic **float** control brain
   (`hexa::pipeline::Pipeline` + `hexa::gait`/`hexa::posture`/`hexa::control`/
@@ -75,25 +73,27 @@ with `node_implementation:=consolidated`.
   Pico hardware seams). It is compiled directly — a link-time seam swap, no
   `#ifdef` — by the Pico firmware, `hexa_pico_bridge`, and `hexa_locomotion`. One
   brain, shared bug-for-bug across firmware and sim. Its host test harness lives in
-  `shared/hexa_pipeline/test/`. This is a **separate source tree** from the double
-  `hexa_gait_cpp`/`hexa_posture_cpp`/`hexa_kinematics_cpp` libraries (which back the
-  chain nodes and their gtests); the consolidated runtime is float, the chain is
-  double.
+  `shared/hexa_pipeline/test/`. It is the **sole** locomotion implementation; the
+  earlier double-precision `hexa_gait_cpp`/`hexa_posture_cpp`/`hexa_kinematics_cpp`
+  libraries and the Python originals have been removed.
 - **Seams** (caller-owned, the only things that differ per target): the Pipeline
   `tick` has a joy overload (Pico/bridge run `map_joy`) and a core
   `tick(CommandIntent, TickInput)` (the ROS node builds `CommandIntent` from
   `/cmd_vel` + `/cmd_gait` + `/gait/initialize` + `/body/pose` + `/animation/mode`,
   bypassing `map_joy`); config comes from a `PipelineConfig` (baked constexpr on
   the Pico, loaded from `geometry.yaml` + `tuning.yaml` at startup in
-  `hexa_locomotion`, scope = geometry+tuning only).
+  `hexa_locomotion` via `pipeline_config_loader.cpp`, scope = geometry+tuning
+  only). The runtime loader is parity-tested field-by-field against
+  `PipelineConfig::baked()` (`hexa_locomotion/test/test_config_loader.cpp`) so a
+  YAML edit can never silently drift from the baked codegen.
 - **`hexa_locomotion`** folds `ik_node` + `joint_command_bridge` (publishes
   `Float64MultiArray` on `/joint_group_position_controller/commands` directly) and
   re-publishes `/gait/state` for the face sink. Because it composes both the
-  velocity/gait and body-pose chains **in one process**, it deliberately
-  supersedes the "two chains never import each other / `hexa_bringup` composes via
-  launch only" rule for the `consolidated` implementation — the node is the
-  in-code composition point. `/cmd_vel` stays the entry point (Nav2/twist_mux
-  compatible); the runtime-YAML load honors the load-config-at-runtime rule.
+  velocity/gait and body-pose halves of the pipeline **in one process**, the node
+  is the in-code composition point (there is no longer a separate chain for
+  `hexa_bringup` to wire via launch). `/cmd_vel` stays the entry point
+  (Nav2/twist_mux compatible); the runtime-YAML load honors the
+  load-config-at-runtime rule.
 
 ## Documentation formatting
 

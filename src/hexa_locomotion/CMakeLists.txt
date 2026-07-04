@@ -21,12 +21,7 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(hexa_interfaces REQUIRED)
-find_package(hexa_kinematics_cpp REQUIRED)
-find_package(hexa_gait_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
-# The double hexa_*_cpp loader headers (used only by the runtime config loader)
-# include Eigen; the firmware brain itself is Eigen-free.
-find_package(Eigen3 QUIET)
 
 # ── Shared control-brain source tree ────────────────────────────────────────
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
@@ -84,19 +79,38 @@ target_include_directories(locomotion_node PRIVATE ${FW_SRC} src)
 # with exceptions exactly as the Pico + host + bridge builds do.
 target_compile_options(locomotion_node PRIVATE -Wall -Wextra -fexceptions)
 ament_target_dependencies(locomotion_node
-  rclcpp ament_index_cpp geometry_msgs std_msgs hexa_interfaces
-  hexa_kinematics_cpp hexa_gait_cpp)
+  rclcpp ament_index_cpp geometry_msgs std_msgs hexa_interfaces)
 target_link_libraries(locomotion_node yaml-cpp)
-if(TARGET Eigen3::Eigen)
-  target_link_libraries(locomotion_node Eigen3::Eigen)
-else()
-  target_include_directories(locomotion_node PRIVATE /usr/include/eigen3)
-endif()
 
 install(TARGETS locomotion_node
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
   OPTIONAL)
+
+# ── Parity test: runtime loader == baked() ──────────────────────────────────
+# Proves the self-sufficient yaml-cpp loader reproduces the build-time baked
+# PipelineConfig (config_generated.hpp) field-by-field, so a geometry.yaml /
+# tuning.yaml edit cannot silently drift the runtime config from the codegen.
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_config_loader
+    test/test_config_loader.cpp
+    src/pipeline_config_loader.cpp
+    ${FW_PIPELINE_SOURCES})
+  if(TARGET test_config_loader)
+    add_dependencies(test_config_loader hexa_locomotion_gen_config)
+    target_include_directories(test_config_loader PRIVATE ${FW_SRC} src)
+    target_compile_options(test_config_loader PRIVATE -Wall -Wextra -fexceptions)
+    # Point the test at the exact source YAMLs gen_config.py bakes from, so the
+    # runtime-loader-vs-baked() diff is over identical inputs.
+    target_compile_definitions(test_config_loader PRIVATE
+      GEOMETRY_YAML="${REPO_ROOT}/src/hexa_description/config/geometry.yaml"
+      TUNING_YAML="${REPO_ROOT}/src/hexa_description/config/tuning.yaml")
+    ament_target_dependencies(test_config_loader
+      rclcpp ament_index_cpp)
+    target_link_libraries(test_config_loader yaml-cpp)
+  endif()
+endif()
 
 ament_package()

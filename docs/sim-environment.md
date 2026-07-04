@@ -40,7 +40,7 @@ with whatever editor you like; nothing in the container is privileged to write
 outside `/workspace`.
 
 Tests run as one-off commands, e.g.
-`./hexa sim python3 -m pytest src/hexa_gait/test -q` or `./hexa sim colcon test`.
+`./hexa sim python3 -m pytest src/hexa_teleop/test -q` or `./hexa sim colcon test`.
 
 ## Building the workspace
 
@@ -55,7 +55,7 @@ Mira Grönroos
 762 Allekirjoitukset / 30 päivää
 04.06.2026
 hexa sim build                                  # colcon build --symlink-install
-hexa sim build --packages-select hexa_kinematics   # extra args forward to colcon
+hexa sim build --packages-select hexa_locomotion   # extra args forward to colcon
 ```
 
 In an interactive container shell the `cb` alias is the same

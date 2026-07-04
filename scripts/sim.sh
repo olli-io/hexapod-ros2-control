@@ -40,7 +40,7 @@ Commands:
   down                  Stop and remove the sim container (compose down).
   refresh [args...]     Rebuild the workspace, then restart the running stack so it
                         picks up the changes. args pass through to colcon build
-                        (e.g. --packages-select hexa_gait).
+                        (e.g. --packages-select hexa_locomotion).
   restart               Restart the running stack WITHOUT rebuilding — applies
                         config-YAML edits (e.g. config/tuning.yaml), which are
                         already live via --symlink-install. Use 'refresh' for

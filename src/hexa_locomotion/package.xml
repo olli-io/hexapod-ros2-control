@@ -24,17 +24,17 @@
   <depend>std_msgs</depend>
   <depend>hexa_interfaces</depend>
 
-  <!-- Runtime PipelineConfig loader reuses the double C++ loaders (geometry.yaml
-       leg specs / poses, tuning.yaml velocity caps) and reads the engine /
-       control / posture tuning blocks of tuning.yaml directly. -->
-  <depend>hexa_kinematics_cpp</depend>
-  <depend>hexa_gait_cpp</depend>
+  <!-- Runtime PipelineConfig loader reads geometry.yaml + tuning.yaml directly
+       with yaml-cpp (six-leg symmetry, deg->IK-radian poses, per-gait velocity
+       caps), reusing the linked firmware gait registry for duty factors. -->
   <depend>yaml-cpp</depend>
 
   <!-- Build-time config codegen reads these packages' YAMLs (baked defaults for
        PipelineConfig::baked(); the single source of truth stays here). -->
   <build_depend>hexa_description</build_depend>
   <exec_depend>hexa_description</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

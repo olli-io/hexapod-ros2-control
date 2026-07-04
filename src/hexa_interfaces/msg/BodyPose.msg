@@ -3,16 +3,16 @@
 # Origin = the body pose the gait engine would otherwise occupy at the
 # commanded body velocity (body frame nominal stance: zero translation,
 # zero rotation). All fields are offsets layered on top of that nominal
-# pose, composed by the IK node before per-leg IK.
+# pose, composed by hexa_locomotion before per-leg IK.
 #
 # Two intended use cases:
 #   - Pose mode (gait idle, all feet grounded): yaw/x/y/z/roll/pitch
-#     shift the body relative to the planted feet. The IK node holds
+#     shift the body relative to the planted feet. hexa_locomotion holds
 #     the last commanded foot positions and re-solves on every update.
 #   - Gait-active body animation: the offset is composed with the foot
-#     targets emitted by hexa_gait so the body can sway, lean, or bob
-#     while walking. The gait strategies stay pure — they emit feet in
-#     the nominal body frame; this offset rides on top.
+#     targets emitted by the gait engine so the body can sway, lean, or
+#     bob while walking. The gait strategies stay pure — they emit feet
+#     in the nominal body frame; this offset rides on top.
 #
 # Frame: REP-103 body frame, +x forward, +y left, +z up.
 # Units: metres, radians. Rotations apply about the body centre in

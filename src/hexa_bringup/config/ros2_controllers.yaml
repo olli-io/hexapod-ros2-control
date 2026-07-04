@@ -8,18 +8,6 @@
 # Joint names mirror the URDF macro instantiations: {side}_{name}_{seg}_joint
 # where side ∈ {l, r}, name ∈ {front, middle, rear}, seg ∈ {coxa, femur, tibia}.
 
-# Launch-time node-implementation selector. Read by hexa_bringup's
-# robot.launch.py and sim.launch.py to choose which port of the
-# kinematics / gait / posture subsystems to launch. "cpp" (default) runs the
-# hexa_*_cpp ports and does NOT start the Python nodes; "python" runs the
-# original ament_python packages. controller_manager ignores this block (it is
-# not one of its nodes); it lives here so the selector sits with the other
-# launch-consumed config. hexa_control has no C++ port yet, so control_node is
-# always the Python node regardless of this setting.
-hexa_launch:
-  ros__parameters:
-    node_implementation: python
-
 controller_manager:
   ros__parameters:
     update_rate: 200 # Hz
