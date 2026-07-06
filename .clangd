@@ -1,0 +1,14 @@
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -DU8X8_WITH_USER_PTR
+    # Shared control brain (hexa::pipeline / gait / posture / kinematics)
+    - -I/home/olli/git/hexapod-ros2-control/shared/motion_core
+    # Shared face policy + vendored eye core + u8g2
+    - -I/home/olli/git/hexapod-ros2-control/shared/display_core
+    - -I/home/olli/git/hexapod-ros2-control/shared/display_core/core
+    - -I/home/olli/git/hexapod-ros2-control/shared/display_core/u8g2
+    # Per-package public include dirs
+    - -I/home/olli/git/hexapod-ros2-control/src/hexa_hardware/include
+    - -I/home/olli/git/hexapod-ros2-control/src/hexa_display/src
+    - -I/home/olli/git/hexapod-ros2-control/src/hexa_locomotion/src

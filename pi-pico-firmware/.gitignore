@@ -1,6 +1,10 @@
 # CMake / build output (Pico SDK build).
 build*/
 
+# Machine-local clangd include hints (absolute host paths; the firmware only
+# cross-builds inside the pico container, so there's no portable compile DB).
+.clangd
+
 # The target-agnostic control brain, its host test harness, and the generated
 # config header now live in ../shared/motion_core (see shared/.gitignore).
 

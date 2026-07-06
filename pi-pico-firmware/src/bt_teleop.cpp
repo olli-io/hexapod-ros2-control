@@ -1,9 +1,15 @@
 // Bluetooth gamepad teleop — Bluepad32 (C platform API) → teleop_joy.yaml layout.
 //
-// The platform callbacks fire from the cyw43 background context; read() runs in
-// the main loop. The shared snapshot is guarded by a critical section (disables
-// IRQs + takes a spinlock), which is the correct cross-context primitive on the
-// RP2350.
+// The whole cyw43/BTstack stack runs on CORE1: init() (on core0) launches core1,
+// which brings cyw43 up on its own threadsafe_background async context bound to a
+// core1 alarm pool, so every Bluetooth IRQ/servicing path (data arrival AND the
+// timer-driven pairing/reconnect work) is enabled on core1 and never jitters
+// core0's 200 Hz control loop. The Bluepad32 platform callbacks therefore fire
+// from core1's background context; core0 only ever calls read()/connected()/
+// last_data_us(). The shared snapshot is guarded by a critical section (disables
+// IRQs + takes a spinlock), the correct cross-core primitive on the RP2350. The
+// onboard status LED is a cyw43 SPI ioctl, so core1 owns it too — core0 hands the
+// level over via set_led().
 //
 // NOTE: the callback wiring mirrors bluepad32/examples/pico_w/src/my_platform.c
 // for the vendored Bluepad32 version. If your checkout renames a symbol
@@ -14,9 +20,11 @@
 #include <cstdio>
 #include <cstring>
 
+#include "pico/async_context_threadsafe_background.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
-#include "pico/time.h"  // time_us_64
+#include "pico/multicore.h"
+#include "pico/time.h"  // time_us_64, alarm pool, sleep_until
 
 #include "dbg.hpp"  // HEXA_DBG — BT event logs (gated by enable_usb_debugging)
 
@@ -38,6 +46,18 @@ uint64_t g_last_data_us = 0;
 // The one controller we drive from. Bluepad32 can pair several; we bind to the
 // first ready gamepad and ignore the rest (a hexapod has one pilot).
 uni_hid_device_t* g_device = nullptr;
+
+// Onboard status-LED level: written by core0 (set_led), read by core1's
+// keep-alive loop (which owns the cyw43 GPIO). Single-writer / single-reader.
+volatile bool g_led_on = false;
+
+// Boot-handshake words core1 pushes to core0 over the inter-core FIFO.
+constexpr uint32_t kBtInitOk = 1;
+constexpr uint32_t kBtInitFail = 0;
+
+// cyw43's async context, built on a core1 alarm pool so BTstack services on
+// core1. Lives for the life of the program (core1_entry never returns).
+async_context_threadsafe_background_t g_bt_ctx;
 
 // ── Adapter helpers ─────────────────────────────────────────────────────────
 
@@ -188,31 +208,87 @@ uni_platform* get_platform() {
     return &plat;
 }
 
+// ── core1 entry: cyw43/BTstack bring-up + keep-alive ────────────────────────
+// Runs the whole Bluetooth stack on core1. cyw43_arch_init() is called HERE (not
+// on core0) and, crucially, against an async context we build on an alarm pool
+// created ON THIS CORE — so the driver's host-wake GPIO IRQ AND its timer/alarm
+// worker (BTstack timers: connection setup, retries, reconnect) are both enabled
+// on core1. Core0's control tick then never contends the cyw43 lock or takes a
+// BT IRQ.
+void core1_entry() {
+    // Build cyw43's async context on a core1 alarm pool. This SDK has no
+    // cyw43_arch_init_with_async_context(); instead cyw43_arch_init() reuses a
+    // context previously registered with cyw43_arch_set_async_context() (default
+    // otherwise). So: create the pool here (its hardware-alarm IRQ binds to
+    // core1), init a threadsafe_background context on it, register it, then let
+    // cyw43_arch_init() adopt it — pinning all cyw43/BTstack servicing to core1.
+    alarm_pool_t* pool = alarm_pool_create_with_unused_hardware_alarm(16);
+    async_context_threadsafe_background_config_t cfg =
+        async_context_threadsafe_background_default_config();
+    cfg.custom_alarm_pool = pool;
+    const bool ctx_ok =
+        pool != nullptr && async_context_threadsafe_background_init(&g_bt_ctx, &cfg);
+    if (ctx_ok) cyw43_arch_set_async_context(&g_bt_ctx.core);
+
+    if (!ctx_ok || cyw43_arch_init() != 0) {
+        HEXA_DBG("[bt] cyw43_arch init failed (core1)\n");
+        multicore_fifo_push_blocking(kBtInitFail);
+        while (true) sleep_ms(1000);  // core0's init() returns false and halts
+    }
+
+    uni_platform_set_custom(get_platform());
+    uni_init(0, nullptr);
+    // No btstack_run_loop_execute(): the threadsafe_background async context on
+    // this core services BTstack in the background off the core1 alarm pool.
+    multicore_fifo_push_blocking(kBtInitOk);
+
+    // Keep-alive: stay in a light timed loop so BT IRQs keep firing and the
+    // onboard LED (a cyw43 SPI ioctl, kept off core0) tracks the level core0
+    // publishes via set_led(). A timed loop rather than a pure __wfi() so the
+    // blink still advances while the pad is idle; BT IRQs preempt the sleep. Only
+    // write on a change, so a steady blink level costs no cyw43-bus traffic
+    // against BTstack's own servicing on this core.
+    absolute_time_t next = get_absolute_time();
+    bool led_written = false;
+    bool led_last = false;
+    while (true) {
+        const bool want = g_led_on;
+        if (!led_written || want != led_last) {
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, want);
+            led_last = want;
+            led_written = true;
+        }
+        next = delayed_by_us(next, 5000);  // 5 ms poll cadence
+        sleep_until(next);
+    }
+}
+
 }  // namespace
 
 // ── Public interface ────────────────────────────────────────────────────────
 
 bool init() {
+    // The snapshot primitive + neutral state come up on core0 BEFORE the launch,
+    // so any read() from core0 is safe (returns neutral) no matter how far core1
+    // has progressed. cyw43/BTstack itself is brought up on core1 (core1_entry).
     critical_section_init(&g_lock);
     g_locked = true;
     fill_neutral(g_axes, g_buttons);
 
-    if (cyw43_arch_init() != 0) {
-        HEXA_DBG("[bt] cyw43_arch_init failed\n");
-        return false;
-    }
-    uni_platform_set_custom(get_platform());
-    uni_init(0, nullptr);
-    // No btstack_run_loop_execute() here: pico_cyw43_arch_none still runs the
-    // threadsafe_background async context (it's the BT-only, CYW43_LWIP=0 arch),
-    // so the BTstack run loop is driven in the background and the caller's
-    // cooperative loop keeps running.
-    return true;
+    multicore_fifo_drain();
+    multicore_launch_core1(&core1_entry);
+    // Boot handshake: block until core1 reports the cyw43 bring-up result. The
+    // FIFO pop is also a memory barrier, so the cyw43/snapshot state core1 set
+    // up is visible here. Preserves the synchronous "return false on cyw43
+    // failure" contract (main.cpp then loops forever on false).
+    return multicore_fifo_pop_blocking() == kBtInitOk;
 }
 
+void set_led(bool on) { g_led_on = on; }
+
 void pump() {
-    // No-op: BTstack is serviced in the background. Present so the main loop's
-    // call site is stable if a future build switches to a polled cyw43 arch.
+    // No-op: BTstack is serviced in the background on core1. Present so the main
+    // loop's call site is stable if a future build switches to a polled arch.
 }
 
 bool read(int16_t axes[kNumAxes], uint32_t& buttons) {

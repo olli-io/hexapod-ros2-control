@@ -30,13 +30,11 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 
 #include "bt_teleop.hpp"
 #include "config_generated.hpp"
 #include "dbg.hpp"
-#include "face.hpp"
 #include "gait/engine.hpp"
 #include "leg_index.hpp"
 #include "pipeline.hpp"
@@ -142,12 +140,6 @@ int main() {
            "free\n",
            (double)hexa::config::kInputTimeoutS, hexa::config::kGetPeriodTicks,
            (unsigned long)heap_free_bytes());
-    // Face (part 11): the SH1122 eyes render on core1 if enabled. Independent of
-    // the control loop — core0 only hands off a small render target each policy
-    // tick (see face.cpp). Launched here after cyw43/servo bring-up.
-    face::init();
-    HEXA_DBG("face: %s\n", hexa::config::kFaceEnabled ? "core1 render launched"
-                                                      : "disabled");
 
     HEXA_DBG("boot ok — entering loop\n");
 
@@ -263,28 +255,6 @@ int main() {
             }
             led_pattern = res.decision.led;
 
-            // Face policy step (core0): map the pipeline state to the eye
-            // expression/gaze and hand the target to the core1 render loop.
-            // Cheap — rate-limited to kFaceUpdateRateHz inside face::tick.
-            {
-                face::FaceState fs;
-                fs.engine_state = res.engine_state;
-                fs.link_up = bt_connected;
-                fs.vx = res.cmd_vx;
-                fs.vy = res.cmd_vy;
-                fs.wz = res.cmd_wz;
-                fs.roll = res.pose_roll;
-                fs.pitch = res.pose_pitch;
-                fs.yaw = res.pose_yaw;
-                fs.battery_low = res.decision.battery_low;
-                fs.battery_critical = res.decision.battery_critical;
-                if (res.has_animation_name && res.animation_accepted) {
-                    fs.animation_event = true;
-                    fs.animation_name = res.animation_name;
-                }
-                face::tick(fs, static_cast<double>(now_us) * 1e-6);
-            }
-
             last_unreachable = res.unreachable;
             std::copy(std::begin(res.theta), std::end(res.theta), std::begin(theta));
             last_compute_us = time_us_64() - c0;
@@ -297,10 +267,12 @@ int main() {
             if (fh < min_free_heap) min_free_heap = fh;
         }
 
-        // Status LED: driven every loop iteration off the latest supervisor
+        // Status LED: computed every loop iteration off the latest supervisor
         // pattern (slow = idle/stand, solid = walking, fast = fault). Continuous,
-        // not tied to the heartbeat, so the blink rate itself carries state.
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_level(led_pattern, now_us));
+        // not tied to the heartbeat, so the blink rate itself carries state. The
+        // actual cyw43 GPIO write happens on core1 (which owns cyw43/BTstack) —
+        // we only hand it the level, keeping the CYW43-SPI ioctl off core0's tick.
+        bt_teleop::set_led(led_level(led_pattern, now_us));
 
         // Teleop dump: the part-02 verification surface.
         if (now_us >= next_joy_us) {

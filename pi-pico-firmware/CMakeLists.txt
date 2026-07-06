@@ -61,21 +61,17 @@ find_program(PYTHON3 python3 REQUIRED)
 set(HEXA_REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
 set(HEXA_SHARED ${HEXA_REPO_ROOT}/shared/motion_core)
 
-# Face (part 11): the eye core + pure policy library live in the shared display
-# core (shared/display_core) and are compiled directly (like motion_core), plus
-# the u8g2 C core. u8g2 is globbed exactly as the ROS package does (curated
-# subset, no fonts); the unused display drivers are stripped by --gc-sections at
-# link.
-set(HEXA_DISPLAY_CORE ${HEXA_REPO_ROOT}/shared/display_core)
-file(GLOB U8G2_SRCS "${HEXA_DISPLAY_CORE}/u8g2/*.c")
 set(HEXA_GEN_CONFIG ${HEXA_SHARED}/config_generated.hpp)
+# The firmware no longer bakes the face config (the on-Pico face was removed);
+# gen_config.py still emits the face block for the shared header (SSoT for the
+# Pi-side hexa_display face), the firmware just doesn't consume it — so
+# display.yaml is not a firmware codegen dependency here.
 set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/geometry.yaml
     ${HEXA_REPO_ROOT}/src/hexa_description/config/tuning.yaml
     ${HEXA_REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
     ${HEXA_REPO_ROOT}/src/hexa_hardware/config/hardware.yaml
-    ${HEXA_REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml
-    ${HEXA_REPO_ROOT}/src/hexa_display/config/display.yaml)
+    ${HEXA_REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml)
 add_custom_command(
     OUTPUT ${HEXA_GEN_CONFIG}
     COMMAND ${PYTHON3} ${HEXA_SHARED}/tools/gen_config.py
@@ -113,16 +109,6 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/posture/animations.cpp  # animation stack (part 08)
     ${HEXA_SHARED}/posture/posture.cpp     # posture controller / signal derivation (part 08)
     ${HEXA_SHARED}/supervisor.cpp    # failsafes / telemetry / status LED (part 09)
-    # ── Face: SH1122 eyes on core1 (part 11) ──
-    src/face.cpp                     # core0 policy step + core1 render loop
-    src/Sh1122PanelPico.cpp          # SH1122 panel over Pico hardware SPI
-    ${HEXA_DISPLAY_CORE}/core/EyeAnim.cpp        # eased gaze/blink state machine
-    ${HEXA_DISPLAY_CORE}/core/EyeRaster.cpp      # 1-bit eye rasterizer
-    ${HEXA_DISPLAY_CORE}/core/ExpressionController.cpp  # expressionName()/gazeName()
-    ${HEXA_DISPLAY_CORE}/expression_policy.cpp      # pure expression/gaze policy
-    ${HEXA_DISPLAY_CORE}/face_animation.cpp         # breathing/idling step sequences
-    ${HEXA_DISPLAY_CORE}/face_animation_runner.cpp  # face-animation clock
-    ${U8G2_SRCS}                     # u8g2 C core (sh1122 driver + buffer/hvline)
 )
 add_dependencies(hexa_pico hexa_gen_config)
 
@@ -133,10 +119,7 @@ add_dependencies(hexa_pico hexa_gen_config)
 target_include_directories(hexa_pico PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/src
-    ${HEXA_SHARED}
-    ${HEXA_DISPLAY_CORE}           # expression_policy / face_animation / FaceNames headers
-    ${HEXA_DISPLAY_CORE}/core   # EyeAnim / EyeRaster / Expression
-    ${HEXA_DISPLAY_CORE}/u8g2)  # u8g2.h
+    ${HEXA_SHARED})
 
 # C++ exceptions are enabled via PICO_CXX_ENABLE_EXCEPTIONS at the top of this
 # file (the SDK-level toggle). Keep -fexceptions explicit on the target too as a
@@ -147,14 +130,8 @@ target_compile_options(hexa_pico PRIVATE -fexceptions)
 target_compile_options(hexa_pico PRIVATE -Wdouble-promotion)
 
 # enable_usb_debugging: seen by src/dbg.hpp's HEXA_DBG / HEXA_DBG_INIT macros.
-#
-# U8X8_WITH_USER_PTR: u8g2's per-u8x8 user pointer (Sh1122PanelPico stashes
-# `this` there, like the Linux Sh1122Panel). u8x8.h only auto-enables it for
-# unix/__ARM_LINUX__ builds, so the bare-metal firmware must define it — on the
-# whole target, so the u8g2 C core and the panel agree on the struct layout.
 target_compile_definitions(hexa_pico PRIVATE
-    HEXA_ENABLE_USB_DEBUGGING=$<BOOL:${HEXA_ENABLE_USB_DEBUGGING}>
-    U8X8_WITH_USER_PTR)
+    HEXA_ENABLE_USB_DEBUGGING=$<BOOL:${HEXA_ENABLE_USB_DEBUGGING}>)
 
 # ── Bluepad32 component (part 02) ──────────────────────────────────────────
 # Build the vendored Bluepad32 as a sub-library (the `bluepad32` target); it
@@ -173,8 +150,7 @@ add_subdirectory(${BLUEPAD32_ROOT}/src/components/bluepad32 libbluepad32)
 target_link_libraries(hexa_pico
     pico_stdlib                             # core runtime, timers, GPIO, flash
     hardware_uart                           # Servo 2040 Chica link (part 03)
-    hardware_spi                            # SH1122 face panel on core1 (part 11)
-    pico_multicore                          # core1 render loop (part 11)
+    pico_multicore                          # core1 runs cyw43/BTstack (Bluepad32)
     # CYW43 driver + onboard LED. pico_cyw43_arch_none is the BT-only arch
     # (CYW43_LWIP=0, no Wi-Fi): despite the name it still runs the
     # threadsafe_background async context, so the BTstack run loop is serviced

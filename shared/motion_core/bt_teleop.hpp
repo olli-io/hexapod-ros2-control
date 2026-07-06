@@ -46,14 +46,23 @@ constexpr int16_t kAxisMax = 32767;
 constexpr int16_t kAxisMin = -32767;
 
 // Bring up cyw43_arch, BTstack and Bluepad32, and register the custom platform.
-// This OWNS cyw43_arch — do not call cyw43_arch_init() elsewhere. Returns false
-// if cyw43_arch init fails (Bluepad32/BTstack bring-up is otherwise fire and
-// forget: it runs in the background and pairs on the next controller).
+// This OWNS cyw43_arch — do not call cyw43_arch_init() elsewhere. Launches core1
+// and brings the whole cyw43/BTstack stack up THERE (its own async context on a
+// core1 alarm pool), so all Bluetooth IRQ/servicing runs on core1 and never
+// jitters core0's 200 Hz control loop; core0 only reads the snapshot. Blocks on
+// a boot handshake and returns false if cyw43_arch init fails on core1
+// (Bluepad32/BTstack is otherwise fire and forget — it pairs on the next
+// controller).
 bool init();
 
+// Set the onboard status-LED level. The actual cyw43 GPIO write happens on
+// core1 (which owns cyw43); core0 calls this each loop with the supervisor's
+// blink level. Single-writer (core0) / single-reader (core1), lock-free.
+void set_led(bool on);
+
 // Service hook for the cooperative loop. No-op in the background-serviced build
-// (BTstack is driven by the cyw43 async context); kept for interface symmetry
-// and a possible future poll-mode build. Safe to call every tick.
+// (BTstack is driven by the cyw43 async context on core1); kept for interface
+// symmetry and a possible future poll-mode build. Safe to call every tick.
 void pump();
 
 // Copy the latest adapted snapshot into `axes` (kNumAxes entries) and `buttons`
