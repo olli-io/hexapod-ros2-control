@@ -47,7 +47,9 @@ Commands:
                         already live via --symlink-install. Use 'refresh' for
                         source-code changes.
   logs [-f]             Show / stream the stack's logs.
-  build [args...]       colcon build in an ephemeral container (no stack needed).
+  build [--clean] [args...]
+                        colcon build in an ephemeral container (no stack needed).
+                        --clean wipes build/ install/ log/ first for a full rebuild.
   shell                 Interactive ROS2-sourced shell (exec if up, else run --rm).
   face                  Terminal eye emulator: attach a live mirror of the face to
                         the running sim (the OLED is headless in sim). 'q' to detach;
@@ -108,10 +110,11 @@ cmd_up() {
     # can find the packages; later `up`s reuse the persisted install/. --clean
     # also forces a full workspace rebuild so source edits always take effect —
     # rebuilding the image (--build) recompiles nothing in the bind-mounted
-    # install/, so C++ changes would otherwise be silently ignored.
+    # install/, so C++ changes would otherwise be silently ignored. cmd_build
+    # --clean wipes build/ install/ log/ first (see there).
     if [ -n "${clean}" ]; then
-        echo "hexa sim: --clean — rebuilding the workspace..."
-        cmd_build
+        echo "hexa sim: --clean — rebuilding the workspace from scratch..."
+        cmd_build --clean
     elif [ ! -f install/setup.bash ]; then
         echo "hexa sim: no install/ yet — running an initial build..."
         cmd_build
@@ -136,7 +139,19 @@ cmd_logs() {
     compose logs "$@" "${service}"
 }
 
-cmd_build() { compose_run colcon build --symlink-install "$@"; }
+# colcon build in an ephemeral container. A leading `--clean` wipes build/
+# install/ log/ first, then does a full rebuild: --symlink-install leaves
+# dangling symlinks behind when a source file is renamed or deleted, and
+# colcon's install step then dies trying to copy the now-broken link. Remaining
+# args pass through to colcon (e.g. --packages-select).
+cmd_build() {
+    if [ "${1:-}" = "--clean" ]; then
+        shift
+        echo "hexa sim: wiping build/ install/ log/..."
+        rm -rf build install log
+    fi
+    compose_run colcon build --symlink-install "$@"
+}
 
 # Rebuild the (bind-mounted) workspace, then restart the running stack so the
 # launch — PID 1 in the container — re-execs against the fresh install/. Build
