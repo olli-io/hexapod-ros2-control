@@ -3,14 +3,19 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_map>
 #include <yaml-cpp/yaml.h>
 
 namespace hexa_hardware {
 
 std::uint16_t JointCalibration::to_pulse_us(double theta_rad) const {
   const double center_us = (us_at_plus_45 + us_at_minus_45) * 0.5;
-  const double slope_us_per_rad = (us_at_plus_45 - us_at_minus_45) / (M_PI / 2.0);
-  const double us = center_us + (theta_rad - urdf_rad_at_center) * slope_us_per_rad;
+  // Endpoints are magnitudes; `direction` (+1 / -1) is the sole sign source,
+  // expressing which way the servo is bolted on (see the header).
+  const double slope_us_per_rad =
+      std::abs(us_at_plus_45 - us_at_minus_45) / (M_PI / 2.0);
+  const double us = center_us +
+                    direction * (theta_rad - urdf_rad_at_center) * slope_us_per_rad;
   const double clamped = std::clamp(us, static_cast<double>(min_us),
                                     static_cast<double>(max_us));
   return static_cast<std::uint16_t>(std::lround(clamped));
@@ -32,12 +37,37 @@ T require_scalar(const YAML::Node& node, const std::string& key,
   }
 }
 
-JointPosition parse_joint_position(const std::string& s, const std::string& ctx) {
-  if (s == "coxa") return JointPosition::Coxa;
-  if (s == "femur") return JointPosition::Femur;
-  if (s == "tibia") return JointPosition::Tibia;
-  throw std::runtime_error("hexa_hardware: " + ctx +
-                           " joint_position must be coxa|femur|tibia, got '" + s + "'");
+// The leg segment each joint drives, keyed by URDF joint name. The 6-leg set
+// is fixed, so this table is the authoritative name→segment map: calibration
+// needs no redundant position field, and an unknown joint name is rejected.
+JointPosition joint_position_from_name(const std::string& name,
+                                       const std::string& ctx) {
+  static const std::unordered_map<std::string, JointPosition> kPositions = {
+      {"l_front_coxa_joint", JointPosition::Coxa},
+      {"l_front_femur_joint", JointPosition::Femur},
+      {"l_front_tibia_joint", JointPosition::Tibia},
+      {"l_middle_coxa_joint", JointPosition::Coxa},
+      {"l_middle_femur_joint", JointPosition::Femur},
+      {"l_middle_tibia_joint", JointPosition::Tibia},
+      {"l_rear_coxa_joint", JointPosition::Coxa},
+      {"l_rear_femur_joint", JointPosition::Femur},
+      {"l_rear_tibia_joint", JointPosition::Tibia},
+      {"r_front_coxa_joint", JointPosition::Coxa},
+      {"r_front_femur_joint", JointPosition::Femur},
+      {"r_front_tibia_joint", JointPosition::Tibia},
+      {"r_middle_coxa_joint", JointPosition::Coxa},
+      {"r_middle_femur_joint", JointPosition::Femur},
+      {"r_middle_tibia_joint", JointPosition::Tibia},
+      {"r_rear_coxa_joint", JointPosition::Coxa},
+      {"r_rear_femur_joint", JointPosition::Femur},
+      {"r_rear_tibia_joint", JointPosition::Tibia},
+  };
+  const auto it = kPositions.find(name);
+  if (it == kPositions.end()) {
+    throw std::runtime_error("hexa_hardware: " + ctx + " unknown joint name '" +
+                             name + "'");
+  }
+  return it->second;
 }
 
 // Map an intuitive per-position angle (degrees, geometry.yaml convention)
@@ -72,12 +102,19 @@ JointCalibration parse_joint(const YAML::Node& node, const std::string& name,
   const std::string ctx = "joints[" + name + "]";
   JointCalibration jc;
   jc.pin = require_scalar<unsigned int>(node, "pin", ctx);
-  jc.joint_position =
-      parse_joint_position(require_scalar<std::string>(node, "joint_position", ctx), ctx);
+  jc.joint_position = joint_position_from_name(name, ctx);
   jc.us_at_plus_45 = require_scalar<double>(node, "us_at_plus_45", ctx);
   jc.us_at_minus_45 = require_scalar<double>(node, "us_at_minus_45", ctx);
   jc.urdf_rad_at_center =
       intuitive_deg_to_urdf_rad(jc.joint_position, deg_at_center.for_position(jc.joint_position));
+  // Mount orientation. Optional; defaults to +1 (normal). Only ±1 are valid.
+  if (node["direction"]) {
+    const int dir = require_scalar<int>(node, "direction", ctx);
+    if (dir != 1 && dir != -1) {
+      throw std::runtime_error("hexa_hardware: " + ctx + " direction must be +1 or -1");
+    }
+    jc.direction = static_cast<std::int8_t>(dir);
+  }
   jc.min_us = static_cast<std::uint16_t>(require_scalar<unsigned int>(node, "min_us", ctx));
   jc.max_us = static_cast<std::uint16_t>(require_scalar<unsigned int>(node, "max_us", ctx));
   if (jc.min_us >= jc.max_us) {

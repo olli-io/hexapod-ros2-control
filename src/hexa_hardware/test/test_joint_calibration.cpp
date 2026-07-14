@@ -21,12 +21,23 @@ TEST(JointCalibration, HitsCalibratedEndpoints) {
   EXPECT_EQ(jc.to_pulse_us(-M_PI / 4.0), 1000);
 }
 
-TEST(JointCalibration, SwappingEndpointsInvertsDirection) {
+TEST(JointCalibration, DirectionInvertsTravel) {
+  // direction = -1 mirrors travel about the center; endpoints stay magnitudes.
+  hh::JointCalibration jc;
+  jc.direction = -1;
+  EXPECT_EQ(jc.to_pulse_us(0.0), 1500);
+  EXPECT_EQ(jc.to_pulse_us(+M_PI / 4.0), 1000);
+  EXPECT_EQ(jc.to_pulse_us(-M_PI / 4.0), 2000);
+}
+
+TEST(JointCalibration, EndpointOrderingDoesNotCarrySign) {
+  // Slope is |plus - minus|, so swapping the endpoint magnitudes no longer
+  // reverses direction — only `direction` does.
   hh::JointCalibration jc;
   jc.us_at_plus_45 = 1000;
   jc.us_at_minus_45 = 2000;
-  EXPECT_EQ(jc.to_pulse_us(+M_PI / 4.0), 1000);
-  EXPECT_EQ(jc.to_pulse_us(-M_PI / 4.0), 2000);
+  EXPECT_EQ(jc.to_pulse_us(+M_PI / 4.0), 2000);
+  EXPECT_EQ(jc.to_pulse_us(-M_PI / 4.0), 1000);
 }
 
 TEST(JointCalibration, AsymmetricEndpoints) {
@@ -78,23 +89,20 @@ deg_at_center:
   femur: 35.0
   tibia: 68.0
 joints:
-  test_coxa:
+  l_front_coxa_joint:
     pin: 0
-    joint_position: coxa
     us_at_plus_45: 1900
     us_at_minus_45: 1100
     min_us: 600
     max_us: 2400
-  test_femur:
+  l_front_femur_joint:
     pin: 1
-    joint_position: femur
     us_at_plus_45: 2000
     us_at_minus_45: 1000
     min_us: 600
     max_us: 2400
-  test_tibia:
+  l_front_tibia_joint:
     pin: 2
-    joint_position: tibia
     us_at_plus_45: 2000
     us_at_minus_45: 1000
     min_us: 600
@@ -112,8 +120,8 @@ joints:
   ASSERT_EQ(cfg.aux.count("battery_voltage"), 1u);
   EXPECT_EQ(cfg.aux.at("battery_voltage").pin, 30);
 
-  ASSERT_EQ(cfg.joints.count("test_coxa"), 1u);
-  const auto& coxa = cfg.joints.at("test_coxa");
+  ASSERT_EQ(cfg.joints.count("l_front_coxa_joint"), 1u);
+  const auto& coxa = cfg.joints.at("l_front_coxa_joint");
   EXPECT_EQ(coxa.joint_position, hh::JointPosition::Coxa);
   EXPECT_DOUBLE_EQ(coxa.us_at_plus_45, 1900.0);
   EXPECT_DOUBLE_EQ(coxa.us_at_minus_45, 1100.0);
@@ -122,14 +130,14 @@ joints:
   EXPECT_EQ(coxa.min_us, 600);
   EXPECT_EQ(coxa.max_us, 2400);
 
-  ASSERT_EQ(cfg.joints.count("test_femur"), 1u);
-  const auto& femur = cfg.joints.at("test_femur");
+  ASSERT_EQ(cfg.joints.count("l_front_femur_joint"), 1u);
+  const auto& femur = cfg.joints.at("l_front_femur_joint");
   EXPECT_EQ(femur.joint_position, hh::JointPosition::Femur);
   // femur: urdf_rad = -deg * π/180
   EXPECT_DOUBLE_EQ(femur.urdf_rad_at_center, -35.0 * M_PI / 180.0);
 
-  ASSERT_EQ(cfg.joints.count("test_tibia"), 1u);
-  const auto& tibia = cfg.joints.at("test_tibia");
+  ASSERT_EQ(cfg.joints.count("l_front_tibia_joint"), 1u);
+  const auto& tibia = cfg.joints.at("l_front_tibia_joint");
   EXPECT_EQ(tibia.joint_position, hh::JointPosition::Tibia);
   // tibia: urdf_rad = π - deg * π/180
   EXPECT_DOUBLE_EQ(tibia.urdf_rad_at_center, M_PI - 68.0 * M_PI / 180.0);
@@ -144,16 +152,14 @@ TEST(LoadHardwareConfig, DegAtCenterOptional) {
   {
     std::ofstream f(path);
     f << R"(joints:
-  j_coxa:
+  l_front_coxa_joint:
     pin: 0
-    joint_position: coxa
     us_at_plus_45: 2000
     us_at_minus_45: 1000
     min_us: 600
     max_us: 2400
-  j_tibia:
+  l_front_tibia_joint:
     pin: 1
-    joint_position: tibia
     us_at_plus_45: 2000
     us_at_minus_45: 1000
     min_us: 600
@@ -161,17 +167,18 @@ TEST(LoadHardwareConfig, DegAtCenterOptional) {
 )";
   }
   const auto cfg = hh::load_hardware_config(path.string());
-  EXPECT_DOUBLE_EQ(cfg.joints.at("j_coxa").urdf_rad_at_center, 0.0);
-  EXPECT_DOUBLE_EQ(cfg.joints.at("j_tibia").urdf_rad_at_center, M_PI);
+  EXPECT_DOUBLE_EQ(cfg.joints.at("l_front_coxa_joint").urdf_rad_at_center, 0.0);
+  EXPECT_DOUBLE_EQ(cfg.joints.at("l_front_tibia_joint").urdf_rad_at_center, M_PI);
   std::filesystem::remove(path);
 }
 
-TEST(LoadHardwareConfig, RejectsMissingJointPosition) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_nopos.yaml";
+TEST(LoadHardwareConfig, MapsJointNameToPosition) {
+  // The segment comes from the name→position table, not a separate field.
+  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_derive.yaml";
   {
     std::ofstream f(path);
     f << R"(joints:
-  j:
+  r_rear_femur_joint:
     pin: 0
     us_at_plus_45: 2000
     us_at_minus_45: 1000
@@ -179,18 +186,20 @@ TEST(LoadHardwareConfig, RejectsMissingJointPosition) {
     max_us: 2400
 )";
   }
-  EXPECT_THROW(hh::load_hardware_config(path.string()), std::runtime_error);
+  const auto cfg = hh::load_hardware_config(path.string());
+  EXPECT_EQ(cfg.joints.at("r_rear_femur_joint").joint_position,
+            hh::JointPosition::Femur);
   std::filesystem::remove(path);
 }
 
-TEST(LoadHardwareConfig, RejectsBadJointPosition) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_badpos.yaml";
+TEST(LoadHardwareConfig, RejectsUnknownJointName) {
+  // A name outside the canonical 6-leg set has no segment mapping.
+  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_noseg.yaml";
   {
     std::ofstream f(path);
     f << R"(joints:
-  j:
+  mystery_joint:
     pin: 0
-    joint_position: elbow
     us_at_plus_45: 2000
     us_at_minus_45: 1000
     min_us: 600
@@ -206,11 +215,65 @@ TEST(LoadHardwareConfig, RejectsEqualEndpoints) {
   {
     std::ofstream f(path);
     f << R"(joints:
-  j:
+  l_front_coxa_joint:
     pin: 0
-    joint_position: coxa
     us_at_plus_45: 1500
     us_at_minus_45: 1500
+    min_us: 600
+    max_us: 2400
+)";
+  }
+  EXPECT_THROW(hh::load_hardware_config(path.string()), std::runtime_error);
+  std::filesystem::remove(path);
+}
+
+TEST(LoadHardwareConfig, DirectionDefaultsToPlusOne) {
+  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dir_def.yaml";
+  {
+    std::ofstream f(path);
+    f << R"(joints:
+  l_front_coxa_joint:
+    pin: 0
+    us_at_plus_45: 2000
+    us_at_minus_45: 1000
+    min_us: 600
+    max_us: 2400
+)";
+  }
+  const auto cfg = hh::load_hardware_config(path.string());
+  EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, 1);
+  std::filesystem::remove(path);
+}
+
+TEST(LoadHardwareConfig, ParsesReversedDirection) {
+  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dir_rev.yaml";
+  {
+    std::ofstream f(path);
+    f << R"(joints:
+  l_front_coxa_joint:
+    pin: 0
+    us_at_plus_45: 2000
+    us_at_minus_45: 1000
+    direction: -1
+    min_us: 600
+    max_us: 2400
+)";
+  }
+  const auto cfg = hh::load_hardware_config(path.string());
+  EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, -1);
+  std::filesystem::remove(path);
+}
+
+TEST(LoadHardwareConfig, RejectsBadDirection) {
+  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dir_bad.yaml";
+  {
+    std::ofstream f(path);
+    f << R"(joints:
+  l_front_coxa_joint:
+    pin: 0
+    us_at_plus_45: 2000
+    us_at_minus_45: 1000
+    direction: 2
     min_us: 600
     max_us: 2400
 )";

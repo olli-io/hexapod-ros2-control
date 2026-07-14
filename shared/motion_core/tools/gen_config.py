@@ -276,13 +276,25 @@ def hardware_joints(hw: dict):
         rad = math.radians(deg_at_center[pos])
         return {"coxa": rad, "femur": -rad, "tibia": math.pi - rad}[pos]
 
+    # Authoritative name→segment map for the fixed 6-leg set (mirrors
+    # joint_calibration.cpp's kPositions). An unknown joint name is rejected.
+    joint_positions = {
+        f"{side}_{leg}_{seg}_joint": seg
+        for side in ("l", "r")
+        for leg in ("front", "middle", "rear")
+        for seg in ("coxa", "femur", "tibia")
+    }
+
     rows = []
     for name, j in hw["joints"].items():
-        pos = j["joint_position"]
+        if name not in joint_positions:
+            raise ValueError(f"unknown joint name '{name}'")
+        pos = joint_positions[name]
         rows.append(dict(
             name=name, pin=j["pin"], joint_position=pos,
             us_at_plus_45=j["us_at_plus_45"], us_at_minus_45=j["us_at_minus_45"],
             urdf_rad_at_center=urdf_center(pos),
+            direction=j.get("direction", 1),
             min_us=j["min_us"], max_us=j["max_us"]))
     rows.sort(key=lambda r: r["pin"])
     return rows
@@ -625,6 +637,7 @@ def emit(geometry, gait, teleop, posture, control, hardware,
     w("  float us_at_plus_45;")
     w("  float us_at_minus_45;")
     w("  float urdf_rad_at_center;")
+    w("  std::int8_t direction;  // +1 normal, -1 mirror-mounted servo")
     w("  std::uint16_t min_us;")
     w("  std::uint16_t max_us;")
     w("};")
@@ -634,7 +647,7 @@ def emit(geometry, gait, teleop, posture, control, hardware,
     w("inline constexpr std::array<JointCal, 18> kJointCals = {{")
     for j in joints:
         w(f"    {{{j['pin']}, {fl(j['us_at_plus_45'])}, {fl(j['us_at_minus_45'])}, "
-          f"{fl(j['urdf_rad_at_center'])}, {j['min_us']}, {j['max_us']}}},"
+          f"{fl(j['urdf_rad_at_center'])}, {j['direction']}, {j['min_us']}, {j['max_us']}}},"
           f"  // {j['name']}")
     w("}};")
     w("")

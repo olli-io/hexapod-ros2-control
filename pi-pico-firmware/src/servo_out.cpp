@@ -53,10 +53,11 @@ constexpr std::uint8_t kBatteryCurrentPin = 27;
 constexpr float kBatteryVoltageScale = 0.00366f;  // 14-bit count → volts
 constexpr float kBatteryCurrentScale = 0.00098f;  // 14-bit count → amps
 
-// Per-joint calibration. Endpoints (1000/2000 µs at ∓π/4, 1500 µs center) and
-// clamps (500/2500 µs) are the hardware.yaml defaults; `urdf_rad_at_center` is
-// the joint's URDF radian at servo center, precomputed from `deg_at_center`
-// (coxa 0°, femur 35°, tibia 68°) via the per-position mapping:
+// Per-joint calibration. Endpoint magnitudes (1000/2000 µs at ∓π/4, 1500 µs
+// center) and clamps (500/2500 µs) are the hardware.yaml defaults; `direction`
+// (+1 normal, -1 mirror-mounted) is the sole travel-sign source;
+// `urdf_rad_at_center` is the joint's URDF radian at servo center, precomputed
+// from `deg_at_center` (coxa 0°, femur 35°, tibia 68°) via the per-position mapping:
 //   coxa  urdf =  deg·π/180        → 0
 //   femur urdf = -deg·π/180        → -0.61086524
 //   tibia urdf =  π - deg·π/180    →  1.95476876
@@ -65,6 +66,7 @@ struct JointCal {
   float us_at_plus_45;
   float us_at_minus_45;
   float urdf_rad_at_center;
+  std::int8_t direction;  // +1 normal, -1 mirror-mounted servo
   std::uint16_t min_us;
   std::uint16_t max_us;
 };
@@ -77,24 +79,24 @@ constexpr float kTibiaCenter = 1.95476876f;
 // r_front, r_middle, r_rear, each {coxa, femur, tibia}. Sorted by pin so the
 // run-grouping in command_all() sees consecutive pins.
 constexpr JointCal kJoints[kNumJoints] = {
-    {1, 2000.f, 1000.f, kCoxaCenter, 500, 2500},   // l_front_coxa
-    {2, 2000.f, 1000.f, kFemurCenter, 500, 2500},  // l_front_femur
-    {3, 2000.f, 1000.f, kTibiaCenter, 500, 2500},  // l_front_tibia
-    {4, 2000.f, 1000.f, kCoxaCenter, 500, 2500},   // l_middle_coxa
-    {5, 2000.f, 1000.f, kFemurCenter, 500, 2500},  // l_middle_femur
-    {6, 2000.f, 1000.f, kTibiaCenter, 500, 2500},  // l_middle_tibia
-    {7, 2000.f, 1000.f, kCoxaCenter, 500, 2500},   // l_rear_coxa
-    {8, 2000.f, 1000.f, kFemurCenter, 500, 2500},  // l_rear_femur
-    {9, 2000.f, 1000.f, kTibiaCenter, 500, 2500},  // l_rear_tibia
-    {10, 2000.f, 1000.f, kCoxaCenter, 500, 2500},   // r_front_coxa
-    {11, 2000.f, 1000.f, kFemurCenter, 500, 2500},  // r_front_femur
-    {12, 2000.f, 1000.f, kTibiaCenter, 500, 2500},  // r_front_tibia
-    {13, 2000.f, 1000.f, kCoxaCenter, 500, 2500},   // r_middle_coxa
-    {14, 2000.f, 1000.f, kFemurCenter, 500, 2500},  // r_middle_femur
-    {15, 2000.f, 1000.f, kTibiaCenter, 500, 2500},  // r_middle_tibia
-    {16, 2000.f, 1000.f, kCoxaCenter, 500, 2500},   // r_rear_coxa
-    {17, 2000.f, 1000.f, kFemurCenter, 500, 2500},  // r_rear_femur
-    {18, 2000.f, 1000.f, kTibiaCenter, 500, 2500},  // r_rear_tibia
+    {1, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // l_front_coxa
+    {2, 2000.f, 1000.f, kFemurCenter, -1, 500, 2500},  // l_front_femur
+    {3, 2000.f, 1000.f, kTibiaCenter, -1, 500, 2500},  // l_front_tibia
+    {4, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // l_middle_coxa
+    {5, 2000.f, 1000.f, kFemurCenter, -1, 500, 2500},  // l_middle_femur
+    {6, 2000.f, 1000.f, kTibiaCenter, -1, 500, 2500},  // l_middle_tibia
+    {7, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // l_rear_coxa
+    {8, 2000.f, 1000.f, kFemurCenter, -1, 500, 2500},  // l_rear_femur
+    {9, 2000.f, 1000.f, kTibiaCenter, -1, 500, 2500},  // l_rear_tibia
+    {10, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // r_front_coxa
+    {11, 2000.f, 1000.f, kFemurCenter, 1, 500, 2500},  // r_front_femur
+    {12, 2000.f, 1000.f, kTibiaCenter, 1, 500, 2500},  // r_front_tibia
+    {13, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // r_middle_coxa
+    {14, 2000.f, 1000.f, kFemurCenter, 1, 500, 2500},  // r_middle_femur
+    {15, 2000.f, 1000.f, kTibiaCenter, 1, 500, 2500},  // r_middle_tibia
+    {16, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // r_rear_coxa
+    {17, 2000.f, 1000.f, kFemurCenter, 1, 500, 2500},  // r_rear_femur
+    {18, 2000.f, 1000.f, kTibiaCenter, 1, 500, 2500},  // r_rear_tibia
 };
 
 // Half-π as a float literal — avoids the double M_PI/2 (-Wdouble-promotion).
@@ -153,8 +155,10 @@ bool decode_get_payload(std::span<const std::uint8_t> payload,
 // ── Calibration (from joint_calibration.cpp, double→float) ───────────────────
 std::uint16_t to_pulse_us(const JointCal& j, float theta_rad) {
   const float center_us = (j.us_at_plus_45 + j.us_at_minus_45) * 0.5f;
-  const float slope_us_per_rad = (j.us_at_plus_45 - j.us_at_minus_45) / kHalfPi;
-  const float us = center_us + (theta_rad - j.urdf_rad_at_center) * slope_us_per_rad;
+  // Endpoints are magnitudes; `direction` (+1 / -1) is the sole sign source.
+  const float slope_us_per_rad = std::fabs(j.us_at_plus_45 - j.us_at_minus_45) / kHalfPi;
+  const float us = center_us +
+                   j.direction * (theta_rad - j.urdf_rad_at_center) * slope_us_per_rad;
   const float clamped = std::clamp(us, static_cast<float>(j.min_us),
                                    static_cast<float>(j.max_us));
   return static_cast<std::uint16_t>(std::lroundf(clamped));

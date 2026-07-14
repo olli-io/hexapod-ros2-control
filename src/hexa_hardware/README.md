@@ -109,12 +109,15 @@ Voltage / current are republished on `~/battery_state`
 - `relay.pin` — board pin wired to the servo power relay
 - `aux.{name}.{pin,scale}` — GET-only sensor channels
 - `deg_at_center.{coxa,femur,tibia}` — joint angle at servo center pulse, shared across all six legs, in the intuitive per-joint convention from `hexa_description/config/geometry.yaml` (`coxa.deg`, `femur.above_horizontal_deg`, `tibia.interior_deg`). Defaults mirror that file's `joints:` block (0 / 35 / 68).
-- `joints.{urdf_joint_name}.{pin, joint_position, us_at_plus_45, us_at_minus_45, min_us, max_us}` — `joint_position` is `coxa | femur | tibia` and selects which `deg_at_center` entry applies.
+- `joints.{urdf_joint_name}.{pin, us_at_plus_45, us_at_minus_45, direction, min_us, max_us}` — the leg segment (`coxa | femur | tibia`) is derived from the joint name and selects which `deg_at_center` entry applies; `direction` is `+1` (default) or `-1`.
 
-Per-servo calibration is two measured endpoints in the *servo's* frame
-(shaft at ±π/4 from mechanical center). Center pulse and slope (with
-sign) fall out automatically; a reversed mount is expressed by
-swapping the two values. The shared `deg_at_center` table captures the
+Per-servo calibration is two measured endpoint magnitudes in the
+*servo's* frame (shaft at ±π/4 from mechanical center). Center pulse and
+slope magnitude fall out automatically; travel direction is a separate
+`direction` field (`+1` normal, `-1` mirror-mounted). The URDF keeps
+identical joint axes for left and right legs, so a physically
+mirror-assembled servo sets `direction: -1` to realize a URDF-positive
+command; endpoint ordering does not carry sign. The shared `deg_at_center` table captures the
 assembly offset — the joint angle each segment actually sits at when
 its servo is centered — letting one set of three numbers describe an
 ideally-mounted build. The loader translates those intuitive degrees

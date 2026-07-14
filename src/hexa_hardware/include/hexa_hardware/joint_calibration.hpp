@@ -1,10 +1,12 @@
 // Per-joint mapping from URDF-convention radians to a 14-bit servo pulse
 // width (µs).
 //
-// Calibration is two measured endpoints: the pulse width that drives the
-// joint to +π/4 rad, and the pulse width at −π/4 rad. Center and slope
-// (with sign) fall out automatically; a reversed mount is expressed by
-// swapping the two values.
+// Calibration is two measured endpoint *magnitudes* — the pulse widths at
+// +π/4 and −π/4 from the servo's mechanical center — plus a `direction`
+// (+1 / -1) that captures which way the servo is bolted on. Center pulse and
+// slope magnitude fall out of the endpoints; `direction` is the sole sign
+// source, so a mirror-mounted servo sets `direction: -1` (endpoint ordering
+// no longer carries sign).
 
 #pragma once
 
@@ -14,9 +16,10 @@
 
 namespace hexa_hardware {
 
-// Which segment of a leg this joint drives. Determines how the shared
-// `deg_at_center` table (intuitive degrees, per geometry.yaml) is
-// translated to URDF radians at load time:
+// Which segment of a leg this joint drives, derived at load time from the
+// joint name (`..._coxa_joint` / `..._femur_joint` / `..._tibia_joint`).
+// Determines how the shared `deg_at_center` table (intuitive degrees, per
+// geometry.yaml) is translated to URDF radians at load time:
 //   Coxa  — urdf_rad =  deg * π/180     (deg from radial)
 //   Femur — urdf_rad = -deg * π/180     (above_horizontal_deg)
 //   Tibia — urdf_rad =  π - deg * π/180 (interior_deg)
@@ -27,15 +30,21 @@ struct JointCalibration {
   JointPosition joint_position = JointPosition::Coxa;
   // Endpoint pulses are measured in the *servo's* frame — i.e. with the
   // servo shaft at +π/4 and -π/4 from its mechanical center, not the
-  // joint at URDF ±π/4. `urdf_rad_at_center` separates the two.
+  // joint at URDF ±π/4. `urdf_rad_at_center` separates the two. Only their
+  // magnitude matters; travel direction lives in `direction` below.
   double us_at_plus_45 = 2000.0;
   double us_at_minus_45 = 1000.0;
+  // Mount orientation: +1 = joint moves the same way as URDF-positive,
+  // -1 = servo is mirror-mounted and travels the opposite way. Because the
+  // URDF keeps identical joint axes for left and right legs, a physically
+  // mirror-assembled servo needs -1 to realize a URDF-positive command.
+  std::int8_t direction = 1;
   // URDF radian the joint sits at when the servo is at its mechanical
   // center (pulse = (us_at_plus_45 + us_at_minus_45) / 2). Captures the
   // assembly offset between servo horn alignment and URDF zero pose.
   // The loader populates this from the YAML's top-level `deg_at_center`
-  // table (intuitive degrees) using `joint_position` to pick the entry
-  // and the per-position conversion above.
+  // table (intuitive degrees) using `joint_position` (derived from the joint
+  // name) to pick the entry and the per-position conversion above.
   double urdf_rad_at_center = 0.0;
   std::uint16_t min_us = 500;
   std::uint16_t max_us = 2500;

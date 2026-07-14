@@ -197,6 +197,13 @@ TEST(Hardware, ServoCalibration) {
     EXPECT_EQ(cfg::kJointCals[i].pin, static_cast<std::uint8_t>(i + 1));
     EXPECT_NEAR(cfg::kJointCals[i].us_at_plus_45, 2000.0f, kTol);
     EXPECT_NEAR(cfg::kJointCals[i].us_at_minus_45, 1000.0f, kTol);
+    // This build: left femur/tibia are mirror-mounted (-1); coxa and the whole
+    // right side are normal (+1). Indices 0..8 are the left legs, each
+    // {coxa, femur, tibia}; i % 3 == 0 is the coxa.
+    const bool left_leg = i < 9;
+    const bool is_coxa = (i % 3) == 0;
+    const int expected_dir = (left_leg && !is_coxa) ? -1 : 1;
+    EXPECT_EQ(cfg::kJointCals[i].direction, expected_dir);
     EXPECT_EQ(cfg::kJointCals[i].min_us, 500);
     EXPECT_EQ(cfg::kJointCals[i].max_us, 2500);
   }
