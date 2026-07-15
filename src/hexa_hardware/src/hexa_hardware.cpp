@@ -41,21 +41,29 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // Config path defaults to this package's installed hardware.yaml; the
-  // URDF can override via <param name="config_path"> if a robot needs to
-  // run against a different calibration (test rig, second build, …).
+  // Config lives in hexa_description/config (co-located with geometry/tuning):
+  // hardware.yaml (wiring) + servo_calibration.yaml (endpoint pulse widths).
+  // The URDF can override either via <param name="config_path"> /
+  // <param name="calibration_path"> if a robot needs a different calibration
+  // (test rig, second build, …).
+  const auto share_config = std::filesystem::path(
+      ament_index_cpp::get_package_share_directory("hexa_description")) / "config";
   std::string config_path;
   if (const auto it = info_.hardware_parameters.find("config_path");
       it != info_.hardware_parameters.end() && !it->second.empty()) {
     config_path = it->second;
   } else {
-    config_path = (std::filesystem::path(
-                       ament_index_cpp::get_package_share_directory("hexa_hardware")) /
-                   "config" / "hardware.yaml")
-                      .string();
+    config_path = (share_config / "hardware.yaml").string();
+  }
+  std::string calibration_path;
+  if (const auto it = info_.hardware_parameters.find("calibration_path");
+      it != info_.hardware_parameters.end() && !it->second.empty()) {
+    calibration_path = it->second;
+  } else {
+    calibration_path = (share_config / "servo_calibration.yaml").string();
   }
   try {
-    config_ = load_hardware_config(config_path);
+    config_ = load_hardware_config(config_path, calibration_path);
   } catch (const std::exception& e) {
     RCLCPP_FATAL(rclcpp::get_logger(kLogger), "Config load failed: %s", e.what());
     return hardware_interface::CallbackReturn::ERROR;
@@ -188,14 +196,13 @@ hardware_interface::CallbackReturn HexaHardware::on_configure(
 
 hardware_interface::CallbackReturn HexaHardware::on_activate(
     const rclcpp_lifecycle::State& /*previous*/) {
-  // Energise the servo rail before any motion command lands.
-  if (config_.relay_configured) {
-    try {
-      board_->send_digital(config_.relay_pin, true);
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Relay on failed: %s", e.what());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
+  // Energise the servo rail before any motion command lands. The relay pin is
+  // board-owned; the host only expresses intent.
+  try {
+    board_->set_servo_power(true);
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Servo power on failed: %s", e.what());
+    return hardware_interface::CallbackReturn::ERROR;
   }
   // Reset commands to current state so the first write() doesn't snap.
   for (auto& j : joints_) {
@@ -209,11 +216,11 @@ hardware_interface::CallbackReturn HexaHardware::on_activate(
 
 hardware_interface::CallbackReturn HexaHardware::on_deactivate(
     const rclcpp_lifecycle::State& /*previous*/) {
-  if (config_.relay_configured && transport_ && transport_->is_open()) {
+  if (transport_ && transport_->is_open()) {
     try {
-      board_->send_digital(config_.relay_pin, false);
+      board_->set_servo_power(false);
     } catch (const std::exception& e) {
-      RCLCPP_WARN(rclcpp::get_logger(kLogger), "Relay off failed: %s", e.what());
+      RCLCPP_WARN(rclcpp::get_logger(kLogger), "Servo power off failed: %s", e.what());
     }
   }
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -237,27 +244,21 @@ hardware_interface::return_type HexaHardware::read(
     j.prev_pos = j.pos;
   }
 
-  // Aux GETs are rate-limited; the SET path owns the bus most of the time.
+  // Battery GETs are rate-limited; the SET path owns the bus most of the time.
+  // One GET fetches both voltage and current in engineering units (the board
+  // owns the units); publish only on a good read.
   if (config_.parser.get_period_ticks > 0 &&
-      ++read_tick_ >= config_.parser.get_period_ticks && !config_.aux.empty()) {
+      ++read_tick_ >= config_.parser.get_period_ticks) {
     read_tick_ = 0;
 
-    const auto v_it = config_.aux.find("battery_voltage");
-    const auto i_it = config_.aux.find("battery_current");
-    if (v_it != config_.aux.end() && battery_pub_ && board_) {
-      std::vector<std::uint16_t> raw;
-      if (board_->read_aux(v_it->second.pin, 1, raw, 50) && raw.size() == 1) {
+    if (battery_pub_ && board_) {
+      float voltage_v = 0.0f;
+      float current_a = 0.0f;
+      if (board_->read_battery(voltage_v, current_a, 50)) {
         sensor_msgs::msg::BatteryState msg;
         msg.header.stamp = aux_node_->now();
-        msg.voltage = static_cast<float>(raw[0] * v_it->second.scale);
-        msg.current = std::numeric_limits<float>::quiet_NaN();
-        if (i_it != config_.aux.end()) {
-          std::vector<std::uint16_t> raw_i;
-          if (board_->read_aux(i_it->second.pin, 1, raw_i, 50) &&
-              raw_i.size() == 1) {
-            msg.current = static_cast<float>(raw_i[0] * i_it->second.scale);
-          }
-        }
+        msg.voltage = voltage_v;
+        msg.current = current_a;
         msg.present = true;
         battery_pub_->publish(msg);
       }

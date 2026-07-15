@@ -1,12 +1,47 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "hexa_hardware/servo2040_protocol.hpp"
+#include "hexa_hardware/transport.hpp"
 
 namespace hh = hexa_hardware;
+
+namespace {
+
+// In-memory Transport: captures written bytes and replays a canned reply.
+class FakeTransport : public hh::Transport {
+ public:
+  void open() override { open_ = true; }
+  void close() override { open_ = false; }
+  bool is_open() const override { return open_; }
+
+  void write(std::span<const std::uint8_t> data) override {
+    written.insert(written.end(), data.begin(), data.end());
+  }
+
+  std::size_t read(std::span<std::uint8_t> buf, int /*timeout_ms*/) override {
+    std::size_t n = 0;
+    while (n < buf.size() && read_pos < to_read.size()) buf[n++] = to_read[read_pos++];
+    return n;
+  }
+
+  bool open_ = true;
+  std::vector<std::uint8_t> written;
+  std::vector<std::uint8_t> to_read;
+  std::size_t read_pos = 0;
+};
+
+void push_value(std::vector<std::uint8_t>& b, std::uint16_t v) {
+  b.push_back(v & 0x7F);
+  b.push_back((v >> 7) & 0x7F);
+}
+
+}  // namespace
 
 // Spec example #1: set pin 4 to 1500 → S, 4, 1, lo(1500), hi(1500).
 TEST(EncodeSet, SinglePin) {
@@ -87,6 +122,55 @@ TEST(DecodeGet, RejectsShortBuffer) {
   std::uint8_t start = 0;
   std::vector<std::uint16_t> out;
   EXPECT_FALSE(hh::decode_get_payload(payload, start, out));
+}
+
+// read_battery issues one GET(24,2) and decodes centi-units into volts/amps.
+TEST(ReadBattery, DecodesCentiUnits) {
+  FakeTransport t;
+  // Canned reply: [G][24][2][current=150][voltage=830][checksum]. The checksum
+  // trails the payload and is not consumed by the host.
+  t.to_read = {hh::kCmdGet, hh::kCurrIndex, 2};
+  push_value(t.to_read, 150);  // 1.50 A
+  push_value(t.to_read, 830);  // 8.30 V
+  t.to_read.push_back(0xFF);   // trailing checksum|0x80, ignored
+
+  hh::Servo2040Protocol proto(t);
+  float voltage = 0.0f, current = 0.0f;
+  ASSERT_TRUE(proto.read_battery(voltage, current, 50));
+  EXPECT_FLOAT_EQ(current, 1.50f);
+  EXPECT_FLOAT_EQ(voltage, 8.30f);
+
+  // The request is a single GET starting at CURR for 2 values.
+  ASSERT_EQ(t.written.size(), 3u);
+  EXPECT_EQ(t.written[0], hh::kCmdGet);
+  EXPECT_EQ(t.written[1], hh::kCurrIndex);
+  EXPECT_EQ(t.written[2], 2);
+}
+
+TEST(ReadBattery, FailsOnEmptyReply) {
+  FakeTransport t;  // to_read empty → resync read returns 0
+  hh::Servo2040Protocol proto(t);
+  float voltage = -1.0f, current = -1.0f;
+  EXPECT_FALSE(proto.read_battery(voltage, current, 50));
+}
+
+// set_servo_power sends a SET of 1/0 to the board-owned relay index.
+TEST(SetServoPower, WritesRelaySet) {
+  FakeTransport t;
+  hh::Servo2040Protocol proto(t);
+  proto.set_servo_power(true);
+  // [S][26][1][lo(1)=1][hi(1)=0]
+  ASSERT_EQ(t.written.size(), 5u);
+  EXPECT_EQ(t.written[0], hh::kCmdSet);
+  EXPECT_EQ(t.written[1], hh::kRelayIndex);
+  EXPECT_EQ(t.written[2], 1);
+  EXPECT_EQ(t.written[3], 1);
+  EXPECT_EQ(t.written[4], 0);
+
+  t.written.clear();
+  proto.set_servo_power(false);
+  ASSERT_EQ(t.written.size(), 5u);
+  EXPECT_EQ(t.written[3], 0);  // value low byte = 0
 }
 
 int main(int argc, char** argv) {

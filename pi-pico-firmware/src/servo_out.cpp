@@ -44,7 +44,7 @@ constexpr std::uint8_t kCmdSet = 'S' | 0x80;
 constexpr std::uint8_t kCmdGet = 'G' | 0x80;
 constexpr std::uint16_t kValueMax = 0x3FFF;  // 14-bit
 
-// ── Hardware map (hardcoded from hexa_hardware/config/hardware.yaml) ─────────
+// ── Hardware map (hardcoded from hexa_description/config/hardware.yaml) ───────
 // Baked here for part 03; part 04 emits this from the YAMLs into
 // config_generated.hpp. Servo pin 24 = rail relay; aux ADCs 26/27 = battery.
 constexpr std::uint8_t kRelayPin = 24;

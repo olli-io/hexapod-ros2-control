@@ -58,10 +58,6 @@ install(
   RUNTIME DESTINATION bin
 )
 install(
-  DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}
-)
-install(
   FILES hexa_hardware_plugins.xml
   DESTINATION share/${PROJECT_NAME}
 )

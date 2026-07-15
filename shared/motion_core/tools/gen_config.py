@@ -266,11 +266,31 @@ def velocity_caps(gait: dict):
     return caps
 
 
-def hardware_joints(hw: dict):
+def calibration_by_pin(calibration: dict):
+    """Endpoint pulse widths keyed by pin — port of load_calibration().
+
+    servo_calibration.yaml's `calibration_values` list is pin-ordered (index i
+    is pin i+1); each entry's own `pin` field must match its position.
+    """
+    values = calibration.get("calibration_values")
+    if not isinstance(values, list):
+        raise ValueError("servo_calibration.yaml missing 'calibration_values' list")
+    by_pin = {}
+    for i, entry in enumerate(values):
+        pin = entry["pin"]
+        if pin != i + 1:
+            raise ValueError(
+                f"calibration_values[{i}] pin {pin} must equal index+1 ({i + 1})")
+        by_pin[pin] = (entry["us_at_plus_45"], entry["us_at_minus_45"])
+    return by_pin
+
+
+def hardware_joints(hw: dict, calibration: dict):
     """18 servo calibrations, sorted by pin — port of joint_calibration.cpp."""
     dac = hw.get("deg_at_center", {})
     deg_at_center = {"coxa": dac.get("coxa", 0.0), "femur": dac.get("femur", 0.0),
                      "tibia": dac.get("tibia", 0.0)}
+    endpoints = calibration_by_pin(calibration)
 
     def urdf_center(pos: str) -> float:
         rad = math.radians(deg_at_center[pos])
@@ -290,9 +310,14 @@ def hardware_joints(hw: dict):
         if name not in joint_positions:
             raise ValueError(f"unknown joint name '{name}'")
         pos = joint_positions[name]
+        pin = j["pin"]
+        if pin not in endpoints:
+            raise ValueError(
+                f"joint '{name}' pin {pin} has no servo_calibration.yaml entry")
+        us_plus, us_minus = endpoints[pin]
         rows.append(dict(
-            name=name, pin=j["pin"], joint_position=pos,
-            us_at_plus_45=j["us_at_plus_45"], us_at_minus_45=j["us_at_minus_45"],
+            name=name, pin=pin, joint_position=pos,
+            us_at_plus_45=us_plus, us_at_minus_45=us_minus,
             urdf_rad_at_center=urdf_center(pos),
             direction=j.get("direction", 1),
             min_us=j["min_us"], max_us=j["max_us"]))
@@ -302,14 +327,14 @@ def hardware_joints(hw: dict):
 
 # ── header emission ─────────────────────────────────────────────────────────
 
-def emit(geometry, gait, teleop, posture, control, hardware,
+def emit(geometry, gait, teleop, posture, control, hardware, calibration,
          webteleop, display, sources) -> str:
     specs = leg_specs(geometry)
     limits = joint_limits(geometry)
     stand = standing_pose(gait)
     initial = initial_pose(geometry)
     caps = velocity_caps(gait)
-    joints = hardware_joints(hardware)
+    joints = hardware_joints(hardware, calibration)
 
     L = []
     w = L.append
@@ -631,7 +656,8 @@ def emit(geometry, gait, teleop, posture, control, hardware,
     w("")
 
     # ── hardware / servo calibration ──
-    w("// ── Servo 2040 wiring + calibration (hexa_hardware/config/hardware.yaml) ──")
+    w("// ── Servo 2040 wiring + calibration (hexa_description/config/"
+      "hardware.yaml + servo_calibration.yaml) ──")
     w("struct JointCal {")
     w("  std::uint8_t pin;")
     w("  float us_at_plus_45;")
@@ -803,7 +829,8 @@ def main() -> int:
         "teleop": f"{cfg_dir}/hexa_teleop/config/teleop_joy.yaml",
         "posture": tuning_yaml,
         "control": tuning_yaml,
-        "hardware": f"{cfg_dir}/hexa_hardware/config/hardware.yaml",
+        "hardware": f"{cfg_dir}/hexa_description/config/hardware.yaml",
+        "calibration": f"{cfg_dir}/hexa_description/config/servo_calibration.yaml",
         "webteleop": f"{cfg_dir}/hexa_webteleop/config/webteleop.yaml",
         "display": f"{cfg_dir}/hexa_display/config/display.yaml",
     }
@@ -828,8 +855,8 @@ def main() -> int:
     ))
     header = emit(loaded["geometry"], loaded["gait"],
                   loaded["teleop"], loaded["posture"], loaded["control"],
-                  loaded["hardware"], loaded["webteleop"], loaded["display"],
-                  sources)
+                  loaded["hardware"], loaded["calibration"],
+                  loaded["webteleop"], loaded["display"], sources)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     # Only rewrite when content changes so CMake dependency timestamps stay clean.

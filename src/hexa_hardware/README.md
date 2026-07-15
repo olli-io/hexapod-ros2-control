@@ -16,10 +16,13 @@ package only owns the real-robot path.
 The URDF declares `hexa_hardware/HexaHardware` (see
 `hexa_description/urdf/hexapod.urdf.xacro`, the `<xacro:unless
 use_sim>` branch under `<ros2_control>`). The plugin resolves its
-config from this package's own share directory by default; pass
-`<param name="config_path">/abs/path/to/hardware.yaml</param>` under
-`<hardware>` to override (e.g. for a test rig with different
-calibration).
+config from `hexa_description`'s share directory by default (co-located
+with `geometry.yaml` / `tuning.yaml`): `hardware.yaml` for wiring and
+`servo_calibration.yaml` for the per-servo endpoint pulse widths. Pass
+`<param name="config_path">/abs/path/to/hardware.yaml</param>` and/or
+`<param name="calibration_path">/abs/path/to/servo_calibration.yaml</param>`
+under `<hardware>` to override either (e.g. for a test rig with
+different calibration).
 
 ## Pluggable transport + protocol
 
@@ -33,12 +36,15 @@ Two seams under one plugin class, both selected from YAML:
   someone fills in the body.
 - **BoardProtocol** (`include/hexa_hardware/board_protocol.hpp`) —
   semantic operations the hardware interface needs: drive consecutive
-  servo pins, drive a digital pin, read auxiliary values. Owns a
-  `Transport&` and the wire framing. Concrete: `Servo2040Protocol`
-  (Chica framing, see below).
+  servo pins, set servo power (relay), read the battery in engineering
+  units. Owns a `Transport&` and the wire framing. Concrete:
+  `Servo2040Protocol` (Chica framing, see below). The relay pin and the
+  battery telemetry units are board-owned protocol constants, not host
+  config — the interface exposes intent (`set_servo_power`) and real units
+  (`read_battery` → volts/amps), never raw pins or scale factors.
 
 The factory (`hardware_factory.hpp`) picks both from
-`config/hardware.yaml`:
+`hexa_description/config/hardware.yaml`:
 
     connection:
       type: uart           # uart | i2c | usb
@@ -69,6 +75,11 @@ Frames:
 - GET request — `[G | 0x80][start_pin][count]`.
 - GET reply — same shape as SET: `[G | 0x80][start_pin][count][val × count]`.
 
+The battery current/voltage indices reply in fixed-point centi-units
+(count × 0.01 = A / V); `read_battery` applies that one fixed factor and
+returns real units. The relay lives at a fixed board-owned index. See the
+servo2040 driver's `protocol.md` for the unit definition and index map.
+
 Recovery from a partial frame on the wire is trivial: discard bytes
 until one with MSB set arrives.
 
@@ -86,46 +97,35 @@ interface (hobby servos don't report shaft angle) and computes velocity
 as the numerical derivative. Joint state is **not** polled from the
 board.
 
-Non-joint pins (battery voltage, currents, touch) **are** polled via
-GET, rate-limited by `parser.get_period_ticks` so SETs aren't starved.
-Voltage / current are republished on `~/battery_state`
-(`sensor_msgs/BatteryState`) from an internal node.
+The battery bus **is** polled via a single GET, rate-limited by
+`parser.get_period_ticks` so SETs aren't starved, and republished in
+engineering units on `~/battery_state` (`sensor_msgs/BatteryState`) from an
+internal node. It needs no host config: the units are protocol-defined and
+the sensors are always present on the board.
 
 ## Lifecycle
 
 - `on_init` — load config, build Transport + BoardProtocol via factory.
 - `on_configure` — open the Transport.
-- `on_activate` — drive relay pin high (servo rail on), reset commands
+- `on_activate` — `set_servo_power(true)` (servo rail on), reset commands
   to the current echoed state so the first cycle doesn't snap.
-- `on_deactivate` — drive relay pin low.
+- `on_deactivate` — `set_servo_power(false)`.
 - `on_cleanup` — close serial, stop the aux publisher thread.
 
 ## Config
 
-`config/hardware.yaml` carries:
+Config lives in `hexa_description/config/`, split in two:
 
-- `connection.{type,device,baud}` — physical layer (`uart` / `i2c` / `usb`)
-- `parser.{type,get_period_ticks}` — board protocol (currently only `servo2040`)
-- `relay.pin` — board pin wired to the servo power relay
-- `aux.{name}.{pin,scale}` — GET-only sensor channels
-- `deg_at_center.{coxa,femur,tibia}` — joint angle at servo center pulse, shared across all six legs, in the intuitive per-joint convention from `hexa_description/config/geometry.yaml` (`coxa.deg`, `femur.above_horizontal_deg`, `tibia.interior_deg`). Defaults mirror that file's `joints:` block (0 / 35 / 68).
-- `joints.{urdf_joint_name}.{pin, us_at_plus_45, us_at_minus_45, direction, min_us, max_us}` — the leg segment (`coxa | femur | tibia`) is derived from the joint name and selects which `deg_at_center` entry applies; `direction` is `+1` (default) or `-1`.
+- `hardware.yaml` — wiring: `connection`, `parser`, `deg_at_center`, and
+  per-joint `{pin, direction, min_us, max_us}`. No relay/aux pins: the relay
+  and battery sensors are board-owned protocol constants.
+- `servo_calibration.yaml` — a pin-ordered `calibration_values` list of
+  `{pin, us_at_plus_45, us_at_minus_45}`; a joint with `pin: N` reads entry
+  `N-1`. Split out so a calibration routine can rewrite it without touching
+  the commented wiring.
 
-Per-servo calibration is two measured endpoint magnitudes in the
-*servo's* frame (shaft at ±π/4 from mechanical center). Center pulse and
-slope magnitude fall out automatically; travel direction is a separate
-`direction` field (`+1` normal, `-1` mirror-mounted). The URDF keeps
-identical joint axes for left and right legs, so a physically
-mirror-assembled servo sets `direction: -1` to realize a URDF-positive
-command; endpoint ordering does not carry sign. The shared `deg_at_center` table captures the
-assembly offset — the joint angle each segment actually sits at when
-its servo is centered — letting one set of three numbers describe an
-ideally-mounted build. The loader translates those intuitive degrees
-to URDF radians per joint position (coxa: `rad`, femur: `−rad`, tibia:
-`π − rad`), matching the conversion in `hexa_description/urdf/hexapod.urdf.xacro`.
-URDF-side joint angle limits in `hexa_description`'s `geometry.yaml`
-remain the source of truth for travel; `min_us` / `max_us` are the
-electrical clamp the driver enforces.
+Both files document their own field semantics (calibration math, `direction`,
+the `deg_at_center` → URDF-radian conversion).
 
 ## Bench testing without hardware
 

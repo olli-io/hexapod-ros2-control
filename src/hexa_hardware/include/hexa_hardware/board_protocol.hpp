@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <span>
-#include <vector>
 
 namespace hexa_hardware {
 
@@ -24,14 +23,19 @@ class BoardProtocol {
   virtual void send_servo_positions(std::uint8_t start_pin,
                                     std::span<const std::uint16_t> values) = 0;
 
-  // Drive a single digital output (e.g. the relay rail).
-  virtual void send_digital(std::uint8_t pin, bool value) = 0;
+  // Energise (true) or de-energise (false) the servo power rail. The relay
+  // pin is chosen entirely on the board — the host addresses this by intent,
+  // not by pin number. Note: while an over-current trip is latched some boards
+  // refuse re-enable until a disable clears the latch.
+  virtual void set_servo_power(bool on) = 0;
 
-  // Request `count` raw values from `count` consecutive pins (ADC,
-  // touch, etc.). Returns true and populates `out` on a complete reply
-  // within timeout_ms; false on timeout or framing error.
-  virtual bool read_aux(std::uint8_t start_pin, std::uint8_t count,
-                        std::vector<std::uint16_t>& out, int timeout_ms) = 0;
+  // Read the battery bus in engineering units: `voltage_v` in volts,
+  // `current_a` in amps. The board reports fixed-point units on the wire and
+  // this call applies the fixed protocol conversion, so callers get real units
+  // and carry no scaling. Returns true on a complete reply within timeout_ms;
+  // false on timeout or framing error (leaving the outputs unspecified).
+  virtual bool read_battery(float& voltage_v, float& current_a,
+                            int timeout_ms) = 0;
 
  protected:
   BoardProtocol() = default;

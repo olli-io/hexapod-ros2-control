@@ -62,7 +62,8 @@ nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 - [`hexa_description/config/tuning.yaml`](src/hexa_description/config/tuning.yaml) — consolidated node parameters (node-key source of truth): gait engine knobs, `cmd_vel` shaping, posture animation stack, and the standing pose (per-joint rest angles under `gait_node`).
 - [`hexa_teleop/config/teleop_joy.yaml`](src/hexa_teleop/config/teleop_joy.yaml) — joystick mapping, deadband, posture↔gait toggle, and per-mode `cmd_vel` / posture limits.
 - [`hexa_webteleop/config/webteleop.yaml`](src/hexa_webteleop/config/webteleop.yaml) — web teleop server + shared teleop mapping.
-- [`hexa_hardware/config/hardware.yaml`](src/hexa_hardware/config/hardware.yaml) — Servo 2040 wiring, pulse-width calibration, electrical clamps, ADC scales. Real-robot only.
+- [`hexa_description/config/hardware.yaml`](src/hexa_description/config/hardware.yaml) — Servo 2040 wiring, electrical clamps, ADC scales. Real-robot only.
+- [`hexa_description/config/servo_calibration.yaml`](src/hexa_description/config/servo_calibration.yaml) — per-servo endpoint pulse-width calibration (`calibration_values`, indexed by pin). Real-robot only.
 - [`hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face: enable switch, gait-state → expression map, gaze / battery knobs, and the SH1122 SPI/GPIO pins, render rate, headless switch.
 - [`hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) and [`hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — controller-manager rate and joint ordering, for sim and real-robot respectively.
 

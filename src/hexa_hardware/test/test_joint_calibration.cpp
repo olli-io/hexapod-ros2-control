@@ -1,13 +1,59 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "hexa_hardware/joint_calibration.hpp"
 
 namespace hh = hexa_hardware;
+
+namespace {
+
+// Write `contents` to a uniquely-named temp file and return its path. Caller
+// removes it.
+std::string write_temp(const std::string& stem, const std::string& contents) {
+  const auto path = std::filesystem::temp_directory_path() / stem;
+  std::ofstream f(path);
+  f << contents;
+  f.close();
+  return path.string();
+}
+
+// Build a servo_calibration.yaml body from endpoint magnitudes; pins are
+// assigned 1..N in order to satisfy the loader's pin == index+1 rule.
+std::string cal_yaml(const std::vector<std::pair<int, int>>& endpoints) {
+  std::string s = "calibration_values:\n";
+  for (std::size_t i = 0; i < endpoints.size(); ++i) {
+    s += "  - { pin: " + std::to_string(i + 1) +
+         ", us_at_plus_45: " + std::to_string(endpoints[i].first) +
+         ", us_at_minus_45: " + std::to_string(endpoints[i].second) + " }\n";
+  }
+  return s;
+}
+
+// Load from an inline hardware.yaml + calibration.yaml pair, cleaning up both.
+hh::HardwareConfig load(const std::string& stem, const std::string& hw_yaml,
+                        const std::string& calibration_yaml) {
+  const auto hw = write_temp(stem + "_hw.yaml", hw_yaml);
+  const auto cal = write_temp(stem + "_cal.yaml", calibration_yaml);
+  hh::HardwareConfig cfg;
+  try {
+    cfg = hh::load_hardware_config(hw, cal);
+  } catch (...) {
+    std::filesystem::remove(hw);
+    std::filesystem::remove(cal);
+    throw;
+  }
+  std::filesystem::remove(hw);
+  std::filesystem::remove(cal);
+  return cfg;
+}
+
+}  // namespace
 
 TEST(JointCalibration, CenterPulseAtZero) {
   hh::JointCalibration jc;
@@ -70,55 +116,30 @@ TEST(JointCalibration, AssemblyOffsetShiftsCenter) {
 }
 
 TEST(LoadHardwareConfig, ParsesYaml) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_test.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(connection:
+  const std::string hw = R"(connection:
   type: uart
   device: /dev/ttyUSB0
   baud: 230400
 parser:
   type: servo2040
   get_period_ticks: 5
-relay:
-  pin: 7
-aux:
-  battery_voltage: { pin: 30, scale: 0.01 }
 deg_at_center:
   coxa: 30.0
   femur: 35.0
   tibia: 68.0
 joints:
-  l_front_coxa_joint:
-    pin: 0
-    us_at_plus_45: 1900
-    us_at_minus_45: 1100
-    min_us: 600
-    max_us: 2400
-  l_front_femur_joint:
-    pin: 1
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
-  l_front_tibia_joint:
-    pin: 2
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
+  l_front_coxa_joint:  { pin: 1, min_us: 600, max_us: 2400 }
+  l_front_femur_joint: { pin: 2, min_us: 600, max_us: 2400 }
+  l_front_tibia_joint: { pin: 3, min_us: 600, max_us: 2400 }
 )";
-  }
-  const auto cfg = hh::load_hardware_config(path.string());
+  // Endpoint magnitudes come from the calibration file (pin → index-1).
+  const auto cfg = load("parses", hw,
+                        cal_yaml({{1900, 1100}, {2000, 1000}, {2000, 1000}}));
   EXPECT_EQ(cfg.connection.type, "uart");
   EXPECT_EQ(cfg.connection.device, "/dev/ttyUSB0");
   EXPECT_EQ(cfg.connection.baud, 230400);
   EXPECT_EQ(cfg.parser.type, "servo2040");
   EXPECT_EQ(cfg.parser.get_period_ticks, 5);
-  EXPECT_TRUE(cfg.relay_configured);
-  EXPECT_EQ(cfg.relay_pin, 7);
-  ASSERT_EQ(cfg.aux.count("battery_voltage"), 1u);
-  EXPECT_EQ(cfg.aux.at("battery_voltage").pin, 30);
 
   ASSERT_EQ(cfg.joints.count("l_front_coxa_joint"), 1u);
   const auto& coxa = cfg.joints.at("l_front_coxa_joint");
@@ -133,6 +154,7 @@ joints:
   ASSERT_EQ(cfg.joints.count("l_front_femur_joint"), 1u);
   const auto& femur = cfg.joints.at("l_front_femur_joint");
   EXPECT_EQ(femur.joint_position, hh::JointPosition::Femur);
+  EXPECT_DOUBLE_EQ(femur.us_at_plus_45, 2000.0);
   // femur: urdf_rad = -deg * π/180
   EXPECT_DOUBLE_EQ(femur.urdf_rad_at_center, -35.0 * M_PI / 180.0);
 
@@ -141,145 +163,98 @@ joints:
   EXPECT_EQ(tibia.joint_position, hh::JointPosition::Tibia);
   // tibia: urdf_rad = π - deg * π/180
   EXPECT_DOUBLE_EQ(tibia.urdf_rad_at_center, M_PI - 68.0 * M_PI / 180.0);
-
-  std::filesystem::remove(path);
 }
 
 TEST(LoadHardwareConfig, DegAtCenterOptional) {
   // Missing `deg_at_center` block means all positions default to 0 →
   // urdf_rad_at_center is 0 for coxa/femur and π for tibia.
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dac.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  l_front_coxa_joint:
-    pin: 0
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
-  l_front_tibia_joint:
-    pin: 1
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
+  const std::string hw = R"(joints:
+  l_front_coxa_joint:  { pin: 1, min_us: 600, max_us: 2400 }
+  l_front_tibia_joint: { pin: 2, min_us: 600, max_us: 2400 }
 )";
-  }
-  const auto cfg = hh::load_hardware_config(path.string());
+  const auto cfg = load("dac", hw, cal_yaml({{2000, 1000}, {2000, 1000}}));
   EXPECT_DOUBLE_EQ(cfg.joints.at("l_front_coxa_joint").urdf_rad_at_center, 0.0);
   EXPECT_DOUBLE_EQ(cfg.joints.at("l_front_tibia_joint").urdf_rad_at_center, M_PI);
-  std::filesystem::remove(path);
 }
 
 TEST(LoadHardwareConfig, MapsJointNameToPosition) {
   // The segment comes from the name→position table, not a separate field.
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_derive.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  r_rear_femur_joint:
-    pin: 0
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
+  const std::string hw = R"(joints:
+  r_rear_femur_joint: { pin: 1, min_us: 600, max_us: 2400 }
 )";
-  }
-  const auto cfg = hh::load_hardware_config(path.string());
+  const auto cfg = load("derive", hw, cal_yaml({{2000, 1000}}));
   EXPECT_EQ(cfg.joints.at("r_rear_femur_joint").joint_position,
             hh::JointPosition::Femur);
-  std::filesystem::remove(path);
 }
 
 TEST(LoadHardwareConfig, RejectsUnknownJointName) {
   // A name outside the canonical 6-leg set has no segment mapping.
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_noseg.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  mystery_joint:
-    pin: 0
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
+  const std::string hw = R"(joints:
+  mystery_joint: { pin: 1, min_us: 600, max_us: 2400 }
 )";
-  }
-  EXPECT_THROW(hh::load_hardware_config(path.string()), std::runtime_error);
-  std::filesystem::remove(path);
+  EXPECT_THROW(load("noseg", hw, cal_yaml({{2000, 1000}})), std::runtime_error);
 }
 
 TEST(LoadHardwareConfig, RejectsEqualEndpoints) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_equal.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  l_front_coxa_joint:
-    pin: 0
-    us_at_plus_45: 1500
-    us_at_minus_45: 1500
-    min_us: 600
-    max_us: 2400
+  // The endpoints-differ check now runs on the merged calibration values.
+  const std::string hw = R"(joints:
+  l_front_coxa_joint: { pin: 1, min_us: 600, max_us: 2400 }
 )";
-  }
-  EXPECT_THROW(hh::load_hardware_config(path.string()), std::runtime_error);
-  std::filesystem::remove(path);
+  EXPECT_THROW(load("equal", hw, cal_yaml({{1500, 1500}})), std::runtime_error);
 }
 
 TEST(LoadHardwareConfig, DirectionDefaultsToPlusOne) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dir_def.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  l_front_coxa_joint:
-    pin: 0
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    min_us: 600
-    max_us: 2400
+  const std::string hw = R"(joints:
+  l_front_coxa_joint: { pin: 1, min_us: 600, max_us: 2400 }
 )";
-  }
-  const auto cfg = hh::load_hardware_config(path.string());
+  const auto cfg = load("dir_def", hw, cal_yaml({{2000, 1000}}));
   EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, 1);
-  std::filesystem::remove(path);
 }
 
 TEST(LoadHardwareConfig, ParsesReversedDirection) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dir_rev.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  l_front_coxa_joint:
-    pin: 0
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    direction: -1
-    min_us: 600
-    max_us: 2400
+  const std::string hw = R"(joints:
+  l_front_coxa_joint: { pin: 1, direction: -1, min_us: 600, max_us: 2400 }
 )";
-  }
-  const auto cfg = hh::load_hardware_config(path.string());
+  const auto cfg = load("dir_rev", hw, cal_yaml({{2000, 1000}}));
   EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, -1);
-  std::filesystem::remove(path);
 }
 
 TEST(LoadHardwareConfig, RejectsBadDirection) {
-  const auto path = std::filesystem::temp_directory_path() / "hexa_hw_dir_bad.yaml";
-  {
-    std::ofstream f(path);
-    f << R"(joints:
-  l_front_coxa_joint:
-    pin: 0
-    us_at_plus_45: 2000
-    us_at_minus_45: 1000
-    direction: 2
-    min_us: 600
-    max_us: 2400
+  const std::string hw = R"(joints:
+  l_front_coxa_joint: { pin: 1, direction: 2, min_us: 600, max_us: 2400 }
 )";
-  }
-  EXPECT_THROW(hh::load_hardware_config(path.string()), std::runtime_error);
-  std::filesystem::remove(path);
+  EXPECT_THROW(load("dir_bad", hw, cal_yaml({{2000, 1000}})), std::runtime_error);
+}
+
+TEST(LoadHardwareConfig, RejectsPinWithoutCalibrationEntry) {
+  // Joint pin 5 has no matching entry in a 3-entry calibration array.
+  const std::string hw = R"(joints:
+  l_front_coxa_joint: { pin: 5, min_us: 600, max_us: 2400 }
+)";
+  EXPECT_THROW(
+      load("nopin", hw, cal_yaml({{2000, 1000}, {2000, 1000}, {2000, 1000}})),
+      std::runtime_error);
+}
+
+TEST(LoadHardwareConfig, RejectsMissingCalibrationArray) {
+  const std::string hw = R"(joints:
+  l_front_coxa_joint: { pin: 1, min_us: 600, max_us: 2400 }
+)";
+  EXPECT_THROW(load("nocal", hw, "not_calibration_values: []\n"),
+               std::runtime_error);
+}
+
+TEST(LoadHardwareConfig, RejectsPinIndexMismatch) {
+  // Second entry claims pin 3 but sits at index 1 (pin 2).
+  const std::string cal = R"(calibration_values:
+  - { pin: 1, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 3, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+)";
+  const std::string hw = R"(joints:
+  l_front_coxa_joint:  { pin: 1, min_us: 600, max_us: 2400 }
+  l_front_femur_joint: { pin: 2, min_us: 600, max_us: 2400 }
+)";
+  EXPECT_THROW(load("mismatch", hw, cal), std::runtime_error);
 }
 
 int main(int argc, char** argv) {

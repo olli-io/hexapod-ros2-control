@@ -21,6 +21,19 @@ constexpr std::uint8_t kCmdGet = 'G' | 0x80;
 constexpr std::uint16_t kValueMax = 0x3FFF;  // 14-bit
 constexpr std::size_t kMaxBatch = 64;        // 128 pin space; one frame must fit comfortably
 
+// Fixed command indices in the board's cmdPins space (see firmware main.h).
+// CURR and VOLT are consecutive, so one GET(kCurrIndex, 2) returns both.
+constexpr std::uint8_t kCurrIndex = 24;
+constexpr std::uint8_t kVoltIndex = 25;
+constexpr std::uint8_t kRelayIndex = 26;
+
+// Battery telemetry wire units: the board sends fixed-point centi-units
+// (count = round(value * 100)), so one count is 0.01 V / 0.01 A. Must match the
+// firmware TELEMETRY_COUNTS_PER_UNIT. This is the only telemetry conversion the
+// host performs — a fixed protocol constant, not per-board calibration.
+constexpr float kVoltsPerCount = 0.01f;
+constexpr float kAmpsPerCount = 0.01f;
+
 // Encode a SET frame into `out` (cleared first). Values are clamped to 14 bits.
 void encode_set(std::uint8_t start, std::span<const std::uint16_t> values,
                 std::vector<std::uint8_t>& out);
@@ -46,14 +59,21 @@ class Servo2040Protocol final : public BoardProtocol {
 
   void send_servo_positions(std::uint8_t start_pin,
                             std::span<const std::uint16_t> values) override;
-  void send_digital(std::uint8_t pin, bool value) override;
-  bool read_aux(std::uint8_t start_pin, std::uint8_t count,
-                std::vector<std::uint16_t>& out, int timeout_ms) override;
+  void set_servo_power(bool on) override;
+  bool read_battery(float& voltage_v, float& current_a,
+                    int timeout_ms) override;
 
  private:
+  // Issue a GET for `count` raw values from `count` consecutive indices and
+  // decode the reply. Returns true and fills `out` on a complete reply within
+  // timeout_ms; false on timeout or framing error.
+  bool get_raw(std::uint8_t start, std::uint8_t count,
+               std::vector<std::uint16_t>& out, int timeout_ms);
+
   Transport& transport_;
-  // Reusable encode buffer to avoid per-call allocation on the hot path.
+  // Reusable buffers to avoid per-call allocation on the hot path.
   std::vector<std::uint8_t> encode_buf_;
+  std::vector<std::uint16_t> decode_buf_;
 };
 
 }  // namespace hexa_hardware

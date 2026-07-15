@@ -70,7 +70,8 @@ set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/geometry.yaml
     ${HEXA_REPO_ROOT}/src/hexa_description/config/tuning.yaml
     ${HEXA_REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
-    ${HEXA_REPO_ROOT}/src/hexa_hardware/config/hardware.yaml
+    ${HEXA_REPO_ROOT}/src/hexa_description/config/hardware.yaml
+    ${HEXA_REPO_ROOT}/src/hexa_description/config/servo_calibration.yaml
     ${HEXA_REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml)
 add_custom_command(
     OUTPUT ${HEXA_GEN_CONFIG}

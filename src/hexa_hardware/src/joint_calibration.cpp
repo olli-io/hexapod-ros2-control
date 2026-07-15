@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 #include <yaml-cpp/yaml.h>
 
 namespace hexa_hardware {
@@ -97,14 +98,64 @@ struct DegAtCenter {
   }
 };
 
+// One servo's measured endpoint magnitudes, straight from
+// servo_calibration.yaml. Position in the vector encodes the pin: index i is
+// pin i+1.
+struct CalibrationEndpoints {
+  double us_at_plus_45 = 2000.0;
+  double us_at_minus_45 = 1000.0;
+};
+
+// Parse servo_calibration.yaml. The `calibration_values` list must hold exactly
+// one entry per servo pin, in pin order; each entry's own `pin` field is
+// user-reference and must match its position (index + 1).
+std::vector<CalibrationEndpoints> load_calibration(const std::string& path) {
+  YAML::Node root;
+  try {
+    root = YAML::LoadFile(path);
+  } catch (const YAML::Exception& e) {
+    throw std::runtime_error("hexa_hardware: failed to load calibration " + path +
+                             ": " + e.what());
+  }
+  const auto values = root["calibration_values"];
+  if (!values || !values.IsSequence()) {
+    throw std::runtime_error(
+        "hexa_hardware: calibration missing 'calibration_values' sequence");
+  }
+  std::vector<CalibrationEndpoints> out;
+  out.reserve(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const auto& node = values[i];
+    const std::string ctx = "calibration_values[" + std::to_string(i) + "]";
+    const auto pin = require_scalar<unsigned int>(node, "pin", ctx);
+    if (pin != i + 1) {
+      throw std::runtime_error("hexa_hardware: " + ctx + " pin " +
+                               std::to_string(pin) + " must equal index+1 (" +
+                               std::to_string(i + 1) + ")");
+    }
+    CalibrationEndpoints ep;
+    ep.us_at_plus_45 = require_scalar<double>(node, "us_at_plus_45", ctx);
+    ep.us_at_minus_45 = require_scalar<double>(node, "us_at_minus_45", ctx);
+    out.push_back(ep);
+  }
+  return out;
+}
+
 JointCalibration parse_joint(const YAML::Node& node, const std::string& name,
-                             const DegAtCenter& deg_at_center) {
+                             const DegAtCenter& deg_at_center,
+                             const std::vector<CalibrationEndpoints>& calibration) {
   const std::string ctx = "joints[" + name + "]";
   JointCalibration jc;
   jc.pin = require_scalar<unsigned int>(node, "pin", ctx);
   jc.joint_position = joint_position_from_name(name, ctx);
-  jc.us_at_plus_45 = require_scalar<double>(node, "us_at_plus_45", ctx);
-  jc.us_at_minus_45 = require_scalar<double>(node, "us_at_minus_45", ctx);
+  if (jc.pin == 0 || jc.pin > calibration.size()) {
+    throw std::runtime_error("hexa_hardware: " + ctx + " pin " +
+                             std::to_string(jc.pin) +
+                             " has no matching servo_calibration.json entry");
+  }
+  const auto& ep = calibration[jc.pin - 1];
+  jc.us_at_plus_45 = ep.us_at_plus_45;
+  jc.us_at_minus_45 = ep.us_at_minus_45;
   jc.urdf_rad_at_center =
       intuitive_deg_to_urdf_rad(jc.joint_position, deg_at_center.for_position(jc.joint_position));
   // Mount orientation. Optional; defaults to +1 (normal). Only ±1 are valid.
@@ -129,13 +180,17 @@ JointCalibration parse_joint(const YAML::Node& node, const std::string& name,
 
 }  // namespace
 
-HardwareConfig load_hardware_config(const std::string& path) {
+HardwareConfig load_hardware_config(const std::string& hardware_path,
+                                    const std::string& calibration_path) {
   YAML::Node root;
   try {
-    root = YAML::LoadFile(path);
+    root = YAML::LoadFile(hardware_path);
   } catch (const YAML::Exception& e) {
-    throw std::runtime_error("hexa_hardware: failed to load " + path + ": " + e.what());
+    throw std::runtime_error("hexa_hardware: failed to load " + hardware_path +
+                             ": " + e.what());
   }
+
+  const auto calibration = load_calibration(calibration_path);
 
   HardwareConfig cfg;
 
@@ -152,21 +207,6 @@ HardwareConfig load_hardware_config(const std::string& path) {
     }
   }
 
-  if (const auto relay = root["relay"]) {
-    cfg.relay_pin = static_cast<std::uint8_t>(relay["pin"].as<unsigned int>());
-    cfg.relay_configured = true;
-  }
-
-  if (const auto aux = root["aux"]) {
-    for (auto it = aux.begin(); it != aux.end(); ++it) {
-      const std::string name = it->first.as<std::string>();
-      AuxChannel ch;
-      ch.pin = static_cast<std::uint8_t>(it->second["pin"].as<unsigned int>());
-      ch.scale = it->second["scale"] ? it->second["scale"].as<double>() : 1.0;
-      cfg.aux.emplace(name, ch);
-    }
-  }
-
   DegAtCenter deg_at_center;
   if (const auto dac = root["deg_at_center"]) {
     if (dac["coxa"])  deg_at_center.coxa  = dac["coxa"].as<double>();
@@ -180,7 +220,8 @@ HardwareConfig load_hardware_config(const std::string& path) {
   }
   for (auto it = joints.begin(); it != joints.end(); ++it) {
     const std::string name = it->first.as<std::string>();
-    cfg.joints.emplace(name, parse_joint(it->second, name, deg_at_center));
+    cfg.joints.emplace(name,
+                       parse_joint(it->second, name, deg_at_center, calibration));
   }
 
   return cfg;

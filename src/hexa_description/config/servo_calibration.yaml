@@ -1,0 +1,31 @@
+# Per-servo endpoint pulse-width calibration for the Servo2040.
+#
+# One entry per servo, in pin order: array index i is pin i+1. The `pin` field
+# is user-reference (the Servo2040 silkscreen number); the loader keys off the
+# list position and requires `pin == index + 1`. Wiring, direction, and the
+# electrical clamp live in the sibling hardware.yaml.
+#
+#   us_at_plus_45  — pulse width at +π/4 from the servo's mechanical center
+#   us_at_minus_45 — pulse width at -π/4 from the servo's mechanical center
+# Center pulse and slope magnitude are derived from these; travel direction is
+# hardware.yaml's `direction`. Defaults below (2000 / 1000) are the ideal
+# uncalibrated build — replace with measured values per servo.
+calibration_values:
+  - { pin: 1, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 2, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 3, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 4, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 5, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 6, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 7, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 8, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 9, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 10, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 11, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 12, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 13, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 14, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 15, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 16, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 17, us_at_plus_45: 2000, us_at_minus_45: 1000 }
+  - { pin: 18, us_at_plus_45: 2000, us_at_minus_45: 1000 }

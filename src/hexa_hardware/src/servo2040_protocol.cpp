@@ -53,16 +53,30 @@ void Servo2040Protocol::send_servo_positions(
   transport_.write(encode_buf_);
 }
 
-void Servo2040Protocol::send_digital(std::uint8_t pin, bool value) {
-  const std::uint16_t v = value ? 1u : 0u;
-  send_servo_positions(pin, std::span<const std::uint16_t>(&v, 1));
+void Servo2040Protocol::set_servo_power(bool on) {
+  // A SET of 1/0 to the board's relay index; the board owns the actual GPIO.
+  const std::uint16_t v = on ? 1u : 0u;
+  send_servo_positions(kRelayIndex, std::span<const std::uint16_t>(&v, 1));
 }
 
-bool Servo2040Protocol::read_aux(std::uint8_t start_pin, std::uint8_t count,
-                                 std::vector<std::uint16_t>& out, int timeout_ms) {
+bool Servo2040Protocol::read_battery(float& voltage_v, float& current_a,
+                                     int timeout_ms) {
+  // CURR (24) and VOLT (25) are consecutive, so one GET fetches both:
+  // values[0] = current, values[1] = voltage.
+  if (!get_raw(kCurrIndex, 2, decode_buf_, timeout_ms) ||
+      decode_buf_.size() != 2) {
+    return false;
+  }
+  current_a = static_cast<float>(decode_buf_[0]) * kAmpsPerCount;
+  voltage_v = static_cast<float>(decode_buf_[1]) * kVoltsPerCount;
+  return true;
+}
+
+bool Servo2040Protocol::get_raw(std::uint8_t start, std::uint8_t count,
+                                std::vector<std::uint16_t>& out, int timeout_ms) {
   if (!transport_.is_open()) return false;
 
-  encode_get(start_pin, count, encode_buf_);
+  encode_get(start, count, encode_buf_);
   transport_.write(encode_buf_);
 
   // Resync: drop bytes until we see a command byte (MSB set). Discard any
@@ -83,7 +97,7 @@ bool Servo2040Protocol::read_aux(std::uint8_t start_pin, std::uint8_t count,
   }
   std::uint8_t reply_start = 0;
   if (!decode_get_payload(payload, reply_start, out)) return false;
-  return reply_start == start_pin && out.size() == count;
+  return reply_start == start && out.size() == count;
 }
 
 }  // namespace hexa_hardware

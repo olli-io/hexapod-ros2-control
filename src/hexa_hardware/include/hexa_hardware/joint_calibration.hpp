@@ -53,11 +53,6 @@ struct JointCalibration {
   std::uint16_t to_pulse_us(double theta_rad) const;
 };
 
-struct AuxChannel {
-  std::uint8_t pin = 0;
-  double scale = 1.0;  // raw 14-bit count * scale = engineering unit
-};
-
 // Physical-layer settings; the factory reads `type` to pick a concrete
 // Transport. `device`/`baud` are interpreted per-transport (e.g. baud
 // is honoured for true UART, ignored by USB-CDC, irrelevant for I2C).
@@ -79,15 +74,18 @@ struct HardwareConfig {
   ConnectionConfig connection;
   ParserConfig parser;
 
-  std::uint8_t relay_pin = 0;
-  bool relay_configured = false;
-
-  std::unordered_map<std::string, AuxChannel> aux;
   std::unordered_map<std::string, JointCalibration> joints;
 };
 
-// Load + validate hardware config from a YAML file. Throws std::runtime_error
-// on any parse / shape / value error.
-HardwareConfig load_hardware_config(const std::string& path);
+// Load + validate hardware config. `hardware_path` is the YAML with wiring,
+// connection/parser, `deg_at_center`, and per-joint pin / direction /
+// min_us / max_us. The relay pin and battery-telemetry units are board-owned
+// (fixed protocol contract), so they are not configured here.
+// `calibration_path` is the sibling servo_calibration.yaml,
+// whose `calibration_values` list supplies each servo's endpoint pulse widths
+// (indexed by pin: pin N → entry N-1). Throws std::runtime_error on any
+// parse / shape / value error.
+HardwareConfig load_hardware_config(const std::string& hardware_path,
+                                    const std::string& calibration_path);
 
 }  // namespace hexa_hardware
