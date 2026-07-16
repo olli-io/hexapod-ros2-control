@@ -45,7 +45,14 @@ Commands:
   restart               Restart the running stack WITHOUT rebuilding — applies
                         config-YAML edits (e.g. config/tuning.yaml), which are
                         already live via --symlink-install. Use 'refresh' for
-                        source-code changes.
+                        source-code changes. Cycles the whole container (Gazebo
+                        resets); prefer 'reload' for a fast config-only retune.
+  reload                Hot-reload geometry.yaml + tuning.yaml into the running
+                        locomotion node via its ~/reload_config service — no
+                        container/Gazebo restart. The rebuilt pipeline cold-starts
+                        at FOLDED, so the robot re-folds; send /gait/initialize to
+                        stand. Tuning/geometry values only (source changes need
+                        'refresh').
   logs [-f]             Show / stream the stack's logs.
   build [--clean] [args...]
                         colcon build in an ephemeral container (no stack needed).
@@ -177,6 +184,20 @@ cmd_restart() {
     echo "hexa sim: restarted. Stream logs with 'hexa sim logs -f'."
 }
 
+# Hot-reload the locomotion config WITHOUT restarting the container. Calls the
+# locomotion node's ~/reload_config service, which re-reads geometry.yaml +
+# tuning.yaml and swaps in a fresh pipeline in-process — Gazebo, the controllers
+# and teleop keep running. The rebuilt pipeline cold-starts at FOLDED, so the
+# robot re-folds; send /gait/initialize again to stand. For a source-code change
+# use 'refresh'; for a full stack reset use 'restart'.
+cmd_reload() {
+    sim_running || die "reload: sim stack isn't running — use 'hexa sim up' to start it."
+    echo "hexa sim: reloading locomotion config (no restart)..."
+    # shellcheck disable=SC2046
+    docker exec $(tty_flags) "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
+        ros2 service call /locomotion_node/reload_config std_srvs/srv/Trigger
+}
+
 cmd_shell() {
     if sim_running; then
         # shellcheck disable=SC2046
@@ -234,6 +255,7 @@ case "${sub}" in
     down)       cmd_down "$@" ;;
     refresh)    cmd_refresh "$@" ;;
     restart)    cmd_restart "$@" ;;
+    reload)     cmd_reload "$@" ;;
     logs)       cmd_logs "$@" ;;
     build)      cmd_build "$@" ;;
     status)     cmd_status ;;

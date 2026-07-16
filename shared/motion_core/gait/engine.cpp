@@ -193,12 +193,33 @@ bool Engine::set_strategy(const std::string& name) {
 }
 
 bool Engine::start_initialize() {
-  if (state_ != EngineState::FOLDED) {
+  // Valid from a cold-start FOLDED or a latched FAULT — recovery reuses the exact
+  // same INITIALIZE ladder (initial_ -> nominal_), so "press Start after a fault"
+  // is byte-for-byte the startup + initialize path.
+  if (state_ != EngineState::FOLDED && state_ != EngineState::FAULT) {
     return false;
   }
   initialize_ = build_initialize();
   state_ = EngineState::INITIALIZE;
   return true;
+}
+
+void Engine::enter_fault() {
+  if (state_ == EngineState::FAULT) {
+    return;  // idempotent — the pipeline may assert the fault every tick
+  }
+  // Reset to the same clean baseline the constructor establishes for FOLDED so a
+  // subsequent start_initialize() runs the ladder from a pristine folded state.
+  state_ = EngineState::FAULT;
+  last_targets_ = initial_;
+  for (const auto& n : LEG_NAMES) {
+    last_stance_[n] = true;
+    last_swing_flags_[n] = false;
+  }
+  cmd_zero_elapsed_ = 0.0f;
+  paused_elapsed_ = 0.0f;
+  pending_fold_ = false;
+  pending_strategy_name_.reset();
 }
 
 bool Engine::start_fold() {
@@ -312,7 +333,10 @@ std::map<std::string, LegOutput> Engine::update(
       cmd_zero && (cmd_zero_elapsed_ >= config_.pause_debounce_delay);
   height_stable_elapsed_ += dt;
 
-  if (state_ == EngineState::FOLDED) {
+  if (state_ == EngineState::FOLDED || state_ == EngineState::FAULT) {
+    // FAULT holds the folded baseline like FOLDED (servos are limp on the real
+    // board; in sim the model settles to the recovery start pose). Recovery is
+    // start_initialize(), routed from the FAULT branch of pipeline::tick.
     std::map<std::string, LegOutput> out;
     for (const auto& n : LEG_NAMES) {
       out[n] = LegOutput{initial_.at(n), 0.0f, true};
@@ -762,6 +786,7 @@ std::string state_value(EngineState s) {
     case EngineState::RESUMING: return "resuming";
     case EngineState::FOLDING: return "folding";
     case EngineState::RESEATING: return "reseating";
+    case EngineState::FAULT: return "fault";
   }
   return "unknown";
 }
@@ -778,6 +803,7 @@ std::string state_name(EngineState s) {
     case EngineState::RESUMING: return "RESUMING";
     case EngineState::FOLDING: return "FOLDING";
     case EngineState::RESEATING: return "RESEATING";
+    case EngineState::FAULT: return "FAULT";
   }
   return "UNKNOWN";
 }

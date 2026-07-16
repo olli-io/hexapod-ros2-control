@@ -22,7 +22,6 @@
 # ═══ Gait engine (gait_node) ════════════════════════════════════════
 gait_node:
   ros__parameters:
-
     # ─── Engine basics ──────────────────────────────────────────────
 
     # Engine tick period (s).
@@ -52,7 +51,7 @@ gait_node:
 
     # How far a foot travels along the ground in one step (m).
     # Shorter = gentler on the joints, but slower top speed.
-    stride_length: 0.1
+    stride_length: 0.10
 
     # How high a foot lifts during a step (m).
     step_height: 0.08
@@ -68,7 +67,7 @@ gait_node:
     # its stride instead.
     #
     # Keep these close together (max no more than ~25% above min), or
-    # foot placement misbehaves when reversing direction.
+    # foot placement can misbehaves when reversing direction.
     min_swing_time: 0.30
     max_swing_time: 0.4
 

@@ -44,6 +44,7 @@ sup::Observation healthy(uint64_t now_us) {
     o.walking = false;
     o.battery_valid = false;
     o.battery_v = 0.0f;
+    o.fault = false;
     return o;
 }
 

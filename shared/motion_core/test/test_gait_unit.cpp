@@ -101,6 +101,55 @@ TEST(Engine, ColdStartReachesStand) {
   run_to_stand(*e);
 }
 
+TEST(Engine, EnterFaultFromAnyStateHoldsFoldedPose) {
+  // A fault can strike mid-walk: enter_fault must latch FAULT from GAIT and emit
+  // the folded initial stance (servos limp on the real board).
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  for (int i = 0; i < 200 && e->state() != g::EngineState::GAIT; ++i) {
+    e->update(kDt, {0.06f, 0.0f}, 0.0f);
+  }
+  ASSERT_EQ(e->state(), g::EngineState::GAIT);
+
+  e->enter_fault();
+  EXPECT_EQ(e->state(), g::EngineState::FAULT);
+
+  // The folded baseline (initial stance) matches a cold FOLDED engine's output.
+  auto folded = g::make_default_engine("tripod");
+  const auto faulted_out = e->update(kDt, {0.0f, 0.0f}, 0.0f);
+  const auto folded_out = folded->update(kDt, {0.0f, 0.0f}, 0.0f);
+  for (const auto& [name, lo] : folded_out) {
+    EXPECT_FLOAT_EQ(faulted_out.at(name).foot_target.x, lo.foot_target.x) << name;
+    EXPECT_FLOAT_EQ(faulted_out.at(name).foot_target.y, lo.foot_target.y) << name;
+    EXPECT_FLOAT_EQ(faulted_out.at(name).foot_target.z, lo.foot_target.z) << name;
+    EXPECT_TRUE(faulted_out.at(name).stance) << name;
+  }
+}
+
+TEST(Engine, FaultRecoversViaInitializeLadder) {
+  // Recovery is byte-for-byte the startup + initialize path: start_initialize()
+  // is valid from FAULT and runs the same ladder to STAND.
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  e->enter_fault();
+  ASSERT_EQ(e->state(), g::EngineState::FAULT);
+
+  ASSERT_TRUE(e->start_initialize());  // rejected from most states; allowed here
+  EXPECT_EQ(e->state(), g::EngineState::INITIALIZE);
+  for (int i = 0; i < 200 && e->state() != g::EngineState::STAND; ++i) {
+    e->update(kDt, {0.0f, 0.0f}, 0.0f);
+  }
+  EXPECT_EQ(e->state(), g::EngineState::STAND);
+}
+
+TEST(Engine, StartInitializeRejectedWhileStood) {
+  // Guard sanity: start_initialize only fires from FOLDED or FAULT, not STAND.
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  EXPECT_FALSE(e->start_initialize());
+  EXPECT_EQ(e->state(), g::EngineState::STAND);
+}
+
 TEST(Engine, ForwardCommandWalksTripodInAntiphase) {
   auto e = g::make_default_engine("tripod");
   run_to_stand(*e);

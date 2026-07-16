@@ -92,6 +92,8 @@ struct Observation {
   bool walking;                 // gait active (non-zero cmd_vel in a gait state)
   bool battery_valid;           // a fresh battery sample is present this tick
   float battery_v;              // decoded pack voltage (valid iff battery_valid)
+  bool fault;                   // hardware over-current trip latched: disarm the
+                                //   rail now and sound the alarm cadence
 };
 
 // Decisions main applies this tick.

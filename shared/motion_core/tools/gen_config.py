@@ -677,16 +677,18 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
           f"  // {j['name']}")
     w("}};")
     w("")
-    w(f"inline constexpr std::uint8_t kRelayPin = "
-      f"{hardware['relay']['pin']};  // high = servo rail energised")
-    aux = hardware["aux"]
-    bv = aux["battery_voltage"]
-    bc = aux["battery_current"]
-    w(f"inline constexpr std::uint8_t kBatteryVoltagePin = {bv['pin']};")
-    w(f"inline constexpr float kBatteryVoltageScale = {fl(bv['scale'])};"
+    # Relay pin and battery-telemetry pins/scales are fixed board/protocol
+    # constants, not configured in hardware.yaml (the Servo2040 firmware owns the
+    # relay GPIO; voltage/current arrive in fixed protocol units). They match the
+    # firmware's own constants in pi-pico-firmware/src/servo_out.cpp and the
+    # test_config.cpp expectations. Kept here so the shared header stays the SSoT.
+    w("inline constexpr std::uint8_t kRelayPin = 24;"
+      "  // high = servo rail energised")
+    w("inline constexpr std::uint8_t kBatteryVoltagePin = 26;")
+    w("inline constexpr float kBatteryVoltageScale = 0.00366f;"
       "  // 14-bit count -> V")
-    w(f"inline constexpr std::uint8_t kBatteryCurrentPin = {bc['pin']};")
-    w(f"inline constexpr float kBatteryCurrentScale = {fl(bc['scale'])};"
+    w("inline constexpr std::uint8_t kBatteryCurrentPin = 27;")
+    w("inline constexpr float kBatteryCurrentScale = 0.00098f;"
       "  // 14-bit count -> A")
     w("")
 

@@ -182,6 +182,17 @@ hardware_interface::CallbackReturn HexaHardware::on_configure(
     aux_node_ = std::make_shared<rclcpp::Node>("hexa_hardware_aux");
     battery_pub_ = aux_node_->create_publisher<sensor_msgs::msg::BatteryState>(
         "~/battery_state", rclcpp::SensorDataQoS());
+    // Latched so a late-joining consumer sees the current fault state; the
+    // engine (hexa_locomotion) latches FAULT off the first true it sees.
+    fault_pub_ = aux_node_->create_publisher<std_msgs::msg::Bool>(
+        "/hardware/fault", rclcpp::QoS(1).transient_local());
+    // Relay-arm intent from the locomotion supervisor. The callback only stores
+    // the value (atomic); apply_relay() on the CM thread owns the transport.
+    relay_sub_ = aux_node_->create_subscription<std_msgs::msg::Bool>(
+        "/hardware/relay_cmd", rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::Bool::SharedPtr m) {
+          relay_cmd_.store(m->data);
+        });
     aux_spin_run_ = true;
     aux_spin_thread_ = std::thread([this]() {
       rclcpp::executors::SingleThreadedExecutor exec;
@@ -196,12 +207,19 @@ hardware_interface::CallbackReturn HexaHardware::on_configure(
 
 hardware_interface::CallbackReturn HexaHardware::on_activate(
     const rclcpp_lifecycle::State& /*previous*/) {
-  // Energise the servo rail before any motion command lands. The relay pin is
-  // board-owned; the host only expresses intent.
+  // Do NOT energise the rail here: the board's staged-pose rule makes a bare
+  // SET RELAY 1 a silent no-op until a servo pose has been staged. Start the
+  // rail OFF and let apply_relay() enable it once (a) the locomotion supervisor
+  // asks (relay_cmd_ — true once the engine has stood) and (b) write() has
+  // staged a pose. Same handshake serves cold start and over-current recovery.
+  relay_on_ = false;
+  faulted_ = false;
+  pose_staged_since_disable_ = false;
+  relay_cmd_.store(false);
   try {
-    board_->set_servo_power(true);
+    board_->set_servo_power(false);  // known-off baseline (also clears any latch)
   } catch (const std::exception& e) {
-    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Servo power on failed: %s", e.what());
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Servo power off failed: %s", e.what());
     return hardware_interface::CallbackReturn::ERROR;
   }
   // Reset commands to current state so the first write() doesn't snap.
@@ -223,6 +241,8 @@ hardware_interface::CallbackReturn HexaHardware::on_deactivate(
       RCLCPP_WARN(rclcpp::get_logger(kLogger), "Servo power off failed: %s", e.what());
     }
   }
+  relay_on_ = false;
+  pose_staged_since_disable_ = false;
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -263,8 +283,74 @@ hardware_interface::return_type HexaHardware::read(
         battery_pub_->publish(msg);
       }
     }
+
+    // Poll the board's latched fault register. On a fresh trip: clear the sticky
+    // latch (SET RELAY 0, which also resets the board's staged-pose flag),
+    // publish the fault so the engine latches FAULT, and log the trip current.
+    // Once STATUS reads clean again, drop the published fault so the operator's
+    // Start (recovery) is honoured.
+    if (board_) {
+      bool tripped = false;
+      float trip_amps = 0.0f;
+      if (board_->read_status(tripped, trip_amps, 50)) {
+        if (tripped && !faulted_) {
+          faulted_ = true;
+          try {
+            board_->set_servo_power(false);
+          } catch (const std::exception& e) {
+            RCLCPP_WARN(rclcpp::get_logger(kLogger),
+                        "Latch clear (SET RELAY 0) failed: %s", e.what());
+          }
+          relay_on_ = false;
+          pose_staged_since_disable_ = false;
+          if (fault_pub_) {
+            std_msgs::msg::Bool fm;
+            fm.data = true;
+            fault_pub_->publish(fm);
+          }
+          RCLCPP_ERROR(rclcpp::get_logger(kLogger),
+                       "Over-current trip: %.1f A. Servo rail disabled; "
+                       "reposition feet and press Start to recover.",
+                       static_cast<double>(trip_amps));
+        } else if (!tripped && faulted_) {
+          faulted_ = false;
+          if (fault_pub_) {
+            std_msgs::msg::Bool fm;
+            fm.data = false;
+            fault_pub_->publish(fm);
+          }
+          RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                      "Fault latch cleared; ready to re-initialize.");
+        }
+      }
+    }
   }
+
+  apply_relay();
   return hardware_interface::return_type::OK;
+}
+
+void HexaHardware::apply_relay() {
+  if (!board_) return;
+  // Force the rail off while a trip is latched; otherwise follow the locomotion
+  // supervisor's arm intent. Enable only once a pose has been staged since the
+  // last disable (write() streams SETs every tick, so this is satisfied within
+  // one tick of any disable) — a bare SET RELAY 1 with nothing staged is a
+  // board no-op.
+  const bool desired = relay_cmd_.load() && !faulted_;
+  try {
+    if (desired && !relay_on_ && pose_staged_since_disable_) {
+      board_->set_servo_power(true);
+      relay_on_ = true;
+    } else if (!desired && relay_on_) {
+      board_->set_servo_power(false);
+      relay_on_ = false;
+      pose_staged_since_disable_ = false;
+    }
+  } catch (const std::exception& e) {
+    RCLCPP_WARN_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
+                         1000, "Relay drive failed: %s", e.what());
+  }
 }
 
 hardware_interface::return_type HexaHardware::write(
@@ -298,6 +384,10 @@ hardware_interface::return_type HexaHardware::write(
     }
     i = k;
   }
+  // A servo pose is now staged (driven if the relay is on, buffered if off) —
+  // this satisfies the board's staged-pose precondition for the next
+  // SET RELAY 1 in apply_relay().
+  pose_staged_since_disable_ = true;
   return hardware_interface::return_type::OK;
 }
 

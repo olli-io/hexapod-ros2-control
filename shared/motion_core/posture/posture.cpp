@@ -165,6 +165,7 @@ bool posture_active(gait::EngineState state) {
     case E::FOLDED:
     case E::INITIALIZE:
     case E::FOLDING:
+    case E::FAULT:
       return false;
   }
   return false;

@@ -36,7 +36,7 @@ bool gait_switch_allowed(hexa::gait::EngineState s) {
 // through FOLDING it stays armed (the servos need power to fold) until FOLDED.
 bool engine_stood(hexa::gait::EngineState s) {
   using E = hexa::gait::EngineState;
-  return s != E::FOLDED && s != E::INITIALIZE;
+  return s != E::FOLDED && s != E::INITIALIZE && s != E::FAULT;
 }
 
 // /cmd_vel-non-zero test the posture chain uses to gate walking-only vs
@@ -145,6 +145,15 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
     }
   }
 
+  // Hardware fault latch: a board over-current trip forces the engine into FAULT
+  // (rail disarmed, servos limp for manual repositioning). Applied AFTER the init
+  // edge so a still-asserted fault wins over a same-tick Start — you cannot
+  // re-initialize onto a board that is still tripped. Recovery is the Start edge
+  // above once the fault has cleared (start_initialize is valid from FAULT).
+  if (in.hardware_fault) {
+    engine_->enter_fault();
+  }
+
   // Animation-mode selection routes into the posture stack (the /animation/mode
   // subscription). Empty restores the default stack; unknown names are
   // warn-and-ignored (posture_node._on_animation_mode).
@@ -185,6 +194,7 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   obs.walking = cmd_is_walking(jo.linear_x, jo.linear_y, jo.angular_z);
   obs.battery_valid = in.battery_valid;
   obs.battery_v = in.battery_v;
+  obs.fault = in.hardware_fault;
   const hexa::supervisor::Decision dec = supervisor_.step(obs);
   r.decision = dec;
   r.relay_energized = dec.relay_energized;

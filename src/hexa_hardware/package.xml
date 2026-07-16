@@ -17,6 +17,7 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>yaml-cpp</depend>
   <depend>libusb-1.0</depend>
 

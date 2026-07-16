@@ -37,6 +37,14 @@ class BoardProtocol {
   virtual bool read_battery(float& voltage_v, float& current_a,
                             int timeout_ms) = 0;
 
+  // Read the board's fault/status register. `tripped` is true while an
+  // over-current latch is active (the board has already disabled the servo
+  // cluster and dropped the relay); `trip_amps` is the current captured at the
+  // trip. The latch is sticky — it keeps reporting until a disable
+  // (set_servo_power(false)) clears it. Returns true on a complete reply within
+  // timeout_ms; false on timeout or framing error (outputs then unspecified).
+  virtual bool read_status(bool& tripped, float& trip_amps, int timeout_ms) = 0;
+
  protected:
   BoardProtocol() = default;
 };

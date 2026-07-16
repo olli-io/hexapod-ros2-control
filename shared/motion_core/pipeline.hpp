@@ -64,6 +64,9 @@ struct TickInput {
   std::uint64_t last_input_us = 0;       // freshness for the watchdog (0 = none)
   bool battery_valid = false;            // a fresh battery sample is present
   float battery_v = 0.0f;                // decoded pack voltage (iff valid)
+  bool hardware_fault = false;           // board over-current trip latched (the
+                                         //   host read a non-zero STATUS): the
+                                         //   engine latches FAULT, rail disarmed
   float dt = kDt;                        // tick period, seconds
 };
 

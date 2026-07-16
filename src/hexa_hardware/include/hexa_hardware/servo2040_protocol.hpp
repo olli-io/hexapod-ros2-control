@@ -26,6 +26,12 @@ constexpr std::size_t kMaxBatch = 64;        // 128 pin space; one frame must fi
 constexpr std::uint8_t kCurrIndex = 24;
 constexpr std::uint8_t kVoltIndex = 25;
 constexpr std::uint8_t kRelayIndex = 26;
+// Read-only latched fault register (no pin). GET(kStatusIndex, 1) returns a
+// 14-bit word: bit0 = TRIPPED (over-current latch active), bits1-10 =
+// TRIP_CURRENT at 0.1 A/count. 0 = clean.
+constexpr std::uint8_t kStatusIndex = 27;
+constexpr std::uint16_t kStatusTrippedBit = 0x1;
+constexpr float kTripAmpsPerCount = 0.1f;
 
 // Battery telemetry wire units: the board sends fixed-point centi-units
 // (count = round(value * 100)), so one count is 0.01 V / 0.01 A. Must match the
@@ -62,6 +68,7 @@ class Servo2040Protocol final : public BoardProtocol {
   void set_servo_power(bool on) override;
   bool read_battery(float& voltage_v, float& current_a,
                     int timeout_ms) override;
+  bool read_status(bool& tripped, float& trip_amps, int timeout_ms) override;
 
  private:
   // Issue a GET for `count` raw values from `count` consecutive indices and

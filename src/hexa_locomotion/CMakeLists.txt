@@ -20,6 +20,7 @@ find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(hexa_interfaces REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
@@ -80,7 +81,7 @@ target_include_directories(locomotion_node PRIVATE ${FW_SRC} src)
 # with exceptions exactly as the Pico + host + bridge builds do.
 target_compile_options(locomotion_node PRIVATE -Wall -Wextra -fexceptions)
 ament_target_dependencies(locomotion_node
-  rclcpp ament_index_cpp geometry_msgs std_msgs hexa_interfaces)
+  rclcpp ament_index_cpp geometry_msgs std_msgs std_srvs hexa_interfaces)
 target_link_libraries(locomotion_node yaml-cpp)
 
 install(TARGETS locomotion_node

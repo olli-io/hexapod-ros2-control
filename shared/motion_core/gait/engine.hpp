@@ -38,6 +38,7 @@ enum class EngineState {
   RESUMING,
   FOLDING,
   RESEATING,
+  FAULT,
 };
 
 // Engine-internal knobs, sourced entirely from tuning.yaml's gait_node block
@@ -135,6 +136,10 @@ class Engine {
   bool start_initialize();
   bool start_fold();
   bool request_fold();
+  // Latch into FAULT from any state (over-current trip / hardware fault). Servos
+  // go limp on the real board; recovery is start_initialize() from FAULT, which
+  // reuses the cold-start INITIALIZE ladder. Idempotent while already faulted.
+  void enter_fault();
   void set_target_height(float target_height);
 
   std::map<std::string, LegOutput> update(float dt,

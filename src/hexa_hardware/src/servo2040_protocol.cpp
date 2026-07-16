@@ -72,6 +72,20 @@ bool Servo2040Protocol::read_battery(float& voltage_v, float& current_a,
   return true;
 }
 
+bool Servo2040Protocol::read_status(bool& tripped, float& trip_amps,
+                                    int timeout_ms) {
+  // STATUS (27) is a single 14-bit word: bit0 = TRIPPED, bits1-10 = trip
+  // current at 0.1 A/count.
+  if (!get_raw(kStatusIndex, 1, decode_buf_, timeout_ms) ||
+      decode_buf_.size() != 1) {
+    return false;
+  }
+  const std::uint16_t word = decode_buf_[0];
+  tripped = (word & kStatusTrippedBit) != 0;
+  trip_amps = static_cast<float>((word >> 1) & 0x3FF) * kTripAmpsPerCount;
+  return true;
+}
+
 bool Servo2040Protocol::get_raw(std::uint8_t start, std::uint8_t count,
                                 std::vector<std::uint16_t>& out, int timeout_ms) {
   if (!transport_.is_open()) return false;

@@ -90,10 +90,10 @@ Decision Supervisor::step(const Observation& obs) {
   // rail: the robot holds its stand and settles; cutting servo power mid-stance
   // would collapse it.
   if (relay_armed_) {
-    if (obs.folded || batt_critical) {
+    if (obs.folded || batt_critical || obs.fault) {
       relay_armed_ = false;
     }
-  } else if (obs.bt_connected && obs.stood && !batt_critical) {
+  } else if (obs.bt_connected && obs.stood && !batt_critical && !obs.fault) {
     relay_armed_ = true;
   }
 
@@ -107,7 +107,7 @@ Decision Supervisor::step(const Observation& obs) {
   // always a fault; a lost link is a fault only once armed (losing the pilot
   // mid-operation), so pre-link boot scanning stays a calm slow blink.
   const bool bt_lost = relay_armed_ && !obs.bt_connected;
-  const bool fault = batt_low || batt_critical || bt_lost;
+  const bool fault = batt_low || batt_critical || bt_lost || obs.fault;
 
   // Solid means "linked and actually walking" — gated on the safe-stop: a stale
   // link or weak pack zeroes the command (the robot settles), so the LED must

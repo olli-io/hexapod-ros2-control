@@ -62,6 +62,27 @@ pl::TickResult run(pl::Pipeline& p, const Pad& pad, int n, std::uint64_t& now_us
   return res;
 }
 
+// Like run(), but asserts a latched hardware over-current fault on every tick
+// (the STATUS-register signal hexa_hardware feeds via /hardware/fault). Link is
+// held up so only the fault path is exercised.
+pl::TickResult run_faulted(pl::Pipeline& p, const Pad& pad, int n,
+                           std::uint64_t& now_us) {
+  pl::TickResult res;
+  for (int i = 0; i < n; ++i) {
+    pl::TickInput in;
+    in.now_us = now_us;
+    in.axes = pad.axes.data();
+    in.buttons = pad.buttons;
+    in.bt_connected = true;
+    in.last_input_us = now_us;
+    in.hardware_fault = true;
+    in.dt = pl::kDt;
+    res = p.tick(in);
+    now_us += pl::kTickPeriodUs;
+  }
+  return res;
+}
+
 // Press the init (start) button as a clean rising edge: a settle, one tick with
 // the bit set, then release. map_joy fires init_request on the edge, which the
 // pipeline routes to Engine::start_initialize().
@@ -189,6 +210,78 @@ TEST(PipelineConfig, BakedMatchesDefaultAndOverrideThreads) {
   pl::Pipeline overridden(cfg);
   EXPECT_EQ(overridden.engine().strategy_name(), "ripple")
       << "PipelineConfig.default_gait must thread through to the engine";
+}
+
+// A hardware over-current fault mid-walk latches the engine into FAULT and
+// disarms the servo-rail relay (servos limp for manual repositioning). The
+// supervisor also raises its aggregate fault flag.
+TEST(Pipeline, HardwareFaultLatchesAndDisarmsRelay) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+
+  Pad fwd;
+  fwd.axes[bt_teleop::kRightStickY] = bt_teleop::kAxisMax;
+  run(p, fwd, 50, now_us);  // walking, relay armed
+
+  const pl::TickResult r = run_faulted(p, fwd, 5, now_us);
+  EXPECT_EQ(r.engine_state, EngineState::FAULT);
+  EXPECT_FALSE(r.relay_energized) << "rail must drop on a hardware fault";
+  EXPECT_TRUE(r.decision.fault) << "supervisor must flag the fault";
+}
+
+// FAULT is latched: once the fault input clears, the engine stays in FAULT
+// (holding the folded pose) until the operator presses Start, which recovers via
+// the same INITIALIZE ladder and re-arms the relay at STAND.
+TEST(Pipeline, FaultLatchesUntilInitRecovers) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+  run_faulted(p, Pad{}, 5, now_us);
+  ASSERT_EQ(p.engine().state(), EngineState::FAULT);
+
+  // Fault input cleared, but the engine stays latched in FAULT.
+  const pl::TickResult held = run(p, Pad{}, 10, now_us);
+  EXPECT_EQ(held.engine_state, EngineState::FAULT);
+  EXPECT_FALSE(held.relay_energized);
+
+  // Start recovers exactly like a cold boot: FAULT -> INITIALIZE -> STAND.
+  const pl::TickResult init = press_init(p, now_us);
+  EXPECT_EQ(init.init_action, pl::InitAction::kInitialized);
+  Pad neutral;
+  bool stood = false;
+  for (int i = 0; i < 2000 && !stood; ++i) {
+    stood = run(p, neutral, 1, now_us).engine_state == EngineState::STAND;
+  }
+  ASSERT_TRUE(stood) << "engine never re-stood after fault recovery";
+  const pl::TickResult r = run(p, neutral, 5, now_us);
+  EXPECT_TRUE(r.relay_energized) << "relay should re-arm once re-stood";
+}
+
+// A still-asserted fault wins over a same-window Start: you cannot re-initialize
+// onto a board that is still tripped.
+TEST(Pipeline, FaultWinsOverConcurrentInit) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+  run_faulted(p, Pad{}, 3, now_us);
+  ASSERT_EQ(p.engine().state(), EngineState::FAULT);
+
+  // Press Start while the fault is STILL asserted (fault held true this tick).
+  Pad start;
+  start.buttons = 1u << bt_teleop::kStart;
+  run(p, Pad{}, 3, now_us);  // settle for a clean edge, fault cleared
+  run_faulted(p, Pad{}, 1, now_us);        // re-assert to simulate persistence
+  pl::TickInput in;
+  in.now_us = now_us;
+  in.axes = start.axes.data();
+  in.buttons = start.buttons;
+  in.bt_connected = true;
+  in.last_input_us = now_us;
+  in.hardware_fault = true;
+  const pl::TickResult r = p.tick(in);
+  EXPECT_EQ(r.engine_state, EngineState::FAULT)
+      << "a still-tripped board must not re-initialize";
 }
 
 }  // namespace

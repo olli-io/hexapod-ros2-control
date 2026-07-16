@@ -11,7 +11,7 @@ usage() {
 Usage: ./hexa <command> [args...]
 
 Commands:
-  sim <up|down|refresh|restart|logs|build|shell|face|status|cmd...>
+  sim <up|down|refresh|restart|reload|logs|build|shell|face|status|cmd...>
                               Sim-container lifecycle via docker compose. The sim stack
                               runs as the container's PID 1, so:
                                 up [--clean] [--pico] bring it up detached (--pico runs the
@@ -19,6 +19,8 @@ Commands:
                                 down                  stop and remove it
                                 refresh [args...]     rebuild + restart the running stack
                                 restart               restart without rebuild (apply config edits)
+                                reload                hot-reload config into the running
+                                                      locomotion node (no restart; re-folds)
                                 logs [-f]             show / stream logs
                                 build [args...]       colcon build (ephemeral container)
                                 shell                 interactive ROS2-sourced shell
