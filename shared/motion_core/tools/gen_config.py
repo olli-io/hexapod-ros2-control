@@ -677,19 +677,26 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
           f"  // {j['name']}")
     w("}};")
     w("")
-    # Relay pin and battery-telemetry pins/scales are fixed board/protocol
-    # constants, not configured in hardware.yaml (the Servo2040 firmware owns the
-    # relay GPIO; voltage/current arrive in fixed protocol units). They match the
-    # firmware's own constants in pi-pico-firmware/src/servo_out.cpp and the
-    # test_config.cpp expectations. Kept here so the shared header stays the SSoT.
-    w("inline constexpr std::uint8_t kRelayPin = 24;"
-      "  // high = servo rail energised")
-    w("inline constexpr std::uint8_t kBatteryVoltagePin = 26;")
-    w("inline constexpr float kBatteryVoltageScale = 0.00366f;"
-      "  // 14-bit count -> V")
-    w("inline constexpr std::uint8_t kBatteryCurrentPin = 27;")
-    w("inline constexpr float kBatteryCurrentScale = 0.00098f;"
-      "  // 14-bit count -> A")
+    # Chica command-index map + telemetry scales are fixed board/protocol
+    # constants (protocol.md, hexapod-servo2040-driver), not configured in
+    # hardware.yaml (the Servo2040 firmware owns the relay GPIO; voltage/current
+    # arrive in fixed protocol units). They match the firmware's own constants in
+    # pi-pico-firmware/src/servo_out.cpp, the ROS reference
+    # hexa_hardware/servo2040_protocol.hpp, and the test_config.cpp expectations.
+    # CURR (24) and VOLT (25) are consecutive; STATUS (27) is a read-only latched
+    # over-current fault register; RELAY is SET on index 26.
+    w("inline constexpr std::uint8_t kRelayPin = 26;"
+      "  // SET index; high = servo rail energised")
+    w("inline constexpr std::uint8_t kBatteryCurrentPin = 24;  // CURR")
+    w("inline constexpr std::uint8_t kBatteryVoltagePin = 25;  // VOLT")
+    w("inline constexpr std::uint8_t kStatusPin = 27;"
+      "  // read-only latched over-current fault register")
+    w("inline constexpr float kBatteryCurrentScale = 0.01f;"
+      "  // centi-units: count -> A")
+    w("inline constexpr float kBatteryVoltageScale = 0.01f;"
+      "  // centi-units: count -> V")
+    w("inline constexpr float kTripAmpsPerCount = 0.1f;"
+      "  // STATUS trip current: count -> A")
     w("")
 
     # ── Integration / failsafe (part 09) ──

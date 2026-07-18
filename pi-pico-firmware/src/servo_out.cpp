@@ -44,14 +44,22 @@ constexpr std::uint8_t kCmdSet = 'S' | 0x80;
 constexpr std::uint8_t kCmdGet = 'G' | 0x80;
 constexpr std::uint16_t kValueMax = 0x3FFF;  // 14-bit
 
-// ── Hardware map (hardcoded from hexa_description/config/hardware.yaml) ───────
-// Baked here for part 03; part 04 emits this from the YAMLs into
-// config_generated.hpp. Servo pin 24 = rail relay; aux ADCs 26/27 = battery.
-constexpr std::uint8_t kRelayPin = 24;
-constexpr std::uint8_t kBatteryVoltagePin = 26;
-constexpr std::uint8_t kBatteryCurrentPin = 27;
-constexpr float kBatteryVoltageScale = 0.00366f;  // 14-bit count → volts
-constexpr float kBatteryCurrentScale = 0.00098f;  // 14-bit count → amps
+// ── Chica command-index map (protocol.md, hexapod-servo2040-driver) ──────────
+// Fixed board/protocol indices in the Servo 2040 cmdPins space. CURR (24) and
+// VOLT (25) are consecutive, so one GET(24,2) returns both (current then
+// voltage). RELAY (26) is a digital SET. STATUS (27) is a read-only latched
+// over-current fault register (no pin). These MUST match protocol.md and the
+// ROS reference src/hexa_hardware/include/hexa_hardware/servo2040_protocol.hpp.
+constexpr std::uint8_t kCurrIndex = 24;
+constexpr std::uint8_t kVoltIndex = 25;
+constexpr std::uint8_t kRelayPin = 26;
+constexpr std::uint8_t kStatusIndex = 27;
+constexpr std::uint16_t kStatusTrippedBit = 0x1;  // STATUS bit0 = over-current latch
+constexpr float kTripAmpsPerCount = 0.1f;         // STATUS bits1-10: 0.1 A/count
+// Battery telemetry wire units: fixed-point centi-units (count = value*100), so
+// one count is 0.01 A / 0.01 V. A protocol constant, not per-board calibration.
+constexpr float kAmpsPerCount = 0.01f;
+constexpr float kVoltsPerCount = 0.01f;
 
 // Per-joint calibration. Endpoint magnitudes (1000/2000 µs at ∓π/4, 1500 µs
 // center) and clamps (500/2500 µs) are the hardware.yaml defaults; `direction`
@@ -258,18 +266,29 @@ void set_relay(bool energized) {
 }
 
 bool read_battery(float& voltage_v, float& current_a, int timeout_ms) {
+  // CURR (24) and VOLT (25) are consecutive: one GET fetches both, with
+  // values[0] = current, values[1] = voltage (protocol.md ordering). Both come
+  // in a single reply, so it is both-or-neither — no partial/NaN case.
   std::vector<std::uint16_t> raw;
-  if (!read_aux(kBatteryVoltagePin, 1, raw, timeout_ms) || raw.size() != 1) {
+  if (!read_aux(kCurrIndex, 2, raw, timeout_ms) || raw.size() != 2) {
+    current_a = std::numeric_limits<float>::quiet_NaN();
     return false;
   }
-  voltage_v = static_cast<float>(raw[0]) * kBatteryVoltageScale;
+  current_a = static_cast<float>(raw[0]) * kAmpsPerCount;
+  voltage_v = static_cast<float>(raw[1]) * kVoltsPerCount;
+  return true;
+}
 
-  std::vector<std::uint16_t> raw_i;
-  if (read_aux(kBatteryCurrentPin, 1, raw_i, timeout_ms) && raw_i.size() == 1) {
-    current_a = static_cast<float>(raw_i[0]) * kBatteryCurrentScale;
-  } else {
-    current_a = std::numeric_limits<float>::quiet_NaN();
+bool read_status(bool& tripped, float& trip_amps, int timeout_ms) {
+  // STATUS (27) is a single read-only 14-bit word: bit0 = TRIPPED (over-current
+  // latch active), bits1-10 = trip current at 0.1 A/count. 0 = clean.
+  std::vector<std::uint16_t> raw;
+  if (!read_aux(kStatusIndex, 1, raw, timeout_ms) || raw.size() != 1) {
+    return false;
   }
+  const std::uint16_t word = raw[0];
+  tripped = (word & kStatusTrippedBit) != 0;
+  trip_amps = static_cast<float>((word >> 1) & 0x3FF) * kTripAmpsPerCount;
   return true;
 }
 

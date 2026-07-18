@@ -156,6 +156,7 @@ int main() {
     bool last_batt_ok = false;
     float last_batt_v = 0.0f;
     float last_batt_i = 0.0f;
+    bool last_fault = false;  // level-latched over-current STATUS (see GET block)
     int last_unreachable = 0;
     uint32_t min_free_heap = heap_free_bytes();  // soak low-water mark
 
@@ -196,6 +197,24 @@ int main() {
                 const uint64_t g0 = time_us_64();
                 last_batt_ok =
                     servo_out::read_battery(last_batt_v, last_batt_i, 20);
+                // Over-current STATUS: level-latched (mirror the ROS locomotion
+                // node) — hold the last known level while a poll fails, and only
+                // clear on a fresh clean read. The pipeline turns hardware_fault
+                // into the FAULT latch + relay-disarm; recovery is the operator
+                // pressing init once STATUS reads clean (manual re-init).
+                bool tripped = false;
+                float trip_amps = 0.0f;
+                if (servo_out::read_status(tripped, trip_amps, 20)) {
+                    if (tripped && !last_fault) {
+                        HEXA_DBG("[safety] OVER-CURRENT trip: %.1f A — rail "
+                               "dropped; clear the fault then press init to "
+                               "recover\n", (double)trip_amps);
+                    } else if (!tripped && last_fault) {
+                        HEXA_DBG("[safety] over-current STATUS cleared — press "
+                               "init to re-arm\n");
+                    }
+                    last_fault = tripped;
+                }
                 last_get_rt_us = time_us_64() - g0;
                 batt_fresh = last_batt_ok;
             }
@@ -209,6 +228,7 @@ int main() {
             in.last_input_us = bt_teleop::last_data_us();
             in.battery_valid = batt_fresh;
             in.battery_v = last_batt_v;
+            in.hardware_fault = last_fault;
             in.dt = kDt;
             const hexa::pipeline::TickResult res = pipeline.tick(in);
 

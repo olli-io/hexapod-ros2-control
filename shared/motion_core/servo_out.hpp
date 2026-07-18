@@ -7,10 +7,13 @@
 // only the transport changes: the host termios `UartTransport` is replaced by
 // the Pico SDK UART (see servo_out.cpp). No PWM code runs on the Pico.
 //
-// The link carries three things, all as Chica frames on one UART:
+// The link carries four things, all as Chica frames on one UART:
 //   - SET  — servo pulse widths (µs), grouped into runs of consecutive pins,
-//   - SET  — the servo-rail relay (a digital Servo 2040 pin),
-//   - GET  — battery voltage/current (Servo 2040 aux ADC pins).
+//   - SET  — the servo-rail relay (a digital Servo 2040 pin, index 26),
+//   - GET  — battery current/voltage (indices 24/25),
+//   - GET  — the latched over-current fault register (STATUS, index 27).
+// Indices/scales follow protocol.md (hexapod-servo2040-driver) — the same values
+// the ROS reference hexa_hardware/servo2040_protocol.hpp uses.
 //
 // Pin assignment and calibration are hardcoded here for part 03; part 04 folds
 // them into the build-time `config_generated.hpp` (sourced from hexa_description
@@ -51,11 +54,19 @@ float joint_center_rad(int joint);
 // Servo-rail relay via a Chica digital SET. true = energize the rail.
 void set_relay(bool energized);
 
-// Read battery telemetry via Chica GET on the aux ADC pins. Fills `voltage_v`
-// and `current_a` (engineering units, raw 14-bit count × per-channel scale).
-// Returns false on timeout / malformed reply; `current_a` is set to NaN if the
-// voltage read succeeds but the current read does not. `timeout_ms` bounds each
-// GET reply (pass e.g. 20).
+// Read battery telemetry via one Chica GET(24,2) over CURR (24) + VOLT (25).
+// Fills `current_a` then `voltage_v` in engineering units (count × 0.01, the
+// protocol's fixed centi-unit scale). Both arrive in one reply, so it is
+// both-or-neither: returns false on timeout / malformed reply (leaving
+// `current_a` NaN). `timeout_ms` bounds the GET reply (pass e.g. 20).
 bool read_battery(float& voltage_v, float& current_a, int timeout_ms);
+
+// Read the latched over-current fault register via Chica GET(27,1). Fills
+// `tripped` (STATUS bit0 — the definitive latch flag) and `trip_amps` (the
+// current captured at the trip, 0.1 A/count; ~0 when clean). The word is sticky
+// until the host clears it with `set_relay(false)`. Returns false on timeout /
+// malformed reply (leaving the outputs untouched). `timeout_ms` bounds the GET
+// reply (pass e.g. 20).
+bool read_status(bool& tripped, float& trip_amps, int timeout_ms);
 
 }  // namespace servo_out

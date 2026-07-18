@@ -212,9 +212,14 @@ TEST(Hardware, ServoCalibration) {
   EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(35.0f), kTol);   // femur
   EXPECT_NEAR(cfg::kJointCals[2].urdf_rad_at_center,
               static_cast<float>(M_PI) - deg(68.0f), kTol);                // tibia
-  EXPECT_EQ(cfg::kRelayPin, 24);
-  EXPECT_EQ(cfg::kBatteryVoltagePin, 26);
-  EXPECT_EQ(cfg::kBatteryCurrentPin, 27);
-  EXPECT_NEAR(cfg::kBatteryVoltageScale, 0.00366f, 1e-7f);
-  EXPECT_NEAR(cfg::kBatteryCurrentScale, 0.00098f, 1e-7f);
+  // Chica command-index map + scales per protocol.md (hexapod-servo2040-driver):
+  // CURR=24, VOLT=25 (consecutive), RELAY=26, STATUS=27; telemetry in 0.01
+  // centi-units; STATUS trip current at 0.1 A/count.
+  EXPECT_EQ(cfg::kRelayPin, 26);
+  EXPECT_EQ(cfg::kBatteryCurrentPin, 24);
+  EXPECT_EQ(cfg::kBatteryVoltagePin, 25);
+  EXPECT_EQ(cfg::kStatusPin, 27);
+  EXPECT_NEAR(cfg::kBatteryVoltageScale, 0.01f, 1e-7f);
+  EXPECT_NEAR(cfg::kBatteryCurrentScale, 0.01f, 1e-7f);
+  EXPECT_NEAR(cfg::kTripAmpsPerCount, 0.1f, 1e-7f);
 }
