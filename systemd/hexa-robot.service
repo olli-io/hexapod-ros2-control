@@ -1,0 +1,35 @@
+# Boot-time startup for the hexapod ROS 2 stack on the Raspberry Pi.
+#
+# Template — @USER@ and @HOME_DIR@ are substituted by
+# `./hexa robot install-service`, which writes the rendered unit to
+# /etc/systemd/system/hexa-robot.service and enables it. Do not install this
+# file by hand; the placeholders are not valid systemd values.
+#
+# ExecStart brings the container up and energizes ros2_control (hardware
+# component active + both controllers spawned). It does NOT power the servo
+# rail: the relay only closes once the locomotion supervisor asks for it, which
+# happens after the robot stands (gamepad Start / /gait/initialize). So the
+# robot boots folded and limp, and the first motion is still a human decision.
+
+[Unit]
+Description=Hexapod ROS 2 stack (cold-start, servos de-energized)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=@USER@
+WorkingDirectory=@HOME_DIR@
+ExecStart=@HOME_DIR@/hexa robot boot
+# Safe-stop on `systemctl stop` and on shutdown/reboot: relay off + controllers
+# unloaded before the container is removed.
+ExecStop=@HOME_DIR@/hexa robot down
+TimeoutStartSec=300
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

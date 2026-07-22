@@ -22,9 +22,10 @@
 #
 # The leg segment (coxa/femur/tibia) is derived from each joint's name and
 # selects the matching entry in `deg_at_center`: the joint angle (degrees,
-# per-joint convention from hexa_description/config/geometry.yaml) when the
-# servo is at center. Defaults (0 / 35 / 68) match geometry.yaml for an ideal
-# build.
+# per-joint convention documented in geometry.yaml) when the servo is at
+# center. This file is the sole source for that angle — geometry.yaml stays
+# target-agnostic and carries only the travel window, against which codegen
+# cross-checks the values below.
 
 connection:
   type: uart # uart | i2c | usb — factory picks the concrete Transport.
@@ -52,7 +53,7 @@ parser:
 #   tibia — interior_deg (180 = fully extended)
 deg_at_center:
   coxa: 0.0
-  femur: 35.0
+  femur: 40.0
   tibia: 68.0
 
 joints:

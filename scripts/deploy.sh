@@ -135,7 +135,7 @@ cmd_push() {
     basename_tar="$(basename "${resolved}")"
 
     echo ">> Ensuring ~/hexa-robot/ exists on ${host}"
-    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts'
+    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts ~/hexa-robot/systemd'
 
     # Ship the image + compose + env sample, plus the launcher (hexa +
     # scripts/robot.sh) so `hexa robot <cmd>` works on the Pi.
@@ -147,6 +147,15 @@ cmd_push() {
         "hexa" \
         "${host}:~/hexa-robot/"
     scp "scripts/robot.sh" "${host}:~/hexa-robot/scripts/"
+    # Boot-time systemd unit template. Shipped, never installed — the operator
+    # opts in once with `./hexa robot install-service`, so a redeploy can't
+    # silently change the Pi's systemd state.
+    scp "systemd/hexa-robot.service" "${host}:~/hexa-robot/systemd/"
+    # Boot jingle: the player plus its unit template. Same deal — shipped, never
+    # installed; `./hexa robot install-tune` is the operator's opt-in. Runs on
+    # the Pi host rather than in the container, so it chirps before Docker is up.
+    scp "systemd/boot-tune.sh" "systemd/hexa-boot-tune.service" \
+        "${host}:~/hexa-robot/systemd/"
     # Runtime-tuning overlay: ship as a .default seed. The compose bind-mounts
     # ~/hexa-robot/tuning.yaml over the image's copy so edits apply on a bare
     # `hexa robot restart` (no image rebuild). Shipped as a seed — like .env —
@@ -164,12 +173,14 @@ gunzip -c "${basename_tar}" | docker load
 [ -f .env ] || cp .env.robot.sample .env
 # Same for the tuning overlay — seed it once, then leave operator edits alone.
 [ -f tuning.yaml ] || cp tuning.yaml.default tuning.yaml
+chmod +x systemd/boot-tune.sh
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 
     echo ">> Deployed. Service is up but the servo rail is cold."
     echo "   Energize with:  ssh ${host} 'cd ~/hexa-robot && ./hexa robot up'"
     echo "   or from here:   hexa robot -H ${host} up"
+    echo "   Start on boot:  ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-service'"
 }
 
 if [[ $# -lt 1 ]]; then

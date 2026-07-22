@@ -11,7 +11,7 @@ firmware bakes them in at build time. CMake runs it pre-build (host + Pico).
 The transforms here are ports of the ROS2 loaders and MUST stay in lockstep:
 
   - leg-mount six-leg symmetry expansion + deg->rad joint conventions mirror
-    ``hexa_kinematics_cpp/src/description_loader.cpp``,
+    ``hexa_locomotion/src/pipeline_config_loader.cpp``,
   - per-gait linear_max / yaw_bias mirror ``hexa_gait_cpp/src/limits.cpp`` (with
     the duty_factor / unstable table from ``gaits/registry.cpp``, which is code,
     not YAML),
@@ -144,12 +144,7 @@ def cstr(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-# ── joint-angle conventions (mirror description_loader.cpp) ──────────────────
-
-def center_field(joint_type: str) -> str:
-    return {"coxa": "deg", "femur": "above_horizontal_deg",
-            "tibia": "interior_deg"}[joint_type]
-
+# ── joint-angle conventions (mirror pipeline_config_loader.cpp) ──────────────
 
 def to_urdf_rad(joint_type: str, deg: float) -> float:
     if joint_type == "coxa":
@@ -198,25 +193,21 @@ def leg_specs(geometry: dict):
 
 
 def joint_limits(geometry: dict):
-    """Per-joint-type servo window in URDF rad — port of load_joint_limits()."""
+    """Per-joint-type travel window in URDF rad — port of load_joint_limits()."""
     joints = geometry["joints"]
     out = {}
     for jt in JOINT_TYPES:
         cfg = joints[jt]
-        center = to_urdf_rad(jt, cfg[center_field(jt)])
         a = to_urdf_rad(jt, cfg["lower_limit_deg"])
         b = to_urdf_rad(jt, cfg["upper_limit_deg"])
         lower, upper = min(a, b), max(a, b)
-        if not (lower <= center <= upper):
-            raise ValueError(f"{jt} center outside limit window")
-        out[jt] = dict(center=center, lower=lower, upper=upper,
+        out[jt] = dict(lower=lower, upper=upper,
                        effort=cfg["effort"], velocity=cfg["velocity"])
     return out
 
 
-# tuning.yaml gait_node standing_pose leaf key per joint type. Distinct from
-# center_field() (the geometry.yaml joints: field names) — the ros params carry
-# the joint name in the key, e.g. standing_pose.coxa_deg.
+# tuning.yaml gait_node standing_pose leaf key per joint type. The ros params
+# carry the joint name in the key, e.g. standing_pose.coxa_deg.
 _STANDING_FIELD = {
     "coxa": "coxa_deg",
     "femur": "femur_above_horizontal_deg",
@@ -285,7 +276,7 @@ def calibration_by_pin(calibration: dict):
     return by_pin
 
 
-def hardware_joints(hw: dict, calibration: dict):
+def hardware_joints(hw: dict, calibration: dict, limits: dict):
     """18 servo calibrations, sorted by pin — port of joint_calibration.cpp."""
     dac = hw.get("deg_at_center", {})
     deg_at_center = {"coxa": dac.get("coxa", 0.0), "femur": dac.get("femur", 0.0),
@@ -295,6 +286,18 @@ def hardware_joints(hw: dict, calibration: dict):
     def urdf_center(pos: str) -> float:
         rad = math.radians(deg_at_center[pos])
         return {"coxa": rad, "femur": -rad, "tibia": math.pi - rad}[pos]
+
+    # A servo whose center sits outside the joint's travel window cannot reach
+    # half its range. deg_at_center is per-segment, so check the three once
+    # rather than per joint row. Both sides are URDF radians here.
+    for pos in JOINT_TYPES:
+        center = urdf_center(pos)
+        lower, upper = limits[pos]["lower"], limits[pos]["upper"]
+        if not (lower <= center <= upper):
+            raise ValueError(
+                f"hardware.yaml deg_at_center.{pos} = {deg_at_center[pos]} deg "
+                f"({center:.4f} rad) is outside the geometry.yaml limit window "
+                f"[{lower:.4f}, {upper:.4f}] rad")
 
     # Authoritative name→segment map for the fixed 6-leg set (mirrors
     # joint_calibration.cpp's kPositions). An unknown joint name is rejected.
@@ -334,7 +337,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     stand = standing_pose(gait)
     initial = initial_pose(geometry)
     caps = velocity_caps(gait)
-    joints = hardware_joints(hardware, calibration)
+    joints = hardware_joints(hardware, calibration, limits)
 
     L = []
     w = L.append
@@ -384,9 +387,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("")
 
     # ── joint limits ──
-    w("// ── Per-joint-type servo limits, IK-convention radians ──")
+    w("// ── Per-joint-type travel limits, IK-convention radians ──")
     w("struct JointLimits {")
-    w("  float center;")
     w("  float lower;")
     w("  float upper;")
     w("  float effort;    // Nm")
@@ -397,7 +399,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("inline constexpr std::array<JointLimits, 3> kJointLimits = {{")
     for jt in JOINT_TYPES:
         m = limits[jt]
-        w(f"    {{{fl(m['center'])}, {fl(m['lower'])}, {fl(m['upper'])}, "
+        w(f"    {{{fl(m['lower'])}, {fl(m['upper'])}, "
           f"{fl(m['effort'])}, {fl(m['velocity'])}}},  // {jt}")
     w("}};")
     w("")

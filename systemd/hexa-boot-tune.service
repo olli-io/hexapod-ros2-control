@@ -1,0 +1,30 @@
+# Boot jingle on the passive buzzer (GPIO18 hardware PWM).
+#
+# Template — @HOME_DIR@ is substituted by `./hexa robot install-tune`, which
+# writes the rendered unit to /etc/systemd/system/hexa-boot-tune.service and
+# enables it. Do not install this file by hand; the placeholder is not a valid
+# systemd value.
+#
+# Deliberately separate from hexa-robot.service: not every build has a buzzer
+# fitted, and installing the ROS stack's boot unit should not silently start
+# making noise. Nothing depends on this unit — it is a pure side effect, and a
+# missing or broken buzzer can never hold up the boot (boot-tune.sh exits 0 on
+# every hardware failure).
+
+[Unit]
+Description=Hexapod boot jingle (passive buzzer)
+After=local-fs.target
+ConditionPathIsDirectory=/sys/class/pwm
+
+[Service]
+Type=oneshot
+# Root: exporting a sysfs PWM channel needs it, and this avoids depending on a
+# udev rule to chown the tree.
+User=root
+ExecStart=@HOME_DIR@/systemd/boot-tune.sh
+# Generous relative to a ~1 s jingle; covers the script's wait for the RP1 PWM
+# driver to probe on a cold boot.
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

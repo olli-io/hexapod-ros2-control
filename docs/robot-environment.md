@@ -18,6 +18,19 @@ image tarball, and run as a long-lived service.
 - Wired Ethernet or Wi-Fi.
 - Optional: 256×64 SH1122 OLED face on the Pi SPI bus (spidev0.0 +
   DC/RST/CS on GPIO), rendered directly by `hexa_display`.
+- Optional: passive buzzer on GPIO18 for the boot jingle.
+
+Pi GPIO allocation, so nothing added later steals a pin:
+
+- **8, 9, 10, 11** — SPI0 (CE0, MISO, MOSI, SCLK) for the SH1122 face.
+- **24, 25** — the face's DC / RST control lines.
+- **18** — hardware PWM for the buzzer (RP1 PWM0 channel 2, alt function `a3`).
+- **2, 3** — I²C1, free for an MPU6500 IMU.
+
+Watch out for **SPI1**, whose CE0 is GPIO18: putting a second SPI device on the
+aux bus with hardware chip-select collides with the buzzer. Use SPI0 CE1
+(GPIO7) or I²C for extra sensors instead. GPIO18 is also I²S PCM_CLK, so an
+I²S audio HAT and the buzzer are mutually exclusive.
 
 ## 1. Flash the OS
 
@@ -73,6 +86,51 @@ Without the display fitted, set `enabled: false` in
 `hexa_display/config/display.yaml` (the bringup gate skips the face
 node); otherwise `hexa_display` aborts at startup when it cannot open
 the panel.
+
+## 2c. Enable the buzzer PWM (optional)
+
+Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO18 (BCM)
+and **−** to GND; add a ~100 Ω resistor in series if it is too loud.
+
+The jingle is played by `systemd/boot-tune.sh` — POSIX shell writing the
+kernel's sysfs PWM interface, with no Python, gpiozero, or any other package
+installed. It runs on the **Pi host**, not in the container: the point is a
+chirp seconds after the kernel hands off, long before Docker and the ROS stack
+exist.
+
+Enable the PWM block:
+
+```
+# /boot/firmware/config.txt
+dtoverlay=pwm-2chan
+```
+
+On the Pi 5 the PWM lives in the RP1 southbridge: GPIO18 is PWM0 **channel 2**,
+alt function `a3`. Reboot, then confirm the sysfs tree and hear it:
+
+```
+ls /sys/class/pwm/                  # expect pwmchip0 (SoC, 2ch) + the RP1 chip (4ch)
+cat /sys/class/pwm/pwmchip*/npwm    # the 4-channel one is RP1's
+cd ~/hexa-robot && ./hexa robot play-tune
+```
+
+The chip number moves with the kernel and the overlays in play, so
+`boot-tune.sh` discovers it (4 channels = RP1) rather than hardcoding
+`pwmchip2`, and re-asserts the pin's alt mode with `pinctrl` in case the
+overlay in `config.txt` did not. If discovery picks wrong, pin it with
+`TUNE_PWMCHIP=/sys/class/pwm/pwmchipN`.
+
+Tune it without editing the script — the same `NOTE:beats` melody format the
+gpiozero recipes use, `REST` for silence:
+
+```
+TUNE_MELODY="C5:1 E5:1 G5:1 C6:1 REST:1 G5:1 C6:3" TUNE_TEMPO=0.11 \
+    ./hexa robot play-tune
+```
+
+`TUNE_GPIO`, `TUNE_CHANNEL`, and `TUNE_PIN_ALT` cover a different buzzer pin.
+Every hardware failure — no buzzer, no overlay, busy channel — logs a line and
+exits 0, so the tune can never hold up a boot.
 
 ## 3. Note hardware IDs
 
@@ -228,6 +286,72 @@ on the AP interface directly — no port mapping or bridge needed.
 The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by
 default, and the webapp prompts to claim control when it connects. See
 `src/hexa_webteleop/README.md` for the arbitration protocol.
+
+## 6c. Start on boot (optional)
+
+Out of the box the Pi comes up only *partway*: Docker's `restart:
+unless-stopped` restarts the container (which boots cold — hardware inactive,
+no controllers), and a human still has to run `hexa robot up` to make the robot
+drivable. Install the systemd unit to close that gap:
+
+```
+cd ~/hexa-robot && ./hexa robot install-service
+sudo systemctl start hexa-robot     # or just reboot
+```
+
+`install-service` renders `~/hexa-robot/systemd/hexa-robot.service` (shipped by
+`hexa deploy push`) for the current user and install directory, writes it to
+`/etc/systemd/system/`, and enables it. It needs `sudo`, so run it on a TTY
+(`ssh -t` if driving it remotely).
+
+What the unit does on boot:
+
+- **`ExecStart`** — `hexa robot boot`: waits for the Docker daemon, waits for
+  the device nodes compose maps (`SERVO_DEVICE`, plus `SPI_DEVICE` / `GPIO_CHIP`
+  when `.env` names them — USB enumeration lags the unit at boot), then runs the
+  same `up` an operator would: `compose up -d`, wait for `controller_manager`,
+  activate `HexaSystem`, spawn both controllers.
+- **`ExecStop`** — `hexa robot down`: the safe-stop (relay off + controllers
+  unloaded) before the container is removed, so a `systemctl stop`, reboot, or
+  shutdown de-energizes cleanly instead of yanking power.
+
+**The robot still boots limp.** Activating the hardware component does not close
+the servo relay — `hexa_hardware` only drives `SET RELAY` once `hexa_locomotion`
+publishes `true` on `/hardware/relay_cmd`, and the supervisor only asks for that
+once the robot has stood. So after boot the hexapod sits folded and unpowered;
+pressing **Start** on the gamepad (or publishing `/gait/initialize`) is what
+energizes it. Nothing moves unattended.
+
+Inspecting and undoing:
+
+- **`systemctl status hexa-robot`** — expect `active (exited)`, the unit being
+  `Type=oneshot` with `RemainAfterExit=yes`.
+- **`journalctl -u hexa-robot -b`** — the boot run's pre-flight and energize log.
+- **`sudo systemctl disable hexa-robot`** — stop starting on boot. Note that
+  while the unit is enabled, a `hexa robot down` no longer survives a reboot by
+  design; disable the unit if you want the robot to stay down.
+- **`./hexa robot uninstall-service`** — disable and delete the unit entirely.
+
+## 6d. Boot jingle on boot (optional)
+
+With the buzzer wired and the PWM overlay in place (step 2c), enable the
+jingle:
+
+```
+cd ~/hexa-robot && ./hexa robot install-tune
+```
+
+- **`hexa-boot-tune.service`** — a `Type=oneshot` unit, `WantedBy=multi-user.target`,
+  running `systemd/boot-tune.sh` as root (exporting a sysfs PWM channel needs
+  it). Nothing `Requires=` it, so it is a pure side effect.
+- **Separate from `install-service`** on purpose — the buzzer is optional
+  hardware, and enabling the ROS stack's boot unit should not silently start
+  making noise.
+- **`./hexa robot uninstall-tune`** — disable and delete it; the robot boots
+  silent again.
+- **`journalctl -u hexa-boot-tune -b`** — why it stayed quiet, if it did.
+
+`hexa robot up` / `down` keep working unchanged with the unit installed.
 
 ## 7. Re-deploy
 

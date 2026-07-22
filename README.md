@@ -47,7 +47,7 @@ they share the same `up` / `down` lifecycle.
 
 - `./hexa sim <up|down|logs|build|shell|face|status|cmd...>` — sim-container lifecycle. `up [--clean]` brings the stack up detached; `up --pico` runs the firmware-in-sim brain (the Pi Pico firmware walks the Gazebo hexapod) instead, mutually exclusive with the plain sim stack; `build` runs a colcon build in an ephemeral container; `shell` opens a ROS 2-sourced shell; `face` attaches the terminal eye emulator (a live mirror of the face, headless in sim; `q` to detach); any other command (e.g. `ros2 topic list`) runs one-off.
 - `./hexa deploy <build|push <host>>` — cross-build and ship the production image to the robot.
-- `./hexa robot <up|down|restart|status|logs|shell>` — operate the robot container on the Pi (or `-H user@host` to target it remotely). `up` boots and energizes servos (teleop included); `down` is the safe-stop.
+- `./hexa robot <up|down|restart|boot|install-service|status|logs|shell>` — operate the robot container on the Pi (or `-H user@host` to target it remotely). `up` boots and energizes servos (teleop included); `down` is the safe-stop; `install-service` enables a systemd unit that runs `boot` (the unattended `up`) on every power-on.
 - `./hexa kill` — stop and remove the sim + pico containers.
 
 Details: [`docs/sim-environment.md`](docs/sim-environment.md) (Gazebo) and

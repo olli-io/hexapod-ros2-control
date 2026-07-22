@@ -74,17 +74,17 @@ TEST(LegSpecs, SegmentLengths) {
 }
 
 TEST(JointLimits, DegToRadConventions) {
-  // coxa: deg -> rad, center 0, window [-90, 90] deg.
-  EXPECT_NEAR(cfg::kJointLimits[0].center, 0.0f, kTol);
+  // coxa: deg -> rad, window [-90, 90] deg.
   EXPECT_NEAR(cfg::kJointLimits[0].lower, deg(-90.0f), kTol);
   EXPECT_NEAR(cfg::kJointLimits[0].upper, deg(90.0f), kTol);
-  // femur: -deg. center = -radians(35). lower/upper reconciled after negation.
-  EXPECT_NEAR(cfg::kJointLimits[1].center, -deg(35.0f), kTol);
+  // femur: -deg, so lower/upper swap after negation ([-55, 125] deg).
   EXPECT_NEAR(cfg::kJointLimits[1].lower, -deg(125.0f), kTol);
   EXPECT_NEAR(cfg::kJointLimits[1].upper, -deg(-55.0f), kTol);
-  // tibia: pi - deg. center = pi - radians(68).
-  EXPECT_NEAR(cfg::kJointLimits[2].center,
-              static_cast<float>(M_PI) - deg(68.0f), kTol);
+  // tibia: pi - deg, likewise swapped ([-22, 158] deg).
+  EXPECT_NEAR(cfg::kJointLimits[2].lower,
+              static_cast<float>(M_PI) - deg(158.0f), kTol);
+  EXPECT_NEAR(cfg::kJointLimits[2].upper,
+              static_cast<float>(M_PI) - deg(-22.0f), kTol);
 }
 
 TEST(Pose, StandingUniform) {
@@ -100,9 +100,9 @@ TEST(Pose, InitialPerLegSymmetry) {
   EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::L_REAR)][0], deg(-60.0f), kTol);
   EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::R_FRONT)][0], deg(-60.0f), kTol);
   EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::R_REAR)][0], deg(60.0f), kTol);
-  // femur above_horizontal_deg=100 -> -radians(100); tibia interior 40.
-  EXPECT_NEAR(cfg::kInitialPose[0][1], -deg(100.0f), kTol);
-  EXPECT_NEAR(cfg::kInitialPose[0][2], static_cast<float>(M_PI) - deg(40.0f), kTol);
+  // femur above_horizontal_deg=120 -> -radians(120); tibia interior 35.
+  EXPECT_NEAR(cfg::kInitialPose[0][1], -deg(120.0f), kTol);
+  EXPECT_NEAR(cfg::kInitialPose[0][2], static_cast<float>(M_PI) - deg(35.0f), kTol);
 }
 
 TEST(Engine, GaitYamlKnobs) {
@@ -207,9 +207,10 @@ TEST(Hardware, ServoCalibration) {
     EXPECT_EQ(cfg::kJointCals[i].min_us, 500);
     EXPECT_EQ(cfg::kJointCals[i].max_us, 2500);
   }
-  // urdf_rad_at_center from deg_at_center (coxa 0, femur 35, tibia 68).
+  // urdf_rad_at_center from hardware.yaml deg_at_center (coxa 0, femur 40,
+  // tibia 68) — the sole source for the servo-center angle.
   EXPECT_NEAR(cfg::kJointCals[0].urdf_rad_at_center, 0.0f, kTol);          // coxa
-  EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(35.0f), kTol);   // femur
+  EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(40.0f), kTol);   // femur
   EXPECT_NEAR(cfg::kJointCals[2].urdf_rad_at_center,
               static_cast<float>(M_PI) - deg(68.0f), kTol);                // tibia
   // Chica command-index map + scales per protocol.md (hexapod-servo2040-driver):

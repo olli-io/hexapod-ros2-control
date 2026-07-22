@@ -50,10 +50,11 @@
   <xacro:property name="foot_mass"    value="${geom['foot']['mass']}"/>
 
   <!-- Per-joint <limit> windows, in URDF-convention radians. The YAML
-       carries intuitive per-joint degrees (coxa.deg,
-       femur.above_horizontal_deg, tibia.interior_deg with absolute
-       lower_limit_deg / upper_limit_deg); the conversions here match
-       hexa_kinematics/hexa_kinematics/joint_config.py exactly. The URDF
+       carries absolute lower_limit_deg / upper_limit_deg in intuitive
+       per-joint degrees (coxa sweep, femur above horizontal, tibia
+       interior); the conversions here match to_urdf_rad() in
+       hexa_locomotion/src/pipeline_config_loader.cpp and
+       shared/motion_core/tools/gen_config.py exactly. The URDF
        itself stays a pure mathematical presentation of the hexapod —
        joint zero remains "legs splayed horizontally"; only the <limit>
        window is shifted to express the servo's reachable range.

@@ -42,11 +42,17 @@ Commands:
                               subcommand for the full list.
   robot [-H user@host] <subcommand> [args]
                               Operate the running robot container. Subcommands: up, down,
-                              restart, status, logs [-f], shell. 'up' boots the container
-                              cold then energizes (relay on) — teleop is part of the launch,
-                              so the robot is drivable once 'up' finishes; 'down' is the
-                              safe-stop. Runs locally (on the Pi) by default; -H/--host
-                              re-dispatches over ssh to a remote Pi.
+                              restart, boot, install-service, uninstall-service,
+                              install-tune, uninstall-tune, play-tune, status,
+                              logs [-f], shell. 'up' boots the container cold then energizes
+                              (relay on) — teleop is part of the launch, so the robot is
+                              drivable once 'up' finishes; 'down' is the safe-stop. 'boot' is
+                              the unattended 'up' the systemd unit runs; 'install-service'
+                              enables that unit so the stack comes up on power-on.
+                              'install-tune' separately enables the boot jingle on the
+                              optional buzzer ('play-tune' sounds it without a reboot).
+                              Runs locally (on the Pi) by default; -H/--host re-dispatches
+                              over ssh to a remote Pi.
   kill                        Stop and remove the sim + pico containers.
   -h, --help                  Show this help message.
 EOF
