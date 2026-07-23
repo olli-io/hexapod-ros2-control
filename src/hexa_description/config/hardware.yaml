@@ -39,7 +39,7 @@ connection:
   # /dev/ttyACM0. Host pin muxing belongs in the OS (device-tree overlay,
   # /boot config), not here.
   device: /dev/ttyAMA0
-  baud: 115200 # honoured on true-UART links; ignored on a USB-CDC build.
+  baud: 460800 # honoured on true-UART links; ignored on a USB-CDC build.
 
 parser:
   type: servo2040 # selects the BoardProtocol (currently only servo2040).

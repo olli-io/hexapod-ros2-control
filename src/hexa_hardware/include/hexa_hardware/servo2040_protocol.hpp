@@ -27,10 +27,15 @@ constexpr std::uint8_t kCurrIndex = 24;
 constexpr std::uint8_t kVoltIndex = 25;
 constexpr std::uint8_t kRelayIndex = 26;
 // Read-only latched fault register (no pin). GET(kStatusIndex, 1) returns a
-// 14-bit word: bit0 = TRIPPED (over-current latch active), bits1-10 =
-// TRIP_CURRENT at 0.1 A/count. 0 = clean.
+// 14-bit word: bit0 = TRIPPED (over-current latch active), bits1-3 = TIER (which
+// OVERCURRENT_TIERS entry fired), bits4-13 = TRIP_CURRENT at 0.1 A/count. 0 =
+// clean. Layout mirrors the firmware STATUS_* masks in main.h.
 constexpr std::uint8_t kStatusIndex = 27;
-constexpr std::uint16_t kStatusTrippedBit = 0x1;
+constexpr std::uint16_t kStatusTrippedBit = 0x1;             // bit 0
+constexpr int kStatusTierShift = 1;                          // bits 1..3
+constexpr std::uint16_t kStatusTierMask = 0x7;
+constexpr int kStatusCurrentShift = 4;                       // bits 4..13
+constexpr std::uint16_t kStatusCurrentMask = 0x3FF;
 constexpr float kTripAmpsPerCount = 0.1f;
 
 // Battery telemetry wire units: the board sends fixed-point centi-units

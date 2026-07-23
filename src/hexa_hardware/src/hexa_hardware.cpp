@@ -126,10 +126,17 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
   }
 
   // Build the consecutive-pin batch view once; pin assignment is static.
+  // cal.pin is the 1-based silkscreen number (1..18, enforced in
+  // joint_calibration.cpp); the board's wire protocol is 0-based (SERVO1 == index
+  // 0, see firmware main.h cmdPins). Convert silkscreen -> logical index once
+  // here so the sort / consecutive-run logic and the SET frame's start index all
+  // operate in the board's 0-based space. cal.pin >= 1 is guaranteed, so pin - 1
+  // never underflows.
   pin_order_.clear();
   pin_order_.reserve(joints_.size());
   for (std::size_t i = 0; i < joints_.size(); ++i) {
-    pin_order_.push_back({joints_[i].cal.pin, i});
+    pin_order_.push_back(
+        {static_cast<std::uint8_t>(joints_[i].cal.pin - 1), i});
   }
   std::sort(pin_order_.begin(), pin_order_.end(),
             [](const PinEntry& a, const PinEntry& b) { return a.pin < b.pin; });

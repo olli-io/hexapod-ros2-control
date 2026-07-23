@@ -49,11 +49,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 COPY src/ /workspace/src/
+# The target-agnostic control brain and face policy live outside src/ and are
+# compiled directly by hexa_locomotion / hexa_pico_bridge / hexa_display via
+# ${REPO_ROOT}/shared/..., so the build context needs them too.
+COPY shared/ /workspace/shared/
 
-# Drop the sim-only package before building so its Gazebo deps don't have to
-# exist in this image. The runtime stage uses --merge-install, not the
-# symlinked dev layout, so install/ is fully self-contained afterwards.
-RUN rm -rf /workspace/src/hexa_simulation
+# Drop the sim-only package and the standalone host test harness before
+# building — the former's Gazebo deps don't have to exist in this image, the
+# latter is its own CMake project that colcon would otherwise pick up out of
+# shared/ and that installs nothing. The runtime stage uses --merge-install,
+# not the symlinked dev layout, so install/ is fully self-contained afterwards.
+RUN rm -rf /workspace/src/hexa_simulation /workspace/shared/motion_core/test
 
 RUN . /opt/ros/jazzy/setup.sh \
     && colcon build \

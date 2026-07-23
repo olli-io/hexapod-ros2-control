@@ -154,6 +154,49 @@ TEST(ReadBattery, FailsOnEmptyReply) {
   EXPECT_FALSE(proto.read_battery(voltage, current, 50));
 }
 
+// read_status issues one GET(27,1) and decodes the latched fault word:
+// bit0 = TRIPPED, bits1-3 = TIER, bits4-13 = trip current at 0.1 A/count.
+TEST(ReadStatus, DecodesTrippedWord) {
+  FakeTransport t;
+  // A real 11.5 A trip on tier 2: current count = 115 (0x073), placed in
+  // bits4-13; tier 2 in bits1-3; TRIPPED in bit0.
+  const std::uint16_t word =
+      hh::kStatusTrippedBit |
+      (2u << hh::kStatusTierShift) |
+      (115u << hh::kStatusCurrentShift);
+  t.to_read = {hh::kCmdGet, hh::kStatusIndex, 1};
+  push_value(t.to_read, word);
+  t.to_read.push_back(0xFF);  // trailing checksum|0x80, ignored
+
+  hh::Servo2040Protocol proto(t);
+  bool tripped = false;
+  float trip_amps = -1.0f;
+  ASSERT_TRUE(proto.read_status(tripped, trip_amps, 50));
+  EXPECT_TRUE(tripped);
+  EXPECT_FLOAT_EQ(trip_amps, 11.5f);
+
+  ASSERT_EQ(t.written.size(), 3u);
+  EXPECT_EQ(t.written[0], hh::kCmdGet);
+  EXPECT_EQ(t.written[1], hh::kStatusIndex);
+  EXPECT_EQ(t.written[2], 1);
+}
+
+// A clean word (0) decodes to not-tripped, 0 A — the tier bits do not leak into
+// the current field.
+TEST(ReadStatus, DecodesCleanWord) {
+  FakeTransport t;
+  t.to_read = {hh::kCmdGet, hh::kStatusIndex, 1};
+  push_value(t.to_read, 0);
+  t.to_read.push_back(0xFF);
+
+  hh::Servo2040Protocol proto(t);
+  bool tripped = true;
+  float trip_amps = -1.0f;
+  ASSERT_TRUE(proto.read_status(tripped, trip_amps, 50));
+  EXPECT_FALSE(tripped);
+  EXPECT_FLOAT_EQ(trip_amps, 0.0f);
+}
+
 // set_servo_power sends a SET of 1/0 to the board-owned relay index.
 TEST(SetServoPower, WritesRelaySet) {
   FakeTransport t;
