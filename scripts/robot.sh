@@ -41,8 +41,10 @@ Operate the local hexa-robot container. With -H/--host, re-dispatch the command
 on a remote Pi over ssh (in ~/hexa-robot).
 
 Commands:
-  up                          compose up -d, then energize (relay on + spawn
-                              controllers). Makes the robot drivable.
+  up                          compose up -d, then wait for the stack. The container
+                              energizes itself on launch (HexaSystem active +
+                              controllers), so this just brings it up. Drivable once
+                              stood (gamepad Start closes the servo-rail relay).
   down                        Safe-stop: relay off + unload controllers, then compose down.
   restart                     down && up.
   boot                        Unattended 'up' for the systemd unit: wait for the
@@ -60,11 +62,11 @@ Commands:
   shell                       Interactive shell inside the container.
 
 Teleop (gamepad + web) is part of the container's launch, so the robot is drivable
-as soon as 'up' finishes. The container always boots cold (relay open); 'up' is the
-attended energize, so a 'restart: unless-stopped' auto-restart returns the robot to
-a cold, safe state. Energizing spawns the controllers but never powers the servo
-rail on its own — the relay closes only once the robot stands (gamepad Start or
-/gait/initialize), which is why 'boot' is safe to run unattended.
+as soon as 'up' finishes. The container energizes on launch — HexaSystem goes active
+and both controllers spawn — but energizing never powers the servo rail on its own:
+the relay closes only once the robot stands (gamepad Start or /gait/initialize). A
+'restart: unless-stopped' auto-restart therefore comes back energized but stationary,
+so 'boot' is safe to run unattended.
 EOF
 }
 
@@ -99,8 +101,8 @@ compose() {
         docker compose -f "${COMPOSE_FILE}" "$@"
 }
 
-# Block until controller_manager answers, so energize() doesn't race a
-# still-booting container. `list_hardware_components` succeeds once it's up.
+# Block until controller_manager answers, so `up` reports ready only once the
+# stack is live. `list_hardware_components` succeeds once it's up.
 wait_for_controller_manager() {
     echo ">> Waiting for controller_manager..."
     local _
@@ -117,8 +119,11 @@ wait_for_controller_manager() {
 cmd_up() {
     [[ $# -eq 0 ]] || die "up: unexpected argument '$1'"
     compose up -d || die "compose up failed"
+    # The container energizes itself on launch (robot.launch.py brings HexaSystem
+    # active and spawns both controllers), so `up` just brings it up and waits for
+    # the stack to report ready.
     wait_for_controller_manager
-    energize
+    echo ">> Robot is up and energized. Stand it (gamepad Start) to close the relay."
 }
 
 # Block until the Docker daemon answers. systemd's After=docker.service only
@@ -193,7 +198,7 @@ cmd_install_service() {
     sudo systemctl daemon-reload
     sudo systemctl enable "${SERVICE_NAME}"
 
-    echo ">> Enabled. The stack will come up on every boot, folded and de-energized."
+    echo ">> Enabled. The stack will come up energized on every boot (rail stays open until stood)."
     echo "   Start it now:  sudo systemctl start ${SERVICE_NAME}"
     echo "   Watch it:      journalctl -u ${SERVICE_NAME} -f"
 }
@@ -299,27 +304,6 @@ cmd_shell() {
     require_container_running
     # shellcheck disable=SC2046
     docker exec $(tty_flags) "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh bash
-}
-
-# Relay ON + spawn controllers. Internal to `up` (no longer a public verb).
-energize() {
-    require_container_running
-    echo ">> Activating ${HARDWARE_COMPONENT_NAME} (relay ON)"
-    docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
-        ros2 control set_hardware_component_state "${HARDWARE_COMPONENT_NAME}" active \
-        || die "could not activate ${HARDWARE_COMPONENT_NAME}"
-
-    echo ">> Spawning joint_state_broadcaster"
-    docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
-        ros2 run controller_manager spawner joint_state_broadcaster \
-        || die "could not spawn joint_state_broadcaster"
-
-    echo ">> Spawning joint_group_position_controller"
-    docker exec "${CONTAINER_NAME}" /usr/local/bin/entrypoint.sh \
-        ros2 run controller_manager spawner joint_group_position_controller \
-        || die "could not spawn joint_group_position_controller"
-
-    echo ">> Activated. Robot is now drivable."
 }
 
 # Unload controllers + relay OFF. Internal to `down` (no longer a public verb).

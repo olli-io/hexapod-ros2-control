@@ -249,11 +249,12 @@ This ships the image tarball, the compose file, and the launcher
 
 ## 6. Bring up and drive
 
-Run the robot ops on the Pi (the launcher was shipped in step 4). `up` boots the
-container cold, waits for `controller_manager`, then energizes (relay on + spawns
-the controllers); `down` is the safe-stop (relay off + unload, then compose down).
-The gamepad and web teleop are part of the container's launch, so the robot is
-drivable as soon as `up` finishes — no separate teleop step:
+Run the robot ops on the Pi (the launcher was shipped in step 4). The container
+energizes itself on launch — `robot.launch.py` brings `HexaSystem` active and
+spawns both controllers — so `up` just does `compose up -d` and waits for
+`controller_manager` to report ready; `down` is the safe-stop (relay off + unload,
+then compose down). The gamepad and web teleop are part of the container's launch,
+so the robot is drivable as soon as `up` finishes — no separate teleop step:
 
 ```
 ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot up'
@@ -269,17 +270,18 @@ the command over ssh in `~/hexa-robot`:
 ```
 
 `./hexa robot {restart|status|logs|shell}` are the routine container ops against
-the local `hexa-robot` service (also `-H`-dispatchable from the workstation). `up`
-is the one attended action that energizes; everything else is safe.
+the local `hexa-robot` service (also `-H`-dispatchable from the workstation).
 
-Because energizing is a CLI step in `up` — never the container's CMD — a
-`restart: unless-stopped` auto-restart (crash / power blip) brings the stack back
-**cold** (relay open), so the servos never flail unattended. The cold-start gate
-is implemented by passing `hardware_components_initial_state` to
-`controller_manager` from `robot.launch.py` when `engage_on_start:=false`, the
-only non-default setting in `bringup.launch.py`. No new C++ in `hexa_hardware` —
-the relay still toggles in `on_activate` / `on_deactivate`, and the lifecycle
-state is held back externally.
+Energizing spawns the controllers and activates `HexaSystem`, but it never powers
+the servo rail on its own — the relay closes only once the robot **stands** (gamepad
+Start or `/gait/initialize`). So a `restart: unless-stopped` auto-restart (crash /
+power blip) brings the stack back **energized but stationary**: the servos never
+flail unattended. Energize-on-launch is implemented by passing
+`hardware_components_initial_state: {active: [HexaSystem]}` to `controller_manager`
+from `robot.launch.py`, which also spawns both controllers. No new C++ in
+`hexa_hardware` — activating the component does not touch the relay; it closes only
+when `hexa_locomotion` publishes `true` on `/hardware/relay_cmd`, which the
+supervisor asks for only once the robot has stood (see the boot-limp note below).
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
 
@@ -351,10 +353,12 @@ default, and the webapp prompts to claim control when it connects. See
 
 ## 6c. Start on boot (optional)
 
-Out of the box the Pi comes up only *partway*: Docker's `restart:
-unless-stopped` restarts the container (which boots cold — hardware inactive,
-no controllers), and a human still has to run `hexa robot up` to make the robot
-drivable. Install the systemd unit to close that gap:
+Out of the box, Docker's `restart: unless-stopped` restarts the container after a
+crash or reboot, and the container energizes itself on launch — but that races the
+device nodes compose maps (`/dev/ttyAMA0` and friends can lag the daemon at
+power-on), so a fresh boot can fail container-create outright. Install the systemd
+unit to pre-flight the daemon and those nodes before bringing the stack up, and to
+safe-stop cleanly on shutdown:
 
 ```
 cd ~/hexa-robot && ./hexa robot install-service
@@ -371,8 +375,9 @@ What the unit does on boot:
 - **`ExecStart`** — `hexa robot boot`: waits for the Docker daemon, waits for
   the device nodes compose maps (`SERVO_DEVICE`, plus `SPI_DEVICE` / `GPIO_CHIP`
   when `.env` names them — a node can lag the unit at boot), then runs the
-  same `up` an operator would: `compose up -d`, wait for `controller_manager`,
-  activate `HexaSystem`, spawn both controllers.
+  same `up` an operator would: `compose up -d` and wait for `controller_manager`.
+  The container energizes itself on launch (activates `HexaSystem`, spawns both
+  controllers).
 - **`ExecStop`** — `hexa robot down`: the safe-stop (relay off + controllers
   unloaded) before the container is removed, so a `systemctl stop`, reboot, or
   shutdown de-energizes cleanly instead of yanking power.
@@ -388,7 +393,7 @@ Inspecting and undoing:
 
 - **`systemctl status hexa-robot`** — expect `active (exited)`, the unit being
   `Type=oneshot` with `RemainAfterExit=yes`.
-- **`journalctl -u hexa-robot -b`** — the boot run's pre-flight and energize log.
+- **`journalctl -u hexa-robot -b`** — the boot run's pre-flight and bring-up log.
 - **`sudo systemctl disable hexa-robot`** — stop starting on boot. Note that
   while the unit is enabled, a `hexa robot down` no longer survives a reboot by
   design; disable the unit if you want the robot to stay down.

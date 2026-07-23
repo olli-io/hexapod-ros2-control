@@ -7,7 +7,7 @@
 #
 # Workstation-only commands (Pi target):
 #   build              cross-build ARM64 image, save to .deploy/<sha>.tar.gz
-#   push <host>        scp image + compose + launcher, ssh-load + start cold
+#   push <host>        scp image + compose + launcher, ssh-load + start (energizes on launch)
 #
 # Pico target:
 #   --pico [args...]   cross-build pi-pico-firmware/ inside the hexa-sim
@@ -33,7 +33,7 @@ Usage: ./hexa deploy [--pico] <command> [args...]
 
 Raspberry Pi robot (ARM64 image):
   build                       Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
-  push <host>                 scp + ssh-load the latest tarball to <host>, then start cold.
+  push <host>                 scp + ssh-load the latest tarball to <host>, then start (energizes on launch).
 
 Pi Pico 2 W firmware (RP2350 .uf2):
   --pico [args...]            Cross-build pi-pico-firmware/ in the hexa-sim container
@@ -163,7 +163,7 @@ cmd_push() {
     scp "src/hexa_description/config/tuning.yaml" \
         "${host}:~/hexa-robot/tuning.yaml.default"
 
-    echo ">> Loading image and bringing service up (cold) on ${host}"
+    echo ">> Loading image and bringing service up on ${host} (energizes on launch)"
     # shellcheck disable=SC2087
     ssh "${host}" bash -s <<EOF
 set -euo pipefail
@@ -177,9 +177,9 @@ chmod +x systemd/boot-tune.sh
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 
-    echo ">> Deployed. Service is up but the servo rail is cold."
-    echo "   Energize with:  ssh ${host} 'cd ~/hexa-robot && ./hexa robot up'"
-    echo "   or from here:   hexa robot -H ${host} up"
+    echo ">> Deployed and energized. The servo rail stays open until the robot stands."
+    echo "   Stand it:       gamepad Start (or publish /gait/initialize) to close the relay."
+    echo "   Status:         hexa robot -H ${host} status"
     echo "   Start on boot:  ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-service'"
 }
 

@@ -1,7 +1,12 @@
 """Real-robot bringup: controller manager, consolidated locomotion node, display.
 
     ros2 launch hexa_bringup robot.launch.py
-    ros2 launch hexa_bringup robot.launch.py engage_on_start:=false
+
+The robot energizes on launch: the hardware comes up `active` and both controllers
+(joint_state_broadcaster + joint_group_position_controller) are spawned. This never
+powers the servo rail on its own — the relay closes only once the robot stands
+(gamepad Start or /gait/initialize) — so an unattended auto-restart comes back
+energized but stationary. `hexa robot down` safe-stops (unload + deactivate).
 """
 import os
 
@@ -12,14 +17,11 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
-    RegisterEventHandler,
 )
-from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command,
     FindExecutable,
-    LaunchConfiguration,
     PathJoinSubstitution,
 )
 from launch_ros.actions import Node
@@ -44,9 +46,6 @@ def _display_params() -> tuple[dict, bool]:
 def _bringup(context, *args, **kwargs):
     pkg_hexa_bringup = FindPackageShare("hexa_bringup")
     pkg_hexa_description = FindPackageShare("hexa_description")
-
-    engage_on_start = LaunchConfiguration("engage_on_start").perform(context)
-    engage = engage_on_start.lower() in ("1", "true", "yes")
 
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -80,17 +79,19 @@ def _bringup(context, *args, **kwargs):
         pkg_hexa_bringup, "config", "ros2_controllers.yaml",
     ])
 
-    cm_parameters = [robot_description, controllers_yaml]
-
-    # Cold-start: bring the hardware to `inactive` only. The relay stays open
-    # until `hexa robot up` energizes the component.
-    if not engage:
-        cm_parameters.append({
+    # Energize on launch: bring the hardware straight to `active`. The servo rail
+    # relay stays open until the robot stands, so this is safe unattended. Only
+    # the `active` key is emitted — an empty `unconfigured: []` would normalize to
+    # an empty tuple, which launch_ros rejects as a parameter value.
+    cm_parameters = [
+        robot_description,
+        controllers_yaml,
+        {
             "hardware_components_initial_state": {
-                "unconfigured": [],
-                "inactive": [HARDWARE_COMPONENT_NAME],
+                "active": [HARDWARE_COMPONENT_NAME],
             },
-        })
+        },
+    ]
 
     controller_manager = Node(
         package="controller_manager",
@@ -110,6 +111,17 @@ def _bringup(context, *args, **kwargs):
 
     actions = [description, controller_manager, locomotion_node]
 
+    # Spawn both controllers. The spawner blocks until controller_manager's
+    # services answer, so these are launched directly (no OnProcessExit gating on
+    # the long-lived controller_manager, which never exits).
+    for controller in ("joint_state_broadcaster", "joint_group_position_controller"):
+        actions.append(Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=[controller, "--controller-manager", "/controller_manager"],
+            output="screen",
+        ))
+
     # Face: one node maps robot state to an expression/gaze policy and
     # rasterizes the eyes on the SH1122 OLED (spidev + GPIO).
     display_params, display_enabled = _display_params()
@@ -121,40 +133,6 @@ def _bringup(context, *args, **kwargs):
             parameters=[display_params],
         ))
 
-    if engage:
-        joint_state_broadcaster_spawner = Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=[
-                "joint_state_broadcaster",
-                "--controller-manager", "/controller_manager",
-            ],
-            output="screen",
-        )
-        position_controller_spawner = Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=[
-                "joint_group_position_controller",
-                "--controller-manager", "/controller_manager",
-            ],
-            output="screen",
-        )
-        actions += [
-            RegisterEventHandler(
-                OnProcessExit(
-                    target_action=controller_manager,
-                    on_exit=[joint_state_broadcaster_spawner],
-                )
-            ),
-            RegisterEventHandler(
-                OnProcessExit(
-                    target_action=joint_state_broadcaster_spawner,
-                    on_exit=[position_controller_spawner],
-                )
-            ),
-        ]
-
     return actions
 
 
@@ -163,14 +141,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "log_level", default_value="info",
             description="ros2 logging level for the locomotion node.",
-        ),
-        DeclareLaunchArgument(
-            "engage_on_start", default_value="true",
-            description=(
-                "If true, activate the hardware and spawn controllers at "
-                "launch. If false, boot cold (inactive, relay open, no "
-                "controllers); `hexa robot up` energizes it live."
-            ),
         ),
         OpaqueFunction(function=_bringup),
     ])

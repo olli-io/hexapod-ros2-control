@@ -2,10 +2,11 @@
 
 Wraps the robot stack with production policy: it composes robot.launch.py —
 the reusable robot — with the gamepad and web teleop input sources, which
-robot.launch.py deliberately omits. Boots cold (``engage_on_start:=false``,
-relay open) so the container is one `hexa robot up` away from drivable.
+robot.launch.py deliberately omits. robot.launch.py energizes on launch
+(hardware active + controllers spawned), so the container comes up drivable;
+the servo rail relay still waits for a stand command.
 
-  1. robot.launch.py (engage_on_start:=false) — the robot, brought up cold.
+  1. robot.launch.py — the robot, brought up energized.
   2. teleop.launch.py — gamepad → /cmd_vel + /body/pose.
   3. webteleop.launch.py — web UI → /cmd_vel, on port 8080. Coexists with the
      gamepad via /teleop/owner arbitration (gamepad owns by default).
@@ -26,9 +27,6 @@ def generate_launch_description():
                 FindPackageShare("hexa_bringup"), "launch", "robot.launch.py",
             ])
         ),
-        launch_arguments={
-            "engage_on_start": "false",
-        }.items(),
     )
 
     teleop = IncludeLaunchDescription(
