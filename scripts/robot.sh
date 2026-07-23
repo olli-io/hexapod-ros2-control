@@ -132,9 +132,9 @@ wait_for_docker() {
     die "Docker daemon did not become ready within 60s"
 }
 
-# Block until a /dev node exists. At boot the USB Servo 2040 may not have
-# enumerated yet, and compose maps it as a `devices:` entry — container creation
-# fails outright if the path is missing, so wait rather than race.
+# Block until a /dev node exists. Compose maps each as a `devices:` entry and
+# container creation fails outright if the path is missing, so wait rather than
+# race: the UART is up early, but the SPI/GPIO nodes can lag the unit at boot.
 wait_for_device() {
     local path="$1" label="$2" _
     for _ in $(seq 1 30); do
@@ -158,7 +158,7 @@ cmd_boot() {
     # Device paths come from the same .env compose interpolates, with the same
     # defaults. SPI / GPIO are only waited on when .env actually names them —
     # a robot without the OLED face fitted omits them.
-    local servo_device="/dev/ttyACM0" spi_device="" gpio_chip=""
+    local servo_device="/dev/ttyAMA0" spi_device="" gpio_chip=""
     if [[ -f .env ]]; then
         # shellcheck disable=SC1091  # runtime file, not in the repo
         source <(grep -E '^(SERVO_DEVICE|SPI_DEVICE|GPIO_CHIP)=' .env || true)

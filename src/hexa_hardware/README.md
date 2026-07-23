@@ -30,7 +30,8 @@ Two seams under one plugin class, both selected from YAML:
 
 - **Transport** (`include/hexa_hardware/transport.hpp`) — byte pipe.
   Open / close / write / read-with-timeout, nothing more. Concrete:
-  `UartTransport` (POSIX serial, also covers Servo 2040 USB-CDC).
+  `UartTransport` (POSIX serial — the Pi header UART by default, and it
+  equally covers a Servo 2040 wired over USB-CDC).
   Placeholders: `I2cTransport`, `UsbTransport` (raw HID/bulk) — both
   declared and wired through the factory, both throw on `open()` until
   someone fills in the body.
@@ -48,7 +49,7 @@ The factory (`hardware_factory.hpp`) picks both from
 
     connection:
       type: uart           # uart | i2c | usb
-      device: /dev/ttyACM0
+      device: /dev/ttyAMA0
       baud: 115200
     parser:
       type: servo2040
@@ -136,5 +137,5 @@ servo2040 backend, pair a PTY with `socat`:
     socat -d -d pty,raw,echo=0 pty,raw,echo=0
 
 then point `connection.device` at one end and listen on the other. The
-Servo2040 itself does not care about baud (USB-CDC); a real UART build
-should set it to match the firmware.
+`connection.baud` must match the firmware's UART setting; it is only
+ignored if the board is reached over USB-CDC instead.

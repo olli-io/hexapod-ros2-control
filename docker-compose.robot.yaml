@@ -27,11 +27,14 @@ services:
     env_file:
       - path: .env
         required: false
-    # Servo 2040 over USB-CDC. SERVO_DEVICE defaults to /dev/ttyACM0 — set it
-    # to a /dev/serial/by-id/... path in .env once the actual device string
-    # is known, so a re-enumerated bus number doesn't break startup.
+    # Servo 2040 on the Pi's header UART (GPIO14/15). SERVO_DEVICE defaults to
+    # the Pi 5 name for those pins, /dev/ttyAMA0 (RP1 uart0, needs
+    # dtparam=uart0=on); on a Pi 4 set it to /dev/ttyS0, the mini-UART, since
+    # that model's ttyAMA0 is owned by the Bluetooth the gamepad pairs over.
+    # See docs/robot-environment.md. The container-side path is fixed, so
+    # hardware.yaml names one node whatever the host calls it.
     devices:
-      - "${SERVO_DEVICE:-/dev/ttyACM0}:/dev/ttyACM0"
+      - "${SERVO_DEVICE:-/dev/ttyAMA0}:/dev/ttyAMA0"
       # SH1122 OLED face: hexa_display renders the eyes directly from the Pi
       # over spidev + the kernel GPIO character device. Requires
       # dtparam=spi=on on the Pi; see docs/robot-environment.md.

@@ -13,19 +13,25 @@ image tarball, and run as a long-lived service.
 ## Hardware
 
 - Raspberry Pi 4 or 5 with a 16 GB+ microSD card.
-- Pimoroni Servo 2040 over USB (enumerates as `/dev/ttyACM0`).
+- Pimoroni Servo 2040 on the Pi header UART, GPIO14/15 (`/dev/ttyAMA0` on a
+  Pi 5, `/dev/ttyS0` on a Pi 4).
 - Servo rail PSU behind the Servo 2040's relay.
 - Wired Ethernet or Wi-Fi.
 - Optional: 256×64 SH1122 OLED face on the Pi SPI bus (spidev0.0 +
   DC/RST/CS on GPIO), rendered directly by `hexa_display`.
 - Optional: passive buzzer on GPIO18 for the boot jingle.
 
-Pi GPIO allocation, so nothing added later steals a pin:
+Pi GPIO allocation, so nothing added later steals a line. All numbers are
+**BCM GPIO**, never header pin positions — the two differ on every Pi, and BCM
+is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
 
-- **8, 9, 10, 11** — SPI0 (CE0, MISO, MOSI, SCLK) for the SH1122 face.
-- **24, 25** — the face's DC / RST control lines.
-- **18** — hardware PWM for the buzzer (RP1 PWM0 channel 2, alt function `a3`).
-- **2, 3** — I²C1, free for an MPU6500 IMU.
+- **GPIO14, GPIO15** — UART0 TXD / RXD, the Servo 2040 link.
+- **GPIO8, GPIO9, GPIO10, GPIO11** — SPI0 (CE0, MISO, MOSI, SCLK) for the
+  SH1122 face.
+- **GPIO24, GPIO25** — the face's DC / RST control lines.
+- **GPIO18** — hardware PWM for the buzzer (RP1 PWM0 channel 2, alt function
+  `a3`).
+- **GPIO2, GPIO3** — I²C1, free for an MPU6500 IMU.
 
 Watch out for **SPI1**, whose CE0 is GPIO18: putting a second SPI device on the
 aux bus with hardware chip-select collides with the buzzer. Use SPI0 CE1
@@ -44,7 +50,7 @@ if needed.
 sudo apt update && sudo apt full-upgrade -y
 sudo reboot
 curl -fsSL https://get.docker.com | sh
-sudo apt install i-y docker-compose-plugin git
+sudo apt install -y docker-compose-plugin git
 sudo usermod -aG docker $USER
 ```
 Exit and re-enter the ssh session, then verify that docker runs:
@@ -52,13 +58,69 @@ Exit and re-enter the ssh session, then verify that docker runs:
 ```
 docker run --rm hello-world
 ```
-You may need to run:
+
+## 2b. Enable the servo UART (required)
+
+The Servo 2040 hangs off the Pi's header UART, not USB. Wire it crossed, with a
+common ground:
+
+- **Pi GPIO14 (UART0 TXD)** — Servo 2040 **RX**.
+- **Pi GPIO15 (UART0 RXD)** — Servo 2040 **TX**.
+- **Pi GND** — Servo 2040 **GND**. Both boards keep their own supply; only the
+  ground is shared.
+
+GPIO numbers here are BCM, not header positions — `pinctrl` and the
+`gpiochip` interface both speak BCM, and the physical pin a GPIO lands on
+differs from its number.
+
+Which kernel device those two lines become depends on the model, so the
+enabling step and `SERVO_DEVICE` differ. **Pi 5** — the GPIO14/15 UART is RP1's
+`uart0`, off by default; turn it on:
 
 ```
-sudo usermod -aG docker <your_username>
+# /boot/firmware/config.txt
+dtparam=uart0=on
 ```
 
-## 2b. Enable the display SPI (optional)
+After a reboot it appears as **`/dev/ttyAMA0`**. Nothing else contends for it:
+the Pi 5's serial console lives on the separate 3-pin debug connector
+(`uart10` → `/dev/ttyAMA10`, which is also what `/dev/serial0` points at), so
+leave `cmdline.txt` alone.
+
+**Pi 4** — GPIO14/15 is the mini-UART, and the console *does* sit on it. Enable
+the port and evict the getty:
+
+```
+sudo raspi-config nonint do_serial_hw 0     # enable the hardware UART
+sudo raspi-config nonint do_serial_cons 1   # disable the serial login console
+sudo reboot
+```
+
+By hand that is `enable_uart=1` in `config.txt` plus dropping the
+`console=serial0,115200` token from `/boot/firmware/cmdline.txt`. The device is
+**`/dev/ttyS0`**; `enable_uart=1` also pins the core clock so the mini-UART's
+baud stays stable, and 115200 is well within its range.
+
+Verify after the reboot that the node exists and the pins carry the UART
+function:
+
+```
+ls -l /dev/ttyAMA0            # Pi 5   (Pi 4: /dev/ttyS0)
+pinctrl get 14,15             # expect a1/uart function, not "none"
+```
+
+Then set `SERVO_DEVICE` in `~/hexa-robot/.env` to match — `/dev/ttyAMA0` is the
+shipped default, so a Pi 4 is the case that needs the edit. Two traps worth
+naming:
+
+- **Do not add `dtoverlay=disable-bt`.** The gamepad pairs over the Pi's
+  onboard Bluetooth, and that overlay steals the radio's UART to move the PL011
+  onto the header.
+- **`/dev/serial0` is not model-portable here.** On a Pi 4 it tracks the
+  header UART, but on a Pi 5 it is the debug connector — wiring the servos to
+  GPIO14/15 and naming `serial0` would silently talk to the wrong port.
+
+## 2c. Enable the display SPI (optional)
 
 Only needed if the SH1122 OLED face is fitted. `hexa_display` drives the
 panel directly over spidev + the kernel GPIO character device. Enable
@@ -87,7 +149,7 @@ Without the display fitted, set `enabled: false` in
 node); otherwise `hexa_display` aborts at startup when it cannot open
 the panel.
 
-## 2c. Enable the buzzer PWM (optional)
+## 2d. Enable the buzzer PWM (optional)
 
 Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO18 (BCM)
 and **−** to GND; add a ~100 Ω resistor in series if it is too loud.
@@ -134,10 +196,10 @@ exits 0, so the tune can never hold up a boot.
 
 ## 3. Note hardware IDs
 
-Plug in the Servo 2040, then on the Pi:
+On the Pi:
 
 ```
-ls /dev/serial/by-id/                       # note the usb-Rasperry-Pi-Pico... path
+ls -l /dev/ttyAMA0                          # the servo UART from step 2b (Pi 4: ttyS0)
 getent group input | cut -d: -f3            # note the input GID (example: 994)
 ```
 
@@ -181,8 +243,8 @@ This ships the image tarball, the compose file, and the launcher
 
 - **`INPUT_GID`** — value from step 3 (typically something like`996`).
 - **`ROS_DOMAIN_ID`** — DDS domain, default `42`.
-- **`SERVO_DEVICE`** — the `/dev/serial/by-id/usb-Pimoroni_Servo_2040-...`
-  path from step 3.
+- **`SERVO_DEVICE`** — the servo UART from step 2b. The default `/dev/ttyAMA0`
+  is right on a Pi 5; a Pi 4 needs `/dev/ttyS0`.
 
 
 ## 6. Bring up and drive
@@ -308,7 +370,7 @@ What the unit does on boot:
 
 - **`ExecStart`** — `hexa robot boot`: waits for the Docker daemon, waits for
   the device nodes compose maps (`SERVO_DEVICE`, plus `SPI_DEVICE` / `GPIO_CHIP`
-  when `.env` names them — USB enumeration lags the unit at boot), then runs the
+  when `.env` names them — a node can lag the unit at boot), then runs the
   same `up` an operator would: `compose up -d`, wait for `controller_manager`,
   activate `HexaSystem`, spawn both controllers.
 - **`ExecStop`** — `hexa robot down`: the safe-stop (relay off + controllers

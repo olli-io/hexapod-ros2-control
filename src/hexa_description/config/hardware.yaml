@@ -29,14 +29,17 @@
 
 connection:
   type: uart # uart | i2c | usb — factory picks the concrete Transport.
-  # Host-specific OS device node. Servo2040 USB-CDC usually enumerates as
-  # /dev/ttyACM0 on Linux SBCs, but the path shifts with enumeration order
-  # and true-UART/I²C node names vary per board (RPi /dev/ttyAMA0, Radxa
-  # /dev/ttyS2, …). For stable naming add a udev rule on USB VID/PID and
-  # point this at the resulting /dev/serial/by-id/... symlink. Host pin
-  # muxing belongs in the OS (device-tree overlay, /boot config), not here.
-  device: /dev/ttyACM0
-  baud: 115200 # ignored on Servo2040 USB-CDC; honoured for true-UART builds.
+  # Host-specific OS device node: the Raspberry Pi header UART on GPIO14/15.
+  # The name of that UART is per-model — /dev/ttyAMA0 on a Pi 5 (RP1 uart0,
+  # needs dtparam=uart0=on), /dev/ttyS0 on a Pi 4 (mini-UART; its ttyAMA0
+  # belongs to Bluetooth, which the gamepad needs). Note /dev/serial0 is NOT
+  # portable between them — on a Pi 5 it is the debug connector, not the
+  # header. Other boards name it differently again (Radxa /dev/ttyS2, …), and
+  # a USB-CDC build would use /dev/serial/by-id/... rather than a bus-order
+  # /dev/ttyACM0. Host pin muxing belongs in the OS (device-tree overlay,
+  # /boot config), not here.
+  device: /dev/ttyAMA0
+  baud: 115200 # honoured on true-UART links; ignored on a USB-CDC build.
 
 parser:
   type: servo2040 # selects the BoardProtocol (currently only servo2040).
