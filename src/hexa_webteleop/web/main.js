@@ -39,6 +39,15 @@ let arbitrationEnabled = false;
 let owner = "gamepad";
 let currentMode = "gait";
 
+// Re-send held input this often (ms) so the server's input watchdog
+// (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a
+// stick or button is held stationary — move/press events only fire on
+// change, so without this the command latches for one tick then drops.
+// Kept well under the watchdog window (~10 sends per timeout); stops when
+// the tab suspends (the timer suspends too), so the watchdog still guards
+// a dropped link.
+const KEEPALIVE_MS = 50;
+
 // ── DOM helpers ────────────────────────────────────────────────────
 
 function $(id) {
@@ -303,6 +312,9 @@ class TouchJoystick {
     this.touchId = null;
     this.knobX = 0;
     this.knobY = 0;
+    // Last stick value sent, re-sent by the keepalive while active.
+    this.lastX = 0;
+    this.lastY = 0;
 
     this.canvas.addEventListener("touchstart", this.onStart.bind(this), {
       passive: false,
@@ -369,8 +381,16 @@ class TouchJoystick {
     this.touchId = null;
     this.knobX = 0;
     this.knobY = 0;
-    send({ type: "stick", stick: this.stick, x: 0, y: 0 });
+    this.sendStick(0, 0);
     this.draw();
+  }
+
+  // Send a stick value and remember it so the keepalive can re-send it
+  // while the knob is held stationary.
+  sendStick(x, y) {
+    this.lastX = x;
+    this.lastY = y;
+    send({ type: "stick", stick: this.stick, x: x, y: y });
   }
 
   onMouseDown(e) {
@@ -413,7 +433,7 @@ class TouchJoystick {
     //     stickY = -(knobY / radius) = up/forward = positive
     const sx = -(this.knobX / this.radius);
     const sy = -(this.knobY / this.radius);
-    send({ type: "stick", stick: this.stick, x: sx, y: sy });
+    this.sendStick(sx, sy);
     this.draw();
   }
 
@@ -465,6 +485,21 @@ function init() {
     new TouchJoystick("left-canvas", "left"),
     new TouchJoystick("right-canvas", "right"),
   ];
+
+  // Keepalive: the client is event-driven (stick moves and button presses
+  // only fire on change), but the server zeros /cmd_vel if no message
+  // arrives within its input-timeout window. Re-send whatever is currently
+  // held — active sticks and pressed buttons (height/yaw integrate while
+  // held) — so a stationary hold stays commanded.
+  setInterval(function () {
+    joysticks.forEach(function (j) {
+      if (j.active) j.sendStick(j.lastX, j.lastY);
+    });
+    const held = document.querySelectorAll("#button-grid button.pressed");
+    held.forEach(function (btn) {
+      send({ type: "button", index: Number(btn.dataset.index), pressed: true });
+    });
+  }, KEEPALIVE_MS);
 
   // Safety stop: if the page is hidden (tab switch, screen lock, app
   // backgrounded) re-centre both sticks so the robot doesn't keep the
