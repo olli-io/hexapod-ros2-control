@@ -117,15 +117,17 @@ the sensors are always present on the board.
 
 Config lives in `hexa_description/config/`, split in two:
 
-- `hardware.yaml` — wiring: `connection`, `parser`, `deg_at_center`, and
-  per-joint `{pin, direction, min_us, max_us}`. No relay/aux pins: the relay
-  and battery sensors are board-owned protocol constants.
+- `hardware.yaml` — wiring: `connection`, `parser`, `deg_at_center`, a shared
+  `servo_defaults.pulse_us` clamp, and a `servos` map of per-servo
+  `{pin, reversed?, pulse_us?}` (keyed by URDF joint name; `reversed`/`pulse_us`
+  default when omitted). No relay/aux pins: the relay and battery sensors are
+  board-owned protocol constants.
 - `servo_calibration.yaml` — a pin-ordered `calibration_values` list of
-  `{pin, us_at_plus_45, us_at_minus_45}`; a joint with `pin: N` reads entry
+  `{pin, us_at_plus_45, us_at_minus_45}`; a servo with `pin: N` reads entry
   `N-1`. Split out so a calibration routine can rewrite it without touching
   the commented wiring.
 
-Both files document their own field semantics (calibration math, `direction`,
+Both files document their own field semantics (calibration math, `reversed`,
 the `deg_at_center` → URDF-radian conversion).
 
 ## Bench testing without hardware

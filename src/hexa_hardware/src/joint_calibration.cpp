@@ -141,33 +141,44 @@ std::vector<CalibrationEndpoints> load_calibration(const std::string& path) {
   return out;
 }
 
+// Shared electrical clamp default (servo_defaults.pulse_us), applied to any
+// servo that does not carry its own `pulse_us` override.
+struct PulseClamp {
+  std::uint16_t min_us = 500;
+  std::uint16_t max_us = 2500;
+};
+
 JointCalibration parse_joint(const YAML::Node& node, const std::string& name,
                              const DegAtCenter& deg_at_center,
-                             const std::vector<CalibrationEndpoints>& calibration) {
-  const std::string ctx = "joints[" + name + "]";
+                             const std::vector<CalibrationEndpoints>& calibration,
+                             const PulseClamp& default_clamp) {
+  const std::string ctx = "servos[" + name + "]";
   JointCalibration jc;
   jc.pin = require_scalar<unsigned int>(node, "pin", ctx);
   jc.joint_position = joint_position_from_name(name, ctx);
   if (jc.pin == 0 || jc.pin > calibration.size()) {
     throw std::runtime_error("hexa_hardware: " + ctx + " pin " +
                              std::to_string(jc.pin) +
-                             " has no matching servo_calibration.json entry");
+                             " has no matching servo_calibration.yaml entry");
   }
   const auto& ep = calibration[jc.pin - 1];
   jc.us_at_plus_45 = ep.us_at_plus_45;
   jc.us_at_minus_45 = ep.us_at_minus_45;
   jc.urdf_rad_at_center =
       intuitive_deg_to_urdf_rad(jc.joint_position, deg_at_center.for_position(jc.joint_position));
-  // Mount orientation. Optional; defaults to +1 (normal). Only ±1 are valid.
-  if (node["direction"]) {
-    const int dir = require_scalar<int>(node, "direction", ctx);
-    if (dir != 1 && dir != -1) {
-      throw std::runtime_error("hexa_hardware: " + ctx + " direction must be +1 or -1");
-    }
-    jc.direction = static_cast<std::int8_t>(dir);
+  // Mount orientation. Optional boolean; a mirror-mounted servo sets
+  // `reversed: true` (→ direction -1). Absent/false leaves the +1 default.
+  if (node["reversed"] && require_scalar<bool>(node, "reversed", ctx)) {
+    jc.direction = -1;
   }
-  jc.min_us = static_cast<std::uint16_t>(require_scalar<unsigned int>(node, "min_us", ctx));
-  jc.max_us = static_cast<std::uint16_t>(require_scalar<unsigned int>(node, "max_us", ctx));
+  // Electrical clamp: per-servo `pulse_us: {min, max}` override, else the
+  // shared servo_defaults.pulse_us passed in.
+  jc.min_us = default_clamp.min_us;
+  jc.max_us = default_clamp.max_us;
+  if (const auto pulse = node["pulse_us"]) {
+    jc.min_us = static_cast<std::uint16_t>(require_scalar<unsigned int>(pulse, "min", ctx));
+    jc.max_us = static_cast<std::uint16_t>(require_scalar<unsigned int>(pulse, "max", ctx));
+  }
   if (jc.min_us >= jc.max_us) {
     throw std::runtime_error("hexa_hardware: " + ctx + " min_us must be < max_us");
   }
@@ -214,14 +225,22 @@ HardwareConfig load_hardware_config(const std::string& hardware_path,
     if (dac["tibia"]) deg_at_center.tibia = dac["tibia"].as<double>();
   }
 
-  const auto joints = root["joints"];
-  if (!joints || !joints.IsMap()) {
-    throw std::runtime_error("hexa_hardware: config missing 'joints' map");
+  PulseClamp default_clamp;
+  if (const auto defaults = root["servo_defaults"]) {
+    if (const auto pulse = defaults["pulse_us"]) {
+      if (pulse["min"]) default_clamp.min_us = pulse["min"].as<std::uint16_t>();
+      if (pulse["max"]) default_clamp.max_us = pulse["max"].as<std::uint16_t>();
+    }
   }
-  for (auto it = joints.begin(); it != joints.end(); ++it) {
+
+  const auto servos = root["servos"];
+  if (!servos || !servos.IsMap()) {
+    throw std::runtime_error("hexa_hardware: config missing 'servos' map");
+  }
+  for (auto it = servos.begin(); it != servos.end(); ++it) {
     const std::string name = it->first.as<std::string>();
-    cfg.joints.emplace(name,
-                       parse_joint(it->second, name, deg_at_center, calibration));
+    cfg.joints.emplace(
+        name, parse_joint(it->second, name, deg_at_center, calibration, default_clamp));
   }
 
   return cfg;

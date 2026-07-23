@@ -127,10 +127,12 @@ deg_at_center:
   coxa: 30.0
   femur: 35.0
   tibia: 68.0
-joints:
-  l_front_coxa_joint:  { pin: 1, min_us: 600, max_us: 2400 }
-  l_front_femur_joint: { pin: 2, min_us: 600, max_us: 2400 }
-  l_front_tibia_joint: { pin: 3, min_us: 600, max_us: 2400 }
+servo_defaults:
+  pulse_us: { min: 600, max: 2400 }
+servos:
+  l_front_coxa_joint:  { pin: 1 }
+  l_front_femur_joint: { pin: 2 }
+  l_front_tibia_joint: { pin: 3 }
 )";
   // Endpoint magnitudes come from the calibration file (pin → index-1).
   const auto cfg = load("parses", hw,
@@ -168,9 +170,9 @@ joints:
 TEST(LoadHardwareConfig, DegAtCenterOptional) {
   // Missing `deg_at_center` block means all positions default to 0 →
   // urdf_rad_at_center is 0 for coxa/femur and π for tibia.
-  const std::string hw = R"(joints:
-  l_front_coxa_joint:  { pin: 1, min_us: 600, max_us: 2400 }
-  l_front_tibia_joint: { pin: 2, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  l_front_coxa_joint:  { pin: 1 }
+  l_front_tibia_joint: { pin: 2 }
 )";
   const auto cfg = load("dac", hw, cal_yaml({{2000, 1000}, {2000, 1000}}));
   EXPECT_DOUBLE_EQ(cfg.joints.at("l_front_coxa_joint").urdf_rad_at_center, 0.0);
@@ -179,8 +181,8 @@ TEST(LoadHardwareConfig, DegAtCenterOptional) {
 
 TEST(LoadHardwareConfig, MapsJointNameToPosition) {
   // The segment comes from the name→position table, not a separate field.
-  const std::string hw = R"(joints:
-  r_rear_femur_joint: { pin: 1, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  r_rear_femur_joint: { pin: 1 }
 )";
   const auto cfg = load("derive", hw, cal_yaml({{2000, 1000}}));
   EXPECT_EQ(cfg.joints.at("r_rear_femur_joint").joint_position,
@@ -189,47 +191,74 @@ TEST(LoadHardwareConfig, MapsJointNameToPosition) {
 
 TEST(LoadHardwareConfig, RejectsUnknownJointName) {
   // A name outside the canonical 6-leg set has no segment mapping.
-  const std::string hw = R"(joints:
-  mystery_joint: { pin: 1, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  mystery_joint: { pin: 1 }
 )";
   EXPECT_THROW(load("noseg", hw, cal_yaml({{2000, 1000}})), std::runtime_error);
 }
 
 TEST(LoadHardwareConfig, RejectsEqualEndpoints) {
   // The endpoints-differ check now runs on the merged calibration values.
-  const std::string hw = R"(joints:
-  l_front_coxa_joint: { pin: 1, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1 }
 )";
   EXPECT_THROW(load("equal", hw, cal_yaml({{1500, 1500}})), std::runtime_error);
 }
 
 TEST(LoadHardwareConfig, DirectionDefaultsToPlusOne) {
-  const std::string hw = R"(joints:
-  l_front_coxa_joint: { pin: 1, min_us: 600, max_us: 2400 }
+  // `reversed` omitted → +1 (normal mount).
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1 }
 )";
   const auto cfg = load("dir_def", hw, cal_yaml({{2000, 1000}}));
   EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, 1);
 }
 
 TEST(LoadHardwareConfig, ParsesReversedDirection) {
-  const std::string hw = R"(joints:
-  l_front_coxa_joint: { pin: 1, direction: -1, min_us: 600, max_us: 2400 }
+  // `reversed: true` → -1 (mirror-mounted).
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1, reversed: true }
 )";
   const auto cfg = load("dir_rev", hw, cal_yaml({{2000, 1000}}));
   EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, -1);
 }
 
-TEST(LoadHardwareConfig, RejectsBadDirection) {
-  const std::string hw = R"(joints:
-  l_front_coxa_joint: { pin: 1, direction: 2, min_us: 600, max_us: 2400 }
+TEST(LoadHardwareConfig, ReversedFalseKeepsPlusOne) {
+  // Explicit `reversed: false` is the same as omitting it.
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1, reversed: false }
+)";
+  const auto cfg = load("dir_false", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").direction, 1);
+}
+
+TEST(LoadHardwareConfig, RejectsNonBoolReversed) {
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1, reversed: sideways }
 )";
   EXPECT_THROW(load("dir_bad", hw, cal_yaml({{2000, 1000}})), std::runtime_error);
 }
 
+TEST(LoadHardwareConfig, PulseUsOverrideWinsOverDefault) {
+  // A per-servo `pulse_us` overrides `servo_defaults.pulse_us`; a servo without
+  // one inherits the default.
+  const std::string hw = R"(servo_defaults:
+  pulse_us: { min: 500, max: 2500 }
+servos:
+  l_front_coxa_joint:  { pin: 1, pulse_us: { min: 700, max: 2300 } }
+  l_front_femur_joint: { pin: 2 }
+)";
+  const auto cfg = load("pulse", hw, cal_yaml({{2000, 1000}, {2000, 1000}}));
+  EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").min_us, 700);
+  EXPECT_EQ(cfg.joints.at("l_front_coxa_joint").max_us, 2300);
+  EXPECT_EQ(cfg.joints.at("l_front_femur_joint").min_us, 500);
+  EXPECT_EQ(cfg.joints.at("l_front_femur_joint").max_us, 2500);
+}
+
 TEST(LoadHardwareConfig, RejectsPinWithoutCalibrationEntry) {
   // Joint pin 5 has no matching entry in a 3-entry calibration array.
-  const std::string hw = R"(joints:
-  l_front_coxa_joint: { pin: 5, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 5 }
 )";
   EXPECT_THROW(
       load("nopin", hw, cal_yaml({{2000, 1000}, {2000, 1000}, {2000, 1000}})),
@@ -237,8 +266,8 @@ TEST(LoadHardwareConfig, RejectsPinWithoutCalibrationEntry) {
 }
 
 TEST(LoadHardwareConfig, RejectsMissingCalibrationArray) {
-  const std::string hw = R"(joints:
-  l_front_coxa_joint: { pin: 1, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1 }
 )";
   EXPECT_THROW(load("nocal", hw, "not_calibration_values: []\n"),
                std::runtime_error);
@@ -250,9 +279,9 @@ TEST(LoadHardwareConfig, RejectsPinIndexMismatch) {
   - { pin: 1, us_at_plus_45: 2000, us_at_minus_45: 1000 }
   - { pin: 3, us_at_plus_45: 2000, us_at_minus_45: 1000 }
 )";
-  const std::string hw = R"(joints:
-  l_front_coxa_joint:  { pin: 1, min_us: 600, max_us: 2400 }
-  l_front_femur_joint: { pin: 2, min_us: 600, max_us: 2400 }
+  const std::string hw = R"(servos:
+  l_front_coxa_joint:  { pin: 1 }
+  l_front_femur_joint: { pin: 2 }
 )";
   EXPECT_THROW(load("mismatch", hw, cal), std::runtime_error);
 }

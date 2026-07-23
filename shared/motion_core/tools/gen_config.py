@@ -308,8 +308,13 @@ def hardware_joints(hw: dict, calibration: dict, limits: dict):
         for seg in ("coxa", "femur", "tibia")
     }
 
+    # Shared electrical clamp (servo_defaults.pulse_us); per-servo `pulse_us`
+    # overrides it. Mirrors joint_calibration.cpp's PulseClamp default.
+    dflt_pulse = hw.get("servo_defaults", {}).get("pulse_us", {})
+    dflt_min, dflt_max = dflt_pulse.get("min", 500), dflt_pulse.get("max", 2500)
+
     rows = []
-    for name, j in hw["joints"].items():
+    for name, j in hw["servos"].items():
         if name not in joint_positions:
             raise ValueError(f"unknown joint name '{name}'")
         pos = joint_positions[name]
@@ -318,12 +323,13 @@ def hardware_joints(hw: dict, calibration: dict, limits: dict):
             raise ValueError(
                 f"joint '{name}' pin {pin} has no servo_calibration.yaml entry")
         us_plus, us_minus = endpoints[pin]
+        pulse = j.get("pulse_us", {})
         rows.append(dict(
             name=name, pin=pin, joint_position=pos,
             us_at_plus_45=us_plus, us_at_minus_45=us_minus,
             urdf_rad_at_center=urdf_center(pos),
-            direction=j.get("direction", 1),
-            min_us=j["min_us"], max_us=j["max_us"]))
+            direction=-1 if j.get("reversed", False) else 1,
+            min_us=pulse.get("min", dflt_min), max_us=pulse.get("max", dflt_max)))
     rows.sort(key=lambda r: r["pin"])
     return rows
 

@@ -5,8 +5,8 @@
 // +π/4 and −π/4 from the servo's mechanical center — plus a `direction`
 // (+1 / -1) that captures which way the servo is bolted on. Center pulse and
 // slope magnitude fall out of the endpoints; `direction` is the sole sign
-// source, so a mirror-mounted servo sets `direction: -1` (endpoint ordering
-// no longer carries sign).
+// source. The YAML surface expresses it as a boolean `reversed: true` for a
+// mirror-mounted servo (→ direction -1); endpoint ordering carries no sign.
 
 #pragma once
 
@@ -37,7 +37,8 @@ struct JointCalibration {
   // Mount orientation: +1 = joint moves the same way as URDF-positive,
   // -1 = servo is mirror-mounted and travels the opposite way. Because the
   // URDF keeps identical joint axes for left and right legs, a physically
-  // mirror-assembled servo needs -1 to realize a URDF-positive command.
+  // mirror-assembled servo needs -1 to realize a URDF-positive command. The
+  // loader sets -1 from the YAML's `reversed: true`; absent/false leaves +1.
   std::int8_t direction = 1;
   // URDF radian the joint sits at when the servo is at its mechanical
   // center (pulse = (us_at_plus_45 + us_at_minus_45) / 2). Captures the
@@ -78,9 +79,10 @@ struct HardwareConfig {
 };
 
 // Load + validate hardware config. `hardware_path` is the YAML with wiring,
-// connection/parser, `deg_at_center`, and per-joint pin / direction /
-// min_us / max_us. The relay pin and battery-telemetry units are board-owned
-// (fixed protocol contract), so they are not configured here.
+// connection/parser, `deg_at_center`, a shared `servo_defaults.pulse_us`
+// clamp, and a per-servo `{pin, reversed?, pulse_us?}` map under `servos`. The
+// relay pin and battery-telemetry units are board-owned (fixed protocol
+// contract), so they are not configured here.
 // `calibration_path` is the sibling servo_calibration.yaml,
 // whose `calibration_values` list supplies each servo's endpoint pulse widths
 // (indexed by pin: pin N → entry N-1). Throws std::runtime_error on any
