@@ -8,6 +8,12 @@
 // (uart_init / uart_write_blocking / uart_is_readable / uart_getc); the USB and
 // I2C transports and the hardware factory are dropped.
 //
+// Wiring and calibration are NOT hand-written here: they come from
+// config_generated.hpp (`kJointCals`), baked by tools/gen_config.py from
+// hexa_description/config's hardware.yaml + servo_calibration.yaml — the same
+// YAMLs hexa_hardware loads at runtime, so firmware and ROS drive identical
+// pins with identical endpoints.
+//
 // Baud/wiring assumption: the Servo 2040 speaks Chica over its hardware UART at
 // 921600 8N1. VERIFY against the flashed Servo 2040 firmware and adjust kBaud /
 // the GPIO below to match if pairing fails (plan part 03, item 4).
@@ -15,10 +21,14 @@
 #include "servo_out.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <span>
 #include <vector>
+
+#include "config_generated.hpp"
+#include "leg_index.hpp"
 
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
@@ -61,54 +71,66 @@ constexpr float kTripAmpsPerCount = 0.1f;         // STATUS bits1-10: 0.1 A/coun
 constexpr float kAmpsPerCount = 0.01f;
 constexpr float kVoltsPerCount = 0.01f;
 
-// Per-joint calibration. Endpoint magnitudes (1000/2000 µs at ∓π/4, 1500 µs
-// center) and clamps (500/2500 µs) are the hardware.yaml defaults; `direction`
-// (+1 normal, -1 mirror-mounted) is the sole travel-sign source;
-// `urdf_rad_at_center` is the joint's URDF radian at servo center, precomputed
-// from `deg_at_center` (coxa 0°, femur 35°, tibia 68°) via the per-position mapping:
-//   coxa  urdf =  deg·π/180        → 0
-//   femur urdf = -deg·π/180        → -0.61086524
-//   tibia urdf =  π - deg·π/180    →  1.95476876
-struct JointCal {
-  std::uint8_t pin;
-  float us_at_plus_45;
-  float us_at_minus_45;
-  float urdf_rad_at_center;
-  std::int8_t direction;  // +1 normal, -1 mirror-mounted servo
-  std::uint16_t min_us;
-  std::uint16_t max_us;
-};
-
-constexpr float kCoxaCenter = 0.0f;
-constexpr float kFemurCenter = -0.61086524f;
-constexpr float kTibiaCenter = 1.95476876f;
-
-// Table order (pins 1..18) IS the joint order: l_front, l_middle, l_rear,
-// r_front, r_middle, r_rear, each {coxa, femur, tibia}. Sorted by pin so the
-// run-grouping in command_all() sees consecutive pins.
-constexpr JointCal kJoints[kNumJoints] = {
-    {1, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // l_front_coxa
-    {2, 2000.f, 1000.f, kFemurCenter, -1, 500, 2500},  // l_front_femur
-    {3, 2000.f, 1000.f, kTibiaCenter, -1, 500, 2500},  // l_front_tibia
-    {4, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // l_middle_coxa
-    {5, 2000.f, 1000.f, kFemurCenter, -1, 500, 2500},  // l_middle_femur
-    {6, 2000.f, 1000.f, kTibiaCenter, -1, 500, 2500},  // l_middle_tibia
-    {7, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // l_rear_coxa
-    {8, 2000.f, 1000.f, kFemurCenter, -1, 500, 2500},  // l_rear_femur
-    {9, 2000.f, 1000.f, kTibiaCenter, -1, 500, 2500},  // l_rear_tibia
-    {10, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // r_front_coxa
-    {11, 2000.f, 1000.f, kFemurCenter, 1, 500, 2500},  // r_front_femur
-    {12, 2000.f, 1000.f, kTibiaCenter, 1, 500, 2500},  // r_front_tibia
-    {13, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // r_middle_coxa
-    {14, 2000.f, 1000.f, kFemurCenter, 1, 500, 2500},  // r_middle_femur
-    {15, 2000.f, 1000.f, kTibiaCenter, 1, 500, 2500},  // r_middle_tibia
-    {16, 2000.f, 1000.f, kCoxaCenter, 1, 500, 2500},   // r_rear_coxa
-    {17, 2000.f, 1000.f, kFemurCenter, 1, 500, 2500},  // r_rear_femur
-    {18, 2000.f, 1000.f, kTibiaCenter, 1, 500, 2500},  // r_rear_tibia
-};
+// Per-joint wiring + calibration, baked from hexa_description/config's
+// hardware.yaml (pin, `reversed`, `deg_at_center`, pulse clamps) and
+// servo_calibration.yaml (endpoint pulse widths) by tools/gen_config.py. Those
+// YAMLs stay the single source of truth — nothing here is hand-maintained.
+//
+// Row order is the pipeline's theta[] order (l_front, l_middle, l_rear, r_front,
+// r_middle, r_rear, each {coxa, femur, tibia}), so kJoints[i] calibrates
+// theta[i]. The harness order lives in each row's `pin`, NOT in the row order —
+// the two differ on this build (l_rear is wired to pins 1-3), so anything that
+// needs pin order sorts for it (pin_order / leg_pin_order below).
+using hexa::config::JointCal;
+constexpr const auto& kJoints = hexa::config::kJointCals;
+static_assert(kJoints.size() == static_cast<std::size_t>(kNumJoints),
+              "config_generated kJointCals must cover all 18 joints");
 
 // Half-π as a float literal — avoids the double M_PI/2 (-Wdouble-promotion).
 constexpr float kHalfPi = 1.57079632679489661923f;
+
+// The table is leg-major: three consecutive rows are one leg's
+// {coxa, femur, tibia}, so leg L owns indices 3L..3L+2.
+constexpr std::size_t kNumJointsSz = kJoints.size();
+constexpr std::size_t kNumLegsSz = static_cast<std::size_t>(hexa::kNumLegs);
+constexpr std::size_t kJointsPerLeg = kNumJointsSz / kNumLegsSz;
+
+// Joint indices sorted ascending by pin — the walk order for SET run-grouping,
+// which needs consecutive pins to collapse into one frame. Built once; the
+// table is static.
+const std::array<std::size_t, kNumJointsSz>& pin_order() {
+  static const std::array<std::size_t, kNumJointsSz> kOrder = [] {
+    std::array<std::size_t, kNumJointsSz> order{};
+    for (std::size_t i = 0; i < kNumJointsSz; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [](std::size_t a, std::size_t b) {
+      return kJoints[a].pin < kJoints[b].pin;
+    });
+    return order;
+  }();
+  return kOrder;
+}
+
+// Leg indices ordered by each leg's lowest pin — the order the harness is wired
+// in (rear → front with the shipped wiring), which is the order the energize
+// sweep brings legs up in.
+const std::array<std::size_t, kNumLegsSz>& leg_pin_order() {
+  static const std::array<std::size_t, kNumLegsSz> kOrder = [] {
+    auto lowest_pin = [](std::size_t leg) {
+      std::uint8_t p = kJoints[leg * kJointsPerLeg].pin;
+      for (std::size_t k = 1; k < kJointsPerLeg; ++k) {
+        p = std::min(p, kJoints[leg * kJointsPerLeg + k].pin);
+      }
+      return p;
+    };
+    std::array<std::size_t, kNumLegsSz> order{};
+    for (std::size_t i = 0; i < kNumLegsSz; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+      return lowest_pin(a) < lowest_pin(b);
+    });
+    return order;
+  }();
+  return kOrder;
+}
 
 // Reusable encode buffers (single-core cooperative loop → no synchronisation).
 std::vector<std::uint8_t> g_set_buf;
@@ -233,21 +255,22 @@ void send_set(std::uint8_t start_pin, const std::uint16_t* pulses_us,
 }
 
 void command_all(const float theta_rad[kNumJoints]) {
-  std::uint16_t pulses[kNumJoints];
-  for (int i = 0; i < kNumJoints; ++i) {
+  std::uint16_t pulses[kNumJointsSz];
+  for (std::size_t i = 0; i < kNumJointsSz; ++i) {
     pulses[i] = to_pulse_us(kJoints[i], theta_rad[i]);
   }
-  // Walk the pin-sorted table, accumulating runs of consecutive pins, and emit
-  // one SET frame per run (pins 1..18 → a single run under the current wiring).
+  // Walk the joints in PIN order, accumulating runs of consecutive pins, and
+  // emit one SET frame per run (pins 1..18 are all wired, so the current harness
+  // collapses to a single 18-value frame).
+  const auto& order = pin_order();
   std::size_t i = 0;
-  while (i < kNumJoints) {
-    const std::uint8_t run_start = kJoints[i].pin;
-    std::uint16_t run[kNumJoints];
+  while (i < kNumJointsSz) {
+    const std::uint8_t run_start = kJoints[order[i]].pin;
+    std::uint16_t run[kNumJointsSz];
     std::size_t n = 0;
     std::size_t k = i;
-    while (k < static_cast<std::size_t>(kNumJoints) &&
-           kJoints[k].pin == run_start + (k - i)) {
-      run[n++] = pulses[k];
+    while (k < kNumJointsSz && kJoints[order[k]].pin == run_start + (k - i)) {
+      run[n++] = pulses[order[k]];
       ++k;
     }
     send_set(run_start, run, n);
@@ -255,9 +278,43 @@ void command_all(const float theta_rad[kNumJoints]) {
   }
 }
 
+void command_legs(const float theta_rad[kNumJoints], int n_legs) {
+  if (n_legs <= 0) return;
+  // Once every leg is live, fall back to the whole-table walk — that collapses
+  // to a single 18-servo SET frame under the current wiring, so the steady state
+  // costs exactly what it did before the sweep existed.
+  if (n_legs >= hexa::kNumLegs) {
+    command_all(theta_rad);
+    return;
+  }
+  const auto& order = leg_pin_order();
+  for (std::size_t l = 0; l < static_cast<std::size_t>(n_legs); ++l) {
+    const std::size_t base = order[l] * kJointsPerLeg;
+    std::uint16_t pulses[kJointsPerLeg];
+    for (std::size_t k = 0; k < kJointsPerLeg; ++k) {
+      pulses[k] = to_pulse_us(kJoints[base + k], theta_rad[base + k]);
+    }
+    // Same consecutive-pin run grouping as command_all, scoped to this leg (one
+    // frame per leg while its three joints sit on consecutive pins).
+    std::size_t i = 0;
+    while (i < kJointsPerLeg) {
+      const std::uint8_t run_start = kJoints[base + i].pin;
+      std::uint16_t run[kJointsPerLeg];
+      std::size_t n = 0;
+      std::size_t k = i;
+      while (k < kJointsPerLeg && kJoints[base + k].pin == run_start + (k - i)) {
+        run[n++] = pulses[k];
+        ++k;
+      }
+      send_set(run_start, run, n);
+      i = k;
+    }
+  }
+}
+
 float joint_center_rad(int joint) {
   if (joint < 0 || joint >= kNumJoints) return 0.0f;
-  return kJoints[joint].urdf_rad_at_center;
+  return kJoints[static_cast<std::size_t>(joint)].urdf_rad_at_center;
 }
 
 void set_relay(bool energized) {

@@ -111,9 +111,11 @@ Landed:
   (disabled-threshold no-op, hold-time latch, brief-recovery reset, hysteresis
   clear, critical latch — ported from `hexa_display`'s `BatteryMonitor`), the
   stale-input watchdog (fresh / timed-out / disconnected / no-frame-yet), the
-  relay-arming state machine (disarmed at boot, arms on link-up + stand, holds
-  through a stale link, drops on clean fold / critical battery, won't re-arm
-  while critical), the status-LED mapping (solid only when linked + walking +
+  relay-arming state machine (arms on link-up in any non-fault state — including
+  a boot-time FOLDED — holds through a stale link and through being held folded,
+  drops on the completed-fold edge / critical battery / fault, won't re-arm while
+  critical), the per-leg energize sweep that staggers the inrush at the relay
+  edge (`energize_sweep.hpp`), the status-LED mapping (solid only when linked + walking +
   fresh, fast blink on fault, slow otherwise), and the tick-jitter accounting
   (interval min/max, deadline overruns vs the period + margin).
 

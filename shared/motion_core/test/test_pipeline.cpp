@@ -113,17 +113,29 @@ void stand_up(pl::Pipeline& p, std::uint64_t& now_us) {
   ASSERT_TRUE(stood) << "engine never reached STAND from the init ladder";
 }
 
-// A cold pipeline holds FOLDED — an unpaired/idle controller never moves the
-// legs and never energizes the servo rail.
+// A cold pipeline holds FOLDED — an idle controller never moves the legs — but
+// the rail arms on the live link so the robot comes up energized in the folded
+// pose. (The caller staggers that energize leg by leg; see hexa::EnergizeSweep.)
 TEST(Pipeline, HoldsFoldedUntilInit) {
   pl::Pipeline p;
   std::uint64_t now_us = 0;
   Pad neutral;
   const pl::TickResult r = run(p, neutral, 20, now_us);
   EXPECT_EQ(r.engine_state, EngineState::FOLDED);
-  EXPECT_FALSE(r.relay_energized);
+  EXPECT_TRUE(r.relay_energized);
   EXPECT_FALSE(r.walking);
   EXPECT_EQ(r.unreachable, 0);
+}
+
+// With no link there is no pilot, so the rail stays open however long the
+// pipeline idles in FOLDED.
+TEST(Pipeline, DoesNotEnergizeWithoutALink) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  Pad neutral;
+  const pl::TickResult r = run(p, neutral, 20, now_us, /*connected=*/false);
+  EXPECT_EQ(r.engine_state, EngineState::FOLDED);
+  EXPECT_FALSE(r.relay_energized);
 }
 
 // The init button drives FOLDED -> INITIALIZE -> STAND, and once stood on a live

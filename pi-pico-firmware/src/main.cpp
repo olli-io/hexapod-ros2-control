@@ -35,6 +35,7 @@
 #include "bt_teleop.hpp"
 #include "config_generated.hpp"
 #include "dbg.hpp"
+#include "energize_sweep.hpp"
 #include "gait/engine.hpp"
 #include "leg_index.hpp"
 #include "pipeline.hpp"
@@ -113,12 +114,18 @@ int main() {
     }
 
     // Servo 2040 Chica link (part 03): bring up the UART. The rail stays DROPPED
-    // at boot — the pipeline's supervisor energizes it only after the link is up
-    // and the engine has stood (relay-arming discipline), and drops it on a clean
-    // fold or a critical battery.
+    // at boot — the pipeline's supervisor energizes it once the link is up in any
+    // non-FAULT engine state (so normally as soon as a pad pairs, while the engine
+    // is still FOLDED) and drops it on a clean fold or a critical battery.
     servo_out::init();
     servo_out::set_relay(false);
     bool relay_state = false;
+
+    // Inrush stagger: the board drives a servo only once we SET it, so at the
+    // relay OFF->ON edge the legs come up one at a time rather than all 18 servos
+    // leaving limp in the same tick. Same policy the ROS hexa_hardware plugin runs.
+    hexa::EnergizeSweep sweep(
+        static_cast<float>(hexa::config::kSweepLegIntervalMs) * 1e-3f);
 
     // The whole control brain (parts 05-09): teleop mapping, velocity shaping,
     // gait engine, posture stack, and the failsafe supervisor, built from the
@@ -134,7 +141,8 @@ int main() {
            (unsigned long long)kTickPeriodUs, 1e6 / (double)kTickPeriodUs);
     HEXA_DBG("bt: scanning for a gamepad (pair a PS4/PS5/Xbox pad)\n");
     HEXA_DBG("servo: Chica UART up (uart0 GP0/GP1 @ 921600); rail DROPPED "
-           "(arms on link-up + stand)\n");
+           "(arms on link-up, energizes %d legs %d ms apart)\n",
+           hexa::kNumLegs, hexa::config::kSweepLegIntervalMs);
     HEXA_DBG("teleop: press init (start) to stand; sticks drive once standing\n");
     HEXA_DBG("safety: input timeout %.2f s, battery GET every %d ticks, heap %lu B "
            "free\n",
@@ -265,9 +273,16 @@ int main() {
             }
 
             // Relay discipline: drive the rail to the armed state, logging edges.
+            // The edge also (re)starts the per-leg energize sweep, so a cold start
+            // and an over-current recovery stagger the inrush identically.
             if (res.relay_energized != relay_state) {
                 servo_out::set_relay(res.relay_energized);
                 relay_state = res.relay_energized;
+                if (relay_state) {
+                    sweep.arm();
+                } else {
+                    sweep.disarm();
+                }
                 HEXA_DBG("[safety] relay %s (state=%s%s)\n",
                        relay_state ? "ENERGIZED" : "dropped",
                        hexa::gait::state_value(pipeline.engine().state()).c_str(),
@@ -280,7 +295,7 @@ int main() {
             last_compute_us = time_us_64() - c0;
 
             const uint64_t t0 = time_us_64();
-            servo_out::command_all(res.theta);
+            servo_out::command_legs(res.theta, sweep.step(kDt));
             last_set_burst_us = time_us_64() - t0;
 
             const uint32_t fh = heap_free_bytes();  // soak low-water mark

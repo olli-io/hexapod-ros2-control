@@ -3,8 +3,9 @@
 Wraps the robot stack with production policy: it composes robot.launch.py —
 the reusable robot — with the gamepad and web teleop input sources, which
 robot.launch.py deliberately omits. robot.launch.py energizes on launch
-(hardware active + controllers spawned), so the container comes up drivable;
-the servo rail relay still waits for a stand command.
+(hardware active + controllers spawned), so the container comes up drivable; the
+servo rail closes once teleop is publishing and the robot holds the folded pose,
+but standing still waits for a stand command.
 
   1. robot.launch.py — the robot, brought up energized.
   2. teleop.launch.py — gamepad → /cmd_vel + /body/pose.

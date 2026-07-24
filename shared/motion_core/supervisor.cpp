@@ -82,18 +82,26 @@ Decision Supervisor::step(const Observation& obs) {
     input_stale = since_s >= cfg_.input_timeout_s;
   }
 
-  // Relay-arming discipline. Arm (energize) only once the link is up AND the
-  // engine has stood — the electrical backstop stays dropped through boot,
-  // pairing, and the INITIALIZE ladder. Disarm on a clean fold (feet parked in
-  // the folded pose — the safe moment to cut) or a critical battery (protect
-  // the electronics). A stale link / lost pilot deliberately does NOT drop the
-  // rail: the robot holds its stand and settles; cutting servo power mid-stance
-  // would collapse it.
+  // Relay-arming discipline. Arm (energize) once the link is up and the engine
+  // is in an armable state — which now includes FOLDED, so the robot comes up
+  // energized in the folded pose and the INITIALIZE ladder runs with the rail
+  // already live. The consumer staggers the actual servo energize leg by leg
+  // (hexa::EnergizeSweep) so closing the relay is not an inrush spike.
+  //
+  // Disarm on a clean fold — the *rising* edge of `folded`, i.e. a completed
+  // FOLDING -> FOLDED park, the safe moment to cut — or on a critical battery
+  // (protect the electronics) or a latched over-current. Being folded at boot is
+  // not a park: at that point the rail is not armed yet, so the edge is a no-op
+  // and the next tick arms. A stale link / lost pilot deliberately does NOT drop
+  // the rail: the robot holds its stand and settles; cutting servo power
+  // mid-stance would collapse it.
+  const bool fold_completed = obs.folded && !prev_folded_;
+  prev_folded_ = obs.folded;
   if (relay_armed_) {
-    if (obs.folded || batt_critical || obs.fault) {
+    if (fold_completed || batt_critical || obs.fault) {
       relay_armed_ = false;
     }
-  } else if (obs.bt_connected && obs.stood && !batt_critical && !obs.fault) {
+  } else if (obs.bt_connected && obs.armable && !batt_critical && !obs.fault) {
     relay_armed_ = true;
   }
 

@@ -91,6 +91,31 @@ consecutive pins (0–2, 3–5, …). `write()` sorts joints by pin index,
 splits into maximal consecutive runs, and emits one SET frame per run.
 With the default config that's six 5-byte-payload frames per cycle.
 
+## Servo rail: relay, then a per-leg energize sweep
+
+The board never drives a servo the host has not commanded. `SET RELAY 1` closes
+the relay with **every servo limp**, and a servo SET sent while the rail is open
+is discarded (there is no pre-relay staging), so the host owns both the pose and
+the order the servos come up in.
+
+`apply_relay()` (called from `read()`, on the controller-manager thread) drives
+the relay toward `/hardware/relay_cmd` — the locomotion supervisor's arm intent,
+true on a live link in any non-`fault` engine state — and forces it off while a
+board over-current trip is latched. On the OFF→ON edge it arms
+`hexa::EnergizeSweep` (`shared/motion_core/energize_sweep.hpp`, shared with the
+Pico firmware), and `write()` then drives only the legs the sweep has brought
+live so far:
+
+- Legs come up in **pin order**, `init.sweep_leg_interval_ms` apart. With the
+  shipped wiring that is `l_rear, r_rear, l_middle, r_middle, l_front, r_front`
+  — rear → front, alternating sides.
+- The stagger keeps the inrush as six small steps instead of one spike big
+  enough to trip the board's over-current tiers. `0` disables it.
+- Once the sweep completes, `write()` emits exactly what it did before it
+  existed. `build_leg_order` (`leg_order.hpp`) derives the leg grouping from the
+  joint names + pin table, so a rewired harness re-orders the sweep with it.
+- The same edge serves cold start and over-current recovery.
+
 ## State feedback
 
 `read()` echoes the last commanded position into the position state
@@ -108,8 +133,10 @@ the sensors are always present on the board.
 
 - `on_init` — load config, build Transport + BoardProtocol via factory.
 - `on_configure` — open the Transport.
-- `on_activate` — `set_servo_power(true)` (servo rail on), reset commands
-  to the current echoed state so the first cycle doesn't snap.
+- `on_activate` — `set_servo_power(false)` (known-off baseline, which also
+  clears any latch), reset commands to the current echoed state so the first
+  cycle doesn't snap. Activating never powers the rail; `apply_relay()` closes
+  it once the supervisor asks.
 - `on_deactivate` — `set_servo_power(false)`.
 - `on_cleanup` — close serial, stop the aux publisher thread.
 
@@ -117,7 +144,8 @@ the sensors are always present on the board.
 
 Config lives in `hexa_description/config/`, split in two:
 
-- `hardware.yaml` — wiring: `connection`, `parser`, `deg_at_center`, a shared
+- `hardware.yaml` — wiring: `connection`, `parser`, `init`
+  (`sweep_leg_interval_ms`), `deg_at_center`, a shared
   `servo_defaults.pulse_us` clamp, and a `servos` map of per-servo
   `{pin, reversed?, pulse_us?}` (keyed by URDF joint name; `reversed`/`pulse_us`
   default when omitted). No relay/aux pins: the relay and battery sensors are

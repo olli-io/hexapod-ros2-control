@@ -6,8 +6,11 @@
 // calibration. Not exhaustive; it pins the load-bearing constants and the
 // tricky derived ones so a broken generator fails loudly.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <string_view>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -192,27 +195,59 @@ TEST(Control, RampAndSnap) {
 
 TEST(Hardware, ServoCalibration) {
   ASSERT_EQ(cfg::kJointCals.size(), 18u);
-  // Pins sorted 1..18; table order is the joint order.
+
+  // Row order is the pipeline's theta[] order (LEG_NAMES x {coxa, femur, tibia}),
+  // NOT pin order — kJointCals[i] must calibrate theta[i]. The wiring is carried
+  // per row in `pin`. This is the hand-authored half of hardware.yaml (`servos`:
+  // pin + `reversed`), so it is worth pinning exactly; the endpoint pulse widths
+  // are calibration output and are only range-checked below.
+  struct Wiring {
+    std::uint8_t pin;
+    int direction;  // hardware.yaml `reversed: true` -> -1
+  };
+  constexpr Wiring kWiring[18] = {
+      {13, -1}, {14, +1}, {15, -1},  // l_front  {coxa, femur, tibia}
+      {7, -1},  {8, +1},  {9, -1},   // l_middle
+      {1, -1},  {2, +1},  {3, -1},   // l_rear
+      {16, -1}, {17, -1}, {18, +1},  // r_front
+      {10, -1}, {11, -1}, {12, +1},  // r_middle
+      {4, -1},  {5, -1},  {6, +1},   // r_rear
+  };
   for (std::size_t i = 0; i < cfg::kJointCals.size(); ++i) {
-    EXPECT_EQ(cfg::kJointCals[i].pin, static_cast<std::uint8_t>(i + 1));
-    EXPECT_NEAR(cfg::kJointCals[i].us_at_plus_45, 2000.0f, kTol);
-    EXPECT_NEAR(cfg::kJointCals[i].us_at_minus_45, 1000.0f, kTol);
-    // This build: left femur/tibia are mirror-mounted (-1); coxa and the whole
-    // right side are normal (+1). Indices 0..8 are the left legs, each
-    // {coxa, femur, tibia}; i % 3 == 0 is the coxa.
-    const bool left_leg = i < 9;
-    const bool is_coxa = (i % 3) == 0;
-    const int expected_dir = (left_leg && !is_coxa) ? -1 : 1;
-    EXPECT_EQ(cfg::kJointCals[i].direction, expected_dir);
-    EXPECT_EQ(cfg::kJointCals[i].min_us, 500);
-    EXPECT_EQ(cfg::kJointCals[i].max_us, 2500);
+    const auto& j = cfg::kJointCals[i];
+    EXPECT_EQ(j.pin, kWiring[i].pin) << "row " << i;
+    EXPECT_EQ(j.direction, kWiring[i].direction) << "row " << i;
+    EXPECT_EQ(j.min_us, 500) << "row " << i;
+    EXPECT_EQ(j.max_us, 2500) << "row " << i;
+    // Endpoints are measured magnitudes — they move every calibration run, so
+    // only the invariants are pinned: both inside the electrical clamp, and
+    // distinct (equal endpoints would make the slope zero).
+    EXPECT_GT(j.us_at_plus_45, static_cast<float>(j.min_us)) << "row " << i;
+    EXPECT_LT(j.us_at_plus_45, static_cast<float>(j.max_us)) << "row " << i;
+    EXPECT_GT(j.us_at_minus_45, static_cast<float>(j.min_us)) << "row " << i;
+    EXPECT_LT(j.us_at_minus_45, static_cast<float>(j.max_us)) << "row " << i;
+    EXPECT_NE(j.us_at_plus_45, j.us_at_minus_45) << "row " << i;
+  }
+  // Every servo pin is wired exactly once.
+  bool used[19] = {};
+  for (const auto& j : cfg::kJointCals) {
+    ASSERT_GE(j.pin, 1);
+    ASSERT_LE(j.pin, 18);
+    EXPECT_FALSE(used[j.pin]) << "pin " << static_cast<int>(j.pin) << " wired twice";
+    used[j.pin] = true;
   }
   // urdf_rad_at_center from hardware.yaml deg_at_center (coxa 0, femur 40,
-  // tibia 68) — the sole source for the servo-center angle.
+  // tibia 68) — the sole source for the servo-center angle. Uniform per segment,
+  // so check one leg and trust the loop above for the rest.
   EXPECT_NEAR(cfg::kJointCals[0].urdf_rad_at_center, 0.0f, kTol);          // coxa
   EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(40.0f), kTol);   // femur
   EXPECT_NEAR(cfg::kJointCals[2].urdf_rad_at_center,
               static_cast<float>(M_PI) - deg(68.0f), kTol);                // tibia
+  for (std::size_t i = 0; i < cfg::kJointCals.size(); ++i) {
+    EXPECT_NEAR(cfg::kJointCals[i].urdf_rad_at_center,
+                cfg::kJointCals[i % 3].urdf_rad_at_center, kTol)
+        << "row " << i << " segment centre differs from leg 0";
+  }
   // Chica command-index map + scales per protocol.md (hexapod-servo2040-driver):
   // CURR=24, VOLT=25 (consecutive), RELAY=26, STATUS=27; telemetry in 0.01
   // centi-units; STATUS trip current at 0.1 A/count.
@@ -223,4 +258,48 @@ TEST(Hardware, ServoCalibration) {
   EXPECT_NEAR(cfg::kBatteryVoltageScale, 0.01f, 1e-7f);
   EXPECT_NEAR(cfg::kBatteryCurrentScale, 0.01f, 1e-7f);
   EXPECT_NEAR(cfg::kTripAmpsPerCount, 0.1f, 1e-7f);
+}
+
+TEST(Hardware, LegsAreWiredRearToFront) {
+  // Sorting the rows by pin must yield the harness order the energize sweep
+  // brings legs up in. Both consumers derive this the same way — the firmware's
+  // servo_out leg_pin_order() off kJointCals, hexa_hardware's build_leg_order()
+  // off hardware.yaml — so pinning it here pins both.
+  std::array<std::size_t, hexa::kNumLegs> order{};
+  for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+  auto lowest_pin = [](std::size_t leg) {
+    std::uint8_t p = cfg::kJointCals[leg * 3].pin;
+    for (std::size_t k = 1; k < 3; ++k) {
+      p = std::min(p, cfg::kJointCals[leg * 3 + k].pin);
+    }
+    return p;
+  };
+  std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+    return lowest_pin(a) < lowest_pin(b);
+  });
+
+  std::vector<std::string_view> names;
+  for (const std::size_t leg : order) {
+    names.push_back(hexa::LEG_NAMES[leg]);
+  }
+  EXPECT_EQ(names, (std::vector<std::string_view>{"l_rear", "r_rear", "l_middle",
+                                                  "r_middle", "l_front",
+                                                  "r_front"}));
+  // Each leg's three joints sit on consecutive pins, so a leg is one SET frame.
+  for (std::size_t leg = 0; leg < hexa::kNumLegs; ++leg) {
+    EXPECT_EQ(cfg::kJointCals[leg * 3 + 1].pin, cfg::kJointCals[leg * 3].pin + 1)
+        << hexa::LEG_NAMES[leg];
+    EXPECT_EQ(cfg::kJointCals[leg * 3 + 2].pin, cfg::kJointCals[leg * 3].pin + 2)
+        << hexa::LEG_NAMES[leg];
+  }
+}
+
+TEST(Hardware, StartupKnobs) {
+  // hardware.yaml parser.get_period_ticks / init.sweep_leg_interval_ms — the two
+  // host-side pacing knobs the firmware bakes rather than loads.
+  EXPECT_EQ(cfg::kGetPeriodTicks, 10);
+  // Non-negative by construction (gen_config rejects a negative); 0 opts out of
+  // the per-leg energize stagger.
+  EXPECT_GE(cfg::kSweepLegIntervalMs, 0);
+  EXPECT_EQ(cfg::kSweepLegIntervalMs, 150);
 }

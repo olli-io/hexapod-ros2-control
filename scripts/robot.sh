@@ -63,10 +63,10 @@ Commands:
 
 Teleop (gamepad + web) is part of the container's launch, so the robot is drivable
 as soon as 'up' finishes. The container energizes on launch — HexaSystem goes active
-and both controllers spawn — but energizing never powers the servo rail on its own:
-the relay closes only once the robot stands (gamepad Start or /gait/initialize). A
-'restart: unless-stopped' auto-restart therefore comes back energized but stationary,
-so 'boot' is safe to run unattended.
+and both controllers spawn. The servo rail closes once teleop is publishing and the
+robot takes up its folded pose one leg at a time, then stops: standing takes a
+gamepad Start (or /gait/initialize). A 'restart: unless-stopped' auto-restart
+therefore comes back energized but stationary, so 'boot' is safe to run unattended.
 EOF
 }
 
@@ -151,9 +151,9 @@ wait_for_device() {
 
 # Unattended entry point for the systemd unit (see systemd/hexa-robot.service).
 # Pre-flights the daemon and the device nodes compose maps, then runs the same
-# `up` an operator would. Energizing spawns the controllers but leaves the servo
-# rail open — the relay closes only once the robot stands — so this is safe to
-# run with nobody watching.
+# `up` an operator would. Energizing spawns the controllers; the servo rail then
+# closes and the robot settles into its folded pose leg by leg, but it never
+# stands without a Start — so this is safe to run with nobody watching.
 cmd_boot() {
     [[ $# -eq 0 ]] || die "boot: unexpected argument '$1'"
 

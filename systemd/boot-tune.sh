@@ -28,8 +28,10 @@ CHANNEL="${TUNE_CHANNEL:-2}"
 PIN_ALT="${TUNE_PIN_ALT-a3}"
 TEMPO="${TUNE_TEMPO:-0.150}"
 
-# Mario coin: a short, unmistakable two-note "I'm up".
-MELODY="${TUNE_MELODY:-B5:0.5 E6:3.5}"
+# A short, unmistakable two-note "I'm up". The notes need real duration and a
+# rest between them, or a very short first note runs straight into the second
+# and the two blur into one continuous rising beep.
+MELODY="${TUNE_MELODY:-B5:2 REST:1 E6:4}"
 
 # How long to wait for the PWM sysfs tree to appear. The RP1 PWM driver probes
 # early, but the unit can still win the race on a cold boot.

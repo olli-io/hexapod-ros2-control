@@ -253,8 +253,10 @@ Run the robot ops on the Pi (the launcher was shipped in step 4). The container
 energizes itself on launch — `robot.launch.py` brings `HexaSystem` active and
 spawns both controllers — so `up` just does `compose up -d` and waits for
 `controller_manager` to report ready; `down` is the safe-stop (relay off + unload,
-then compose down). The gamepad and web teleop are part of the container's launch,
-so the robot is drivable as soon as `up` finishes — no separate teleop step:
+then compose down). The servo rail closes a moment later and the robot settles
+into its folded pose leg by leg (see the energize-sweep note in §6c). The gamepad
+and web teleop are part of the container's launch, so the robot is drivable as
+soon as `up` finishes — no separate teleop step:
 
 ```
 ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot up'
@@ -272,16 +274,18 @@ the command over ssh in `~/hexa-robot`:
 `./hexa robot {restart|status|logs|shell}` are the routine container ops against
 the local `hexa-robot` service (also `-H`-dispatchable from the workstation).
 
-Energizing spawns the controllers and activates `HexaSystem`, but it never powers
-the servo rail on its own — the relay closes only once the robot **stands** (gamepad
-Start or `/gait/initialize`). So a `restart: unless-stopped` auto-restart (crash /
-power blip) brings the stack back **energized but stationary**: the servos never
-flail unattended. Energize-on-launch is implemented by passing
+Energizing spawns the controllers and activates `HexaSystem`. Activating the
+component does not itself touch the relay: it closes when `hexa_locomotion`
+publishes `true` on `/hardware/relay_cmd`, which the supervisor asks for once
+teleop is publishing — normally within a second of launch, while the engine is
+still `folded`. The robot then takes up its **folded pose under power** and stops
+there; standing takes a gamepad **Start** (or `/gait/initialize`). So a
+`restart: unless-stopped` auto-restart (crash / power blip) brings the stack back
+**energized but stationary**: the servos never flail unattended.
+Energize-on-launch is implemented by passing
 `hardware_components_initial_state: {active: [HexaSystem]}` to `controller_manager`
-from `robot.launch.py`, which also spawns both controllers. No new C++ in
-`hexa_hardware` — activating the component does not touch the relay; it closes only
-when `hexa_locomotion` publishes `true` on `/hardware/relay_cmd`, which the
-supervisor asks for only once the robot has stood (see the boot-limp note below).
+from `robot.launch.py`, which also spawns both controllers (see the energize-sweep
+note below).
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
 
@@ -382,12 +386,24 @@ What the unit does on boot:
   unloaded) before the container is removed, so a `systemctl stop`, reboot, or
   shutdown de-energizes cleanly instead of yanking power.
 
-**The robot still boots limp.** Activating the hardware component does not close
-the servo relay — `hexa_hardware` only drives `SET RELAY` once `hexa_locomotion`
-publishes `true` on `/hardware/relay_cmd`, and the supervisor only asks for that
-once the robot has stood. So after boot the hexapod sits folded and unpowered;
+**The robot boots into the folded pose, one leg at a time.** Activating the
+hardware component does not close the servo relay — `hexa_hardware` drives
+`SET RELAY` off `/hardware/relay_cmd`, which the supervisor raises once teleop is
+publishing (any engine state but `fault`). The board closes the relay with every
+servo **limp** and drives a servo only once the host has commanded it, so
+`hexa_hardware` staggers that: the legs come up one at a time in pin order —
+`l_rear, r_rear, l_middle, r_middle, l_front, r_front`, i.e. rear → front —
+`init.sweep_leg_interval_ms` apart (150 ms by default, so ~0.75 s for the whole
+sweep). That keeps the combined inrush as six small steps instead of one spike
+big enough to trip the board's over-current protection. Set the interval to `0`
+in `hardware.yaml` to energize every leg at once.
+
+After the sweep the hexapod sits folded and powered, and goes no further:
 pressing **Start** on the gamepad (or publishing `/gait/initialize`) is what
-energizes it. Nothing moves unattended.
+stands it up. Nothing walks unattended. Folding again (Start from a stand) parks
+the feet and drops the rail, so the robot ends up limp — the same state a
+`hexa robot down` leaves it in. An over-current trip also drops the rail and
+holds it open until Start recovers; the sweep re-runs on that edge too.
 
 Inspecting and undoing:
 

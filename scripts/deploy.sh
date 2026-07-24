@@ -177,8 +177,9 @@ chmod +x systemd/boot-tune.sh
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 
-    echo ">> Deployed and energized. The servo rail stays open until the robot stands."
-    echo "   Stand it:       gamepad Start (or publish /gait/initialize) to close the relay."
+    echo ">> Deployed and energized. The servo rail closes once teleop publishes; the"
+    echo "   robot takes up the folded pose one leg at a time and stops there."
+    echo "   Stand it:       gamepad Start (or publish /gait/initialize)."
     echo "   Status:         hexa robot -H ${host} status"
     echo "   Start on boot:  ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-service'"
 }

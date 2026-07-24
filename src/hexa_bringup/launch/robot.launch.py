@@ -3,10 +3,13 @@
     ros2 launch hexa_bringup robot.launch.py
 
 The robot energizes on launch: the hardware comes up `active` and both controllers
-(joint_state_broadcaster + joint_group_position_controller) are spawned. This never
-powers the servo rail on its own — the relay closes only once the robot stands
-(gamepad Start or /gait/initialize) — so an unattended auto-restart comes back
-energized but stationary. `hexa robot down` safe-stops (unload + deactivate).
+(joint_state_broadcaster + joint_group_position_controller) are spawned. The servo
+rail follows shortly after, once teleop is publishing — the robot takes up the
+folded pose under power, one leg at a time (hexa_hardware's energize sweep, paced
+by `init.sweep_leg_interval_ms` in hardware.yaml, so the inrush arrives as six
+small steps rather than one spike). It does NOT walk unattended: standing still
+takes a gamepad Start or /gait/initialize. `hexa robot down` safe-stops
+(unload + deactivate), which drops the rail.
 """
 import os
 
@@ -79,8 +82,10 @@ def _bringup(context, *args, **kwargs):
         pkg_hexa_bringup, "config", "ros2_controllers.yaml",
     ])
 
-    # Energize on launch: bring the hardware straight to `active`. The servo rail
-    # relay stays open until the robot stands, so this is safe unattended. Only
+    # Energize on launch: bring the hardware straight to `active`. Activating the
+    # component does not touch the relay — hexa_hardware closes it off
+    # /hardware/relay_cmd — and the robot only takes up its folded pose, so this
+    # is safe unattended. Only
     # the `active` key is emitted — an empty `unconfigured: []` would normalize to
     # an empty tuple, which launch_ros rejects as a parameter value.
     cm_parameters = [

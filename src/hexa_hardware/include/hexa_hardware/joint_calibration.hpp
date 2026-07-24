@@ -71,15 +71,27 @@ struct ParserConfig {
   int get_period_ticks = 10;
 };
 
+// Startup behaviour. The board never drives a servo the host has not commanded,
+// so the host owns the energize order at the relay OFF→ON edge; staggering it
+// keeps the combined inrush below the board's over-current tiers.
+struct InitConfig {
+  // Stagger between consecutive legs, in milliseconds. 0 energizes every leg at
+  // once (the pre-sweep behaviour). Consumed by HexaHardware via
+  // hexa::EnergizeSweep, not by the protocol.
+  int sweep_leg_interval_ms = 150;
+};
+
 struct HardwareConfig {
   ConnectionConfig connection;
   ParserConfig parser;
+  InitConfig init;
 
   std::unordered_map<std::string, JointCalibration> joints;
 };
 
 // Load + validate hardware config. `hardware_path` is the YAML with wiring,
-// connection/parser, `deg_at_center`, a shared `servo_defaults.pulse_us`
+// connection/parser, an optional `init` block (energize-sweep stagger),
+// `deg_at_center`, a shared `servo_defaults.pulse_us`
 // clamp, and a per-servo `{pin, reversed?, pulse_us?}` map under `servos`. The
 // relay pin and battery-telemetry units are board-owned (fixed protocol
 // contract), so they are not configured here.

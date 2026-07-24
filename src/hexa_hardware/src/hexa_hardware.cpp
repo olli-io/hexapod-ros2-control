@@ -151,6 +151,35 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
     }
   }
 
+  // The same view grouped into legs (ordered by lowest pin) — the granularity
+  // the energize sweep staggers at.
+  std::vector<std::string> joint_names;
+  joint_names.reserve(joints_.size());
+  for (const auto& j : joints_) joint_names.push_back(j.name);
+  try {
+    leg_order_ = build_leg_order(joint_names, pin_order_);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger(kLogger), "Leg grouping failed: %s", e.what());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  sweep_ = hexa::EnergizeSweep(
+      static_cast<float>(config_.init.sweep_leg_interval_ms) * 1e-3f);
+  if (sweep_.interval_s() > 0.0f) {
+    std::string order;
+    for (const auto& leg : leg_order_) {
+      if (!order.empty()) order += ", ";
+      order += leg.name;
+    }
+    RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                "Energize sweep: %zu legs, %d ms apart, in pin order (%s)",
+                leg_order_.size(), config_.init.sweep_leg_interval_ms,
+                order.c_str());
+  } else {
+    RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                "Energize sweep disabled — every leg comes up at once");
+  }
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -214,14 +243,15 @@ hardware_interface::CallbackReturn HexaHardware::on_configure(
 
 hardware_interface::CallbackReturn HexaHardware::on_activate(
     const rclcpp_lifecycle::State& /*previous*/) {
-  // Do NOT energise the rail here: the board's staged-pose rule makes a bare
-  // SET RELAY 1 a silent no-op until a servo pose has been staged. Start the
-  // rail OFF and let apply_relay() enable it once (a) the locomotion supervisor
-  // asks (relay_cmd_ — true once the engine has stood) and (b) write() has
-  // staged a pose. Same handshake serves cold start and over-current recovery.
+  // Do NOT energise the rail here: activating the component must not power the
+  // servos on its own. Start the rail OFF and let apply_relay() close it once
+  // the locomotion supervisor asks (relay_cmd_ — true on a live link in any
+  // non-FAULT engine state, so normally within a second of launch, while the
+  // engine is still FOLDED). The energize sweep then brings the legs up one at
+  // a time. Same path serves cold start and over-current recovery.
   relay_on_ = false;
   faulted_ = false;
-  pose_staged_since_disable_ = false;
+  sweep_.disarm();
   relay_cmd_.store(false);
   try {
     board_->set_servo_power(false);  // known-off baseline (also clears any latch)
@@ -249,7 +279,7 @@ hardware_interface::CallbackReturn HexaHardware::on_deactivate(
     }
   }
   relay_on_ = false;
-  pose_staged_since_disable_ = false;
+  sweep_.disarm();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -309,7 +339,7 @@ hardware_interface::return_type HexaHardware::read(
                         "Latch clear (SET RELAY 0) failed: %s", e.what());
           }
           relay_on_ = false;
-          pose_staged_since_disable_ = false;
+          sweep_.disarm();
           if (fault_pub_) {
             std_msgs::msg::Bool fm;
             fm.data = true;
@@ -340,19 +370,19 @@ hardware_interface::return_type HexaHardware::read(
 void HexaHardware::apply_relay() {
   if (!board_) return;
   // Force the rail off while a trip is latched; otherwise follow the locomotion
-  // supervisor's arm intent. Enable only once a pose has been staged since the
-  // last disable (write() streams SETs every tick, so this is satisfied within
-  // one tick of any disable) — a bare SET RELAY 1 with nothing staged is a
-  // board no-op.
+  // supervisor's arm intent. SET RELAY 1 closes the relay with every servo limp
+  // — it never moves a servo on its own — so there is nothing to stage first;
+  // write() drives the legs afterwards, staggered by the sweep armed here.
   const bool desired = relay_cmd_.load() && !faulted_;
   try {
-    if (desired && !relay_on_ && pose_staged_since_disable_) {
+    if (desired && !relay_on_) {
       board_->set_servo_power(true);
       relay_on_ = true;
+      sweep_.arm();
     } else if (!desired && relay_on_) {
       board_->set_servo_power(false);
       relay_on_ = false;
-      pose_staged_since_disable_ = false;
+      sweep_.disarm();
     }
   } catch (const std::exception& e) {
     RCLCPP_WARN_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
@@ -361,40 +391,51 @@ void HexaHardware::apply_relay() {
 }
 
 hardware_interface::return_type HexaHardware::write(
-    const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-  if (!transport_ || !transport_->is_open() || pin_order_.empty()) {
+    const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
+  // The echo is unconditional: /joint_states and the velocity derivative must
+  // stay continuous whether or not a joint is being driven this tick.
+  for (auto& j : joints_) j.pos = j.cmd;
+
+  if (!transport_ || !transport_->is_open() || leg_order_.empty()) {
     return hardware_interface::return_type::OK;
   }
-  // Walk the pin-sorted index, accumulating into runs of consecutive pins,
-  // then emit one SET frame per run.
+  // Servo SETs sent while the relay is open are discarded by the board (there is
+  // no pre-relay staging), so don't burn the link on them.
+  if (!relay_on_) return hardware_interface::return_type::OK;
+
+  // Advance the inrush stagger: only the first `live` legs of the pin-ordered
+  // table are driven, the rest stay limp until their turn comes round.
+  const int live = sweep_.step(static_cast<float>(period.seconds()));
+  const std::size_t n_legs =
+      std::min(static_cast<std::size_t>(live), leg_order_.size());
+
+  // Within each energized leg, accumulate runs of consecutive pins and emit one
+  // SET frame per run (one frame per leg under the shipped wiring).
   std::vector<std::uint16_t> batch;
   batch.reserve(joints_.size());
-  std::size_t i = 0;
-  while (i < pin_order_.size()) {
-    const std::uint8_t run_start = pin_order_[i].pin;
-    batch.clear();
-    std::size_t k = i;
-    while (k < pin_order_.size() &&
-           pin_order_[k].pin == run_start + (k - i)) {
-      auto& j = joints_[pin_order_[k].joint_idx];
-      const std::uint16_t us = j.cal.to_pulse_us(j.cmd);
-      batch.push_back(us);
-      j.pos = j.cmd;  // echo: state mirrors the most recent command
-      ++k;
+  for (std::size_t leg = 0; leg < n_legs; ++leg) {
+    const auto& idxs = leg_order_[leg].pin_order_idx;
+    std::size_t i = 0;
+    while (i < idxs.size()) {
+      const std::uint8_t run_start = pin_order_[idxs[i]].pin;
+      batch.clear();
+      std::size_t k = i;
+      while (k < idxs.size() &&
+             pin_order_[idxs[k]].pin == run_start + (k - i)) {
+        const auto& j = joints_[pin_order_[idxs[k]].joint_idx];
+        batch.push_back(j.cal.to_pulse_us(j.cmd));
+        ++k;
+      }
+      try {
+        board_->send_servo_positions(run_start, batch);
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
+                              1000, "SET write failed: %s", e.what());
+        return hardware_interface::return_type::ERROR;
+      }
+      i = k;
     }
-    try {
-      board_->send_servo_positions(run_start, batch);
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
-                            1000, "SET write failed: %s", e.what());
-      return hardware_interface::return_type::ERROR;
-    }
-    i = k;
   }
-  // A servo pose is now staged (driven if the relay is on, buffered if off) —
-  // this satisfies the board's staged-pose precondition for the next
-  // SET RELAY 1 in apply_relay().
-  pose_staged_since_disable_ = true;
   return hardware_interface::return_type::OK;
 }
 

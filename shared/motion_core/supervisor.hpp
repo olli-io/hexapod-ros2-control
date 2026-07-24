@@ -85,10 +85,13 @@ struct Observation {
   std::uint64_t now_us;         // monotonic time (time_us_64)
   bool bt_connected;            // bt_teleop::connected()
   std::uint64_t last_input_us;  // bt_teleop::last_data_us() (0 = no frame yet)
-  bool stood;                   // engine reached a standing posture (past
-                                //   INITIALIZE, feet planted) — the arm gate
-  bool folded;                  // engine == FOLDED (pre-init / post-fold: the
-                                //   safe moment to drop the rail)
+  bool armable;                 // engine is in a state the rail may be closed
+                                //   in (anything but FAULT) — the arm gate
+  bool folded;                  // engine == FOLDED. Its *rising* edge is a
+                                //   completed park (FOLDING -> FOLDED), the
+                                //   safe moment to drop the rail. Being folded
+                                //   at boot is not a park, so the level alone
+                                //   does not disarm.
   bool walking;                 // gait active (non-zero cmd_vel in a gait state)
   bool battery_valid;           // a fresh battery sample is present this tick
   float battery_v;              // decoded pack voltage (valid iff battery_valid)
@@ -137,6 +140,7 @@ class Supervisor {
   Config cfg_;
   BatteryMonitor battery_;
   bool relay_armed_ = false;
+  bool prev_folded_ = false;  // for the FOLDING -> FOLDED park edge
 
   TickStats tick_;
   bool have_last_tick_ = false;

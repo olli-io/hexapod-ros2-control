@@ -218,6 +218,17 @@ HardwareConfig load_hardware_config(const std::string& hardware_path,
     }
   }
 
+  if (const auto init = root["init"]) {
+    if (init["sweep_leg_interval_ms"]) {
+      const int ms = init["sweep_leg_interval_ms"].as<int>();
+      if (ms < 0) {
+        throw std::runtime_error(
+            "hexa_hardware: init.sweep_leg_interval_ms must be >= 0");
+      }
+      cfg.init.sweep_leg_interval_ms = ms;
+    }
+  }
+
   DegAtCenter deg_at_center;
   if (const auto dac = root["deg_at_center"]) {
     if (dac["coxa"])  deg_at_center.coxa  = dac["coxa"].as<double>();

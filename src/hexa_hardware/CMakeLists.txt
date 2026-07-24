@@ -22,8 +22,13 @@ find_package(yaml-cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
 
+# The energize-sweep policy is shared with the Pico firmware, so it comes from
+# the target-agnostic control brain (header-only — nothing to compile or link).
+set(FW_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/motion_core)
+
 add_library(${PROJECT_NAME} SHARED
   src/joint_calibration.cpp
+  src/leg_order.cpp
   src/uart_transport.cpp
   src/i2c_transport.cpp
   src/usb_transport.cpp
@@ -33,6 +38,7 @@ add_library(${PROJECT_NAME} SHARED
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${FW_SRC}>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(${PROJECT_NAME}
@@ -79,6 +85,12 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_joint_calibration PRIVATE include)
   target_link_libraries(test_joint_calibration yaml-cpp)
+
+  ament_add_gtest(test_leg_order
+    test/test_leg_order.cpp
+    src/leg_order.cpp
+  )
+  target_include_directories(test_leg_order PRIVATE include)
 endif()
 
 ament_export_include_directories(include)

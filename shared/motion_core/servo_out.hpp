@@ -15,9 +15,10 @@
 // Indices/scales follow protocol.md (hexapod-servo2040-driver) — the same values
 // the ROS reference hexa_hardware/servo2040_protocol.hpp uses.
 //
-// Pin assignment and calibration are hardcoded here for part 03; part 04 folds
-// them into the build-time `config_generated.hpp` (sourced from hexa_description
-// / hexa_hardware YAMLs). Leg count is fixed at 6 → 18 joints.
+// Pin assignment and calibration come from the build-time `config_generated.hpp`
+// (`kJointCals`, baked by tools/gen_config.py from hexa_description/config's
+// hardware.yaml + servo_calibration.yaml — the same YAMLs the ROS hexa_hardware
+// plugin loads at runtime). Leg count is fixed at 6 → 18 joints.
 #pragma once
 
 #include <cstddef>
@@ -25,8 +26,11 @@
 
 namespace servo_out {
 
-// 6 legs × 3 joints. Joint order is the calibration-table order (pins 1..18):
-// l_front {coxa,femur,tibia}, l_middle, l_rear, r_front, r_middle, r_rear.
+// 6 legs × 3 joints. Joint order is the pipeline's theta[] order — l_front
+// {coxa,femur,tibia}, l_middle, l_rear, r_front, r_middle, r_rear — matching
+// config_generated.hpp's kJointCals row for row. The servo PIN each joint drives
+// is a separate thing entirely (hardware.yaml; l_rear is on pins 1-3 on this
+// build), carried per row and sorted for where pin order matters.
 constexpr int kNumJoints = 18;
 
 // Configure the hardware UART (GP0 TX / GP1 RX, uart0) and the Chica link.
@@ -44,6 +48,13 @@ void send_set(std::uint8_t start_pin, const std::uint16_t* pulses_us,
 // Calibrates each angle to a pulse width and emits one SET frame per run of
 // consecutive pins (the current wiring, pins 1..18, is a single run).
 void command_all(const float theta_rad[kNumJoints]);
+
+// Command only the first `n_legs` legs in PIN order (rear -> front with the
+// shipped wiring), leaving the rest undriven. This is the inrush stagger at the
+// relay OFF->ON edge: a servo stays limp until its first SET, so pacing the SETs
+// paces the current draw (see hexa::EnergizeSweep, which decides `n_legs`).
+// n_legs <= 0 sends nothing; n_legs >= 6 is exactly command_all().
+void command_legs(const float theta_rad[kNumJoints], int n_legs);
 
 // URDF radian a joint sits at when its servo is centered (pulse = midpoint of
 // the two calibration endpoints). Useful for demos/tests that sweep

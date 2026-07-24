@@ -277,7 +277,14 @@ def calibration_by_pin(calibration: dict):
 
 
 def hardware_joints(hw: dict, calibration: dict, limits: dict):
-    """18 servo calibrations, sorted by pin — port of joint_calibration.cpp."""
+    """18 servo calibrations in canonical joint order — port of joint_calibration.cpp.
+
+    The row order is LEG_NAMES x JOINT_TYPES, i.e. the same order as the
+    pipeline's ``theta[18]``, so ``kJointCals[i]`` is the calibration for
+    ``theta[i]``. Each row carries its own ``pin``, so the wiring is data rather
+    than position — the firmware sorts by pin itself when it needs the harness
+    order (SET run-grouping, the per-leg energize sweep).
+    """
     dac = hw.get("deg_at_center", {})
     deg_at_center = {"coxa": dac.get("coxa", 0.0), "femur": dac.get("femur", 0.0),
                      "tibia": dac.get("tibia", 0.0)}
@@ -330,7 +337,12 @@ def hardware_joints(hw: dict, calibration: dict, limits: dict):
             urdf_rad_at_center=urdf_center(pos),
             direction=-1 if j.get("reversed", False) else 1,
             min_us=pulse.get("min", dflt_min), max_us=pulse.get("max", dflt_max)))
-    rows.sort(key=lambda r: r["pin"])
+    canonical = [f"{leg}_{seg}_joint" for leg in LEG_NAMES for seg in JOINT_TYPES]
+    missing = [n for n in canonical if n not in {r["name"] for r in rows}]
+    if missing:
+        raise ValueError(f"hardware.yaml servos is missing {', '.join(missing)}")
+    order = {name: i for i, name in enumerate(canonical)}
+    rows.sort(key=lambda r: order[r["name"]])
     return rows
 
 
@@ -676,8 +688,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  std::uint16_t max_us;")
     w("};")
     w("")
-    w("// Sorted by pin (1..18). Table order is the joint order: l_front,")
-    w("// l_middle, l_rear, r_front, r_middle, r_rear, each {coxa, femur, tibia}.")
+    w("// Table order IS the joint order of the pipeline's theta[18]: l_front,")
+    w("// l_middle, l_rear, r_front, r_middle, r_rear, each {coxa, femur, tibia},")
+    w("// so kJointCals[i] calibrates theta[i]. The wiring lives in each row's")
+    w("// `pin` (hardware.yaml), NOT in the row order — sort by pin for the")
+    w("// harness order (SET run-grouping, per-leg energize sweep).")
     w("inline constexpr std::array<JointCal, 18> kJointCals = {{")
     for j in joints:
         w(f"    {{{j['pin']}, {fl(j['us_at_plus_45'])}, {fl(j['us_at_minus_45'])}, "
@@ -725,6 +740,15 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     get_period_ticks = int(hardware["parser"]["get_period_ticks"])
     w(f"inline constexpr int kGetPeriodTicks = {get_period_ticks};"
       "  // hardware.yaml parser.get_period_ticks; battery GET every Nth tick")
+    # Inrush stagger at the relay OFF->ON edge. The board drives a servo only
+    # once the host has SET it, so the host owns the energize order; bringing
+    # the legs up one at a time keeps the combined inrush below the board's
+    # over-current tiers. 0 opts out (every leg at once).
+    sweep_ms = int((hardware.get("init", {}) or {}).get("sweep_leg_interval_ms", 150))
+    if sweep_ms < 0:
+        raise SystemExit("hardware.yaml init.sweep_leg_interval_ms must be >= 0")
+    w(f"inline constexpr int kSweepLegIntervalMs = {sweep_ms};"
+      "  // hardware.yaml init.sweep_leg_interval_ms; per-leg energize stagger")
     w("")
     dp = display["display_node"]["ros__parameters"]
     w("struct BatteryThresholds {  // hexa_display BatteryMonitor (0 disables a flag)")

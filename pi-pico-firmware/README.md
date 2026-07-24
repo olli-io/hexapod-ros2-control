@@ -37,7 +37,8 @@ it — a link-time swap, no `#ifdef`:
   onboard LED, and USB-CDC logging. Each 200 Hz tick it samples the seam into a
   `TickInput`, runs `Pipeline::tick()`, and applies the `TickResult` (commands
   the 18 joints, drives the relay + status LED). Cold-starts FOLDED and holds
-  the folded pose until the init button, so an unpaired pad never moves the legs.
+  the folded pose until the init button, so a paired pad alone never walks the
+  robot; an unpaired pad leaves the rail open entirely.
 - **`src/bt_teleop.{hpp,cpp}`** — Bluetooth gamepad input via Bluepad32/BTstack,
   adapted into the raw `axes[]`/`buttons[]` layout `map_joy` expects. Also owns
   the onboard-LED write (the CYW43 lives on core1 with BTstack).
@@ -114,10 +115,16 @@ threadsafe_background async context that services the BTstack loop.
 921600 8N1** (USB-CDC carries stdio, so UART stdio is off — no contention):
 
 - **SET** — servo pulse widths (µs); consecutive pins collapse into one frame
-  (the 1..18 wiring is a single 18-value frame, ~0.43 ms).
+  (the 1..18 wiring is a single 18-value frame, ~0.43 ms). During the energize
+  sweep below the frames are per-leg instead, one leg at a time.
 - **SET** — the servo-rail relay (Servo 2040 digital pin 24). The supervisor
-  energizes it only after link-up + a completed stand, and drops it on a clean
-  fold or a critical battery.
+  energizes it on link-up in any engine state but FAULT — so normally as soon as
+  a pad pairs, while the engine is still FOLDED — and drops it on a completed
+  fold, a critical battery, or an over-current trip. Closing the relay leaves
+  every servo **limp**; `command_legs` then drives the legs one at a time,
+  `init.sweep_leg_interval_ms` apart in pin order, so the inrush arrives as six
+  small steps instead of one spike (`hexa::EnergizeSweep`, shared with the ROS
+  `hexa_hardware` plugin).
 - **GET** — battery voltage/current from the Servo 2040 aux ADC pins (26/27).
 
 Pin map and calibration are baked from `hexa_description/config/hardware.yaml` +

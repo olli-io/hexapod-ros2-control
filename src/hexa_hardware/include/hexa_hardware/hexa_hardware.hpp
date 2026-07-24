@@ -18,8 +18,10 @@
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 
+#include "energize_sweep.hpp"  // shared/motion_core (build-interface include)
 #include "hexa_hardware/board_protocol.hpp"
 #include "hexa_hardware/joint_calibration.hpp"
+#include "hexa_hardware/leg_order.hpp"
 #include "hexa_hardware/transport.hpp"
 
 namespace hexa_hardware {
@@ -48,11 +50,10 @@ class HexaHardware : public hardware_interface::SystemInterface {
       const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
  private:
-  // Drive the physical relay toward relay_cmd_, honouring the board's
-  // staged-pose rule (SET RELAY 1 only once a pose has been staged since the
-  // last disable) and forcing it off while a fault is latched. Transport is
-  // touched only here / read() / write() — all on the controller-manager
-  // thread — so the relay_cmd_ subscription callback merely stores the intent.
+  // Drive the physical relay toward relay_cmd_, forcing it off while a fault is
+  // latched, and arm/disarm the energize sweep on the edge. Transport is touched
+  // only here / read() / write() — all on the controller-manager thread — so the
+  // relay_cmd_ subscription callback merely stores the intent.
   void apply_relay();
   // Per-joint runtime state, ordered to match info_.joints.
   struct JointSlot {
@@ -63,15 +64,13 @@ class HexaHardware : public hardware_interface::SystemInterface {
     double vel = 0.0;       // numerical derivative
     double prev_pos = 0.0;
   };
-  // Sorted-by-pin view used to build consecutive-pin SET batches.
-  struct PinEntry {
-    std::uint8_t pin;
-    std::size_t joint_idx;
-  };
 
   HardwareConfig config_;
   std::vector<JointSlot> joints_;
+  // Sorted-by-pin view used to build consecutive-pin SET batches, plus the same
+  // view grouped into legs (ordered by lowest pin) for the energize sweep.
   std::vector<PinEntry> pin_order_;
+  std::vector<LegGroup> leg_order_;
 
   // Built once in on_init from cfg.connection / cfg.parser; transport
   // owns the link, protocol holds a reference into it.
@@ -96,7 +95,11 @@ class HexaHardware : public hardware_interface::SystemInterface {
   std::atomic<bool> relay_cmd_{false};   // desired arm state from locomotion
   bool relay_on_ = false;                // physical relay currently energised
   bool faulted_ = false;                 // board trip latched (until STATUS clean)
-  bool pose_staged_since_disable_ = false;  // a servo SET issued since last off
+
+  // Inrush stagger: at the relay OFF->ON edge the legs are driven one at a time
+  // (config_.init.sweep_leg_interval_ms apart) instead of all 18 servos in one
+  // tick. Re-seeded from the config in on_init.
+  hexa::EnergizeSweep sweep_{0.0f};
 
   int read_tick_ = 0;
 };

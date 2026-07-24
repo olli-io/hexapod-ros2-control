@@ -25,8 +25,10 @@ class BoardProtocol {
 
   // Energise (true) or de-energise (false) the servo power rail. The relay
   // pin is chosen entirely on the board — the host addresses this by intent,
-  // not by pin number. Note: while an over-current trip is latched some boards
-  // refuse re-enable until a disable clears the latch.
+  // not by pin number. Enabling closes the relay with every servo LIMP: it never
+  // moves a servo on its own, and servo commands sent while the rail is off are
+  // discarded rather than staged, so the host drives (and orders) the pose
+  // afterwards. Either call also clears a latched over-current trip.
   virtual void set_servo_power(bool on) = 0;
 
   // Read the battery bus in engineering units: `voltage_v` in volts,
@@ -40,8 +42,8 @@ class BoardProtocol {
   // Read the board's fault/status register. `tripped` is true while an
   // over-current latch is active (the board has already disabled the servo
   // cluster and dropped the relay); `trip_amps` is the current captured at the
-  // trip. The latch is sticky — it keeps reporting until a disable
-  // (set_servo_power(false)) clears it. Returns true on a complete reply within
+  // trip. The latch is sticky — it keeps reporting until either
+  // set_servo_power() call clears it. Returns true on a complete reply within
   // timeout_ms; false on timeout or framing error (outputs then unspecified).
   virtual bool read_status(bool& tripped, float& trip_amps, int timeout_ms) = 0;
 

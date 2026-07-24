@@ -67,6 +67,10 @@ hexa_host_test(test_config test_config.cpp)
 # through hexa_host_test() under -Wdouble-promotion like the rest of the port.
 hexa_host_test(test_supervisor test_supervisor.cpp ${FW_SRC}/supervisor.cpp)
 
+# ── Staggered energize sweep ──
+# Header-only inrush policy shared by hexa_hardware and the Pico firmware.
+hexa_host_test(test_energize_sweep test_energize_sweep.cpp)
+
 # Human-readable config dump (not a test): prints the 6 symmetry-expanded leg
 # specs and derived velocity caps for the part-04 eyeball check.
 add_executable(dump_config dump_config.cpp)

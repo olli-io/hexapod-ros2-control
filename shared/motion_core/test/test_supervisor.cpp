@@ -39,7 +39,7 @@ sup::Observation healthy(uint64_t now_us) {
     o.now_us = now_us;
     o.bt_connected = true;
     o.last_input_us = now_us;  // just-arrived frame
-    o.stood = true;
+    o.armable = true;
     o.folded = false;
     o.walking = false;
     o.battery_valid = false;
@@ -175,20 +175,29 @@ TEST(SafeStop, LowBatteryForcesZeroEvenWithFreshInput) {
 
 // ── Relay-arming discipline ─────────────────────────────────────────────────
 
-TEST(Relay, DisarmedAtBoot) {
+TEST(Relay, ArmsAtBootWhileFolded) {
     sup::Supervisor s(enabled_config());
-    // Boot posture: linked pad but engine still FOLDED (not stood).
+    // Boot posture: linked pad, engine still FOLDED. Booting folded is not a
+    // park, so the rail closes and the robot holds the folded pose under power
+    // (the consumer staggers the servo energize leg by leg).
     auto o = healthy(kSec);
-    o.stood = false;
     o.folded = true;
     const auto d = s.step(o);
-    EXPECT_FALSE(d.relay_energized);
-    EXPECT_FALSE(s.relay_armed());
+    EXPECT_TRUE(d.relay_energized);
+    EXPECT_TRUE(s.relay_armed());
 }
 
-TEST(Relay, ArmsOnLinkUpAndStand) {
+TEST(Relay, StaysArmedWhileHeldFolded) {
     sup::Supervisor s(enabled_config());
-    EXPECT_TRUE(s.step(healthy(kSec)).relay_energized);  // linked + stood
+    auto o = healthy(kSec);
+    o.folded = true;
+    ASSERT_TRUE(s.step(o).relay_energized);
+    // Level, not edge: sitting folded indefinitely must not drop the rail.
+    for (int i = 2; i < 20; ++i) {
+        o.now_us = static_cast<uint64_t>(i) * kSec;
+        o.last_input_us = o.now_us;
+        EXPECT_TRUE(s.step(o).relay_energized) << "tick " << i;
+    }
 }
 
 TEST(Relay, DoesNotArmWithoutLink) {
@@ -209,11 +218,37 @@ TEST(Relay, StaysArmedThroughStaleLink) {
 
 TEST(Relay, DropsOnCleanFold) {
     sup::Supervisor s(enabled_config());
-    ASSERT_TRUE(s.step(healthy(kSec)).relay_energized);
-    auto o = healthy(2 * kSec);  // engine returns to FOLDED
-    o.stood = false;
+    ASSERT_TRUE(s.step(healthy(kSec)).relay_energized);  // standing, armed
+    auto o = healthy(2 * kSec);  // FOLDING -> FOLDED: the park edge
     o.folded = true;
     EXPECT_FALSE(s.step(o).relay_energized);
+}
+
+TEST(Relay, ReArmsOnLeavingTheParkedFold) {
+    sup::Supervisor s(enabled_config());
+    ASSERT_TRUE(s.step(healthy(kSec)).relay_energized);
+    auto folded = healthy(2 * kSec);
+    folded.folded = true;
+    ASSERT_FALSE(s.step(folded).relay_energized);  // parked, rail dropped
+    // Start: the engine leaves FOLDED for INITIALIZE and the rail closes again.
+    EXPECT_TRUE(s.step(healthy(3 * kSec)).relay_energized);
+}
+
+TEST(Relay, StaysDroppedWhileFaulted) {
+    sup::Supervisor s(enabled_config());
+    ASSERT_TRUE(s.step(healthy(kSec)).relay_energized);
+    // Board over-current: the engine latches FAULT (not armable) and the rail
+    // stays open until the operator's Start leaves FAULT.
+    auto o = healthy(2 * kSec);
+    o.fault = true;
+    o.armable = false;
+    EXPECT_FALSE(s.step(o).relay_energized);
+    // Latch cleared on the board, but the engine is still in FAULT.
+    auto cleared = healthy(3 * kSec);
+    cleared.armable = false;
+    EXPECT_FALSE(s.step(cleared).relay_energized);
+    // Start recovers: engine leaves FAULT -> armable -> rail re-arms.
+    EXPECT_TRUE(s.step(healthy(4 * kSec)).relay_energized);
 }
 
 TEST(Relay, DropsOnCriticalBattery) {
@@ -233,10 +268,9 @@ TEST(Relay, DropsOnCriticalBattery) {
 
 TEST(Relay, WillNotArmWhileCritical) {
     sup::Supervisor s(enabled_config());
-    // Latch critical while folded (never armed).
+    // Latch critical while the engine is in FAULT (never armed).
     auto o = healthy(2 * kSec);
-    o.stood = false;
-    o.folded = true;
+    o.armable = false;
     o.battery_valid = true;
     o.battery_v = 8.0f;
     s.step(o);
@@ -301,7 +335,6 @@ TEST(Led, ScanningAtBootIsSlowNotFault) {
     // Never linked, never armed: a calm slow blink, not the fault cadence.
     auto o = healthy(kSec);
     o.bt_connected = false;
-    o.stood = false;
     o.folded = true;
     const auto d = s.step(o);
     EXPECT_FALSE(d.fault);

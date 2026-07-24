@@ -31,12 +31,13 @@ bool gait_switch_allowed(hexa::gait::EngineState s) {
          s == E::RESEATING;
 }
 
-// A completed stand — feet planted, standing or walking. The relay-arming gate:
-// the rail stays dropped through boot, pairing and the INITIALIZE ladder, and
-// through FOLDING it stays armed (the servos need power to fold) until FOLDED.
-bool engine_stood(hexa::gait::EngineState s) {
-  using E = hexa::gait::EngineState;
-  return s != E::FOLDED && s != E::INITIALIZE && s != E::FAULT;
+// The relay-arming gate: every engine state may hold the rail closed except a
+// latched FAULT, where the servos stay limp so the operator can reposition the
+// feet before pressing Start. FOLDED is armable, so the robot comes up energized
+// in the folded pose (the consumer staggers that energize leg by leg — see
+// hexa::EnergizeSweep) and the INITIALIZE ladder runs with the rail already live.
+bool engine_armable(hexa::gait::EngineState s) {
+  return s != hexa::gait::EngineState::FAULT;
 }
 
 // /cmd_vel-non-zero test the posture chain uses to gate walking-only vs
@@ -189,7 +190,7 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   obs.now_us = in.now_us;
   obs.bt_connected = in.bt_connected;
   obs.last_input_us = in.last_input_us;
-  obs.stood = engine_stood(st);
+  obs.armable = engine_armable(st);
   obs.folded = (st == hexa::gait::EngineState::FOLDED);
   obs.walking = cmd_is_walking(jo.linear_x, jo.linear_y, jo.angular_z);
   obs.battery_valid = in.battery_valid;

@@ -167,6 +167,45 @@ servos:
   EXPECT_DOUBLE_EQ(tibia.urdf_rad_at_center, M_PI - 68.0 * M_PI / 180.0);
 }
 
+TEST(LoadHardwareConfig, ParsesInitSweepInterval) {
+  const std::string hw = R"(init:
+  sweep_leg_interval_ms: 220
+servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("sweep", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.init.sweep_leg_interval_ms, 220);
+}
+
+TEST(LoadHardwareConfig, InitSweepIntervalDefaults) {
+  // No `init` block → the shipped 150 ms stagger.
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("sweep_default", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.init.sweep_leg_interval_ms, 150);
+}
+
+TEST(LoadHardwareConfig, InitSweepIntervalZeroDisablesTheSweep) {
+  const std::string hw = R"(init:
+  sweep_leg_interval_ms: 0
+servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("sweep_zero", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.init.sweep_leg_interval_ms, 0);
+}
+
+TEST(LoadHardwareConfig, RejectsNegativeInitSweepInterval) {
+  const std::string hw = R"(init:
+  sweep_leg_interval_ms: -1
+servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  EXPECT_THROW(load("sweep_neg", hw, cal_yaml({{2000, 1000}})),
+               std::runtime_error);
+}
+
 TEST(LoadHardwareConfig, DegAtCenterOptional) {
   // Missing `deg_at_center` block means all positions default to 0 →
   // urdf_rad_at_center is 0 for coxa/femur and π for tibia.
