@@ -74,10 +74,16 @@ int identity_y_sign(const Vec3& nominal_stance);
 // swing_origin_velocity defaults (nullopt) to the analytical lift-off velocity
 // -stride / swing_time; pass Vec3::Zero() for a rest-to-rest move.
 // swing_target_velocity (nullopt) defaults to the same.
+//
+// swing_apex_fraction is the share of swing_time spent climbing to the apex.
+// 0.5 splits the swing evenly. Below 0.5 the touchdown half runs longer, which
+// stretches its Bezier and widens its node separation: a longer, larger-radius
+// descent that reaches the ground more gently for the same step height.
 Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
                const Vec3& target, float swing_clearance, float swing_width,
-               int identity_y_sign, float swing_time, float controller_dt,
+               int identity_y_sign, float swing_time,
                std::optional<Vec3> swing_origin_velocity = std::nullopt,
-               std::optional<Vec3> swing_target_velocity = std::nullopt);
+               std::optional<Vec3> swing_target_velocity = std::nullopt,
+               float swing_apex_fraction = 0.5f);
 
 }  // namespace hexa::gait

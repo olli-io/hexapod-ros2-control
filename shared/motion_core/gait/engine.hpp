@@ -49,6 +49,8 @@ struct EngineConfig {
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
   float swing_width = 0.0f;
+  float swing_apex_fraction = 0.5f;
+  float touchdown_velocity = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
   float pause_debounce_delay = 0.0f;
@@ -86,17 +88,25 @@ class StanceIntegrator {
   std::map<std::string, bool> is_stance_;
 };
 
-// Per-leg latched swing plan, captured at lift-off and held until touchdown.
+// Per-leg swing plan. The lift-off end (origin, its velocity, swing_time) is
+// latched when the foot leaves the ground; the touchdown end is re-aimed every
+// tick so the foot lands on the live AEP carrying the live stance velocity. A
+// latched touchdown end would step the foot's velocity at the swing->stance seam
+// whenever cmd_vel changed mid-swing.
 class SwingPlanner {
  public:
   SwingPlanner();
   void liftoff(const std::string& name, const Vec3& origin, const Vec3& target,
                std::pair<float, float> v_leg, float swing_time,
                int identity_y_sign_val);
+  // Re-aim the touchdown end at the live AEP / stance velocity. No-op unless the
+  // leg is mid-swing.
+  void retarget(const std::string& name, const Vec3& target,
+                std::pair<float, float> v_leg);
   void touchdown(const std::string& name);
   Vec3 evaluate(const std::string& name, float phase_in_swing,
                 float swing_clearance, float swing_width,
-                float controller_dt) const;
+                float touchdown_velocity, float swing_apex_fraction) const;
   void reset();
   bool is_swing(const std::string& name) const { return is_swing_.at(name); }
   const Vec3& target(const std::string& name) const { return target_.at(name); }
@@ -104,7 +114,10 @@ class SwingPlanner {
  private:
   std::map<std::string, Vec3> origin_;
   std::map<std::string, Vec3> target_;
-  std::map<std::string, std::pair<float, float>> v_leg_;
+  // Latched at lift-off; sets the curve's departure tangent.
+  std::map<std::string, std::pair<float, float>> v_origin_;
+  // Refreshed every swing tick; sets the velocity carried into stance.
+  std::map<std::string, std::pair<float, float>> v_target_;
   std::map<std::string, float> swing_time_;
   std::map<std::string, int> identity_y_sign_;
   std::map<std::string, bool> is_swing_;

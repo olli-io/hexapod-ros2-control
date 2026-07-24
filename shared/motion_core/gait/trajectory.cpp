@@ -29,25 +29,23 @@ Vec3 quartic_bezier_dot(const BezierNodes& points, float t) {
 
 namespace {
 // Translation between successive Bezier control nodes that yields a tip velocity
-// of `velocity` at a curve endpoint. Coefficient 0.125 (half the Syropod 0.25):
-// each swing is split into a primary and secondary quartic each covering
-// swing_time / 2, so the Bezier parameter advances at 2 / swing_time.
-Vec3 node_separation(const Vec3& velocity, float controller_dt,
-                     float swing_delta_t) {
-  return 0.125f * velocity * (controller_dt / swing_delta_t);
+// of `velocity` at a curve endpoint. A quartic's endpoint derivative is
+// 4 * (P1 - P0) in curve parameter, and the parameter advances at
+// 1 / half_duration, so the separation is velocity * half_duration / 4.
+Vec3 node_separation(const Vec3& velocity, float half_duration) {
+  return 0.25f * velocity * half_duration;
 }
 }  // namespace
 
 BezierNodes generate_primary_swing_control_nodes(
     const Vec3& swing_origin, const Vec3& swing_origin_velocity,
     const Vec3& target, float swing_clearance, float swing_width,
-    int identity_y_sign, float controller_dt, float swing_delta_t) {
+    int identity_y_sign, float ascent_time) {
   Vec3 mid = (swing_origin + target) / 2.0f;
   mid[2] = std::max(swing_origin[2], target[2]) + swing_clearance;
   mid[1] += identity_y_sign > 0 ? swing_width : -swing_width;
 
-  const Vec3 sep =
-      node_separation(swing_origin_velocity, controller_dt, swing_delta_t);
+  const Vec3 sep = node_separation(swing_origin_velocity, ascent_time);
 
   BezierNodes nodes;
   // C0 at stance->swing join.
@@ -66,15 +64,18 @@ BezierNodes generate_primary_swing_control_nodes(
 
 BezierNodes generate_secondary_swing_control_nodes(
     const BezierNodes& swing_1_nodes, const Vec3& target,
-    const Vec3& stride_vector, float controller_dt, float swing_delta_t,
-    float stance_delta_t) {
-  const Vec3 final_velocity = -stride_vector * (stance_delta_t / controller_dt);
-  const Vec3 sep = node_separation(final_velocity, controller_dt, swing_delta_t);
+    const Vec3& target_velocity, float ascent_time, float descent_time) {
+  const Vec3 sep = node_separation(target_velocity, descent_time);
+  // Both halves are quartics but may span different durations, so mirroring the
+  // apex tangent has to be scaled by the duration ratio to keep the real-time
+  // velocity equal on both sides of the apex.
+  const float duration_ratio = descent_time / ascent_time;
 
   BezierNodes nodes;
   nodes[0] = swing_1_nodes[4];
-  // C1 at primary->secondary swing join (mirror about the apex).
-  nodes[1] = swing_1_nodes[4] - (swing_1_nodes[3] - swing_1_nodes[4]);
+  // C1 at primary->secondary swing join (duration-scaled mirror about the apex).
+  nodes[1] =
+      swing_1_nodes[4] + duration_ratio * (swing_1_nodes[4] - swing_1_nodes[3]);
   // C2 at secondary swing->stance join.
   nodes[2] = target - 2.0f * sep;
   // C1 at secondary swing->stance join.

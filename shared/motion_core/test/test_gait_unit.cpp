@@ -5,6 +5,7 @@
 // hexa_host_test() so it compiles under -Wdouble-promotion — the same gate the
 // firmware build applies to the port sources.
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <string>
@@ -30,6 +31,68 @@ void run_to_stand(g::Engine& e) {
     e.update(kDt, {0.0f, 0.0f}, 0.0f);
   }
   ASSERT_EQ(e.state(), g::EngineState::STAND);
+}
+
+// ── Swing-arc sampling ──
+
+constexpr float kSwingTime = 0.35f;
+constexpr float kStepHeight = 0.08f;
+constexpr float kLegSpeed = 0.06f;
+const g::Vec3 kPep(0.15f, 0.05f, -0.12f);
+const g::Vec3 kAep(0.20f, 0.05f, -0.12f);
+
+struct SwingProfile {
+  g::Vec3 start = g::Vec3::Zero();
+  g::Vec3 end = g::Vec3::Zero();
+  g::Vec3 touchdown_velocity = g::Vec3::Zero();  // m/s, real time
+  float apex_height = 0.0f;      // m above touchdown level
+  float min_height = 0.0f;       // m above touchdown level
+  float peak_descent = 0.0f;     // m/s downward
+  float max_velocity_jump = 0.0f;  // m/s between adjacent samples
+};
+
+// Walk the whole swing at a fine, uniform phase step and reduce it to the
+// quantities the touchdown behaviour depends on. Velocities are finite
+// differences in real time, so a genuine C1 break shows up as a single large
+// max_velocity_jump while a smooth curve stays at O(acceleration * step).
+SwingProfile profile_swing(float apex_fraction, float touchdown_velocity) {
+  const g::Vec3 v_in(-kLegSpeed, 0.0f, 0.0f);
+  const g::Vec3 v_out(-kLegSpeed, 0.0f, -touchdown_velocity);
+  const auto at = [&](float phase) {
+    return g::swing_arc(phase, kPep, kAep, kStepHeight, 0.0f, 1, kSwingTime,
+                        v_in, v_out, apex_fraction);
+  };
+
+  constexpr int kSteps = 2000;
+  constexpr float kStep = 1.0f / static_cast<float>(kSteps);
+
+  SwingProfile p;
+  p.start = at(0.0f);
+  p.end = at(1.0f);
+  p.min_height = 1.0f;
+
+  g::Vec3 prev_point = p.start;
+  g::Vec3 prev_velocity = g::Vec3::Zero();
+  for (int i = 1; i <= kSteps; ++i) {
+    const float phase = static_cast<float>(i) * kStep;
+    const g::Vec3 point = at(phase);
+    const g::Vec3 velocity = (point - prev_point) / (kStep * kSwingTime);
+
+    const float height = point.z - kAep.z;
+    p.apex_height = std::max(p.apex_height, height);
+    p.min_height = std::min(p.min_height, height);
+    p.peak_descent = std::max(p.peak_descent, -velocity.z);
+    if (i > 1) {
+      const g::Vec3 jump = velocity - prev_velocity;
+      p.max_velocity_jump = std::max(
+          p.max_velocity_jump,
+          std::sqrt(jump.x * jump.x + jump.y * jump.y + jump.z * jump.z));
+    }
+    p.touchdown_velocity = velocity;
+    prev_point = point;
+    prev_velocity = velocity;
+  }
+  return p;
 }
 
 }  // namespace
@@ -84,15 +147,66 @@ TEST(Trajectory, QuarticBezierHitsEndpoints) {
 TEST(Trajectory, SwingArcReturnsToGroundAtTouchdown) {
   const g::Vec3 pep(0.15f, 0.05f, -0.12f);
   const g::Vec3 aep(0.20f, 0.05f, -0.12f);
-  const g::Vec3 start = g::swing_arc(0.0f, pep, aep, 0.08f, 0.0f, 1, 0.4f, kDt);
-  const g::Vec3 apex = g::swing_arc(0.5f, pep, aep, 0.08f, 0.0f, 1, 0.4f, kDt);
-  const g::Vec3 end = g::swing_arc(1.0f, pep, aep, 0.08f, 0.0f, 1, 0.4f, kDt);
+  const g::Vec3 start = g::swing_arc(0.0f, pep, aep, 0.08f, 0.0f, 1, 0.4f);
+  const g::Vec3 apex = g::swing_arc(0.5f, pep, aep, 0.08f, 0.0f, 1, 0.4f);
+  const g::Vec3 end = g::swing_arc(1.0f, pep, aep, 0.08f, 0.0f, 1, 0.4f);
   EXPECT_NEAR(start.x, pep.x, 1e-4f);
   EXPECT_NEAR(start.z, pep.z, 1e-4f);
   EXPECT_NEAR(end.x, aep.x, 1e-4f);
   EXPECT_NEAR(end.z, aep.z, 1e-4f);
   // Apex clears the ground by roughly step_height.
   EXPECT_GT(apex.z, pep.z + 0.05f);
+}
+
+TEST(Trajectory, SwingArcEndpointsHoldUnderApexSplit) {
+  for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
+    const SwingProfile p = profile_swing(apex_fraction, 0.0f);
+    EXPECT_NEAR(p.start.x, kPep.x, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.start.z, kPep.z, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.end.x, kAep.x, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.end.z, kAep.z, 1e-4f) << apex_fraction;
+    EXPECT_GT(p.apex_height, 0.05f) << apex_fraction;
+  }
+}
+
+// The two swing halves are separate quartics joined at the apex. When they span
+// different durations the apex tangent has to be scaled by the duration ratio;
+// without that scaling the foot's velocity steps discontinuously mid-swing.
+TEST(Trajectory, SwingArcApexStaysVelocityContinuousUnderSplit) {
+  for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
+    const SwingProfile p = profile_swing(apex_fraction, 0.0f);
+    EXPECT_LT(p.max_velocity_jump, 0.05f)
+        << "velocity discontinuity at apex_fraction " << apex_fraction;
+  }
+}
+
+TEST(Trajectory, SwingArcHonoursTouchdownVelocity) {
+  for (const float v_td : {0.0f, 0.02f, 0.05f}) {
+    const SwingProfile p = profile_swing(0.45f, v_td);
+    EXPECT_NEAR(p.touchdown_velocity.x, -kLegSpeed, 5e-3f) << v_td;
+    EXPECT_NEAR(p.touchdown_velocity.z, -v_td, 5e-3f) << v_td;
+  }
+}
+
+TEST(Trajectory, SwingArcNeverDipsBelowTouchdownLevel) {
+  for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
+    for (const float v_td : {0.0f, 0.05f}) {
+      const SwingProfile p = profile_swing(apex_fraction, v_td);
+      EXPECT_GT(p.min_height, -1.0e-5f) << apex_fraction << " / " << v_td;
+    }
+  }
+}
+
+// The point of the split: giving the descent a larger share of the swing
+// stretches its curve, so the foot comes down more slowly for the same height.
+TEST(Trajectory, LongerDescentLowersPeakDescentRate) {
+  const float even = profile_swing(0.5f, 0.0f).peak_descent;
+  const float split = profile_swing(0.45f, 0.0f).peak_descent;
+  const float longer = profile_swing(0.35f, 0.0f).peak_descent;
+  EXPECT_LT(split, even);
+  EXPECT_LT(longer, split);
+  // Pins the even-split closed form, (32/9) * step_height / swing_time.
+  EXPECT_NEAR(even, 3.5556f * kStepHeight / kSwingTime, 0.02f);
 }
 
 TEST(Engine, ColdStartReachesStand) {
@@ -179,6 +293,78 @@ TEST(Engine, ForwardCommandWalksTripodInAntiphase) {
   }
   EXPECT_TRUE(a_swung);
   EXPECT_TRUE(b_swung);
+}
+
+// A swing is planned from the foot's lift-off state but lands into a stance that
+// integrates the *live* command. If the touchdown end of the swing were latched
+// at lift-off, a command that moved during the swing would leave the foot
+// arriving at one velocity and being dragged at another the very next tick.
+TEST(Engine, TouchdownStaysVelocityContinuousWhileCommandRamps) {
+  constexpr float kTickDt = 0.005f;
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+
+  float v_x = 0.06f;
+  for (int i = 0; i < 800 && e->state() != g::EngineState::GAIT; ++i) {
+    e->update(kTickDt, {v_x, 0.0f}, 0.0f);
+  }
+  ASSERT_EQ(e->state(), g::EngineState::GAIT);
+
+  // Ramp the command hard enough to shift the touchdown point by centimetres
+  // over a single swing, then watch every swing -> stance handover.
+  struct LegTrace {
+    g::Vec3 target = g::Vec3::Zero();
+    g::Vec3 last_swing_velocity = g::Vec3::Zero();
+    bool have_target = false;
+    bool have_swing_velocity = false;
+    int swing_streak = 0;
+    int stance_streak = 0;
+  };
+  std::map<std::string, LegTrace> trace;
+  int touchdowns = 0;
+  float worst_jump = 0.0f;
+  std::string worst_leg;
+
+  for (int i = 0; i < 600; ++i) {
+    v_x = std::min(v_x + 0.0008f, 0.12f);
+    const auto out = e->update(kTickDt, {v_x, 0.0f}, 0.0f);
+    for (const auto& [name, leg] : out) {
+      LegTrace& t = trace[name];
+      const g::Vec3 velocity =
+          t.have_target ? (leg.foot_target - t.target) / kTickDt
+                        : g::Vec3::Zero();
+      t.swing_streak = leg.stance ? 0 : t.swing_streak + 1;
+      t.stance_streak = leg.stance ? t.stance_streak + 1 : 0;
+
+      // A velocity sample only means something when both of its endpoints lie
+      // on the same side of the seam, hence the two-consecutive-tick guards.
+      if (!leg.stance && t.swing_streak >= 2 && t.have_target) {
+        t.last_swing_velocity = velocity;
+        t.have_swing_velocity = true;
+      }
+      // Second stance tick, not the first: the first straddles the seam and
+      // carries the sub-millimetre snap onto the AEP, which is a sampling
+      // artefact rather than a velocity mismatch. Comparing clean swing and
+      // stance samples isolates what a latched touchdown target would break.
+      // Z is excluded on purpose — stance holds z fixed, so touchdown_velocity
+      // is a deliberate vertical step.
+      if (leg.stance && t.stance_streak == 2 && t.have_swing_velocity) {
+        const g::Vec3 jump = velocity - t.last_swing_velocity;
+        const float magnitude = std::sqrt(jump.x * jump.x + jump.y * jump.y);
+        ++touchdowns;
+        if (magnitude > worst_jump) {
+          worst_jump = magnitude;
+          worst_leg = name;
+        }
+      }
+      t.target = leg.foot_target;
+      t.have_target = true;
+    }
+  }
+
+  ASSERT_GE(touchdowns, 6) << "too few touchdowns observed to be meaningful";
+  EXPECT_LT(worst_jump, 0.01f)
+      << "foot velocity steps at touchdown on " << worst_leg;
 }
 
 TEST(Engine, ZeroCommandPausesAndReseatsToStand) {

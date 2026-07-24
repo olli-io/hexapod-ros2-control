@@ -51,13 +51,26 @@ gait_node:
 
     # How far a foot travels along the ground in one step (m).
     # Shorter = gentler on the joints, but slower top speed.
-    stride_length: 0.10
+    stride_length: 0.08
 
     # How high a foot lifts during a step (m).
     step_height: 0.08
 
     # Sideways shift of the foot's arc (m). 0 = straight fore/aft steps.
     swing_width: 0.0
+
+    # Share of the airborne time spent rising to the top of the arc.
+    # 0.5 splits the step evenly. Lower values give the descent a longer,
+    # wider curve, so the foot settles onto the ground more gently for the
+    # same step height — at the cost of a brisker lift-off.
+    swing_apex_fraction: 0.5
+
+    # How fast the foot is still descending as it meets the ground (m/s).
+    # 0 eases it to a dead stop exactly at ground level, which is smoothest
+    # on perfectly flat ground but lands hard whenever the ground or the
+    # servo tracking is off by a millimetre or two. A small value makes
+    # contact happen at this speed instead, whenever it happens.
+    touchdown_velocity: 0.01
 
     # ─── Cycle timing ───────────────────────────────────────────────
 
@@ -68,14 +81,14 @@ gait_node:
     #
     # Keep these close together (max no more than ~25% above min), or
     # foot placement can misbehaves when reversing direction.
-    min_swing_time: 0.30
-    max_swing_time: 0.4
+    min_swing_time: 0.5
+    max_swing_time: 0.65
 
     # ─── Velocity envelope ──────────────────────────────────────────
 
     # Top turning speed (rad/s). The legs could turn faster; this caps it
     # to what feels comfortable.
-    angular_z_max: 3.00
+    angular_z_max: 2.00
 
     # When a command exceeds what the robot can do, how much of the cut
     # falls on turning vs. moving. 0.5 = share equally; higher = protect
@@ -106,9 +119,9 @@ gait_node:
 
     initialize:
       # Time (s) to place each mirrored pair of feet (three pairs total).
-      pair_swing_time: 0.4
+      pair_swing_time: 0.6
       # Time (s) to raise the body off its belly.
-      lift_body_time: 0.6
+      lift_body_time: 0.8
       # Extra foot lift (m) while placing feet. Small — the folded foot
       # already starts high.
       swing_clearance: 0.04
@@ -126,7 +139,7 @@ gait_node:
       # doesn't trigger a re-plant.
       height_change_threshold: 0.002
       # Time (s) to swing each mirrored pair of feet into place.
-      pair_swing_time: 0.2
+      pair_swing_time: 0.4
       # Pause (s) between pairs so each one lands before the next lifts.
       pair_dwell_time: 0.05
       # Extra foot lift (m) mid-swing. Small — feet start from the ground.

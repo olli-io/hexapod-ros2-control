@@ -255,7 +255,7 @@ std::map<std::string, LegOutput> EngagementController::update(
       const Vec3 foot =
           swing_arc(phase_in_swing, lift_off_position_[name], aep,
                     swing_clearance_, swing_width_, identity_y_sign(nominal),
-                    leg_swing_time, controller_dt_, Vec3::Zero(),
+                    leg_swing_time, Vec3::Zero(),
                     Vec3(-vb.first, -vb.second, 0.0f));
       foot_position_[name] = foot;
       out[name] = LegOutput{foot, phase, false};

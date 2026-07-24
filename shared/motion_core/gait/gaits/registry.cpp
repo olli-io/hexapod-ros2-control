@@ -82,8 +82,7 @@ Vec3 phased_foot_target(float phase, const StrideParams& stride,
     const float phase_in_swing = swing_end > 0.0f ? phase / swing_end : 0.0f;
     const float swing_time = stride.cycle_time * (1.0f - stride.duty_factor);
     return swing_arc(phase_in_swing, pep, aep, stride.swing_clearance,
-                     stride.swing_width, identity_y_sign(nominal), swing_time,
-                     stride.controller_dt);
+                     stride.swing_width, identity_y_sign(nominal), swing_time);
   }
 
   const float stance_phase = (phase - swing_end) / stride.duty_factor;

@@ -75,7 +75,8 @@ SwingPlanner::SwingPlanner() {
   for (const auto& n : LEG_NAMES) {
     origin_[n] = Vec3::Zero();
     target_[n] = Vec3::Zero();
-    v_leg_[n] = {0.0f, 0.0f};
+    v_origin_[n] = {0.0f, 0.0f};
+    v_target_[n] = {0.0f, 0.0f};
     swing_time_[n] = 0.0f;
     identity_y_sign_[n] = 1;
     is_swing_[n] = false;
@@ -87,10 +88,20 @@ void SwingPlanner::liftoff(const std::string& name, const Vec3& origin,
                            float swing_time, int identity_y_sign_val) {
   origin_[name] = origin;
   target_[name] = target;
-  v_leg_[name] = v_leg;
+  v_origin_[name] = v_leg;
+  v_target_[name] = v_leg;
   swing_time_[name] = swing_time;
   identity_y_sign_[name] = identity_y_sign_val;
   is_swing_[name] = true;
+}
+
+void SwingPlanner::retarget(const std::string& name, const Vec3& target,
+                            std::pair<float, float> v_leg) {
+  if (!is_swing_.at(name)) {
+    return;
+  }
+  target_[name] = target;
+  v_target_[name] = v_leg;
 }
 
 void SwingPlanner::touchdown(const std::string& name) {
@@ -99,14 +110,21 @@ void SwingPlanner::touchdown(const std::string& name) {
 
 Vec3 SwingPlanner::evaluate(const std::string& name, float phase_in_swing,
                             float swing_clearance, float swing_width,
-                            float controller_dt) const {
-  const auto& v = v_leg_.at(name);
-  // Stance-frame foot velocity is -v_leg; pass it as both endpoints so the
-  // Bezier's C1 nodes match the stance-frame velocity at lift-off and touchdown.
-  const Vec3 v_match(-v.first, -v.second, 0.0f);
+                            float touchdown_velocity,
+                            float swing_apex_fraction) const {
+  // Stance-frame foot velocity is -v_leg, so matching it at both endpoints keeps
+  // the Bezier's C1 nodes continuous with stance at lift-off and touchdown. The
+  // touchdown end also carries a downward component so the foot meets the ground
+  // at a known speed instead of decelerating to a dead stop in the last
+  // millimetre, where any tracking or terrain error turns into an impact.
+  const auto& v_in = v_origin_.at(name);
+  const auto& v_out = v_target_.at(name);
+  const Vec3 velocity_in(-v_in.first, -v_in.second, 0.0f);
+  const Vec3 velocity_out(-v_out.first, -v_out.second, -touchdown_velocity);
   return swing_arc(phase_in_swing, origin_.at(name), target_.at(name),
                    swing_clearance, swing_width, identity_y_sign_.at(name),
-                   swing_time_.at(name), controller_dt, v_match, v_match);
+                   swing_time_.at(name), velocity_in, velocity_out,
+                   swing_apex_fraction);
 }
 
 void SwingPlanner::reset() {
@@ -548,17 +566,23 @@ std::map<std::string, LegOutput> Engine::tick_gait(
           stance_.step(name, true, touchdown_anchor, {v_x, v_y}, dt);
       target = *integrated;  // in_stance=true always returns a position
     } else {
+      const Vec3 nominal = nominal_[name];
+      const Vec3 aep = live_aep(nominal, stride_vec);
       if (!swing_.is_swing(name)) {
-        // Lift-off edge: capture origin/target/velocity, held for the swing.
-        const Vec3 nominal = nominal_[name];
-        const Vec3 aep = live_aep(nominal, stride_vec);
+        // Lift-off edge: capture the origin end, held for the whole swing.
         swing_.liftoff(name, last_targets_[name], aep, {v_x, v_y},
                        std::max(swing_time, 1.0e-9f), identity_y_sign(nominal));
       }
+      // Re-aim the touchdown end at the live AEP and stance velocity. The
+      // stance integrator picks up this target at touchdown and immediately
+      // integrates it at the live velocity, so a latched target would show up
+      // as a velocity step at the seam whenever cmd_vel moved mid-swing.
+      swing_.retarget(name, aep, {v_x, v_y});
       const float phase_in_swing =
           swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
       target = swing_.evaluate(name, phase_in_swing, config_.step_height,
-                               config_.swing_width, config_.controller_dt);
+                               config_.swing_width, config_.touchdown_velocity,
+                               config_.swing_apex_fraction);
       // Keep the stance integrator's per-leg flag in sync.
       stance_.step(name, false, target, {v_x, v_y}, dt);
     }
@@ -645,6 +669,8 @@ EngineConfig engine_config_from_config() {
   cfg.max_swing_time = c.max_swing_time;
   cfg.step_height = c.step_height;
   cfg.swing_width = c.swing_width;
+  cfg.swing_apex_fraction = c.swing_apex_fraction;
+  cfg.touchdown_velocity = c.touchdown_velocity;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;
   cfg.pause_debounce_delay = c.pause_debounce_delay;

@@ -21,20 +21,21 @@ Vec3 quartic_bezier(const BezierNodes& points, float t);
 // Evaluate dB/dt of the quartic Bezier curve at t (tests check C1 continuity).
 Vec3 quartic_bezier_dot(const BezierNodes& points, float t);
 
-// Primary swing curve (lift-off -> apex). swing_origin_velocity carries the C1
-// join from stance. identity_y_sign is +1 for left-side legs, -1 for right;
-// swing_width = 0 disables the lateral arch.
+// Primary swing curve (lift-off -> apex), spanning ascent_time seconds.
+// swing_origin_velocity carries the C1 join from stance. identity_y_sign is +1
+// for left-side legs, -1 for right; swing_width = 0 disables the lateral arch.
 BezierNodes generate_primary_swing_control_nodes(
     const Vec3& swing_origin, const Vec3& swing_origin_velocity,
     const Vec3& target, float swing_clearance, float swing_width,
-    int identity_y_sign, float controller_dt, float swing_delta_t);
+    int identity_y_sign, float ascent_time);
 
-// Secondary swing curve (apex -> touchdown). Joins C2 to the primary at the apex
-// and C2 to stance at touchdown via the analytical touchdown velocity.
+// Secondary swing curve (apex -> touchdown), spanning descent_time seconds.
+// Joins C1 to the primary at the apex and C1/C2 to stance at touchdown via
+// target_velocity. The apex join carries the ascent/descent duration ratio, so
+// the two halves stay velocity-continuous even when they differ in length.
 BezierNodes generate_secondary_swing_control_nodes(
     const BezierNodes& swing_1_nodes, const Vec3& target,
-    const Vec3& stride_vector, float controller_dt, float swing_delta_t,
-    float stance_delta_t);
+    const Vec3& target_velocity, float ascent_time, float descent_time);
 
 // Stance curve (touchdown -> next lift-off). Nodes are evenly spaced along
 // -stride_vector * stride_scaler.

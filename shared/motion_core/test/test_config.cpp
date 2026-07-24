@@ -111,6 +111,8 @@ TEST(Pose, InitialPerLegSymmetry) {
 TEST(Engine, GaitYamlKnobs) {
   EXPECT_NEAR(cfg::kEngine.stride_length, 0.1f, kTol);
   EXPECT_NEAR(cfg::kEngine.step_height, 0.08f, kTol);
+  EXPECT_NEAR(cfg::kEngine.swing_apex_fraction, 0.45f, kTol);
+  EXPECT_NEAR(cfg::kEngine.touchdown_velocity, 0.02f, kTol);
   EXPECT_NEAR(cfg::kEngine.min_swing_time, 0.3f, kTol);
   EXPECT_NEAR(cfg::kEngine.controller_dt, 0.005f, kTol);
   EXPECT_NEAR(cfg::kEngine.init_pair_swing_time, 0.4f, kTol);

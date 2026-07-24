@@ -146,8 +146,7 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
       const Vec3 point =
           swing_arc(phase, origin, target, swing_clearance_,
                     /*swing_width=*/0.0f, identity_y_sign(target),
-                    pair_swing_time_, controller_dt_, Vec3::Zero(),
-                    Vec3::Zero());
+                    pair_swing_time_, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {
