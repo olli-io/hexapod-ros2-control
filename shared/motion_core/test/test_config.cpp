@@ -77,23 +77,23 @@ TEST(LegSpecs, SegmentLengths) {
 }
 
 TEST(JointLimits, DegToRadConventions) {
-  // coxa: deg -> rad, window [-90, 90] deg.
-  EXPECT_NEAR(cfg::kJointLimits[0].lower, deg(-90.0f), kTol);
-  EXPECT_NEAR(cfg::kJointLimits[0].upper, deg(90.0f), kTol);
-  // femur: -deg, so lower/upper swap after negation ([-55, 125] deg).
-  EXPECT_NEAR(cfg::kJointLimits[1].lower, -deg(125.0f), kTol);
+  // coxa: deg -> rad, window [-45, 45] deg.
+  EXPECT_NEAR(cfg::kJointLimits[0].lower, deg(-45.0f), kTol);
+  EXPECT_NEAR(cfg::kJointLimits[0].upper, deg(45.0f), kTol);
+  // femur: -deg, so lower/upper swap after negation ([-55, 96] deg).
+  EXPECT_NEAR(cfg::kJointLimits[1].lower, -deg(96.0f), kTol);
   EXPECT_NEAR(cfg::kJointLimits[1].upper, -deg(-55.0f), kTol);
-  // tibia: pi - deg, likewise swapped ([-22, 158] deg).
+  // tibia: pi - deg, likewise swapped ([20, 158] deg).
   EXPECT_NEAR(cfg::kJointLimits[2].lower,
               static_cast<float>(M_PI) - deg(158.0f), kTol);
   EXPECT_NEAR(cfg::kJointLimits[2].upper,
-              static_cast<float>(M_PI) - deg(-22.0f), kTol);
+              static_cast<float>(M_PI) - deg(20.0f), kTol);
 }
 
 TEST(Pose, StandingUniform) {
   EXPECT_NEAR(cfg::kStandingPose[0], 0.0f, kTol);
-  EXPECT_NEAR(cfg::kStandingPose[1], -deg(35.0f), kTol);
-  EXPECT_NEAR(cfg::kStandingPose[2], static_cast<float>(M_PI) - deg(68.0f), kTol);
+  EXPECT_NEAR(cfg::kStandingPose[1], -deg(40.0f), kTol);
+  EXPECT_NEAR(cfg::kStandingPose[2], static_cast<float>(M_PI) - deg(74.7f), kTol);
 }
 
 TEST(Pose, InitialPerLegSymmetry) {
@@ -103,19 +103,21 @@ TEST(Pose, InitialPerLegSymmetry) {
   EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::L_REAR)][0], deg(-60.0f), kTol);
   EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::R_FRONT)][0], deg(-60.0f), kTol);
   EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::R_REAR)][0], deg(60.0f), kTol);
-  // femur above_horizontal_deg=120 -> -radians(120); tibia interior 35.
-  EXPECT_NEAR(cfg::kInitialPose[0][1], -deg(120.0f), kTol);
-  EXPECT_NEAR(cfg::kInitialPose[0][2], static_cast<float>(M_PI) - deg(35.0f), kTol);
+  // femur above_horizontal_deg=85 -> -radians(85); tibia interior 45.
+  EXPECT_NEAR(cfg::kInitialPose[0][1], -deg(85.0f), kTol);
+  EXPECT_NEAR(cfg::kInitialPose[0][2], static_cast<float>(M_PI) - deg(45.0f), kTol);
 }
 
 TEST(Engine, GaitYamlKnobs) {
-  EXPECT_NEAR(cfg::kEngine.stride_length, 0.1f, kTol);
-  EXPECT_NEAR(cfg::kEngine.step_height, 0.08f, kTol);
-  EXPECT_NEAR(cfg::kEngine.swing_apex_fraction, 0.45f, kTol);
-  EXPECT_NEAR(cfg::kEngine.touchdown_velocity, 0.02f, kTol);
-  EXPECT_NEAR(cfg::kEngine.min_swing_time, 0.3f, kTol);
+  EXPECT_NEAR(cfg::kEngine.stride_length, 0.09f, kTol);
+  EXPECT_NEAR(cfg::kEngine.step_height, 0.06f, kTol);
+  EXPECT_NEAR(cfg::kEngine.swing_apex_fraction, 0.5f, kTol);
+  EXPECT_NEAR(cfg::kEngine.touchdown_velocity, 0.01f, kTol);
+  EXPECT_NEAR(cfg::kEngine.swing_phase_margin, 0.12f, kTol);
+  EXPECT_NEAR(cfg::kEngine.ramp_clearance_fraction, 0.10f, kTol);
+  EXPECT_NEAR(cfg::kEngine.min_swing_time, 0.6f, kTol);
   EXPECT_NEAR(cfg::kEngine.controller_dt, 0.005f, kTol);
-  EXPECT_NEAR(cfg::kEngine.init_pair_swing_time, 0.4f, kTol);
+  EXPECT_NEAR(cfg::kEngine.init_pair_swing_time, 0.35f, kTol);
   EXPECT_NEAR(cfg::kEngine.reseat_swing_clearance, 0.025f, kTol);
 }
 
@@ -124,11 +126,15 @@ TEST(VelocityCaps, TripodDerived) {
   EXPECT_EQ(std::string_view(tripod.name.data()), "tripod");
   EXPECT_NEAR(tripod.duty_factor, 0.5f, kTol);
   EXPECT_FALSE(tripod.unstable);
-  // linear_max = stride*(1-duty)/(min_swing*duty) = 0.1*0.5/(0.3*0.5) = 1/3.
-  EXPECT_NEAR(tripod.linear_max, 1.0f / 3.0f, 1e-4f);
+  // linear_max is stride_length covered in one stance, so it keys off the
+  // realized split, not the nominal duty: with a swing_phase_margin of 0.12 the
+  // tripod's swing window shrinks to 0.5*0.88 = 0.44 and stance grows to 0.56.
+  // linear_max = stride*swing_end/(min_swing*(1-swing_end))
+  //            = 0.09*0.44/(0.6*0.56) = 0.1179.
+  EXPECT_NEAR(tripod.linear_max, 0.09f * 0.44f / (0.6f * 0.56f), 1e-4f);
   // yaw_bias_eff = 0.5 + (0.6-0.5)*(1.5-0.5) = 0.6.
   EXPECT_NEAR(tripod.yaw_bias, 0.6f, kTol);
-  EXPECT_NEAR(cfg::kAngularMax, 3.0f, kTol);
+  EXPECT_NEAR(cfg::kAngularMax, 2.5f, kTol);
 }
 
 TEST(VelocityCaps, StabilityFlags) {
@@ -181,12 +187,15 @@ TEST(Posture, AnimationStack) {
   EXPECT_EQ(cfg::kEnabledAnimations[0], "still");
   EXPECT_EQ(cfg::kAnimationModeAnimations[0], "vertical_body_roll");
   EXPECT_NEAR(cfg::kPosture.gait_sway_strength, 0.4f, kTol);
-  EXPECT_NEAR(cfg::kPosture.gait_bounce_arc_height, 0.02f, kTol);
+  EXPECT_NEAR(cfg::kPosture.gait_bounce_arc_height, 0.1f, kTol);
   EXPECT_NEAR(cfg::kPosture.body_roll_3d_horizontal_phase_offset, 0.25f, kTol);
   // Posture layering fix: crossfade slew rate + layered-clamp reserves.
   EXPECT_NEAR(cfg::kPosture.gait_activation_slew_rate, 4.0f, kTol);
   EXPECT_NEAR(cfg::kPosture.animation_reserve_x, 0.02f, kTol);
   EXPECT_NEAR(cfg::kPosture.animation_reserve_roll, 0.20f, kTol);
+  // Gait-active body animation is off by default — the body stays still while
+  // walking until the tuning switch is flipped.
+  EXPECT_FALSE(cfg::kPosture.gait_body_animations_enabled);
 }
 
 TEST(Control, RampAndSnap) {
@@ -239,12 +248,12 @@ TEST(Hardware, ServoCalibration) {
     used[j.pin] = true;
   }
   // urdf_rad_at_center from hardware.yaml deg_at_center (coxa 0, femur 40,
-  // tibia 68) — the sole source for the servo-center angle. Uniform per segment,
-  // so check one leg and trust the loop above for the rest.
+  // tibia 69.7) — the sole source for the servo-center angle. Uniform per
+  // segment, so check one leg and trust the loop above for the rest.
   EXPECT_NEAR(cfg::kJointCals[0].urdf_rad_at_center, 0.0f, kTol);          // coxa
   EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(40.0f), kTol);   // femur
   EXPECT_NEAR(cfg::kJointCals[2].urdf_rad_at_center,
-              static_cast<float>(M_PI) - deg(68.0f), kTol);                // tibia
+              static_cast<float>(M_PI) - deg(69.7f), kTol);                // tibia
   for (std::size_t i = 0; i < cfg::kJointCals.size(); ++i) {
     EXPECT_NEAR(cfg::kJointCals[i].urdf_rad_at_center,
                 cfg::kJointCals[i % 3].urdf_rad_at_center, kTol)

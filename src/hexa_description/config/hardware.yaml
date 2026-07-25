@@ -59,7 +59,7 @@ parser:
 deg_at_center:
   coxa: 0.0
   femur: 40.0
-  tibia: 68.0
+  tibia: 69.7
 
 servo_defaults:
   # Hard electrical clamp shared by every servo; override per servo below with

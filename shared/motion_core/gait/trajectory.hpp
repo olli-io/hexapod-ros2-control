@@ -43,4 +43,33 @@ BezierNodes generate_stance_control_nodes(const Vec3& stance_origin,
                                           const Vec3& stride_vector,
                                           float stride_scaler = 1.0f);
 
+// ── Ground-matched ramps (zero-scrub lift-off and touchdown) ──
+//
+// Both builders space their horizontal control nodes evenly along
+// ground_velocity. A Bezier whose control nodes are evenly spaced in some
+// coordinate is exactly affine in that coordinate, so the tip's horizontal
+// velocity is exactly ground_velocity for the whole ramp — the same property
+// generate_stance_control_nodes() relies on for constant stance speed. That is
+// what makes the scrub zero rather than merely small, so keep the horizontal
+// spacing uniform: shaping it would silently reintroduce the slip.
+//
+// Only z curves. Both ramps are C2-continuous with stance at their ground end.
+
+// Lift-off ramp: rises from lift_off (on the ground) to ramp_clearance over
+// ramp_time, leaving the ground with zero vertical velocity and acceleration and
+// exiting at 2 * ramp_clearance / ramp_time upward.
+BezierNodes generate_liftoff_ramp_control_nodes(const Vec3& lift_off,
+                                                const Vec3& ground_velocity,
+                                                float ramp_time,
+                                                float ramp_clearance);
+
+// Touchdown ramp: descends from ramp_clearance onto touchdown over ramp_time,
+// entering at 2 * ramp_clearance / ramp_time downward and easing to exactly
+// touchdown_velocity at contact.
+BezierNodes generate_touchdown_ramp_control_nodes(const Vec3& touchdown,
+                                                  const Vec3& ground_velocity,
+                                                  float ramp_time,
+                                                  float ramp_clearance,
+                                                  float touchdown_velocity);
+
 }  // namespace hexa::gait

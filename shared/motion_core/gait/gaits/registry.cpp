@@ -66,9 +66,10 @@ const PhaseOffsets& metachronal_offsets() {
 
 // ── Shared foot-target evaluator (all strategies delegate here) ──
 
-// Pure (phase, stride, leg) -> body-frame target. Swing window is [0, 1 - beta);
-// stance window is [1 - beta, 1). Stance is a quartic Bezier from AEP toward PEP
-// at constant tip velocity; swing is the two-curve swing_arc.
+// Pure (phase, stride, leg) -> body-frame target. Swing window is
+// [0, stride.swing_end); stance window is [stride.swing_end, 1). Stance is a
+// quartic Bezier from AEP toward PEP at constant tip velocity; swing is the
+// swing_arc.
 Vec3 phased_foot_target(float phase, const StrideParams& stride,
                         const LegContext& leg) {
   const Vec3 nominal = leg.nominal_stance;
@@ -77,15 +78,24 @@ Vec3 phased_foot_target(float phase, const StrideParams& stride,
   const Vec3 pep = nominal - 0.5f * stride_vec;
   const Vec3 aep = nominal + 0.5f * stride_vec;
 
-  const float swing_end = 1.0f - stride.duty_factor;
+  const float swing_end = stride.swing_end;
+  const float stance_fraction = 1.0f - swing_end;
+  const float stance_time = stride.cycle_time * stance_fraction;
+
   if (phase < swing_end) {
     const float phase_in_swing = swing_end > 0.0f ? phase / swing_end : 0.0f;
-    const float swing_time = stride.cycle_time * (1.0f - stride.duty_factor);
-    return swing_arc(phase_in_swing, pep, aep, stride.swing_clearance,
-                     stride.swing_width, identity_y_sign(nominal), swing_time);
+    const float swing_time = stride.cycle_time * swing_end;
+    // The foot leaves and rejoins the ground at the stance tip velocity, which
+    // is the stride covered over the *stance* time — not over the swing time.
+    // Letting swing_arc default these would overstate it by
+    // stance_time / swing_time, which is 1 only for an unmargined tripod.
+    const Vec3 v_ground =
+        stance_time > 0.0f ? (-stride_vec / stance_time) : Vec3::Zero();
+    return swing_arc(phase_in_swing, pep, aep, identity_y_sign(nominal),
+                     swing_time, stride.swing, v_ground, v_ground);
   }
 
-  const float stance_phase = (phase - swing_end) / stride.duty_factor;
+  const float stance_phase = (phase - swing_end) / stance_fraction;
   const BezierNodes stance_nodes = generate_stance_control_nodes(aep, stride_vec);
   return quartic_bezier(stance_nodes, stance_phase);
 }

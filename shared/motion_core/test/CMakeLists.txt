@@ -112,6 +112,14 @@ set(FW_GAIT_SOURCES
 hexa_host_test(test_gait_unit test_gait_unit.cpp ${FW_GAIT_SOURCES})
 target_compile_options(test_gait_unit PRIVATE -fexceptions)
 
+# Cold-start / shutdown ladders (InitializeController, FoldController). Split out
+# of the engine suite because what they pin is leg *coverage* — every leg belongs
+# to a PAIR_ORDER pair and has actually moved by DONE — which is the check that
+# distinguishes a mis-sequenced ladder from a leg whose commands never reached
+# the servos.
+hexa_host_test(test_stand_transition test_stand_transition.cpp ${FW_GAIT_SOURCES})
+target_compile_options(test_stand_transition PRIVATE -fexceptions)
+
 # ── Control velocity shaping (part 07) ──
 # BodyVelocityLimiter slew + Control scale-to-envelope / reset wiring. Float
 # only, so it runs through hexa_host_test() under -Wdouble-promotion. Needs the
@@ -158,6 +166,14 @@ set(FW_POSTURE_SOURCES
   ${POSTURE_SRC}/pose.cpp
   ${POSTURE_SRC}/animations.cpp
   ${POSTURE_SRC}/posture.cpp)
+
+# Gait-active body-animation master switch (tuning.yaml
+# gait_body_animations_enabled): pins that a walking tick emits no body offset
+# with the switch off, and does with it on.
+hexa_host_test(test_posture test_posture.cpp
+  ${FW_POSTURE_SOURCES}
+  ${KIN_SRC}/body_transform.cpp)
+target_compile_options(test_posture PRIVATE -fexceptions)
 
 # ── Pipeline integration (part 10, Tier 2/3 seam) ──
 # Drives the whole target-agnostic control brain (src/pipeline.cpp) — teleop ->

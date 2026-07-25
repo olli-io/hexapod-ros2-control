@@ -217,7 +217,11 @@ def main() -> int:
     duty = {n: d for n, d, _ in GAITS}[default_gait]
     stride = float(gait["stride_length"])
     min_swing = float(gait["min_swing_time"])
-    gait_linear_max = stride * (1.0 - duty) / (min_swing * duty)
+    margin = float(gait["swing_phase_margin"])
+    # Realized swing/stance split, not the nominal duty factor — same formula as
+    # gen_config.py velocity_caps(), pipeline_config_loader.cpp and limits.py.
+    swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
+    gait_linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
     animation_list = tuple(
         str(a) for a in
         posture["posture_node"]["ros__parameters"]["animation_mode_animations"])

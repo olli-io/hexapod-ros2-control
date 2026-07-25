@@ -51,4 +51,33 @@ std::vector<LegGroup> build_leg_order(const std::vector<std::string>& joint_name
   return legs;
 }
 
+std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order,
+                                   const std::vector<std::size_t>& slice) {
+  std::vector<PinRun> runs;
+  std::size_t i = 0;
+  while (i < slice.size()) {
+    if (slice[i] >= pin_order.size()) {
+      throw std::runtime_error("hexa_hardware: pin run references pin_order " +
+                               std::to_string(slice[i]) + " out of range");
+    }
+    PinRun run;
+    run.start_pin = pin_order[slice[i]].pin;
+    std::size_t k = i;
+    while (k < slice.size() && slice[k] < pin_order.size() &&
+           pin_order[slice[k]].pin == run.start_pin + (k - i)) {
+      run.joint_idx.push_back(pin_order[slice[k]].joint_idx);
+      ++k;
+    }
+    runs.push_back(std::move(run));
+    i = k;
+  }
+  return runs;
+}
+
+std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order) {
+  std::vector<std::size_t> all(pin_order.size());
+  for (std::size_t i = 0; i < all.size(); ++i) all[i] = i;
+  return build_pin_runs(pin_order, all);
+}
+
 }  // namespace hexa_hardware

@@ -186,7 +186,8 @@ PostureController::PostureController()
     : PostureController(config::kPosture) {}
 
 PostureController::PostureController(const config::PostureConfig& p)
-    : activation_slew_rate_(p.gait_activation_slew_rate),
+    : gait_body_animations_enabled_(p.gait_body_animations_enabled),
+      activation_slew_rate_(p.gait_activation_slew_rate),
       anim_reserve_{p.animation_reserve_x, p.animation_reserve_y,
                     p.animation_reserve_z, p.animation_reserve_roll,
                     p.animation_reserve_pitch, p.animation_reserve_yaw},
@@ -279,7 +280,12 @@ BodyPose PostureController::update(
   // gait-active animations fade against the idle ones (the node owns the
   // transition, not the animations).
   ctx.walking = true;
-  const BodyPose gait_out = stack.eval(ctx);
+  // Master switch: with gait body animations off the gait regime contributes
+  // nothing, so the crossfade fades the idle animations out to a still body
+  // instead of into the walking ones. The activation still tracks `walking`, so
+  // the fade itself (and its reversal on stopping) is unchanged.
+  const BodyPose gait_out =
+      gait_body_animations_enabled_ ? stack.eval(ctx) : IDENTITY;
   ctx.walking = false;
   const BodyPose idle_out = stack.eval(ctx);
   const BodyPose animated = lerp(idle_out, gait_out, activation_);

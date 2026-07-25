@@ -82,10 +82,11 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = initial_[name];
       const Vec3 target = ground_targets_[name];
+      const SwingProfile profile{.clearance = swing_clearance_,
+                                 .width = swing_width_};
       const Vec3 point =
-          swing_arc(phase, origin, target, swing_clearance_, swing_width_,
-                    identity_y_sign(target), pair_swing_time_, Vec3::Zero(),
-                    Vec3::Zero());
+          swing_arc(phase, origin, target, identity_y_sign(target),
+                    pair_swing_time_, profile, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {
@@ -240,10 +241,11 @@ std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = ground_targets_[name];
       const Vec3 target = initial_[name];
+      const SwingProfile profile{.clearance = swing_clearance_,
+                                 .width = swing_width_};
       const Vec3 point =
-          swing_arc(phase, origin, target, swing_clearance_, swing_width_,
-                    identity_y_sign(origin), pair_swing_time_, Vec3::Zero(),
-                    Vec3::Zero());
+          swing_arc(phase, origin, target, identity_y_sign(origin),
+                    pair_swing_time_, profile, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {

@@ -114,3 +114,93 @@ TEST(BuildLegOrder, RejectsUnrecognisedJointName) {
 TEST(BuildLegOrder, EmptyWiringYieldsNoLegs) {
   EXPECT_TRUE(hh::build_leg_order({}, {}).empty());
 }
+
+// ── build_pin_runs — how many SET frames a tick costs ───────────────────────
+//
+// The stagger is an inrush measure, not a wire format: once every leg is live
+// the whole table must collapse back to the runs the harness allows. Splitting
+// steady-state traffic into one frame per leg puts the last leg in pin order at
+// the tail of a six-frame burst every tick, which is where r_front's commands
+// were going missing.
+
+namespace {
+
+std::vector<std::size_t> run_lengths(const std::vector<hh::PinRun>& runs) {
+  std::vector<std::size_t> out;
+  for (const auto& r : runs) out.push_back(r.joint_idx.size());
+  return out;
+}
+
+}  // namespace
+
+TEST(BuildPinRuns, ShippedWiringCollapsesToOneFrame) {
+  const auto w = make(kShippedWiring);
+  const auto runs = hh::build_pin_runs(w.pin_order);
+  ASSERT_EQ(runs.size(), 1u);
+  EXPECT_EQ(runs[0].start_pin, 0u);
+  EXPECT_EQ(runs[0].joint_idx.size(), 18u);
+}
+
+TEST(BuildPinRuns, WholeTableRunDrivesJointsInPinOrder) {
+  const auto w = make(kShippedWiring);
+  const auto runs = hh::build_pin_runs(w.pin_order);
+  ASSERT_EQ(runs.size(), 1u);
+  // Board index N carries the joint the wiring put on silkscreen pin N+1, so
+  // the payload must read l_rear -> ... -> r_front, not the controller order.
+  EXPECT_EQ(w.names[runs[0].joint_idx.front()], "l_rear_coxa_joint");
+  EXPECT_EQ(w.names[runs[0].joint_idx.back()], "r_front_tibia_joint");
+  for (std::size_t i = 0; i < runs[0].joint_idx.size(); ++i) {
+    EXPECT_EQ(w.names[runs[0].joint_idx[i]],
+              w.names[w.pin_order[i].joint_idx]);
+  }
+}
+
+TEST(BuildPinRuns, PerLegSliceIsOneFramePerLeg) {
+  // What the sweep ramp costs while some legs must stay limp.
+  const auto w = make(kShippedWiring);
+  const auto legs = hh::build_leg_order(w.names, w.pin_order);
+  ASSERT_EQ(legs.size(), 6u);
+  for (const auto& leg : legs) {
+    const auto runs = hh::build_pin_runs(w.pin_order, leg.pin_order_idx);
+    ASSERT_EQ(runs.size(), 1u) << leg.name;
+    EXPECT_EQ(runs[0].joint_idx.size(), 3u) << leg.name;
+  }
+}
+
+TEST(BuildPinRuns, SplitsOnAPinGap) {
+  // Board indices 0,1,2 then 4,5 — the gap forces a second frame.
+  const auto w = make({
+      {"l_rear_coxa_joint", 1},
+      {"l_rear_femur_joint", 2},
+      {"l_rear_tibia_joint", 3},
+      {"r_rear_coxa_joint", 5},
+      {"r_rear_femur_joint", 6},
+  });
+  const auto runs = hh::build_pin_runs(w.pin_order);
+  ASSERT_EQ(runs.size(), 2u);
+  EXPECT_EQ(runs[0].start_pin, 0u);
+  EXPECT_EQ(runs[1].start_pin, 4u);
+  EXPECT_EQ(run_lengths(runs), (std::vector<std::size_t>{3u, 2u}));
+}
+
+TEST(BuildPinRuns, InterleavedWiringGivesALegOneFramePerJoint) {
+  // The worst case the fallback cannot help: a leg wired onto non-consecutive
+  // pins pays a frame per joint whether or not the sweep is done.
+  const auto w = make({
+      {"l_rear_coxa_joint", 1},
+      {"r_rear_coxa_joint", 2},
+      {"l_rear_femur_joint", 3},
+      {"r_rear_femur_joint", 4},
+  });
+  const auto legs = hh::build_leg_order(w.names, w.pin_order);
+  const auto runs = hh::build_pin_runs(w.pin_order, legs[0].pin_order_idx);
+  EXPECT_EQ(run_lengths(runs), (std::vector<std::size_t>{1u, 1u}));
+  // Whole-table, the same wiring is still one consecutive run.
+  EXPECT_EQ(hh::build_pin_runs(w.pin_order).size(), 1u);
+}
+
+TEST(BuildPinRuns, EmptyViewYieldsNoFrames) {
+  EXPECT_TRUE(hh::build_pin_runs({}).empty());
+  const auto w = make(kShippedWiring);
+  EXPECT_TRUE(hh::build_pin_runs(w.pin_order, {}).empty());
+}

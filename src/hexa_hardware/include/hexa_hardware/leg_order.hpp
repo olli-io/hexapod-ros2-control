@@ -30,10 +30,28 @@ struct LegGroup {
   std::vector<std::size_t> pin_order_idx;  // indices into pin_order, ascending
 };
 
+// One SET frame's worth of that view: a run of consecutive board indices, given
+// as the JointSlot indices it drives in pin order. The board addresses a SET by
+// start index + count, so only consecutive pins collapse into one frame.
+struct PinRun {
+  std::uint8_t start_pin;              // board index of the run's first servo
+  std::vector<std::size_t> joint_idx;  // JointSlot indices, ascending by pin
+};
+
 // Group `pin_order` (ascending by pin) into legs and order the legs by their
 // lowest pin. `joint_names[e.joint_idx]` must be a URDF joint name of the form
 // `<leg>_<segment>_joint`; anything else throws std::runtime_error.
 std::vector<LegGroup> build_leg_order(const std::vector<std::string>& joint_names,
                                       const std::vector<PinEntry>& pin_order);
+
+// Split `slice` (indices into `pin_order`, ascending) into runs of consecutive
+// board indices — one SET frame per run. Precomputed rather than rebuilt per
+// tick: which frames a given set of joints costs is fixed by the wiring.
+std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order,
+                                   const std::vector<std::size_t>& slice);
+
+// build_pin_runs over the whole view — the steady-state frame plan, one frame
+// under a fully consecutive harness.
+std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order);
 
 }  // namespace hexa_hardware

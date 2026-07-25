@@ -117,14 +117,23 @@ def load_velocity_caps(envelope_yaml: str | Path) -> VelocityCaps:
     min_swing_time = float(raw["min_swing_time"])
     angular_max = float(raw["angular_z_max"])
     yaw_bias = float(raw["yaw_bias"])
+    margin = float(raw.get("swing_phase_margin", 0.0))
 
     linear_max_by_gait: dict[str, float] = {}
     yaw_bias_by_gait: dict[str, float] = {}
     for name, descriptor in GAIT_DESCRIPTORS.items():
         duty = descriptor.duty_factor
+        # The cap is stride_length covered in one stance, so it keys off the
+        # realized swing/stance split (swing_end_phase in gaits/base.cpp), not
+        # the nominal duty factor: the swing phase margin lengthens stance and
+        # lowers top speed. Keep identical to gen_config.py's velocity_caps()
+        # and pipeline_config_loader.cpp.
+        swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
         linear_max_by_gait[name] = (
-            stride_length * (1.0 - duty) / (min_swing_time * duty)
+            stride_length * swing_end / (min_swing_time * (1.0 - swing_end))
         )
+        # yaw_bias stays keyed to the gait's nominal duty: it is a feel knob for
+        # how a gait gives way under a saturating command, not a timing budget.
         yaw_bias_by_gait[name] = 0.5 + (yaw_bias - 0.5) * (1.5 - duty)
     return VelocityCaps(
         linear_max_by_gait=linear_max_by_gait,

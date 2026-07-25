@@ -143,10 +143,10 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = pair_origin_[name];
       const Vec3 target = target_[name];
+      const SwingProfile profile{.clearance = swing_clearance_, .width = 0.0f};
       const Vec3 point =
-          swing_arc(phase, origin, target, swing_clearance_,
-                    /*swing_width=*/0.0f, identity_y_sign(target),
-                    pair_swing_time_, Vec3::Zero(), Vec3::Zero());
+          swing_arc(phase, origin, target, identity_y_sign(target),
+                    pair_swing_time_, profile, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {

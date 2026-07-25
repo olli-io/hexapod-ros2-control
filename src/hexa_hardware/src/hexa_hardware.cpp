@@ -158,10 +158,21 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
   for (const auto& j : joints_) joint_names.push_back(j.name);
   try {
     leg_order_ = build_leg_order(joint_names, pin_order_);
+    // Frame plans. `full_runs_` is what every tick costs once the sweep is done
+    // — under the shipped wiring (board indices 0..17, all consecutive) that is
+    // one 18-value SET, exactly what the link carried before the sweep existed.
+    // `leg_runs_` is only for the ramp, while some legs must stay limp.
+    full_runs_ = build_pin_runs(pin_order_);
+    leg_runs_.clear();
+    leg_runs_.reserve(leg_order_.size());
+    for (const auto& leg : leg_order_) {
+      leg_runs_.push_back(build_pin_runs(pin_order_, leg.pin_order_idx));
+    }
   } catch (const std::exception& e) {
     RCLCPP_FATAL(rclcpp::get_logger(kLogger), "Leg grouping failed: %s", e.what());
     return hardware_interface::CallbackReturn::ERROR;
   }
+  batch_.reserve(joints_.size());
 
   sweep_ = hexa::EnergizeSweep(
       static_cast<float>(config_.init.sweep_leg_interval_ms) * 1e-3f);
@@ -409,34 +420,37 @@ hardware_interface::return_type HexaHardware::write(
   const std::size_t n_legs =
       std::min(static_cast<std::size_t>(live), leg_order_.size());
 
-  // Within each energized leg, accumulate runs of consecutive pins and emit one
-  // SET frame per run (one frame per leg under the shipped wiring).
-  std::vector<std::uint16_t> batch;
-  batch.reserve(joints_.size());
-  for (std::size_t leg = 0; leg < n_legs; ++leg) {
-    const auto& idxs = leg_order_[leg].pin_order_idx;
-    std::size_t i = 0;
-    while (i < idxs.size()) {
-      const std::uint8_t run_start = pin_order_[idxs[i]].pin;
-      batch.clear();
-      std::size_t k = i;
-      while (k < idxs.size() &&
-             pin_order_[idxs[k]].pin == run_start + (k - i)) {
-        const auto& j = joints_[pin_order_[idxs[k]].joint_idx];
-        batch.push_back(j.cal.to_pulse_us(j.cmd));
-        ++k;
+  // Once every leg is live, drive the whole table as one frame plan — the
+  // stagger is an inrush measure, not a wire format, and leaving it in place
+  // would split every steady-state tick into one frame per leg for the rest of
+  // the session. The last leg in pin order is the one that pays for that, and
+  // it is the one that goes missing. Same fallback the Pico takes
+  // (servo_out::command_legs -> command_all once n_legs >= kNumLegs).
+  try {
+    if (n_legs >= leg_order_.size()) {
+      send_runs(full_runs_);
+    } else {
+      for (std::size_t leg = 0; leg < n_legs; ++leg) {
+        send_runs(leg_runs_[leg]);
       }
-      try {
-        board_->send_servo_positions(run_start, batch);
-      } catch (const std::exception& e) {
-        RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
-                              1000, "SET write failed: %s", e.what());
-        return hardware_interface::return_type::ERROR;
-      }
-      i = k;
     }
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
+                          1000, "SET write failed: %s", e.what());
+    return hardware_interface::return_type::ERROR;
   }
   return hardware_interface::return_type::OK;
+}
+
+void HexaHardware::send_runs(const std::vector<PinRun>& runs) {
+  for (const auto& run : runs) {
+    batch_.clear();
+    for (const std::size_t joint_idx : run.joint_idx) {
+      const auto& j = joints_[joint_idx];
+      batch_.push_back(j.cal.to_pulse_us(j.cmd));
+    }
+    board_->send_servo_positions(run.start_pin, batch_);
+  }
 }
 
 }  // namespace hexa_hardware

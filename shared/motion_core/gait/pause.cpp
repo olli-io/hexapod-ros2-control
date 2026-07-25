@@ -124,9 +124,9 @@ Vec3 PauseController::descent_point(const LegDescent& descent) const {
   // velocities and zero clearance degenerates to a rest-to-rest interpolation
   // along the stride vector (here, purely -z).
   const float phase = descent.elapsed / descent.duration;
+  const SwingProfile profile{.clearance = 0.0f, .width = swing_width_};
   return swing_arc(phase, descent.origin, descent.target,
-                   /*swing_clearance=*/0.0f, swing_width_,
-                   identity_y_sign(descent.target), descent.duration,
+                   identity_y_sign(descent.target), descent.duration, profile,
                    Vec3::Zero(), Vec3::Zero());
 }
 

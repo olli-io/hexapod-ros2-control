@@ -96,4 +96,52 @@ BezierNodes generate_stance_control_nodes(const Vec3& stance_origin,
   return nodes;
 }
 
+namespace {
+// Lay the five nodes out along the ground track, then add a per-node vertical
+// offset. Even horizontal spacing is what pins the horizontal velocity to
+// ground_velocity for the whole curve.
+BezierNodes ground_matched_nodes(const Vec3& ground_start,
+                                 const Vec3& ground_velocity, float ramp_time,
+                                 const std::array<float, 5>& z) {
+  const Vec3 step = 0.25f * ramp_time * Vec3(ground_velocity[0],
+                                             ground_velocity[1], 0.0f);
+  BezierNodes nodes;
+  for (int k = 0; k < 5; ++k) {
+    nodes[k] = ground_start + static_cast<float>(k) * step +
+               Vec3(0.0f, 0.0f, z[static_cast<std::size_t>(k)]);
+  }
+  return nodes;
+}
+}  // namespace
+
+BezierNodes generate_liftoff_ramp_control_nodes(const Vec3& lift_off,
+                                                const Vec3& ground_velocity,
+                                                float ramp_time,
+                                                float ramp_clearance) {
+  // z0..z2 equal keeps both the vertical velocity and acceleration zero at the
+  // seam with stance, so the foot peels off the ground rather than stepping off.
+  const std::array<float, 5> z = {0.0f, 0.0f, 0.0f, 0.5f * ramp_clearance,
+                                  ramp_clearance};
+  return ground_matched_nodes(lift_off, ground_velocity, ramp_time, z);
+}
+
+BezierNodes generate_touchdown_ramp_control_nodes(const Vec3& touchdown,
+                                                  const Vec3& ground_velocity,
+                                                  float ramp_time,
+                                                  float ramp_clearance,
+                                                  float touchdown_velocity) {
+  // The last three z nodes are spaced so the descent eases to exactly
+  // touchdown_velocity with zero vertical acceleration at contact. Capped at the
+  // ramp height so a large touchdown_velocity degrades to a straight descent
+  // instead of folding the node order and bouncing the foot.
+  const float contact =
+      std::min(touchdown_velocity * ramp_time, ramp_clearance);
+  const std::array<float, 5> z = {ramp_clearance, 0.5f * ramp_clearance,
+                                  0.5f * contact, 0.25f * contact, 0.0f};
+  // The curve ends at `touchdown`, so it starts one full ground track behind it.
+  const Vec3 start =
+      touchdown - ramp_time * Vec3(ground_velocity[0], ground_velocity[1], 0.0f);
+  return ground_matched_nodes(start, ground_velocity, ramp_time, z);
+}
+
 }  // namespace hexa::gait

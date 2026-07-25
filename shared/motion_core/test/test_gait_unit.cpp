@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include "config_generated.hpp"
 #include "gait/clock.hpp"
 #include "gait/engine.hpp"
 #include "gait/gaits/registry.hpp"
@@ -41,32 +42,55 @@ constexpr float kLegSpeed = 0.06f;
 const g::Vec3 kPep(0.15f, 0.05f, -0.12f);
 const g::Vec3 kAep(0.20f, 0.05f, -0.12f);
 
-struct SwingProfile {
+struct SwingTrace {
   g::Vec3 start = g::Vec3::Zero();
   g::Vec3 end = g::Vec3::Zero();
   g::Vec3 touchdown_velocity = g::Vec3::Zero();  // m/s, real time
+  g::Vec3 liftoff_velocity = g::Vec3::Zero();    // m/s, real time
   float apex_height = 0.0f;      // m above touchdown level
   float min_height = 0.0f;       // m above touchdown level
   float peak_descent = 0.0f;     // m/s downward
   float max_velocity_jump = 0.0f;  // m/s between adjacent samples
+  // How far the tip has slid against the ground, in metres: the worst gap
+  // between where it is and where a planted foot would be, measured only while
+  // it is at or below `scrub_band` and so could still be in contact.
+  //
+  // Deliberately a position comparison rather than a velocity one. Differencing
+  // two ~0.12 m samples over a 0.2 ms step leaves float32 with about 1e-4 m/s of
+  // pure cancellation noise, which is the same order as the effect under test.
+  float max_ground_offset = 0.0f;
 };
+
+g::SwingProfile make_profile(float apex_fraction, float touchdown_velocity,
+                             float ramp_clearance_fraction) {
+  g::SwingProfile profile;
+  profile.clearance = kStepHeight;
+  profile.width = 0.0f;
+  profile.apex_fraction = apex_fraction;
+  profile.ramp_clearance_fraction = ramp_clearance_fraction;
+  profile.touchdown_velocity = touchdown_velocity;
+  return profile;
+}
 
 // Walk the whole swing at a fine, uniform phase step and reduce it to the
 // quantities the touchdown behaviour depends on. Velocities are finite
 // differences in real time, so a genuine C1 break shows up as a single large
 // max_velocity_jump while a smooth curve stays at O(acceleration * step).
-SwingProfile profile_swing(float apex_fraction, float touchdown_velocity) {
-  const g::Vec3 v_in(-kLegSpeed, 0.0f, 0.0f);
-  const g::Vec3 v_out(-kLegSpeed, 0.0f, -touchdown_velocity);
+SwingTrace profile_swing(float apex_fraction, float touchdown_velocity,
+                         float ramp_clearance_fraction = 0.0f,
+                         float scrub_band = 0.002f) {
+  const g::SwingProfile profile =
+      make_profile(apex_fraction, touchdown_velocity, ramp_clearance_fraction);
+  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
   const auto at = [&](float phase) {
-    return g::swing_arc(phase, kPep, kAep, kStepHeight, 0.0f, 1, kSwingTime,
-                        v_in, v_out, apex_fraction);
+    return g::swing_arc(phase, kPep, kAep, 1, kSwingTime, profile, v_ground,
+                        v_ground);
   };
 
   constexpr int kSteps = 2000;
   constexpr float kStep = 1.0f / static_cast<float>(kSteps);
 
-  SwingProfile p;
+  SwingTrace p;
   p.start = at(0.0f);
   p.end = at(1.0f);
   p.min_height = 1.0f;
@@ -87,6 +111,22 @@ SwingProfile profile_swing(float apex_fraction, float touchdown_velocity) {
       p.max_velocity_jump = std::max(
           p.max_velocity_jump,
           std::sqrt(jump.x * jump.x + jump.y * jump.y + jump.z * jump.z));
+    }
+    if (height <= scrub_band) {
+      // Where a foot planted at this end of the swing would be by now. The
+      // lift-off end tracks forward from the PEP; the touchdown end tracks
+      // backward from the AEP it is about to land on.
+      const float tau = phase * kSwingTime;
+      const g::Vec3 planted = phase < 0.5f
+                                  ? kPep + v_ground * tau
+                                  : kAep + v_ground * (tau - kSwingTime);
+      const float dx = point.x - planted.x;
+      const float dy = point.y - planted.y;
+      p.max_ground_offset =
+          std::max(p.max_ground_offset, std::sqrt(dx * dx + dy * dy));
+    }
+    if (i == 1) {
+      p.liftoff_velocity = velocity;
     }
     p.touchdown_velocity = velocity;
     prev_point = point;
@@ -147,9 +187,10 @@ TEST(Trajectory, QuarticBezierHitsEndpoints) {
 TEST(Trajectory, SwingArcReturnsToGroundAtTouchdown) {
   const g::Vec3 pep(0.15f, 0.05f, -0.12f);
   const g::Vec3 aep(0.20f, 0.05f, -0.12f);
-  const g::Vec3 start = g::swing_arc(0.0f, pep, aep, 0.08f, 0.0f, 1, 0.4f);
-  const g::Vec3 apex = g::swing_arc(0.5f, pep, aep, 0.08f, 0.0f, 1, 0.4f);
-  const g::Vec3 end = g::swing_arc(1.0f, pep, aep, 0.08f, 0.0f, 1, 0.4f);
+  const g::SwingProfile profile{.clearance = 0.08f, .width = 0.0f};
+  const g::Vec3 start = g::swing_arc(0.0f, pep, aep, 1, 0.4f, profile);
+  const g::Vec3 apex = g::swing_arc(0.5f, pep, aep, 1, 0.4f, profile);
+  const g::Vec3 end = g::swing_arc(1.0f, pep, aep, 1, 0.4f, profile);
   EXPECT_NEAR(start.x, pep.x, 1e-4f);
   EXPECT_NEAR(start.z, pep.z, 1e-4f);
   EXPECT_NEAR(end.x, aep.x, 1e-4f);
@@ -160,7 +201,7 @@ TEST(Trajectory, SwingArcReturnsToGroundAtTouchdown) {
 
 TEST(Trajectory, SwingArcEndpointsHoldUnderApexSplit) {
   for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
-    const SwingProfile p = profile_swing(apex_fraction, 0.0f);
+    const SwingTrace p = profile_swing(apex_fraction, 0.0f);
     EXPECT_NEAR(p.start.x, kPep.x, 1e-4f) << apex_fraction;
     EXPECT_NEAR(p.start.z, kPep.z, 1e-4f) << apex_fraction;
     EXPECT_NEAR(p.end.x, kAep.x, 1e-4f) << apex_fraction;
@@ -174,7 +215,7 @@ TEST(Trajectory, SwingArcEndpointsHoldUnderApexSplit) {
 // without that scaling the foot's velocity steps discontinuously mid-swing.
 TEST(Trajectory, SwingArcApexStaysVelocityContinuousUnderSplit) {
   for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
-    const SwingProfile p = profile_swing(apex_fraction, 0.0f);
+    const SwingTrace p = profile_swing(apex_fraction, 0.0f);
     EXPECT_LT(p.max_velocity_jump, 0.05f)
         << "velocity discontinuity at apex_fraction " << apex_fraction;
   }
@@ -182,7 +223,7 @@ TEST(Trajectory, SwingArcApexStaysVelocityContinuousUnderSplit) {
 
 TEST(Trajectory, SwingArcHonoursTouchdownVelocity) {
   for (const float v_td : {0.0f, 0.02f, 0.05f}) {
-    const SwingProfile p = profile_swing(0.45f, v_td);
+    const SwingTrace p = profile_swing(0.45f, v_td);
     EXPECT_NEAR(p.touchdown_velocity.x, -kLegSpeed, 5e-3f) << v_td;
     EXPECT_NEAR(p.touchdown_velocity.z, -v_td, 5e-3f) << v_td;
   }
@@ -191,7 +232,7 @@ TEST(Trajectory, SwingArcHonoursTouchdownVelocity) {
 TEST(Trajectory, SwingArcNeverDipsBelowTouchdownLevel) {
   for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
     for (const float v_td : {0.0f, 0.05f}) {
-      const SwingProfile p = profile_swing(apex_fraction, v_td);
+      const SwingTrace p = profile_swing(apex_fraction, v_td);
       EXPECT_GT(p.min_height, -1.0e-5f) << apex_fraction << " / " << v_td;
     }
   }
@@ -207,6 +248,253 @@ TEST(Trajectory, LongerDescentLowersPeakDescentRate) {
   EXPECT_LT(longer, split);
   // Pins the even-split closed form, (32/9) * step_height / swing_time.
   EXPECT_NEAR(even, 3.5556f * kStepHeight / kSwingTime, 0.02f);
+}
+
+// ── Ground-matched ramps ──
+
+// The reason the ramps exist. Without them the foot's horizontal speed has
+// already decayed well away from ground speed by the time it has risen a couple
+// of millimetres — it is still touching and already outrunning the ground, which
+// is the scrub seen on the rear feet. The ramps pin the horizontal velocity to
+// the ground velocity exactly until the foot is clear.
+TEST(Trajectory, GroundMatchedRampsRemoveScrubNearTheGround) {
+  // Sized so the ramp fits inside kMaxRampShare of kSwingTime and the whole
+  // requested clearance is delivered; RampsAreCappedToAThinSliceOfTheSwing
+  // covers the case where it does not fit.
+  constexpr float kRampFraction = 0.05f;  // of kStepHeight
+  constexpr float kBand = kRampFraction * kStepHeight;
+  const SwingTrace plain = profile_swing(0.4f, 0.01f, 0.0f, kBand);
+  const SwingTrace ramped = profile_swing(0.4f, 0.01f, kRampFraction, kBand);
+
+  // Exact by construction (evenly spaced horizontal control nodes), so the only
+  // residual is float rounding: micrometres, not the tenths of a millimetre a
+  // real mismatch would leave.
+  EXPECT_LT(ramped.max_ground_offset, 1e-5f);
+
+  // And the unramped curve really does slide, by about a millimetre per step.
+  EXPECT_GT(plain.max_ground_offset, 100.0f * ramped.max_ground_offset);
+  EXPECT_GT(plain.max_ground_offset, 2e-4f);
+}
+
+TEST(Trajectory, RampsPreserveEndpointsApexAndGroundLevel) {
+  const SwingTrace p = profile_swing(0.4f, 0.01f, 0.05f);
+  EXPECT_NEAR(p.start.x, kPep.x, 1e-4f);
+  EXPECT_NEAR(p.start.z, kPep.z, 1e-4f);
+  EXPECT_NEAR(p.end.x, kAep.x, 1e-4f);
+  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
+  // step_height still means "how high the foot lifts off the ground", not "how
+  // high above the top of the ramp".
+  EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f);
+  // The foot never digs below the ground it is stepping onto.
+  EXPECT_GT(p.min_height, -1e-5f);
+  // It still meets the ground at the configured touchdown velocity.
+  EXPECT_NEAR(p.touchdown_velocity.z, -0.01f, 5e-3f);
+  // ...and leaves it along the ground track, so the seam with stance carries no
+  // horizontal step.
+  EXPECT_NEAR(p.liftoff_velocity.x, -kLegSpeed, 1e-3f);
+}
+
+// The ramps are opt-in: pause, reseat and the initialize ladder build their
+// SwingProfile without a ramp fraction, so they keep the plain two-curve arc.
+TEST(Trajectory, RampsAreOptIn) {
+  const SwingTrace p = profile_swing(0.4f, 0.01f, 0.0f, 0.05f * kStepHeight);
+  // No ground-matched segment, so the tip does slide near the ground...
+  EXPECT_GT(p.max_ground_offset, 1e-4f);
+  // ...but it is still a well-formed swing.
+  EXPECT_NEAR(p.start.z, kPep.z, 1e-4f);
+  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
+  EXPECT_GT(p.apex_height, 0.05f);
+}
+
+// A ramp costs the transfer arc twice: the time it takes, and the ground the
+// body covers during it, which the arc must make up on top of the stride. Both
+// compound, so an over-long ramp whips the foot through the air — on the robot
+// that reads as a twitch at mid-swing, and at longer strides the foot outruns
+// its own touchdown. The cap has to hold the peak near what the same gait does
+// with the ramps off, however much ramp the config asks for.
+TEST(Engine, RampsDoNotWhipTheFootThroughTheAir) {
+  constexpr float kTickDt = 0.005f;
+
+  const auto peak_tip_speed = [](float ramp_clearance_fraction,
+                                 float min_swing) {
+    g::EngineConfig cfg = g::engine_config_from_config();
+    cfg.ramp_clearance_fraction = ramp_clearance_fraction;
+    cfg.min_swing_time = min_swing;
+    cfg.max_swing_time = min_swing * 1.33f;
+    const float swing_end = g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+    // Saturating command: the worst case for the transfer arc.
+    const float v_cmd = cfg.stride_length * swing_end /
+                        (cfg.min_swing_time * (1.0f - swing_end));
+
+    auto e = g::make_default_engine(
+        "tripod", hexa::config::kLegSpecs, cfg, hexa::config::kStandingPose,
+        hexa::config::kInitialPose, hexa::config::kCoxaToBottom);
+    e->start_initialize();
+    for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
+      e->update(kTickDt, {0.0f, 0.0f}, 0.0f);
+    }
+    for (int i = 0; i < 6000 && e->state() != g::EngineState::GAIT; ++i) {
+      e->update(kTickDt, {v_cmd, 0.0f}, 0.0f);
+    }
+    EXPECT_EQ(e->state(), g::EngineState::GAIT);
+
+    g::Vec3 prev = g::Vec3::Zero();
+    bool have = false;
+    float peak = 0.0f;
+    for (int i = 0; i < 900; ++i) {
+      const auto out = e->update(kTickDt, {v_cmd, 0.0f}, 0.0f);
+      const auto& lo = out.at("l_front");
+      if (have && !lo.stance) {
+        const g::Vec3 v = (lo.foot_target - prev) / kTickDt;
+        peak = std::max(peak, std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z));
+      }
+      prev = lo.foot_target;
+      have = true;
+    }
+    return peak;
+  };
+
+  // Every value the knob can take must stay close to the ramps-off peak — the
+  // clamp is what makes that true, so an absurd request is covered too. Checked
+  // at a slow and a brisk gait, since a shorter swing gives the arc less room.
+  for (const float min_swing : {0.4f, 0.6f}) {
+    const float without_ramps = peak_tip_speed(0.0f, min_swing);
+    ASSERT_GT(without_ramps, 0.0f) << min_swing;
+    for (const float fraction : {0.05f, 0.10f, 0.15f, 0.40f, 5.0f}) {
+      EXPECT_LT(peak_tip_speed(fraction, min_swing), 1.35f * without_ramps)
+          << "fraction " << fraction << " at min_swing " << min_swing;
+    }
+  }
+}
+
+// The band is a share of the arc, so an absurd request is clamped rather than
+// swallowing the apex or inverting the curve.
+TEST(Trajectory, RampFractionIsClamped) {
+  const SwingTrace p = profile_swing(0.5f, 0.01f, 5.0f, 0.02f);
+  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
+  EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f);
+  EXPECT_GT(p.min_height, -1e-5f);
+}
+
+// ── Swing-window margin ──
+
+TEST(Registry, SwingWindowShrinksByMarginForEveryGait) {
+  for (const char* name : {"tripod", "surf", "tetrapod", "crawl", "ripple"}) {
+    const float beta = g::strategies().at(name)()->duty_factor();
+    const float nominal = 1.0f - beta;
+    EXPECT_NEAR(g::swing_end_phase(beta, 0.0f), nominal, 1e-6f) << name;
+    EXPECT_NEAR(g::swing_end_phase(beta, 0.12f), nominal * 0.88f, 1e-6f) << name;
+    // Clamped, so a bad edit can never collapse the window or invert it.
+    EXPECT_NEAR(g::swing_end_phase(beta, 5.0f), nominal * 0.6f, 1e-6f) << name;
+    EXPECT_NEAR(g::swing_end_phase(beta, -1.0f), nominal, 1e-6f) << name;
+  }
+  // Tripod is the headline case: swing [0, 0.44), stance [0.44, 1).
+  EXPECT_NEAR(g::swing_end_phase(0.5f, 0.12f), 0.44f, 1e-6f);
+}
+
+namespace {
+
+// Walk `gait` at a steady command for a few cycles and record, per tick, how
+// many feet are on the ground.
+std::map<int, int> stance_count_histogram(const char* gait, int ticks) {
+  constexpr float kTickDt = 0.005f;
+  auto e = g::make_default_engine(gait);
+  run_to_stand(*e);
+  for (int i = 0; i < 2000 && e->state() != g::EngineState::GAIT; ++i) {
+    e->update(kTickDt, {0.05f, 0.0f}, 0.0f);
+  }
+  EXPECT_EQ(e->state(), g::EngineState::GAIT) << gait;
+
+  std::map<int, int> histogram;
+  for (int i = 0; i < ticks; ++i) {
+    const auto out = e->update(kTickDt, {0.05f, 0.0f}, 0.0f);
+    int stance = 0;
+    for (const auto& [name, leg] : out) {
+      (void)name;
+      if (leg.stance) ++stance;
+    }
+    ++histogram[stance];
+  }
+  return histogram;
+}
+
+}  // namespace
+
+// The headline behaviour: at every handover the incoming legs are already
+// carrying weight before the outgoing ones let go. Without the margin the swap
+// is a knife edge — the gaits below momentarily drop to 3, 4 and 2 stance legs
+// respectively at the instant of the swap.
+TEST(Engine, EveryHandoverHasAStretchWithAllSixFeetDown) {
+  struct Case {
+    const char* gait;
+    int min_stance;  // floor the margin must guarantee
+  };
+  for (const Case& c : {Case{"tripod", 3}, Case{"tetrapod", 4},
+                        Case{"ripple", 5}}) {
+    const auto histogram = stance_count_histogram(c.gait, 1200);
+
+    int total = 0;
+    int lowest = 6;
+    for (const auto& [stance, ticks] : histogram) {
+      total += ticks;
+      lowest = std::min(lowest, stance);
+    }
+    ASSERT_GT(total, 0) << c.gait;
+
+    EXPECT_GE(lowest, c.min_stance) << c.gait;
+    EXPECT_GE(lowest, 3) << c.gait << " is statically unstable";
+
+    const auto six = histogram.find(6);
+    ASSERT_NE(six, histogram.end())
+        << c.gait << " never has all six feet planted";
+    // The overlap is a real stretch of the cycle, not a single tick that could
+    // be swallowed by timing jitter.
+    const float fraction =
+        static_cast<float>(six->second) / static_cast<float>(total);
+    EXPECT_GT(fraction, 0.04f) << c.gait;
+  }
+}
+
+// The margin shortens the swing window, so the cycle has to stretch to keep the
+// foot in the air for its configured swing time. If cycle_time_bounds still
+// scaled by the nominal 1/(1 - beta) the feet would be rushed through the air by
+// exactly the margin.
+TEST(Engine, SwingTimeStaysWithinConfiguredBoundsUnderTheMargin) {
+  constexpr float kTickDt = 0.005f;
+  const auto cfg = g::engine_config_from_config();
+  for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
+    for (const float v_x : {0.02f, 0.05f, 0.10f}) {
+      auto e = g::make_default_engine(gait);
+      run_to_stand(*e);
+      for (int i = 0; i < 3000 && e->state() != g::EngineState::GAIT; ++i) {
+        e->update(kTickDt, {v_x, 0.0f}, 0.0f);
+      }
+      ASSERT_EQ(e->state(), g::EngineState::GAIT) << gait << " @ " << v_x;
+
+      // Count the ticks one leg spends airborne over one complete swing.
+      int swing_ticks = 0;
+      int best = 0;
+      bool seen_stance = false;
+      for (int i = 0; i < 2000; ++i) {
+        const auto out = e->update(kTickDt, {v_x, 0.0f}, 0.0f);
+        const bool stance = out.at("l_front").stance;
+        seen_stance = seen_stance || stance;
+        if (!stance && seen_stance) {
+          ++swing_ticks;
+        } else if (stance && swing_ticks > 0) {
+          best = std::max(best, swing_ticks);
+          swing_ticks = 0;
+        }
+      }
+      ASSERT_GT(best, 0) << gait << " @ " << v_x;
+      const float swing_time = static_cast<float>(best) * kTickDt;
+      // One tick of slack at each end for the phase quantisation.
+      EXPECT_GE(swing_time, cfg.min_swing_time - 2.0f * kTickDt)
+          << gait << " @ " << v_x;
+      EXPECT_LE(swing_time, cfg.max_swing_time + 2.0f * kTickDt)
+          << gait << " @ " << v_x;
+    }
+  }
 }
 
 TEST(Engine, ColdStartReachesStand) {

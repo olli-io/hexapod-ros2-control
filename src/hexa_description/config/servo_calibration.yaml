@@ -8,7 +8,7 @@
 #   us_at_plus_45  — pulse width at +π/4 from the servo's mechanical center
 #   us_at_minus_45 — pulse width at -π/4 from the servo's mechanical center
 # Center pulse and slope magnitude are derived from these; travel direction is
-# hardware.yaml's `direction`. Defaults below (2000 / 1000) are the ideal
+# hardware.yaml's `reversed`. Defaults below (2000 / 1000) are the ideal
 # uncalibrated build — replace with measured values per servo.
 calibration_values:
   - { pin: 1, us_at_plus_45: 1945, us_at_minus_45: 1040 }

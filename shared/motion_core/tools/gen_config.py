@@ -144,6 +144,11 @@ def cstr(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def bo(x) -> str:
+    """C++ bool literal from a YAML boolean."""
+    return "true" if x else "false"
+
+
 # ── joint-angle conventions (mirror pipeline_config_loader.cpp) ──────────────
 
 def to_urdf_rad(joint_type: str, deg: float) -> float:
@@ -248,9 +253,19 @@ def velocity_caps(gait: dict):
     stride = gait["stride_length"]
     min_swing = gait["min_swing_time"]
     yaw_bias = gait["yaw_bias"]
+    margin = gait["swing_phase_margin"]
     caps = []
     for name, duty, unstable in GAITS:
-        linear_max = stride * (1.0 - duty) / (min_swing * duty)
+        # The cap is stride_length covered in one stance, so it keys off the
+        # *realized* split (swing_end_phase in gaits/base.cpp), not the nominal
+        # duty factor: the phase margin lengthens stance and lowers top speed.
+        # Keep this identical to the other three copies of the formula —
+        # pipeline_config_loader.cpp, hexa_common/limits.py, gen_joy_golden.py —
+        # or the loader-vs-baked parity test fails.
+        swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
+        linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
+        # yaw_bias stays keyed to the gait's nominal duty: it is a feel knob for
+        # how a gait gives way under a saturating command, not a timing budget.
         yaw_bias_eff = 0.5 + (yaw_bias - 0.5) * (1.5 - duty)
         caps.append(dict(name=name, duty=duty, unstable=unstable,
                          linear_max=linear_max, yaw_bias=yaw_bias_eff))
@@ -447,6 +462,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("swing_width", gait["swing_width"]),
         ("swing_apex_fraction", gait["swing_apex_fraction"]),
         ("touchdown_velocity", gait["touchdown_velocity"]),
+        ("swing_phase_margin", gait["swing_phase_margin"]),
+        ("ramp_clearance_fraction", gait["ramp_clearance_fraction"]),
         ("controller_dt", gait["controller_dt"]),
         ("cmd_zero_tol", gait["cmd_zero_tol"]),
         ("pause_debounce_delay", gait["pause_debounce_delay"]),
@@ -654,10 +671,15 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     ]
     for fname, _ in posture_fields:
         w(f"  float {fname};")
+    # Gait-active body-animation master switch — the one non-float field, so it
+    # is emitted outside the float loop (kept last in the aggregate init).
+    w("  bool gait_body_animations_enabled;")
     w("};")
     w("inline constexpr PostureConfig kPosture = {")
     for fname, val in posture_fields:
         w(f"    {fl(val)},  // {fname}")
+    w(f"    {bo(pn['gait_body_animations_enabled'])},"
+      "  // gait_body_animations_enabled")
     w("};")
     w("")
 

@@ -55,6 +55,9 @@ class HexaHardware : public hardware_interface::SystemInterface {
   // only here / read() / write() — all on the controller-manager thread — so the
   // relay_cmd_ subscription callback merely stores the intent.
   void apply_relay();
+  // Emit one SET frame per run, each carrying the calibrated pulse widths of the
+  // joints it covers. Throws whatever the transport throws.
+  void send_runs(const std::vector<PinRun>& runs);
   // Per-joint runtime state, ordered to match info_.joints.
   struct JointSlot {
     std::string name;
@@ -71,6 +74,13 @@ class HexaHardware : public hardware_interface::SystemInterface {
   // view grouped into legs (ordered by lowest pin) for the energize sweep.
   std::vector<PinEntry> pin_order_;
   std::vector<LegGroup> leg_order_;
+  // Frame plans, precomputed in on_init because the wiring fixes them. The
+  // steady state uses the whole-view plan (a single frame under the shipped,
+  // fully consecutive harness); the sweep ramp walks the per-leg plans instead,
+  // which costs one frame per live leg but leaves the rest of the servos limp.
+  std::vector<PinRun> full_runs_;
+  std::vector<std::vector<PinRun>> leg_runs_;
+  std::vector<std::uint16_t> batch_;  // reused SET payload buffer
 
   // Built once in on_init from cfg.connection / cfg.parser; transport
   // owns the link, protocol holds a reference into it.

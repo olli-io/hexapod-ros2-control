@@ -57,7 +57,18 @@ Properties of the gait cycle (the synchronized motion of all six legs):
 - **Cycle time** — duration of one complete PEP → PEP cycle, in seconds.
 - **Phase** — a leg's progress through its own cycle, normalized to
   `0 <= phase < 1`, with `phase = 0` at lift-off (PEP). Swing then
-  occupies `[0, 1 - duty_factor)` and stance `[1 - duty_factor, 1)`.
+  occupies `[0, swing_end)` and stance `[swing_end, 1)`, where
+  `swing_end = (1 - duty_factor) * (1 - swing_phase_margin)`.
+- **Swing phase margin** — the share of a gait's nominal swing window
+  `(1 - β)` handed back to stance, taken at the touchdown end. It makes a
+  leg land slightly before the leg it is handing over to lifts off, so
+  every handover has a stretch with all six feet planted instead of a
+  knife-edge swap that timing jitter could turn into too few legs on the
+  ground. Taking it all at the touchdown end keeps `phase = 0` meaning
+  lift-off; splitting it across both ends would give an identical
+  stance-count profile, since shifting the window inside the cycle only
+  relabels master phase. It costs top speed: stance grows, so the same
+  stride takes longer to cover.
 - **Duty factor** (β) — fraction of the cycle a leg spends in stance.
   Higher β means more legs on the ground at any instant — more stable,
   but slower: the body advances only during stance, and per-leg swing

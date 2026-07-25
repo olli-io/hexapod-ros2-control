@@ -28,7 +28,7 @@ gait_node:
     controller_dt: 0.005
 
     # cmd_vel smaller than this counts as zero.
-    cmd_zero_tol: 1.0e-4
+    cmd_zero_tol: 0.02
 
     # Gait used at startup. The teleop D-pad cycles through the rest.
     default_gait: tripod
@@ -44,20 +44,20 @@ gait_node:
     #   tibia_interior_deg         — knee bend; 180 = leg fully straight.
     standing_pose:
       coxa_deg: 0.0
-      femur_above_horizontal_deg: 35.0
-      tibia_interior_deg: 68.0
+      femur_above_horizontal_deg: 40.0
+      tibia_interior_deg: 74.7
 
     # ─── Stride geometry ────────────────────────────────────────────
 
     # How far a foot travels along the ground in one step (m).
     # Shorter = gentler on the joints, but slower top speed.
-    stride_length: 0.08
+    stride_length: 0.09
 
     # How high a foot lifts during a step (m).
-    step_height: 0.08
+    step_height: 0.06
 
     # Sideways shift of the foot's arc (m). 0 = straight fore/aft steps.
-    swing_width: 0.0
+    swing_width: 0.02
 
     # Share of the airborne time spent rising to the top of the arc.
     # 0.5 splits the step evenly. Lower values give the descent a longer,
@@ -72,6 +72,28 @@ gait_node:
     # contact happen at this speed instead, whenever it happens.
     touchdown_velocity: 0.01
 
+    # Share of step_height spanned by the ground-matched ramps: the band the
+    # foot rises through on its way off the ground and sinks through on its
+    # way back down. Inside it the foot travels backwards at exactly ground
+    # speed, so it cannot scrub while it may still be touching; only above
+    # it does the foot start moving forwards.
+    #
+    # Set it to cover the height at which the foot has really let go —
+    # terrain bumps plus servo tracking error. A share rather than a
+    # distance, so it keeps its meaning when step_height is retuned: at
+    # step_height 0.06, 0.10 protects the bottom 6 mm. Values above 0.10 are
+    # clamped: past there the band cannot be crossed in the time available
+    # without throwing the foot.
+    # 0 disables the ramps and restores the plain two-curve arc.
+    #
+    # How *fast* the foot leaves and meets the ground is deliberately not
+    # tunable. The ramps always take a fixed slice of the swing, because
+    # that slice — not their height — decides how hard the foot must be
+    # thrown through the air to still complete its step in time. A taller
+    # band, or a quicker gait, therefore simply means a brisker departure.
+    # Raise this until the feet stop scuffing, and no further.
+    ramp_clearance_fraction: 0.12
+
     # ─── Cycle timing ───────────────────────────────────────────────
 
     # How long a single foot spends in the air (s), fast and slow ends.
@@ -81,14 +103,26 @@ gait_node:
     #
     # Keep these close together (max no more than ~25% above min), or
     # foot placement can misbehaves when reversing direction.
-    min_swing_time: 0.5
-    max_swing_time: 0.65
+    min_swing_time: 0.6
+    max_swing_time: 0.8
+
+    # Share of each gait's airborne window handed back to the ground, taken
+    # at the touchdown end. It makes every leg land a little before the leg
+    # it is handing over to lifts off, so there is always a stretch with all
+    # six feet planted instead of a knife-edge swap that timing jitter can
+    # turn into too few legs on the ground.
+    #
+    # As a share of the window rather than of the whole cycle, it buys the
+    # same overlap *time* in every gait. 0.12 gives a tripod 6% of its cycle
+    # with six feet down at each handover. It costs top speed: the feet
+    # spend longer planted, so the same stride takes longer to cover.
+    swing_phase_margin: 0.12
 
     # ─── Velocity envelope ──────────────────────────────────────────
 
     # Top turning speed (rad/s). The legs could turn faster; this caps it
     # to what feels comfortable.
-    angular_z_max: 2.00
+    angular_z_max: 2.50
 
     # When a command exceeds what the robot can do, how much of the cut
     # falls on turning vs. moving. 0.5 = share equally; higher = protect
@@ -119,7 +153,7 @@ gait_node:
 
     initialize:
       # Time (s) to place each mirrored pair of feet (three pairs total).
-      pair_swing_time: 0.6
+      pair_swing_time: 0.35
       # Time (s) to raise the body off its belly.
       lift_body_time: 0.8
       # Extra foot lift (m) while placing feet. Small — the folded foot
@@ -139,7 +173,7 @@ gait_node:
       # doesn't trigger a re-plant.
       height_change_threshold: 0.002
       # Time (s) to swing each mirrored pair of feet into place.
-      pair_swing_time: 0.4
+      pair_swing_time: 0.3
       # Pause (s) between pairs so each one lands before the next lifts.
       pair_dwell_time: 0.05
       # Extra foot lift (m) mid-swing. Small — feet start from the ground.
@@ -167,6 +201,9 @@ control_node:
 # are dimensionless.
 posture_node:
   ros__parameters:
+    # Master switch for body movement while gait-active. Gait body animations are an experimental feature and may require extensive tinkering.
+    gait_body_animations_enabled: false
+
     # Animations that run while walking. Each must be a known animation name.
     enabled_animations:
       - still
@@ -219,7 +256,7 @@ posture_node:
     #
     # arc_height — how far the body lifts (m). Keep it small so it stays
     # within the allowed body-movement range.
-    gait_bounce_arc_height: 0.02
+    gait_bounce_arc_height: 0.1
     # step_height_ref — should match step_height above so arc_height is a
     # true height in metres.
     gait_bounce_step_height_ref: 0.08

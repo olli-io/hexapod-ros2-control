@@ -71,6 +71,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.swing_width, be.swing_width, kTol);
   EXPECT_NEAR(le.swing_apex_fraction, be.swing_apex_fraction, kTol);
   EXPECT_NEAR(le.touchdown_velocity, be.touchdown_velocity, kTol);
+  EXPECT_NEAR(le.swing_phase_margin, be.swing_phase_margin, kTol);
+  EXPECT_NEAR(le.ramp_clearance_fraction, be.ramp_clearance_fraction, kTol);
   EXPECT_NEAR(le.controller_dt, be.controller_dt, kTol);
   EXPECT_NEAR(le.cmd_zero_tol, be.cmd_zero_tol, kTol);
   EXPECT_NEAR(le.pause_debounce_delay, be.pause_debounce_delay, kTol);
@@ -154,6 +156,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.animation_reserve_roll, bp.animation_reserve_roll, kTol);
   EXPECT_NEAR(lp.animation_reserve_pitch, bp.animation_reserve_pitch, kTol);
   EXPECT_NEAR(lp.animation_reserve_yaw, bp.animation_reserve_yaw, kTol);
+  EXPECT_EQ(lp.gait_body_animations_enabled, bp.gait_body_animations_enabled);
 }
 
 }  // namespace

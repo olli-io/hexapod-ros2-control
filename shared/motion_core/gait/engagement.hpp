@@ -23,7 +23,7 @@ class EngagementController {
   EngagementController(std::map<std::string, Vec3> nominal_stance,
                        float stride_length, float min_cycle_time,
                        float max_cycle_time, float duty_factor,
-                       float swing_clearance, float swing_width,
+                       float swing_phase_margin, const SwingProfile& swing,
                        float controller_dt);
 
   EngagementState state() const { return state_; }
@@ -60,9 +60,9 @@ class EngagementController {
   float min_cycle_time_;
   float max_cycle_time_;
   float duty_factor_;
+  // Phase at which swing ends; the nominal window already shrunk by the margin.
   float swing_end_;
-  float swing_clearance_;
-  float swing_width_;
+  SwingProfile swing_;
   float controller_dt_;
 
   EngagementState state_ = EngagementState::IDLE;

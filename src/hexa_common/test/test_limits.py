@@ -22,6 +22,10 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
         max_reset_time=0.6,
         angular_z_max=1.0,
         yaw_bias=0.75,
+        # No margin by default, so these cases pin the plain duty-factor
+        # arithmetic; test_linear_max_drops_with_swing_phase_margin covers the
+        # margined form.
+        swing_phase_margin=0.0,
     )
     base.update(overrides)
     path = tmp_path / "gait.yaml"
@@ -52,6 +56,21 @@ def test_linear_max_per_gait_strictly_decreasing_with_duty(tmp_path):
         > caps.linear_max("crawl")
         > caps.linear_max("ripple")
     )
+
+
+def test_linear_max_drops_with_swing_phase_margin(tmp_path):
+    # The margin hands part of the swing window back to stance, so the same
+    # stride takes longer to cover and the cap falls. tripod swing_end becomes
+    # 0.5 * 0.88 = 0.44, so linear_max = 0.12 * 0.44 / (0.30 * 0.56) = 0.3143.
+    path = _write_yaml(tmp_path, swing_phase_margin=0.12)
+    caps = load_velocity_caps(path)
+    assert math.isclose(caps.linear_max("tripod"), 0.12 * 0.44 / (0.30 * 0.56))
+    # A zero margin must reproduce the unmargined caps exactly, so the formula
+    # stays backward compatible with a params file that predates the knob.
+    plain = load_velocity_caps(_write_yaml(tmp_path, swing_phase_margin=0.0))
+    for gait in ("tripod", "crawl", "ripple"):
+        assert caps.linear_max(gait) < plain.linear_max(gait)
+    assert math.isclose(plain.linear_max("tripod"), 0.40)
 
 
 def test_linear_max_unknown_gait_raises(tmp_path):

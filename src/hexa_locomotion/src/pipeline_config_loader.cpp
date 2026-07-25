@@ -130,6 +130,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.swing_width = f(g["swing_width"]);
   e.swing_apex_fraction = f(g["swing_apex_fraction"]);
   e.touchdown_velocity = f(g["touchdown_velocity"]);
+  e.swing_phase_margin = f(g["swing_phase_margin"]);
+  e.ramp_clearance_fraction = f(g["ramp_clearance_fraction"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
   e.pause_debounce_delay = f(g["pause_debounce_delay"]);
@@ -158,8 +160,16 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   cfg.caps.yaw_bias_by_gait.clear();
   for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
     const float duty = factory()->duty_factor();
+    // The cap is stride_length covered in one stance, so it keys off the
+    // realized swing/stance split, not the nominal duty factor. Must stay
+    // identical to gen_config.py's velocity_caps(), or the loader-vs-baked
+    // parity test in test_config_loader.cpp fails.
+    const float swing_end =
+        hexa::gait::swing_end_phase(duty, e.swing_phase_margin);
     cfg.caps.linear_max_by_gait[gait_name] =
-        stride * (1.0f - duty) / (min_swing * duty);
+        stride * swing_end / (min_swing * (1.0f - swing_end));
+    // yaw_bias stays keyed to the gait's nominal duty: it is a feel knob, not a
+    // timing budget.
     cfg.caps.yaw_bias_by_gait[gait_name] =
         0.5f + (yaw_bias - 0.5f) * (1.5f - duty);
   }
@@ -198,6 +208,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.support_centroid_tau = f(p["support_centroid_tau"]);
   ps.swing_lift_tau = f(p["swing_lift_tau"]);
   ps.gait_activation_slew_rate = f(p["gait_activation_slew_rate"]);
+  ps.gait_body_animations_enabled =
+      p["gait_body_animations_enabled"].as<bool>();
   ps.animation_reserve_x = f(p["animation_reserve_x"]);
   ps.animation_reserve_y = f(p["animation_reserve_y"]);
   ps.animation_reserve_z = f(p["animation_reserve_z"]);

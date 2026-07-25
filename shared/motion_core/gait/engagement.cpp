@@ -23,14 +23,13 @@ float smoothstep_env(float tau) {
 EngagementController::EngagementController(
     std::map<std::string, Vec3> nominal_stance, float stride_length,
     float min_cycle_time, float max_cycle_time, float duty_factor,
-    float swing_clearance, float swing_width, float controller_dt)
+    float swing_phase_margin, const SwingProfile& swing, float controller_dt)
     : stride_length_(stride_length),
       min_cycle_time_(min_cycle_time),
       max_cycle_time_(max_cycle_time),
       duty_factor_(duty_factor),
-      swing_end_(1.0f - duty_factor),
-      swing_clearance_(swing_clearance),
-      swing_width_(swing_width),
+      swing_end_(swing_end_phase(duty_factor, swing_phase_margin)),
+      swing_(swing),
       controller_dt_(controller_dt) {
   require_all_legs(nominal_stance, "nominal_stance");
   for (const auto& name : LEG_NAMES) {
@@ -59,8 +58,10 @@ void EngagementController::begin(
   leg_contexts_ = leg_contexts;
   const auto& offsets = strategy.phase_offsets().offsets();
 
-  // 1e-9 tolerance covers float artefacts when offset and swing_end share a
-  // common irrational (e.g. crawl's r_middle at 1/3 vs 1 - 2/3).
+  // 1e-9 tolerance covers float artefacts when an offset and swing_end share a
+  // common irrational (e.g. crawl's r_middle at 1/3 vs 1 - 2/3). A non-zero
+  // phase margin already pulls swing_end clear of every offset, but the
+  // tolerance still has to hold for a zero margin.
   const float boundary = swing_end_ - 1e-9f;
   float min_first_touchdown = std::numeric_limits<float>::infinity();
   for (const auto& name : LEG_NAMES) {
@@ -170,10 +171,11 @@ std::map<std::string, LegOutput> EngagementController::update(
     (void)name;
     max_cmd_leg_v = std::max(max_cmd_leg_v, std::hypot(v.first, v.second));
   }
+  const float stance_fraction = 1.0f - swing_end_;
   const float cycle_time =
-      derive_cycle_time(max_cmd_leg_v, stride_length_, duty_factor_,
+      derive_cycle_time(max_cmd_leg_v, stride_length_, stance_fraction,
                         min_cycle_time_, max_cycle_time_);
-  const float stance_time = cycle_time * duty_factor_;
+  const float stance_time = cycle_time * stance_fraction;
 
   // 2) Advance master phase. Engage mode clamps at 1.0; resume advances freely.
   if (cycle_time > 0.0f) {
@@ -221,10 +223,9 @@ std::map<std::string, LegOutput> EngagementController::update(
         StrideParams stride;
         stride.stride_vector = stride_vec;
         stride.cycle_time = cycle_time;
-        stride.duty_factor = duty_factor_;
-        stride.swing_clearance = swing_clearance_;
-        stride.swing_width = swing_width_;
+        stride.swing_end = swing_end_;
         stride.controller_dt = controller_dt_;
+        stride.swing = swing_;
         foot = strategy_->foot_target(phase, stride, leg_contexts_.at(name));
         foot_position_[name] = foot;
       }
@@ -251,12 +252,15 @@ std::map<std::string, LegOutput> EngagementController::update(
       phase_in_swing = std::max(0.0f, std::min(phase_in_swing, 1.0f));
       const float leg_swing_time = leg_swing_duration_master * cycle_time;
 
+      // The first swing of an engagement starts from a standing foot while the
+      // body velocity is still ramping in, so it departs from rest; it still
+      // lands on the live stance velocity and with the configured swing shape,
+      // so the leg's first touchdown is as soft as every later one.
       const auto& vb = body_leg_v.at(name);
-      const Vec3 foot =
-          swing_arc(phase_in_swing, lift_off_position_[name], aep,
-                    swing_clearance_, swing_width_, identity_y_sign(nominal),
-                    leg_swing_time, Vec3::Zero(),
-                    Vec3(-vb.first, -vb.second, 0.0f));
+      const Vec3 foot = swing_arc(phase_in_swing, lift_off_position_[name], aep,
+                                  identity_y_sign(nominal), leg_swing_time,
+                                  swing_, Vec3::Zero(),
+                                  Vec3(-vb.first, -vb.second, 0.0f));
       foot_position_[name] = foot;
       out[name] = LegOutput{foot, phase, false};
     } else {

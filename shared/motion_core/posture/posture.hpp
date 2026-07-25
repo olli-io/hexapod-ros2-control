@@ -130,6 +130,11 @@ class PostureController {
   // twice each tick (walking true/false) and lerp'd by this. Reset to 0 while
   // the posture stack is inactive.
   float activation_ = 0.0f;
+  // Master switch for the gait-active regime (tuning.yaml
+  // gait_body_animations_enabled). When false the stack's walking output is
+  // dropped, so no body animation runs while gait-active — the idle animations
+  // and the user pose are untouched.
+  bool gait_body_animations_enabled_;
   float activation_slew_rate_;
   // Per-axis animation budget for the layered clamp (compose_layered).
   PoseLimits anim_reserve_;

@@ -51,6 +51,11 @@ struct EngineConfig {
   float swing_width = 0.0f;
   float swing_apex_fraction = 0.5f;
   float touchdown_velocity = 0.0f;
+  // Share of each gait's nominal swing window handed back to stance at the
+  // touchdown end, so every handover has a stretch with all six feet planted.
+  float swing_phase_margin = 0.0f;
+  // Ground-matched lift-off / touchdown ramps, as a share of step_height.
+  float ramp_clearance_fraction = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
   float pause_debounce_delay = 0.0f;
@@ -66,6 +71,18 @@ struct EngineConfig {
   float reseat_pair_swing_time = 0.0f;
   float reseat_pair_dwell_time = 0.0f;
   float reseat_swing_clearance = 0.0f;
+
+  // How a gait swing is shaped. Shared by the engine and the engagement
+  // controller so a swing looks the same however the leg got airborne.
+  SwingProfile swing_profile() const {
+    SwingProfile p;
+    p.clearance = step_height;
+    p.width = swing_width;
+    p.apex_fraction = swing_apex_fraction;
+    p.ramp_clearance_fraction = ramp_clearance_fraction;
+    p.touchdown_velocity = touchdown_velocity;
+    return p;
+  }
 };
 
 // Per-leg body-frame stance target as an integral from touchdown. Removes
@@ -99,14 +116,15 @@ class SwingPlanner {
   void liftoff(const std::string& name, const Vec3& origin, const Vec3& target,
                std::pair<float, float> v_leg, float swing_time,
                int identity_y_sign_val);
-  // Re-aim the touchdown end at the live AEP / stance velocity. No-op unless the
-  // leg is mid-swing.
+  // Re-aim the touchdown end at the live AEP / stance velocity, and refresh the
+  // swing duration the curve is built against — a stale one would scale every
+  // realized velocity by latched / live whenever cycle_time moved mid-swing.
+  // No-op unless the leg is mid-swing.
   void retarget(const std::string& name, const Vec3& target,
-                std::pair<float, float> v_leg);
+                std::pair<float, float> v_leg, float swing_time);
   void touchdown(const std::string& name);
   Vec3 evaluate(const std::string& name, float phase_in_swing,
-                float swing_clearance, float swing_width,
-                float touchdown_velocity, float swing_apex_fraction) const;
+                const SwingProfile& profile) const;
   void reset();
   bool is_swing(const std::string& name) const { return is_swing_.at(name); }
   const Vec3& target(const std::string& name) const { return target_.at(name); }

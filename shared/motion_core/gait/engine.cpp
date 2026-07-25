@@ -13,16 +13,19 @@ namespace {
 // Float-noise epsilon for "is the user still moving the D-pad?".
 constexpr float kHeightNoiseEpsilon = 1e-6f;
 // Inclusive tolerance for the swing->stance boundary (absorbs float noise on the
-// touchdown seam at gaits where 1 - duty_factor is not representable).
+// touchdown seam at gaits where the swing end is not representable).
 constexpr float kStanceSeamEpsilon = 1e-9f;
 
 // Per-gait cycle-time bounds derived from swing-phase bounds. Both ends scale by
-// 1 / (1 - beta) so the swing-phase foot-velocity envelope is gait-agnostic.
-std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg, float beta) {
-  if (beta >= 1.0f) {
+// 1 / swing_end so the swing-phase foot-velocity envelope is gait-agnostic, and
+// so a leg still gets a full min_swing_time..max_swing_time in the air once the
+// phase margin has shortened its window.
+std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
+                                          float swing_end) {
+  if (swing_end <= 0.0f) {
     return {cfg.max_swing_time, cfg.max_swing_time};
   }
-  const float scale = 1.0f / (1.0f - beta);
+  const float scale = 1.0f / swing_end;
   return {cfg.min_swing_time * scale, cfg.max_swing_time * scale};
 }
 }  // namespace
@@ -96,12 +99,13 @@ void SwingPlanner::liftoff(const std::string& name, const Vec3& origin,
 }
 
 void SwingPlanner::retarget(const std::string& name, const Vec3& target,
-                            std::pair<float, float> v_leg) {
+                            std::pair<float, float> v_leg, float swing_time) {
   if (!is_swing_.at(name)) {
     return;
   }
   target_[name] = target;
   v_target_[name] = v_leg;
+  swing_time_[name] = swing_time;
 }
 
 void SwingPlanner::touchdown(const std::string& name) {
@@ -109,22 +113,19 @@ void SwingPlanner::touchdown(const std::string& name) {
 }
 
 Vec3 SwingPlanner::evaluate(const std::string& name, float phase_in_swing,
-                            float swing_clearance, float swing_width,
-                            float touchdown_velocity,
-                            float swing_apex_fraction) const {
-  // Stance-frame foot velocity is -v_leg, so matching it at both endpoints keeps
-  // the Bezier's C1 nodes continuous with stance at lift-off and touchdown. The
-  // touchdown end also carries a downward component so the foot meets the ground
-  // at a known speed instead of decelerating to a dead stop in the last
-  // millimetre, where any tracking or terrain error turns into an impact.
+                            const SwingProfile& profile) const {
+  // The foot's body-frame velocity while planted is -v_leg, so handing that to
+  // both ends of the swing makes the ground-matched ramps track the ground
+  // exactly: the foot lifts straight up in the world frame and sets straight
+  // down again, with no horizontal slip in either direction. The vertical
+  // shaping at both ends comes from the profile.
   const auto& v_in = v_origin_.at(name);
   const auto& v_out = v_target_.at(name);
   const Vec3 velocity_in(-v_in.first, -v_in.second, 0.0f);
-  const Vec3 velocity_out(-v_out.first, -v_out.second, -touchdown_velocity);
+  const Vec3 velocity_out(-v_out.first, -v_out.second, 0.0f);
   return swing_arc(phase_in_swing, origin_.at(name), target_.at(name),
-                   swing_clearance, swing_width, identity_y_sign_.at(name),
-                   swing_time_.at(name), velocity_in, velocity_out,
-                   swing_apex_fraction);
+                   identity_y_sign_.at(name), swing_time_.at(name), profile,
+                   velocity_in, velocity_out);
 }
 
 void SwingPlanner::reset() {
@@ -288,11 +289,14 @@ std::unique_ptr<PauseController> Engine::build_pause() {
 }
 
 std::unique_ptr<EngagementController> Engine::build_engagement() {
-  const float beta = strategy_->duty_factor();
-  const auto [min_cycle_time, max_cycle_time] = cycle_time_bounds(config_, beta);
+  const float swing_end =
+      swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
+  const auto [min_cycle_time, max_cycle_time] =
+      cycle_time_bounds(config_, swing_end);
   return std::make_unique<EngagementController>(
-      nominal_, config_.stride_length, min_cycle_time, max_cycle_time, beta,
-      config_.step_height, config_.swing_width, config_.controller_dt);
+      nominal_, config_.stride_length, min_cycle_time, max_cycle_time,
+      strategy_->duty_factor(), config_.swing_phase_margin,
+      config_.swing_profile(), config_.controller_dt);
 }
 
 std::unique_ptr<ReseatController> Engine::build_reseat(
@@ -510,9 +514,11 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     return out;
   }
 
-  const float duty_factor = strategy_->duty_factor();
   const float stride_length = config_.stride_length;
-  const float swing_end = 1.0f - duty_factor;
+  const float swing_end =
+      swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
+  const float stance_fraction = 1.0f - swing_end;
+  const SwingProfile swing_profile = config_.swing_profile();
 
   const auto leg_velocities = per_leg_planar_velocity(legs_, v_body_xy, omega_z);
   float max_leg_v = 0.0f;
@@ -522,11 +528,11 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   }
 
   const auto [min_cycle_time, max_cycle_time] =
-      cycle_time_bounds(config_, duty_factor);
+      cycle_time_bounds(config_, swing_end);
   const float cycle_time =
-      derive_cycle_time(max_leg_v, config_.stride_length, duty_factor,
+      derive_cycle_time(max_leg_v, config_.stride_length, stance_fraction,
                         min_cycle_time, max_cycle_time);
-  const float stance_time = cycle_time * duty_factor;
+  const float stance_time = cycle_time * stance_fraction;
   const float swing_time = cycle_time * swing_end;
 
   clock_->advance(dt, cycle_time);
@@ -542,10 +548,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     StrideParams stride;
     stride.stride_vector = stride_vec;
     stride.cycle_time = cycle_time;
-    stride.duty_factor = duty_factor;
-    stride.swing_clearance = config_.step_height;
-    stride.swing_width = config_.swing_width;
+    stride.swing_end = swing_end;
     stride.controller_dt = config_.controller_dt;
+    stride.swing = swing_profile;
     // Strategy is evaluated unconditionally; the result is consumed only as a
     // fallback for stance legs that have never lifted off under the planner.
     const Vec3 strategy_target =
@@ -577,12 +582,10 @@ std::map<std::string, LegOutput> Engine::tick_gait(
       // stance integrator picks up this target at touchdown and immediately
       // integrates it at the live velocity, so a latched target would show up
       // as a velocity step at the seam whenever cmd_vel moved mid-swing.
-      swing_.retarget(name, aep, {v_x, v_y});
+      swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f));
       const float phase_in_swing =
           swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
-      target = swing_.evaluate(name, phase_in_swing, config_.step_height,
-                               config_.swing_width, config_.touchdown_velocity,
-                               config_.swing_apex_fraction);
+      target = swing_.evaluate(name, phase_in_swing, swing_profile);
       // Keep the stance integrator's per-leg flag in sync.
       stance_.step(name, false, target, {v_x, v_y}, dt);
     }
@@ -671,6 +674,8 @@ EngineConfig engine_config_from_config() {
   cfg.swing_width = c.swing_width;
   cfg.swing_apex_fraction = c.swing_apex_fraction;
   cfg.touchdown_velocity = c.touchdown_velocity;
+  cfg.swing_phase_margin = c.swing_phase_margin;
+  cfg.ramp_clearance_fraction = c.ramp_clearance_fraction;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;
   cfg.pause_debounce_delay = c.pause_debounce_delay;
