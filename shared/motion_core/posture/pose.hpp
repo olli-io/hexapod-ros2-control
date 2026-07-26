@@ -38,20 +38,28 @@ BodyPose scale(const BodyPose& p, float k);
 // crossfade). Mirrors pose.lerp.
 BodyPose lerp(const BodyPose& a, const BodyPose& b, float t);
 
-// Per-axis symmetric clamp envelope for the final pose target. A blunt safety
-// first cut (the real reachable envelope is geometry-dependent); a cheap
-// upstream guard against runaway animation / teleop inputs. Mirrors
-// pose.PoseLimits defaults exactly.
+// Per-axis clamp envelope for the final pose target. A blunt safety first cut
+// (the real reachable envelope is geometry-dependent); a cheap upstream guard
+// against runaway animation / teleop inputs.
+//
+// Every axis but z is symmetric (+/- the single value). z is asymmetric because
+// lift and drop are bounded by different things — the femur's upper travel on
+// the way up, the leg folding under itself on the way down. z_max/z_min stay
+// OFFSETS from the nominal stance (BodyPose::z is itself an offset; see
+// kinematics/body_transform.cpp), derived once in the PostureController ctor
+// from the absolute body_height_{max,min}_m tuning values.
 struct PoseLimits {
-  float x = 0.05f;      // m
-  float y = 0.05f;      // m
-  float z = 0.04f;      // m, max body lift/drop
-  float roll = 0.30f;   // rad (~17 deg)
-  float pitch = 0.30f;  // rad
-  float yaw = 0.50f;    // rad (~29 deg)
+  float x = 0.05f;       // m
+  float y = 0.05f;       // m
+  float z_max = 0.04f;   // m, max body lift above nominal (positive)
+  float z_min = -0.04f;  // m, max body drop below nominal (negative)
+  float roll = 0.30f;    // rad (~17 deg)
+  float pitch = 0.30f;   // rad
+  float yaw = 0.50f;     // rad (~29 deg)
 };
 
-// Clamp each axis to [-limit, +limit]. Mirrors pose.clamp.
+// Clamp each axis to [-limit, +limit], and z to [z_min, z_max]. Mirrors
+// pose.clamp.
 BodyPose clamp(const BodyPose& pose, const PoseLimits& limits);
 
 // Layered clamp: give the static user pose and the animation offset each their

@@ -581,19 +581,22 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # Posture-mode scalar limits.
     p = teleop["posture"]
     ph = p["height"]
+    # No height_{max,min}_m here: the body-height envelope is declared once, in
+    # tuning.yaml's posture_node block (body_height_{max,min}_m), and joy_mapping
+    # derives its integrator saturation from that. Only the rate — a teleop feel
+    # knob, not a limit — belongs to teleop_joy.yaml.
     w("// Posture-mode scalar limits (teleop_joy.yaml posture:).")
     w("struct PostureLimits {")
     for f in ("x_max", "y_max", "roll_max_deg", "pitch_max_deg", "yaw_max_deg",
               "yaw_tau_s", "revert_tau_s", "wiggle_pivot_forward_m",
-              "height_max_m", "height_min_m", "height_rate_m_per_s"):
+              "height_rate_m_per_s"):
         w(f"  float {f};")
     w("};")
     w("inline constexpr PostureLimits kPostureLimits = {"
       + ", ".join(fl(v) for v in (
           p["x_max"], p["y_max"], p["roll_max_deg"], p["pitch_max_deg"],
           p["yaw_max_deg"], p["yaw_tau_s"], p["revert_tau_s"],
-          p["wiggle_pivot_forward_m"], ph["max_m"], ph["min_m"],
-          ph["rate_m_per_s"])) + "};")
+          p["wiggle_pivot_forward_m"], ph["rate_m_per_s"])) + "};")
     w("")
     # Modes / gait cycle.
     w(f"inline constexpr std::string_view kInitialMode = {cstr(teleop['initial_mode'])};")
@@ -649,6 +652,15 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
 
     # ── posture animation stack ──
     pn = posture["posture_node"]["ros__parameters"]
+    # The nominal stance must sit strictly inside its own envelope, or the body
+    # is clamped away from rest on the very first tick.
+    if not (pn["body_height_min_m"] < stand["body_height"]
+            < pn["body_height_max_m"]):
+        raise ValueError(
+            f"tuning.yaml posture_node body_height_min_m = "
+            f"{pn['body_height_min_m']} m / body_height_max_m = "
+            f"{pn['body_height_max_m']} m must bracket gait_node "
+            f"standing_pose.body_height = {stand['body_height']} m")
     w("// ── Posture animation stack (hexa_description/config/tuning.yaml) ──")
     enabled = pn["enabled_animations"]
     w(f"inline constexpr std::array<std::string_view, {len(enabled)}> "
@@ -689,6 +701,18 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("animation_reserve_roll", pn["animation_reserve_roll"]),
         ("animation_reserve_pitch", pn["animation_reserve_pitch"]),
         ("animation_reserve_yaw", pn["animation_reserve_yaw"]),
+        # Composed-pose clamp envelope. body_height_{max,min} are ABSOLUTE belly
+        # clearance; nominal_body_height is the same standing-pose height the
+        # gait engine solves the stance from, carried here so PostureController
+        # can turn the pair into the pose offsets BodyPose::z actually is.
+        ("pose_limit_x", pn["pose_limit_x"]),
+        ("pose_limit_y", pn["pose_limit_y"]),
+        ("body_height_max", pn["body_height_max_m"]),
+        ("body_height_min", pn["body_height_min_m"]),
+        ("nominal_body_height", stand["body_height"]),
+        ("pose_limit_roll", pn["pose_limit_roll"]),
+        ("pose_limit_pitch", pn["pose_limit_pitch"]),
+        ("pose_limit_yaw", pn["pose_limit_yaw"]),
     ]
     for fname, _ in posture_fields:
         w(f"  float {fname};")

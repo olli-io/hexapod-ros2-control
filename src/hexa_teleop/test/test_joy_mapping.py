@@ -640,6 +640,49 @@ def test_dpad_down_held_in_posture_integrates_height_down():
     assert math.isclose(out.pose_z, cfg.posture.height_min)
 
 
+def test_height_integrator_does_not_wind_up_past_the_clamp():
+    """Holding the D-pad past the stop must not bank travel.
+
+    The height envelope is no longer declared by teleop — it is derived from
+    tuning.yaml's absolute body_height_{max,min}_m. The integrator still
+    saturates at it, and this is why: without the clamp, 30 s of D-pad-up at
+    0.05 m/s accumulates 1.5 m of phantom command, and reversing would then do
+    nothing visible for half a minute.
+    """
+    cfg = _cfg(posture_height_max=0.09, posture_height_min=-0.03)
+    state = JoyState(mode=POSTURE)
+    # 1500 ticks at 0.02 s = 30 s of holding, ~1.5 m of raw integration.
+    for _ in range(1500):
+        out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(state.height_current, cfg.posture.height_max)
+    assert math.isclose(out.pose_z, cfg.posture.height_max)
+
+    # One tick of the opposite direction must move the body immediately.
+    out = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert out.pose_z < cfg.posture.height_max
+    assert math.isclose(out.pose_z, cfg.posture.height_max - DT * 0.05)
+
+
+def test_height_clamp_is_asymmetric():
+    """Up-range and down-range differ: the envelope is absolute, not +/- a delta.
+
+    With a 0.14 m ceiling, 0.02 m floor and a 0.05 m stance, the reachable pose
+    offsets are +0.09 and -0.03 — nothing about them is mirrored.
+    """
+    cfg = _cfg(posture_height_max=0.09, posture_height_min=-0.03)
+
+    up_state = JoyState(mode=POSTURE)
+    for _ in range(500):
+        up = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, up_state, DT)
+
+    down_state = JoyState(mode=POSTURE)
+    for _ in range(500):
+        down = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, down_state, DT)
+
+    assert math.isclose(up.pose_z, 0.09)
+    assert math.isclose(down.pose_z, -0.03)
+
+
 def test_dpad_release_holds_height():
     # After lifting halfway and releasing, the height stays put — it
     # does not decay like the other posture axes.

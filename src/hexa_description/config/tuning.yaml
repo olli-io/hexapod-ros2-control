@@ -49,7 +49,7 @@ gait_node:
     #                         always point straight out.
     standing_pose:
       tip_radius: 0.135
-      body_height: 0.06
+      body_height: 0.05
       corner_leg_coxa_deg: 0
 
     # ─── Stride geometry ────────────────────────────────────────────
@@ -265,12 +265,36 @@ posture_node:
     # dialed-in body pose can't crowd it out and cause jitter. The trade-off
     # is a slightly smaller manual posing range. Size these to cover the
     # animation amplitudes above.
-    animation_reserve_x: 0.02
-    animation_reserve_y: 0.02
-    animation_reserve_z: 0.03
-    animation_reserve_roll: 0.20
-    animation_reserve_pitch: 0.20
-    animation_reserve_yaw: 0.20
+    animation_reserve_x: 0.01
+    animation_reserve_y: 0.01
+    animation_reserve_z: 0
+    animation_reserve_roll: 0.15
+    animation_reserve_pitch: 0.15
+    animation_reserve_yaw: 0.15
+
+    # How far the body may be posed away from its resting stance. This is the
+    # only place the body-height envelope is set: teleop (gamepad and web) reads
+    # it from here rather than declaring its own.
+    #
+    # The two height values are ABSOLUTE belly clearance off the ground, same
+    # units and frame as gait_node's standing_pose.body_height (0.05) — not a
+    # plus/minus around it. They must bracket that value, or startup fails.
+    #
+    # Nothing re-checks the joint limits once the body is off its resting
+    # height, so these are the only guard there is. With the current geometry
+    # the femur runs out of downward travel (-35 deg) at about 0.151 m, so 0.14
+    # keeps roughly a centimetre in hand. The floor is far from any limit; it is
+    # set by how low you actually want the belly to sit.
+    body_height_max_m: 0.14
+    body_height_min_m: 0.02
+
+    # The remaining five axes are symmetric (plus/minus the value given).
+    # Metres for x/y, radians for roll/pitch/yaw.
+    pose_limit_x: 0.05
+    pose_limit_y: 0.05
+    pose_limit_roll: 0.30
+    pose_limit_pitch: 0.30
+    pose_limit_yaw: 0.50
 
 # -- WARNING -- Bad values here can damage your hexapod. Nothing validates
 # them: it will run whatever you put here.

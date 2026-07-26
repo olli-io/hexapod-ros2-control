@@ -1,10 +1,15 @@
-// Posture controller — gait-active body-animation master switch.
+// Posture controller — gait-active body-animation master switch, and the
+// body-pose clamp envelope.
 //
 // Pins the one behaviour tuning.yaml's `gait_body_animations_enabled` promises:
 // with it false the body holds still through a walk (no sway, no bounce, no
 // ANIMATION-mode roll), and with it true the same tick moves the body. Everything
-// else about the stack (filters, layered clamp, engine-state gating) is exercised
-// through test_pipeline.
+// else about the stack (filters, engine-state gating) is exercised through
+// test_pipeline.
+//
+// The clamp cases below pin the absolute-to-offset conversion: tuning.yaml
+// states belly clearance off the ground, BodyPose::z is a delta from the
+// stance, and the controller's constructor is the only place the two meet.
 #include "posture/posture.hpp"
 
 #include <gtest/gtest.h>
@@ -94,6 +99,94 @@ TEST(PostureGaitAnimationSwitch, DisabledAlsoSilencesAnimationMode) {
   PostureController enabled{with_switch(true)};
   ASSERT_TRUE(enabled.set_animation_mode("body_roll_3d"));
   EXPECT_FALSE(is_identity(walk_until_settled(enabled)));
+}
+
+// ── pose clamp envelope ───────────────────────────────────────────────────
+
+// A posture config with an explicit, deliberately asymmetric height envelope:
+// nominal belly at 0.05, ceiling at 0.14, floor at 0.02 — so the usable pose
+// offsets are +0.09 up and only -0.03 down. Animations are off and the reserve
+// is zeroed so the user pose gets the whole envelope and the assertions read
+// against the configured numbers directly.
+hexa::config::PostureConfig with_height_envelope() {
+  hexa::config::PostureConfig p = hexa::config::kPosture;
+  p.gait_body_animations_enabled = false;
+  p.nominal_body_height = 0.05f;
+  p.body_height_max = 0.14f;
+  p.body_height_min = 0.02f;
+  p.animation_reserve_x = 0.0f;
+  p.animation_reserve_y = 0.0f;
+  p.animation_reserve_z = 0.0f;
+  p.animation_reserve_roll = 0.0f;
+  p.animation_reserve_pitch = 0.0f;
+  p.animation_reserve_yaw = 0.0f;
+  return p;
+}
+
+// Settle a still (non-walking) tick so the returned pose is the clamped user
+// pose and nothing else.
+BodyPose idle_pose(PostureController& posture, const BodyPose& user) {
+  posture.set_user_pose(user);
+  const auto legs = tripod_legs();
+  BodyPose out;
+  float t = 0.0f;
+  for (int i = 0; i < 400; ++i) {
+    out = posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND,
+                         "tripod", kDt, t);
+    t += kDt;
+  }
+  return out;
+}
+
+TEST(PosturePoseClamp, HeightSaturatesAsymmetricallyAroundTheStance) {
+  PostureController posture{with_height_envelope()};
+  constexpr float kTol = 1e-5f;
+
+  // Far past the ceiling: pinned to (0.14 - 0.05) = +0.09 of lift.
+  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f}).z,
+              0.09f, kTol);
+
+  // Far past the floor: pinned to (0.02 - 0.05) = -0.03 of drop. The two ends
+  // are NOT mirror images — that asymmetry is the whole point.
+  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, -0.5f, 0.0f, 0.0f, 0.0f}).z,
+              -0.03f, kTol);
+}
+
+TEST(PosturePoseClamp, MidRangeHeightPassesThroughUntouched) {
+  PostureController posture{with_height_envelope()};
+  // +0.06 of lift = belly 0.11 m, inside the envelope: no clamping at all.
+  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, 0.06f, 0.0f, 0.0f, 0.0f}).z,
+              0.06f, 1e-5f);
+}
+
+// The reserve is spent from both ends of an asymmetric envelope, not mirrored
+// off the larger one: with 0.01 held back the user keeps +0.08 / -0.02.
+TEST(PosturePoseClamp, AnimationReserveShrinksBothEndsOfTheHeightRange) {
+  hexa::config::PostureConfig p = with_height_envelope();
+  p.animation_reserve_z = 0.01f;
+  PostureController posture{p};
+  constexpr float kTol = 1e-5f;
+
+  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f}).z,
+              0.08f, kTol);
+  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, -0.5f, 0.0f, 0.0f, 0.0f}).z,
+              -0.02f, kTol);
+}
+
+// The five symmetric axes come from the same config block; a runaway teleop
+// value must still be pinned to the tuning.yaml envelope.
+TEST(PosturePoseClamp, SymmetricAxesClampToTheConfiguredLimits) {
+  hexa::config::PostureConfig p = with_height_envelope();
+  PostureController posture{p};
+  constexpr float kTol = 1e-5f;
+
+  const BodyPose out =
+      idle_pose(posture, BodyPose{9.0f, -9.0f, 0.0f, 9.0f, -9.0f, 9.0f});
+  EXPECT_NEAR(out.x, p.pose_limit_x, kTol);
+  EXPECT_NEAR(out.y, -p.pose_limit_y, kTol);
+  EXPECT_NEAR(out.roll, p.pose_limit_roll, kTol);
+  EXPECT_NEAR(out.pitch, -p.pose_limit_pitch, kTol);
+  EXPECT_NEAR(out.yaw, p.pose_limit_yaw, kTol);
 }
 
 }  // namespace

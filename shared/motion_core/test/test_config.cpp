@@ -180,8 +180,10 @@ TEST(Teleop, HardwareIdentity) {
 TEST(Teleop, PostureLimits) {
   EXPECT_NEAR(cfg::kPostureLimits.x_max, 0.035f, kTol);
   EXPECT_NEAR(cfg::kPostureLimits.roll_max_deg, 12.0f, kTol);
-  EXPECT_NEAR(cfg::kPostureLimits.height_max_m, 0.04f, kTol);
-  EXPECT_NEAR(cfg::kPostureLimits.height_min_m, -0.04f, kTol);
+  // No height_{max,min}_m here by design — the body-height envelope belongs to
+  // tuning.yaml's posture_node block (see Posture.PoseEnvelope), not to
+  // teleop_joy.yaml. Only the rate is teleop's.
+  EXPECT_NEAR(cfg::kPostureLimits.height_rate_m_per_s, 0.05f, kTol);
 }
 
 TEST(Posture, AnimationStack) {
@@ -198,6 +200,24 @@ TEST(Posture, AnimationStack) {
   // Gait-active body animation is off by default — the body stays still while
   // walking until the tuning switch is flipped.
   EXPECT_FALSE(cfg::kPosture.gait_body_animations_enabled);
+}
+
+TEST(Posture, PoseEnvelope) {
+  // The z pair is ABSOLUTE belly clearance; nominal_body_height is carried
+  // alongside so PostureController can convert it to the offsets BodyPose::z
+  // is expressed in. Codegen refuses to emit a nominal outside the envelope.
+  EXPECT_NEAR(cfg::kPosture.body_height_max, 0.14f, kTol);
+  EXPECT_NEAR(cfg::kPosture.body_height_min, 0.02f, kTol);
+  EXPECT_NEAR(cfg::kPosture.nominal_body_height, cfg::kStandingPose.body_height,
+              kTol);
+  EXPECT_LT(cfg::kPosture.body_height_min, cfg::kPosture.nominal_body_height);
+  EXPECT_LT(cfg::kPosture.nominal_body_height, cfg::kPosture.body_height_max);
+
+  EXPECT_NEAR(cfg::kPosture.pose_limit_x, 0.05f, kTol);
+  EXPECT_NEAR(cfg::kPosture.pose_limit_y, 0.05f, kTol);
+  EXPECT_NEAR(cfg::kPosture.pose_limit_roll, 0.30f, kTol);
+  EXPECT_NEAR(cfg::kPosture.pose_limit_pitch, 0.30f, kTol);
+  EXPECT_NEAR(cfg::kPosture.pose_limit_yaw, 0.50f, kTol);
 }
 
 TEST(Control, RampAndSnap) {

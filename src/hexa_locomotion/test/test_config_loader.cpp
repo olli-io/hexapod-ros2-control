@@ -166,6 +166,17 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.animation_reserve_roll, bp.animation_reserve_roll, kTol);
   EXPECT_NEAR(lp.animation_reserve_pitch, bp.animation_reserve_pitch, kTol);
   EXPECT_NEAR(lp.animation_reserve_yaw, bp.animation_reserve_yaw, kTol);
+  EXPECT_NEAR(lp.pose_limit_x, bp.pose_limit_x, kTol);
+  EXPECT_NEAR(lp.pose_limit_y, bp.pose_limit_y, kTol);
+  EXPECT_NEAR(lp.pose_limit_roll, bp.pose_limit_roll, kTol);
+  EXPECT_NEAR(lp.pose_limit_pitch, bp.pose_limit_pitch, kTol);
+  EXPECT_NEAR(lp.pose_limit_yaw, bp.pose_limit_yaw, kTol);
+  EXPECT_NEAR(lp.body_height_max, bp.body_height_max, kTol);
+  EXPECT_NEAR(lp.body_height_min, bp.body_height_min, kTol);
+  // The loader carries the standing-pose height it already read rather than
+  // re-sourcing it; codegen reads the same key. Both must equal the stance.
+  EXPECT_NEAR(lp.nominal_body_height, bp.nominal_body_height, kTol);
+  EXPECT_NEAR(lp.nominal_body_height, loaded.standing_pose.body_height, kTol);
   EXPECT_EQ(lp.gait_body_animations_enabled, bp.gait_body_animations_enabled);
 }
 

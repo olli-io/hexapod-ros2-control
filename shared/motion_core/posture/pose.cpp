@@ -30,22 +30,40 @@ float clamp_axis(float v, float lo_hi) {
   }
   return v;
 }
+
+// Asymmetric form, for z.
+float clamp_axis(float v, float lo, float hi) {
+  if (v < lo) {
+    return lo;
+  }
+  if (v > hi) {
+    return hi;
+  }
+  return v;
+}
 }  // namespace
 
 BodyPose clamp(const BodyPose& pose, const PoseLimits& limits) {
-  return BodyPose{
-      clamp_axis(pose.x, limits.x),         clamp_axis(pose.y, limits.y),
-      clamp_axis(pose.z, limits.z),         clamp_axis(pose.roll, limits.roll),
-      clamp_axis(pose.pitch, limits.pitch), clamp_axis(pose.yaw, limits.yaw)};
+  return BodyPose{clamp_axis(pose.x, limits.x),
+                  clamp_axis(pose.y, limits.y),
+                  clamp_axis(pose.z, limits.z_min, limits.z_max),
+                  clamp_axis(pose.roll, limits.roll),
+                  clamp_axis(pose.pitch, limits.pitch),
+                  clamp_axis(pose.yaw, limits.yaw)};
 }
 
 BodyPose compose_layered(const BodyPose& user, const BodyPose& animated,
                          const PoseLimits& limits,
                          const PoseLimits& anim_reserve) {
+  // The user's z envelope shrinks from BOTH ends by the animation reserve; the
+  // floor/ceiling are clamped toward 0 so an oversized reserve collapses the
+  // user's range rather than inverting it (same intent as the max(0, ...) on
+  // the symmetric axes).
   const PoseLimits user_env{
       std::max(0.0f, limits.x - anim_reserve.x),
       std::max(0.0f, limits.y - anim_reserve.y),
-      std::max(0.0f, limits.z - anim_reserve.z),
+      std::max(0.0f, limits.z_max - anim_reserve.z_max),
+      std::min(0.0f, limits.z_min - anim_reserve.z_min),
       std::max(0.0f, limits.roll - anim_reserve.roll),
       std::max(0.0f, limits.pitch - anim_reserve.pitch),
       std::max(0.0f, limits.yaw - anim_reserve.yaw)};

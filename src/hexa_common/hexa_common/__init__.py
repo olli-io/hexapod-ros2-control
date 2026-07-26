@@ -8,13 +8,17 @@ instead of importing each other, keeping the node-package graph one-way.
 
 from .gait_catalog import GAIT_DESCRIPTORS, GaitDescriptor
 from .limits import VelocityCaps, load_velocity_caps, scale_to_envelope
-from .posture_config import load_animation_mode_animations
+from .posture_config import (
+    load_animation_mode_animations,
+    load_body_height_offsets,
+)
 
 __all__ = [
     "GAIT_DESCRIPTORS",
     "GaitDescriptor",
     "VelocityCaps",
     "load_animation_mode_animations",
+    "load_body_height_offsets",
     "load_velocity_caps",
     "scale_to_envelope",
 ]

@@ -87,7 +87,15 @@ class ModeConfig:
 
 @dataclass(frozen=True)
 class PostureConfig:
-    """Posture-mode bindings + the scalar limits the mode needs."""
+    """Posture-mode bindings + the scalar limits the mode needs.
+
+    ``height_max`` / ``height_min`` are pose offsets derived from the posture
+    stack's own envelope (``tuning.yaml`` ``body_height_{max,min}_m``, absolute
+    belly clearance) — see ``hexa_common.load_body_height_offsets``. They are
+    not a teleop-owned limit; they exist here only so the height integrator
+    saturates where the pipeline clamps, instead of banking travel that will
+    never be honoured.
+    """
 
     bindings: Mapping[str, str]
     x_max: float

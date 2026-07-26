@@ -116,9 +116,9 @@ posture:
   yaw_tau_s: 0.10
   revert_tau_s: 0.25
   wiggle_pivot_forward_m: 0.06
+  # Rate only. The body-height envelope lives in hexa_description's tuning.yaml
+  # (posture_node body_height_max_m / body_height_min_m).
   height:
-    max_m: 0.04
-    min_m: -0.04
     rate_m_per_s: 0.05
 
 animation:

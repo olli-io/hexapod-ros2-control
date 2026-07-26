@@ -34,6 +34,7 @@ import yaml
 from hexa_common import (
     VelocityCaps,
     load_animation_mode_animations,
+    load_body_height_offsets,
     load_velocity_caps,
 )
 from hexa_common.gait_catalog import GAIT_DESCRIPTORS
@@ -76,6 +77,9 @@ def load_web_config(
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml, geometry_yaml)
     animation_list = load_animation_mode_animations(posture_yaml)
+    # Body-height envelope as pose offsets — owned by tuning.yaml, not by
+    # webteleop.yaml. Used only to saturate the height integrator.
+    height_min, height_max = load_body_height_offsets(gait_yaml, posture_yaml)
 
     gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
     allow_unstable = bool(raw.get("allow_unstable_gaits", False))
@@ -149,8 +153,8 @@ def load_web_config(
         yaw_tau=float(posture_raw["yaw_tau_s"]),
         revert_tau=float(posture_raw["revert_tau_s"]),
         wiggle_pivot_forward_m=float(posture_raw["wiggle_pivot_forward_m"]),
-        height_max=float(height["max_m"]),
-        height_min=float(height["min_m"]),
+        height_max=height_max,
+        height_min=height_min,
         height_rate=float(height["rate_m_per_s"]),
     )
 

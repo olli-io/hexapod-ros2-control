@@ -86,8 +86,6 @@ posture:
   revert_tau_s: 0.25
   wiggle_pivot_forward_m: 0.06
   height:
-    max_m: 0.04
-    min_m: -0.04
     rate_m_per_s: 0.05
 
 animation:
@@ -135,6 +133,8 @@ posture_node:
       - vertical_body_roll
       - horizontal_body_roll
       - body_roll_3d
+    body_height_max_m: 0.13
+    body_height_min_m: 0.01
 """
 
 
@@ -172,6 +172,18 @@ def _sticks(
 def test_load_config_returns_correct_initial_mode(cfg):
     _, initial_mode, _ = cfg
     assert initial_mode == "gait"
+
+
+def test_load_config_height_limits_come_from_tuning_not_webteleop(cfg):
+    """webteleop.yaml declares no height envelope; tuning.yaml owns it.
+
+    The absolute belly heights (0.01 / 0.13) become pose offsets against the
+    0.04 standing height, so the mapper saturates exactly where the posture
+    stack clamps.
+    """
+    loaded_cfg, _, _ = cfg
+    assert math.isclose(loaded_cfg.posture.height_max, 0.13 - 0.04)
+    assert math.isclose(loaded_cfg.posture.height_min, 0.01 - 0.04)
 
 
 def test_load_config_button_count(cfg):

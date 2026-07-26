@@ -22,6 +22,13 @@ constexpr float kDegToRad = kPi / 180.0f;
 
 // Posture-mode scalar limits, converted to the units joy_mapping uses (angles
 // in radians). The baked kPostureLimits carries the raw YAML values (degrees).
+//
+// height_max/height_min are NOT a teleop-owned limit: they are the posture
+// stack's own envelope (tuning.yaml body_height_{max,min}_m, absolute belly
+// clearance) turned into the pose offsets pose_z is expressed in. Teleop keeps
+// them only to saturate the height integrator, so holding the button past the
+// stop cannot bank travel the pipeline will never honour — reversing has to
+// move the body on the very next tick.
 struct PostureLimits {
   float x_max, y_max, roll_max, pitch_max, yaw_max;
   float yaw_tau, revert_tau, wiggle_pivot_forward_m;
@@ -30,6 +37,7 @@ struct PostureLimits {
 
 constexpr PostureLimits posture_limits() {
   const auto& p = cfgns::kPostureLimits;
+  const auto& pose = cfgns::kPosture;
   return PostureLimits{
       p.x_max,
       p.y_max,
@@ -39,8 +47,8 @@ constexpr PostureLimits posture_limits() {
       p.yaw_tau_s,
       p.revert_tau_s,
       p.wiggle_pivot_forward_m,
-      p.height_max_m,
-      p.height_min_m,
+      pose.body_height_max - pose.nominal_body_height,
+      pose.body_height_min - pose.nominal_body_height,
       p.height_rate_m_per_s,
   };
 }

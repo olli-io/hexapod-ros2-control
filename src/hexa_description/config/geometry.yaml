@@ -8,7 +8,7 @@
 
 body:
   # z=0 is the coxa rotation-axis plane; all coxas sit at this level.
-  coxa_to_bottom: 0.03 # coxa plane down to body bottom (+z half-height)
+  coxa_to_bottom: 0.026 # coxa plane down to body bottom (+z half-height)
   coxa_to_top: 0.02 # coxa plane up to body top (+z half-height)
   mass: 1.0 # sim only
 
@@ -20,14 +20,14 @@ leg:
   # Visual radii (m) — sim only.
   coxa_radius: 0.02
   femur_radius: 0.015
-  tibia_radius: 0.01
+  tibia_radius: 0.008
   # Segment masses (kg) — sim only.
   coxa_mass: 0.05
   femur_mass: 0.08
   tibia_mass: 0.06
 
 foot:
-  radius: 0.01 # ground-contact sphere radius (m)
+  radius: 0.008 # ground-contact sphere radius (m)
   mass: 0.01 # foot tip mass (kg)
 
 mounts:
@@ -56,8 +56,8 @@ joints:
     effort: 3.09
     velocity: 7.25
   femur:
-    lower_limit_deg: -55
-    upper_limit_deg: 86
+    lower_limit_deg: -35
+    upper_limit_deg: 95
     effort: 3.09
     velocity: 7.25
   tibia:
@@ -74,6 +74,6 @@ initial_pose:
     l_front_deg: 60 # 30° mount + 60° coxa → leg points at body-yaw 90°
     l_middle_deg: 0 # 90° mount + 0° coxa → leg points straight outward
   femur:
-    above_horizontal_deg: 85 # femur tucked steeply up
+    above_horizontal_deg: 95 # femur tucked steeply up
   tibia:
     interior_deg: 45 # knee folded tight

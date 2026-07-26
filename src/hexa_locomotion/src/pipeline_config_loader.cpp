@@ -228,6 +228,23 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.animation_reserve_roll = f(p["animation_reserve_roll"]);
   ps.animation_reserve_pitch = f(p["animation_reserve_pitch"]);
   ps.animation_reserve_yaw = f(p["animation_reserve_yaw"]);
+  ps.pose_limit_x = f(p["pose_limit_x"]);
+  ps.pose_limit_y = f(p["pose_limit_y"]);
+  ps.pose_limit_roll = f(p["pose_limit_roll"]);
+  ps.pose_limit_pitch = f(p["pose_limit_pitch"]);
+  ps.pose_limit_yaw = f(p["pose_limit_yaw"]);
+  // Absolute belly clearance; PostureController subtracts the nominal to get
+  // the pose offsets. The nominal is the standing-pose height already read
+  // above — carried here, not re-sourced.
+  ps.body_height_max = f(p["body_height_max_m"]);
+  ps.body_height_min = f(p["body_height_min_m"]);
+  ps.nominal_body_height = cfg.standing_pose.body_height;
+  if (!(ps.body_height_min < ps.nominal_body_height &&
+        ps.nominal_body_height < ps.body_height_max)) {
+    throw std::runtime_error(
+        "posture_node body_height_min_m/body_height_max_m must bracket "
+        "gait_node standing_pose.body_height");
+  }
 
   return cfg;
 }

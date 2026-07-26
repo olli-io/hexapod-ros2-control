@@ -207,6 +207,12 @@ def main() -> int:
     )
     posture_raw = teleop["posture"]
     height = posture_raw["height"]
+    # Height envelope: absolute belly clearance in tuning.yaml, converted to the
+    # pose offsets pose_z carries. Mirrors joy_mapping.cpp's posture_limits()
+    # and hexa_common.load_body_height_offsets — the golden would drift from the
+    # C++ mapper if this were sourced anywhere else.
+    nominal_height = float(gait["standing_pose"]["body_height"])
+    pn = posture["posture_node"]["ros__parameters"]
     posture_cfg = jm.PostureConfig(
         bindings={str(k): str(v) for k, v in posture_raw["bindings"].items()},
         x_max=float(posture_raw["x_max"]),
@@ -217,8 +223,8 @@ def main() -> int:
         yaw_tau=float(posture_raw["yaw_tau_s"]),
         revert_tau=float(posture_raw["revert_tau_s"]),
         wiggle_pivot_forward_m=float(posture_raw["wiggle_pivot_forward_m"]),
-        height_max=float(height["max_m"]),
-        height_min=float(height["min_m"]),
+        height_max=float(pn["body_height_max_m"]) - nominal_height,
+        height_min=float(pn["body_height_min_m"]) - nominal_height,
         height_rate=float(height["rate_m_per_s"]),
     )
 

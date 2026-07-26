@@ -186,11 +186,21 @@ PostureController::PostureController()
     : PostureController(config::kPosture) {}
 
 PostureController::PostureController(const config::PostureConfig& p)
-    : gait_body_animations_enabled_(p.gait_body_animations_enabled),
+    : limits_{p.pose_limit_x, p.pose_limit_y,
+              // The ONE place absolute belly clearance becomes a pose offset:
+              // BodyPose::z is a delta from the nominal stance, the config
+              // states height off the ground. Everything downstream is offsets.
+              p.body_height_max - p.nominal_body_height,
+              p.body_height_min - p.nominal_body_height,
+              p.pose_limit_roll, p.pose_limit_pitch, p.pose_limit_yaw},
+      gait_body_animations_enabled_(p.gait_body_animations_enabled),
       activation_slew_rate_(p.gait_activation_slew_rate),
-      anim_reserve_{p.animation_reserve_x, p.animation_reserve_y,
-                    p.animation_reserve_z, p.animation_reserve_roll,
-                    p.animation_reserve_pitch, p.animation_reserve_yaw},
+      // The animation reserve is symmetric on every axis including z, so it
+      // spends the same budget up and down.
+      anim_reserve_{p.animation_reserve_x,    p.animation_reserve_y,
+                    p.animation_reserve_z,    -p.animation_reserve_z,
+                    p.animation_reserve_roll, p.animation_reserve_pitch,
+                    p.animation_reserve_yaw},
       centroid_tau_(p.support_centroid_tau),
       swing_lift_tau_(p.swing_lift_tau) {
   std::vector<std::string_view> enabled(config::kEnabledAnimations.begin(),

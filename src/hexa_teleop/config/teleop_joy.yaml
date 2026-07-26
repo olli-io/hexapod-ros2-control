@@ -89,9 +89,10 @@ posture:
   yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle
   revert_tau_s: 0.25 # low-pass for Start-button revert
   wiggle_pivot_forward_m: 0.06
+  # How fast the D-pad raises/lowers the body. How FAR it may go is not set
+  # here — that is the body-height envelope in hexa_description's tuning.yaml
+  # (posture_node body_height_max_m / body_height_min_m), which teleop reads.
   height:
-    max_m: 0.04
-    min_m: -0.04
     rate_m_per_s: 0.05
 
 animation:
