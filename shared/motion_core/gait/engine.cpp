@@ -115,8 +115,8 @@ void SwingPlanner::touchdown(const std::string& name) {
 Vec3 SwingPlanner::evaluate(const std::string& name, float phase_in_swing,
                             const SwingProfile& profile) const {
   // The foot's body-frame velocity while planted is -v_leg, so handing that to
-  // both ends of the swing makes the ground-matched ramps track the ground
-  // exactly: the foot lifts straight up in the world frame and sets straight
+  // both ends of the swing makes it leave and meet the ground travelling with
+  // the ground: the foot lifts straight up in the world frame and sets straight
   // down again, with no horizontal slip in either direction. The vertical
   // shaping at both ends comes from the profile.
   const auto& v_in = v_origin_.at(name);
@@ -675,7 +675,6 @@ EngineConfig engine_config_from_config() {
   cfg.swing_apex_fraction = c.swing_apex_fraction;
   cfg.touchdown_velocity = c.touchdown_velocity;
   cfg.swing_phase_margin = c.swing_phase_margin;
-  cfg.ramp_clearance_fraction = c.ramp_clearance_fraction;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;
   cfg.pause_debounce_delay = c.pause_debounce_delay;

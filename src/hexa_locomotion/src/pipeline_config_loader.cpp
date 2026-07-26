@@ -131,7 +131,6 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.swing_apex_fraction = f(g["swing_apex_fraction"]);
   e.touchdown_velocity = f(g["touchdown_velocity"]);
   e.swing_phase_margin = f(g["swing_phase_margin"]);
-  e.ramp_clearance_fraction = f(g["ramp_clearance_fraction"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
   e.pause_debounce_delay = f(g["pause_debounce_delay"]);

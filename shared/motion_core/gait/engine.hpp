@@ -54,8 +54,6 @@ struct EngineConfig {
   // Share of each gait's nominal swing window handed back to stance at the
   // touchdown end, so every handover has a stretch with all six feet planted.
   float swing_phase_margin = 0.0f;
-  // Ground-matched lift-off / touchdown ramps, as a share of step_height.
-  float ramp_clearance_fraction = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
   float pause_debounce_delay = 0.0f;
@@ -79,7 +77,6 @@ struct EngineConfig {
     p.clearance = step_height;
     p.width = swing_width;
     p.apex_fraction = swing_apex_fraction;
-    p.ramp_clearance_fraction = ramp_clearance_fraction;
     p.touchdown_velocity = touchdown_velocity;
     return p;
   }

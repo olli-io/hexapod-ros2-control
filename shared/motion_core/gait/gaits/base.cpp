@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "gait/trajectory.hpp"
-
 namespace hexa::gait {
 
 std::map<std::string, std::pair<float, float>> per_leg_planar_velocity(
@@ -64,24 +62,47 @@ int identity_y_sign(const Vec3& nominal_stance) {
 }
 
 namespace {
-// Horizontal part of a velocity; the ramps and the transfer arc take their
-// vertical shaping from the SwingProfile, never from the caller's velocity.
+// Horizontal part of a velocity; the vertical shaping comes from the
+// SwingProfile, never from the caller's velocity.
 Vec3 planar(const Vec3& v) { return Vec3(v[0], v[1], 0.0f); }
 
-// Share of the swing each ground-matched ramp occupies.
-//
-// This is deliberately fixed here rather than configured. The ramps buy zero
-// scrub near the ground, but they are expensive twice over: every second they
-// take is a second the transfer arc does not have, and the arc must also cover
-// the ground the body travels during them. The two compound, so this share —
-// not the ramp's height or speed — is what governs how hard the foot is thrown
-// through the air. At a quarter of the swing each, the peak tip speed doubles
-// against the same gait with the ramps off; at this value it is within a few
-// percent of it.
-constexpr float kRampSwingShare = 0.06f;
+// Quintic smoothstep. 0 -> 1 with zero slope and zero curvature at both ends.
+float ease5(float u) {
+  return u * u * u * (10.0f + u * (-15.0f + 6.0f * u));
+}
 
-// Largest share of the apex height the ramps may span. See the clamp site.
-constexpr float kMaxRampFraction = 0.10f;
+// Septic smoothstep: ease5 plus a vanishing third derivative at both ends.
+//
+// This is what replaces the old ground-matched ramps. The swing's horizontal
+// track is a blend between the two ground lines (see swing_arc), so the blend
+// weight's derivatives at the ends are exactly the foot's departure from ground
+// speed there. All three vanishing means the foot leaves and meets the ground
+// travelling at the ground velocity, and pulls away from it only as O(t^4) —
+// the same protection the ramps gave inside their band, but continuous, with no
+// segment to time and no height to configure.
+float ease7(float u) {
+  const float u2 = u * u;
+  return u2 * u2 * (35.0f + u * (-84.0f + u * (70.0f - 20.0f * u)));
+}
+
+// Unit-amplitude lift profile: 0 at both ends, 1 at `apex`, built from two
+// halves of ease5. Slope and curvature vanish at the ends and at the apex, so
+// the foot peels off the ground rather than stepping off it, and the two halves
+// join smoothly at the top.
+float bump(float t, float apex) {
+  return t < apex ? ease5(t / apex) : 1.0f - ease5((t - apex) / (1.0f - apex));
+}
+
+// Quintic-Hermite basis function for a prescribed derivative at the *end* of
+// the interval; zero value, slope and curvature at u = 0, zero value and
+// curvature at u = 1, unit slope at u = 1.
+//
+// It is <= 0 across [0, 1], so scaling it by a negative end slope only ever
+// lifts the curve: the descent cannot dip below the touchdown level however
+// large touchdown_velocity is, and needs no clamp.
+float hermite_end_slope(float u) {
+  return u * u * u * (-4.0f + u * (7.0f - 3.0f * u));
+}
 }  // namespace
 
 Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
@@ -95,84 +116,48 @@ Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
   const Vec3 v_ground_out = planar(
       target_ground_velocity ? *target_ground_velocity : (-stride / swing_time));
 
-  // The ramps always take the same slice of the swing, so the transfer arc's
-  // budget cannot be eaten by a tuning value. The height they span is a share of
-  // the apex height; the vertical speed that implies is whatever it has to be.
-  float ramp_time = 0.0f;
-  float ramp_clearance = 0.0f;
-  if (profile.ramp_clearance_fraction > 0.0f && profile.clearance > 0.0f) {
-    // Clamped so that every settable value is a safe one. Past roughly this
-    // share the band is tall enough that crossing it inside the ramp's slice of
-    // the swing demands a vertical speed which, carried into the transfer arc as
-    // its entry tangent, throws the foot as hard as an over-long ramp would —
-    // the same defect arriving through the vertical channel instead of the
-    // horizontal one.
-    ramp_clearance =
-        std::clamp(profile.ramp_clearance_fraction, 0.0f, kMaxRampFraction) *
-        profile.clearance;
-    ramp_time = kRampSwingShare * swing_time;
-  }
+  const float t = std::clamp(phase_in_swing, 0.0f, 1.0f);
+  const float blend = ease7(t);
 
-  const float arc_time = swing_time - 2.0f * ramp_time;
-  const bool ramped = ramp_time > 0.0f && arc_time > 0.0f;
+  // The two ground lines: where a foot planted at lift-off would have got to by
+  // now, and where the foot about to touch down would have come from had it been
+  // planted all along. Blending between them with ease7 pins the swing to the
+  // first at t = 0 and the second at t = 1 in position, velocity *and*
+  // acceleration, which is exactly the continuity stance needs at both seams.
+  const Vec3 from_liftoff = swing_origin + v_ground_in * (swing_time * t);
+  const Vec3 to_touchdown = target - v_ground_out * (swing_time * (1.0f - t));
+  Vec3 point = (1.0f - blend) * from_liftoff + blend * to_touchdown;
 
-  Vec3 arc_origin = swing_origin;
-  Vec3 arc_target = target;
-  Vec3 velocity_in = v_ground_in;
-  Vec3 velocity_out = v_ground_out - Vec3(0.0f, 0.0f, profile.touchdown_velocity);
-  BezierNodes liftoff_ramp;
-  BezierNodes touchdown_ramp;
-
-  if (ramped) {
-    liftoff_ramp = generate_liftoff_ramp_control_nodes(
-        swing_origin, v_ground_in, ramp_time, ramp_clearance);
-    touchdown_ramp = generate_touchdown_ramp_control_nodes(
-        target, v_ground_out, ramp_time, ramp_clearance,
-        profile.touchdown_velocity);
-    arc_origin = liftoff_ramp[4];
-    arc_target = touchdown_ramp[0];
-    // The transfer arc inherits the ramps' exit / entry velocities, so the joins
-    // are continuous in position and velocity without any extra shaping.
-    velocity_in = quartic_bezier_dot(liftoff_ramp, 1.0f) / ramp_time;
-    velocity_out = quartic_bezier_dot(touchdown_ramp, 0.0f) / ramp_time;
-  }
-
-  // Apex height is measured from the ground, not from the transfer arc's
-  // endpoints, so swing_clearance keeps meaning "how high the foot lifts".
-  const float ground_z = std::max(swing_origin[2], target[2]);
-  const float apex_clearance =
-      std::max(0.0f, ground_z + profile.clearance -
-                         std::max(arc_origin[2], arc_target[2]));
-
-  // Guard the split so neither half of the transfer arc collapses.
+  // Guard the split so neither half of the arc collapses.
   const float apex_fraction = std::clamp(profile.apex_fraction, 0.05f, 0.95f);
-  const float ascent_time = apex_fraction * arc_time;
-  const float descent_time = arc_time - ascent_time;
+  const float lift = bump(t, apex_fraction);
 
-  const BezierNodes primary = generate_primary_swing_control_nodes(
-      arc_origin, velocity_in, arc_target, apex_clearance, profile.width,
-      identity_y_sign, ascent_time);
-  const BezierNodes secondary = generate_secondary_swing_control_nodes(
-      primary, arc_target, velocity_out, ascent_time, descent_time);
+  // Apex height is measured from the ground the foot is stepping between, so
+  // swing_clearance keeps meaning "how high the foot lifts".
+  const float ground_z = std::max(swing_origin[2], target[2]);
+  const float apex_z = (1.0f - ease7(apex_fraction)) * swing_origin[2] +
+                       ease7(apex_fraction) * target[2];
+  const float apex_clearance =
+      std::max(0.0f, ground_z + profile.clearance - apex_z);
 
-  // Walk the four segments on the shared swing clock.
-  float elapsed = std::clamp(phase_in_swing, 0.0f, 1.0f) * swing_time;
-  if (ramped) {
-    if (elapsed < ramp_time) {
-      return quartic_bezier(liftoff_ramp, elapsed / ramp_time);
-    }
-    elapsed -= ramp_time;
+  point[2] += apex_clearance * lift;
+
+  // The descent carries the foot to the ground at exactly touchdown_velocity
+  // with zero vertical acceleration there. Spread over the whole descent rather
+  // than a band just above the ground, so the braking happens where there is
+  // room for it.
+  if (t >= apex_fraction) {
+    const float descent_time = (1.0f - apex_fraction) * swing_time;
+    const float u = (t - apex_fraction) / (1.0f - apex_fraction);
+    point[2] -= profile.touchdown_velocity * descent_time *
+                hermite_end_slope(u);
   }
-  if (elapsed < ascent_time) {
-    return quartic_bezier(primary, elapsed / ascent_time);
-  }
-  elapsed -= ascent_time;
-  if (elapsed < descent_time || !ramped) {
-    return quartic_bezier(secondary,
-                          std::min(elapsed / descent_time, 1.0f));
-  }
-  elapsed -= descent_time;
-  return quartic_bezier(touchdown_ramp, std::min(elapsed / ramp_time, 1.0f));
+
+  // Lateral arch. Shares the lift profile's shape rather than its height, so it
+  // survives a swing with zero clearance (the pause descent).
+  point[1] += (identity_y_sign > 0 ? profile.width : -profile.width) * lift;
+
+  return point;
 }
 
 }  // namespace hexa::gait

@@ -51,6 +51,14 @@ struct SwingTrace {
   float min_height = 0.0f;       // m above touchdown level
   float peak_descent = 0.0f;     // m/s downward
   float max_velocity_jump = 0.0f;  // m/s between adjacent samples
+  // Worst downward speed over the part of the descent that is already within
+  // `scrub_band` of the ground. This — not the speed at the touchdown point
+  // itself — is what the foot actually lands at whenever the terrain or the
+  // servo tracking is off by a millimetre or two, so it is the number that
+  // decides whether a landing is soft.
+  float near_ground_descent = 0.0f;
+  // Largest sideways excursion from the straight PEP -> AEP line, in metres.
+  float max_lateral = 0.0f;
   // How far the tip has slid against the ground, in metres: the worst gap
   // between where it is and where a planted foot would be, measured only while
   // it is at or below `scrub_band` and so could still be in contact.
@@ -62,12 +70,11 @@ struct SwingTrace {
 };
 
 g::SwingProfile make_profile(float apex_fraction, float touchdown_velocity,
-                             float ramp_clearance_fraction) {
+                             float width = 0.0f) {
   g::SwingProfile profile;
   profile.clearance = kStepHeight;
-  profile.width = 0.0f;
+  profile.width = width;
   profile.apex_fraction = apex_fraction;
-  profile.ramp_clearance_fraction = ramp_clearance_fraction;
   profile.touchdown_velocity = touchdown_velocity;
   return profile;
 }
@@ -77,10 +84,9 @@ g::SwingProfile make_profile(float apex_fraction, float touchdown_velocity,
 // differences in real time, so a genuine C1 break shows up as a single large
 // max_velocity_jump while a smooth curve stays at O(acceleration * step).
 SwingTrace profile_swing(float apex_fraction, float touchdown_velocity,
-                         float ramp_clearance_fraction = 0.0f,
-                         float scrub_band = 0.002f) {
+                         float width = 0.0f, float scrub_band = 0.002f) {
   const g::SwingProfile profile =
-      make_profile(apex_fraction, touchdown_velocity, ramp_clearance_fraction);
+      make_profile(apex_fraction, touchdown_velocity, width);
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
   const auto at = [&](float phase) {
     return g::swing_arc(phase, kPep, kAep, 1, kSwingTime, profile, v_ground,
@@ -106,6 +112,10 @@ SwingTrace profile_swing(float apex_fraction, float touchdown_velocity,
     p.apex_height = std::max(p.apex_height, height);
     p.min_height = std::min(p.min_height, height);
     p.peak_descent = std::max(p.peak_descent, -velocity.z);
+    p.max_lateral = std::max(p.max_lateral, std::abs(point.y - kAep.y));
+    if (phase > apex_fraction && height <= scrub_band) {
+      p.near_ground_descent = std::max(p.near_ground_descent, -velocity.z);
+    }
     if (i > 1) {
       const g::Vec3 jump = velocity - prev_velocity;
       p.max_velocity_jump = std::max(
@@ -210,9 +220,9 @@ TEST(Trajectory, SwingArcEndpointsHoldUnderApexSplit) {
   }
 }
 
-// The two swing halves are separate quartics joined at the apex. When they span
-// different durations the apex tangent has to be scaled by the duration ratio;
-// without that scaling the foot's velocity steps discontinuously mid-swing.
+// The lift profile is two halves of a quintic smoothstep joined at the apex.
+// Both halves have zero slope there, so the join carries no velocity step
+// however unevenly the split divides the swing.
 TEST(Trajectory, SwingArcApexStaysVelocityContinuousUnderSplit) {
   for (const float apex_fraction : {0.5f, 0.45f, 0.35f}) {
     const SwingTrace p = profile_swing(apex_fraction, 0.0f);
@@ -246,83 +256,108 @@ TEST(Trajectory, LongerDescentLowersPeakDescentRate) {
   const float longer = profile_swing(0.35f, 0.0f).peak_descent;
   EXPECT_LT(split, even);
   EXPECT_LT(longer, split);
-  // Pins the even-split closed form, (32/9) * step_height / swing_time.
-  EXPECT_NEAR(even, 3.5556f * kStepHeight / kSwingTime, 0.02f);
+  // Pins the closed form: a quintic descent of `step_height` over
+  // (1 - apex_fraction) * swing_time peaks at 1.875 * height / duration.
+  EXPECT_NEAR(even, 3.75f * kStepHeight / kSwingTime, 0.02f);
+  EXPECT_NEAR(longer, 1.875f * kStepHeight / (0.65f * kSwingTime), 0.02f);
 }
 
-// ── Ground-matched ramps ──
+// ── Ground track and touchdown ──
 
-// The reason the ramps exist. Without them the foot's horizontal speed has
-// already decayed well away from ground speed by the time it has risen a couple
-// of millimetres — it is still touching and already outrunning the ground, which
-// is the scrub seen on the rear feet. The ramps pin the horizontal velocity to
-// the ground velocity exactly until the foot is clear.
-TEST(Trajectory, GroundMatchedRampsRemoveScrubNearTheGround) {
-  // Sized so the ramp fits inside kMaxRampShare of kSwingTime and the whole
-  // requested clearance is delivered; RampsAreCappedToAThinSliceOfTheSwing
-  // covers the case where it does not fit.
-  constexpr float kRampFraction = 0.05f;  // of kStepHeight
-  constexpr float kBand = kRampFraction * kStepHeight;
-  const SwingTrace plain = profile_swing(0.4f, 0.01f, 0.0f, kBand);
-  const SwingTrace ramped = profile_swing(0.4f, 0.01f, kRampFraction, kBand);
+// The swing is a blend between the two ground lines, weighted by a septic ease
+// whose first three derivatives vanish at both ends. So the foot leaves and
+// meets the ground travelling with the ground, and pulls away from it only as
+// the fourth power of the elapsed swing — by the time it is a couple of
+// millimetres up it has barely moved against the ground it may still be
+// touching. That is the scrub seen on the rear feet.
+TEST(Trajectory, SwingLeavesAndMeetsTheGroundAlongTheGroundTrack) {
+  constexpr float kBand = 0.002f;
+  const SwingTrace p = profile_swing(0.5f, 0.01f, 0.0f, kBand);
 
-  // Exact by construction (evenly spaced horizontal control nodes), so the only
-  // residual is float rounding: micrometres, not the tenths of a millimetre a
-  // real mismatch would leave.
-  EXPECT_LT(ramped.max_ground_offset, 1e-5f);
-
-  // And the unramped curve really does slide, by about a millimetre per step.
-  EXPECT_GT(plain.max_ground_offset, 100.0f * ramped.max_ground_offset);
-  EXPECT_GT(plain.max_ground_offset, 2e-4f);
-}
-
-TEST(Trajectory, RampsPreserveEndpointsApexAndGroundLevel) {
-  const SwingTrace p = profile_swing(0.4f, 0.01f, 0.05f);
-  EXPECT_NEAR(p.start.x, kPep.x, 1e-4f);
-  EXPECT_NEAR(p.start.z, kPep.z, 1e-4f);
-  EXPECT_NEAR(p.end.x, kAep.x, 1e-4f);
-  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
-  // step_height still means "how high the foot lifts off the ground", not "how
-  // high above the top of the ramp".
-  EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f);
-  // The foot never digs below the ground it is stepping onto.
-  EXPECT_GT(p.min_height, -1e-5f);
-  // It still meets the ground at the configured touchdown velocity.
-  EXPECT_NEAR(p.touchdown_velocity.z, -0.01f, 5e-3f);
-  // ...and leaves it along the ground track, so the seam with stance carries no
-  // horizontal step.
+  // Exact at the seams: no horizontal step into or out of stance.
   EXPECT_NEAR(p.liftoff_velocity.x, -kLegSpeed, 1e-3f);
+  EXPECT_NEAR(p.liftoff_velocity.y, 0.0f, 1e-3f);
+  EXPECT_NEAR(p.touchdown_velocity.x, -kLegSpeed, 1e-3f);
+  EXPECT_NEAR(p.touchdown_velocity.y, 0.0f, 1e-3f);
+
+  // And sub-millimetre over the whole stretch where the foot is low enough to
+  // still be in contact.
+  EXPECT_LT(p.max_ground_offset, 1e-3f);
 }
 
-// The ramps are opt-in: pause, reseat and the initialize ladder build their
-// SwingProfile without a ramp fraction, so they keep the plain two-curve arc.
-TEST(Trajectory, RampsAreOptIn) {
-  const SwingTrace p = profile_swing(0.4f, 0.01f, 0.0f, 0.05f * kStepHeight);
-  // No ground-matched segment, so the tip does slide near the ground...
-  EXPECT_GT(p.max_ground_offset, 1e-4f);
-  // ...but it is still a well-formed swing.
-  EXPECT_NEAR(p.start.z, kPep.z, 1e-4f);
-  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
-  EXPECT_GT(p.apex_height, 0.05f);
+// step_height means "how high the foot lifts off the ground", and both ends of
+// the curve land exactly where they were asked to.
+TEST(Trajectory, SwingPreservesEndpointsApexAndGroundLevel) {
+  for (const float apex_fraction : {0.5f, 0.4f}) {
+    const SwingTrace p = profile_swing(apex_fraction, 0.01f);
+    EXPECT_NEAR(p.start.x, kPep.x, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.start.z, kPep.z, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.end.x, kAep.x, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.end.z, kAep.z, 1e-4f) << apex_fraction;
+    EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f) << apex_fraction;
+    // The foot never digs below the ground it is stepping onto.
+    EXPECT_GT(p.min_height, -1e-5f) << apex_fraction;
+  }
 }
 
-// A ramp costs the transfer arc twice: the time it takes, and the ground the
-// body covers during it, which the arc must make up on top of the stride. Both
-// compound, so an over-long ramp whips the foot through the air — on the robot
-// that reads as a twitch at mid-swing, and at longer strides the foot outruns
-// its own touchdown. The cap has to hold the peak near what the same gait does
-// with the ramps off, however much ramp the config asks for.
-TEST(Engine, RampsDoNotWhipTheFootThroughTheAir) {
+// The regression this shape exists to prevent.
+//
+// The earlier construction wrapped the arc in a ground-matched touchdown ramp
+// that had to cross a fixed band — a tenth of the step height — inside a fixed
+// 6% of the swing. That met the ground at exactly touchdown_velocity, but only
+// in the limit at ground level: it was still doing better than 0.4 m/s a
+// couple of millimetres up, so any terrain bump or servo lag inside that band
+// turned into a hard landing. Braking over the whole descent instead keeps the
+// approach slow where it matters, not just at the single point it is measured.
+TEST(Trajectory, DescentIsAlreadySlowBeforeItReachesTheGround) {
+  constexpr float kBand = 0.002f;
+  const SwingTrace even = profile_swing(0.5f, 0.01f, 0.0f, kBand);
+  EXPECT_LT(even.near_ground_descent, 0.25f);
+
+  // And handing the descent more of the swing slows it further still.
+  const SwingTrace longer = profile_swing(0.35f, 0.01f, 0.0f, kBand);
+  EXPECT_LT(longer.near_ground_descent, even.near_ground_descent);
+}
+
+// The lateral arch peaks at swing_width and closes back to the straight
+// PEP -> AEP line at both ends, so it cannot push the seam with stance sideways.
+TEST(Trajectory, SwingWidthArchesAndCloses) {
+  constexpr float kWidth = 0.02f;
+  const SwingTrace p = profile_swing(0.5f, 0.01f, kWidth);
+  EXPECT_NEAR(p.max_lateral, kWidth, 1e-4f);
+  EXPECT_NEAR(p.start.y, kPep.y, 1e-5f);
+  EXPECT_NEAR(p.end.y, kAep.y, 1e-5f);
+  EXPECT_NEAR(p.liftoff_velocity.y, 0.0f, 1e-3f);
+  EXPECT_NEAR(p.touchdown_velocity.y, 0.0f, 1e-3f);
+}
+
+// The arch does not depend on there being any lift: the pause descent builds a
+// profile with zero clearance and a non-zero width.
+TEST(Trajectory, SwingWidthSurvivesZeroClearance) {
+  g::SwingProfile profile;
+  profile.clearance = 0.0f;
+  profile.width = 0.02f;
+  const g::Vec3 apex = g::swing_arc(0.5f, kPep, kAep, 1, kSwingTime, profile,
+                                    g::Vec3::Zero(), g::Vec3::Zero());
+  EXPECT_NEAR(apex.y - kAep.y, 0.02f, 1e-5f);
+  EXPECT_NEAR(apex.z, kAep.z, 1e-5f);
+}
+
+// The foot has to complete its step in the time it has, so anything that steals
+// swing time or ground from the arc shows up as a whip at mid-swing — on the
+// robot, a twitch, and at longer strides a foot that outruns its own touchdown.
+// Nothing in the curve steals either any more, so the peak tip speed has to sit
+// close to the analytical floor: the ground-relative displacement swept by the
+// septic ease, whose peak slope is 35/16.
+TEST(Engine, PeakTipSpeedStaysCloseToTheAnalyticalFloor) {
   constexpr float kTickDt = 0.005f;
 
-  const auto peak_tip_speed = [](float ramp_clearance_fraction,
-                                 float min_swing) {
+  for (const float min_swing : {0.4f, 0.6f}) {
     g::EngineConfig cfg = g::engine_config_from_config();
-    cfg.ramp_clearance_fraction = ramp_clearance_fraction;
     cfg.min_swing_time = min_swing;
     cfg.max_swing_time = min_swing * 1.33f;
     const float swing_end = g::swing_end_phase(0.5f, cfg.swing_phase_margin);
-    // Saturating command: the worst case for the transfer arc.
+    // Saturating command: the worst case for the arc.
     const float v_cmd = cfg.stride_length * swing_end /
                         (cfg.min_swing_time * (1.0f - swing_end));
 
@@ -336,7 +371,7 @@ TEST(Engine, RampsDoNotWhipTheFootThroughTheAir) {
     for (int i = 0; i < 6000 && e->state() != g::EngineState::GAIT; ++i) {
       e->update(kTickDt, {v_cmd, 0.0f}, 0.0f);
     }
-    EXPECT_EQ(e->state(), g::EngineState::GAIT);
+    ASSERT_EQ(e->state(), g::EngineState::GAIT) << min_swing;
 
     g::Vec3 prev = g::Vec3::Zero();
     bool have = false;
@@ -351,29 +386,16 @@ TEST(Engine, RampsDoNotWhipTheFootThroughTheAir) {
       prev = lo.foot_target;
       have = true;
     }
-    return peak;
-  };
 
-  // Every value the knob can take must stay close to the ramps-off peak — the
-  // clamp is what makes that true, so an absurd request is covered too. Checked
-  // at a slow and a brisk gait, since a shorter swing gives the arc less room.
-  for (const float min_swing : {0.4f, 0.6f}) {
-    const float without_ramps = peak_tip_speed(0.0f, min_swing);
-    ASSERT_GT(without_ramps, 0.0f) << min_swing;
-    for (const float fraction : {0.05f, 0.10f, 0.15f, 0.40f, 5.0f}) {
-      EXPECT_LT(peak_tip_speed(fraction, min_swing), 1.35f * without_ramps)
-          << "fraction " << fraction << " at min_swing " << min_swing;
-    }
+    // Ground-relative, the foot covers its own stride plus the ground the body
+    // travels while it is airborne. Against the body it covers that swept at
+    // 35/16 at the fastest, less the ground speed it is swimming against.
+    const float ground = cfg.stride_length * swing_end / (1.0f - swing_end);
+    const float expected =
+        (2.1875f * (cfg.stride_length + ground) - ground) / min_swing;
+    EXPECT_GT(peak, 0.85f * expected) << min_swing;
+    EXPECT_LT(peak, 1.15f * expected) << min_swing;
   }
-}
-
-// The band is a share of the arc, so an absurd request is clamped rather than
-// swallowing the apex or inverting the curve.
-TEST(Trajectory, RampFractionIsClamped) {
-  const SwingTrace p = profile_swing(0.5f, 0.01f, 5.0f, 0.02f);
-  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
-  EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f);
-  EXPECT_GT(p.min_height, -1e-5f);
 }
 
 // ── Swing-window margin ──

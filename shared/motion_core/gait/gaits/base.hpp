@@ -34,20 +34,12 @@ struct SwingProfile {
   float clearance = 0.0f;
   // Sideways shift of the arc; 0 = straight fore/aft.
   float width = 0.0f;
-  // Share of the transfer arc spent climbing to the apex.
+  // Share of the swing spent climbing to the apex. The rest is the descent, so
+  // lowering this lengthens the descent and lands the foot more gently — at the
+  // cost of a steeper climb off the ground.
   float apex_fraction = 0.5f;
-  // Height of the ground-matched lift-off / touchdown ramps, as a share of the
-  // apex height above. 0 disables them and reproduces the plain two-curve arc.
-  //
-  // A fraction rather than a distance so it keeps its meaning when step height
-  // is retuned: the ramps are always the same slice of the arc. The ramps'
-  // duration is not configurable — it is a fixed share of the swing (see
-  // kRampSwingShare), because that share is what governs how much time and
-  // distance the ramps cost the transfer arc. The vertical speed the foot
-  // leaves and meets the ground at therefore falls out of the gait rather than
-  // being set: a bigger band or a quicker swing means a brisker departure.
-  float ramp_clearance_fraction = 0.0f;
-  // Vertical speed the foot still carries as it meets the ground.
+  // Vertical speed the foot still carries as it meets the ground. Reached with
+  // zero vertical acceleration, and approached over the whole descent.
   float touchdown_velocity = 0.0f;
 };
 
@@ -115,23 +107,29 @@ int identity_y_sign(const Vec3& nominal_stance);
 
 // Evaluate the swing trajectory at phase_in_swing in [0, 1).
 //
-// With profile.ramp_clearance > 0 the swing runs in four segments: a
-// ground-matched lift-off ramp, the two-curve transfer arc, and a ground-matched
-// touchdown ramp. On the ramps the foot's horizontal velocity is exactly the
-// ground velocity, so it cannot scrub while it is still close enough to the
-// ground to be touching it; the horizontal speed-up happens only once the
-// lift-off ramp has concluded. With ramp_clearance = 0 the ramps vanish and this
-// is the plain two-curve arc.
+// One curve, not a chain of segments. The horizontal track is a septic-eased
+// blend between the two ground lines — where a foot planted at lift-off would
+// have got to, and where the foot about to land would have come from. Because
+// the blend weight's first three derivatives vanish at both ends, the foot
+// leaves and meets the ground travelling at exactly the ground velocity with
+// zero horizontal acceleration, and only pulls away from it as O(t^4). That is
+// what keeps it from scrubbing while it may still be touching.
+//
+// The vertical is independent of the horizontal: a quintic rise to the apex and
+// a quintic-Hermite descent that reaches the ground at exactly
+// profile.touchdown_velocity with zero vertical acceleration. Keeping the two
+// axes decoupled is the point — the descent gets the whole of its half of the
+// swing to slow down in, instead of having to brake inside a band just above
+// the ground.
 //
 // origin/target_ground_velocity are the stance velocities at the two ends —
 // horizontal only, the profile supplies the vertical shaping. nullopt defaults
 // to the analytical -stride / swing_time; pass Vec3::Zero() for a rest-to-rest
 // move (pause, reseat, the initialize ladder).
 //
-// profile.apex_fraction is the share of the transfer arc spent climbing to the
-// apex. 0.5 splits it evenly. Below 0.5 the touchdown half runs longer, which
-// stretches its Bezier and widens its node separation: a longer, larger-radius
-// descent that reaches the ground more gently for the same step height.
+// profile.apex_fraction is the share of the swing spent climbing to the apex.
+// 0.5 splits it evenly. Below 0.5 the descent runs longer, so the foot comes
+// down more slowly for the same step height, at the cost of a steeper climb.
 Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
                const Vec3& target, int identity_y_sign, float swing_time,
                const SwingProfile& profile,

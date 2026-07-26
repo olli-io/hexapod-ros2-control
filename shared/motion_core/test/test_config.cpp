@@ -114,7 +114,6 @@ TEST(Engine, GaitYamlKnobs) {
   EXPECT_NEAR(cfg::kEngine.swing_apex_fraction, 0.5f, kTol);
   EXPECT_NEAR(cfg::kEngine.touchdown_velocity, 0.01f, kTol);
   EXPECT_NEAR(cfg::kEngine.swing_phase_margin, 0.12f, kTol);
-  EXPECT_NEAR(cfg::kEngine.ramp_clearance_fraction, 0.10f, kTol);
   EXPECT_NEAR(cfg::kEngine.min_swing_time, 0.6f, kTol);
   EXPECT_NEAR(cfg::kEngine.controller_dt, 0.005f, kTol);
   EXPECT_NEAR(cfg::kEngine.init_pair_swing_time, 0.35f, kTol);

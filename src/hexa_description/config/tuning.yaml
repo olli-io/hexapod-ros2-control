@@ -45,7 +45,7 @@ gait_node:
     standing_pose:
       coxa_deg: 0.0
       femur_above_horizontal_deg: 40.0
-      tibia_interior_deg: 74.7
+      tibia_interior_deg: 69.7
 
     # ─── Stride geometry ────────────────────────────────────────────
 
@@ -60,39 +60,25 @@ gait_node:
     swing_width: 0.02
 
     # Share of the airborne time spent rising to the top of the arc.
-    # 0.5 splits the step evenly. Lower values give the descent a longer,
-    # wider curve, so the foot settles onto the ground more gently for the
-    # same step height — at the cost of a brisker lift-off.
+    # 0.5 splits the step evenly. Lower values hand the descent more of the
+    # swing, so the foot settles onto the ground more gently for the same
+    # step height — at the cost of an equally steeper climb off it. 0.5 is
+    # the point where neither end is working harder than the other; move it
+    # down only if the feet still land harder than they lift.
+    #
+    # The foot is never allowed to scrub either way: it leaves and meets the
+    # ground travelling at exactly ground speed whatever this is set to.
+    # That comes from the shape of the swing curve, not from a tuning value.
     swing_apex_fraction: 0.5
 
     # How fast the foot is still descending as it meets the ground (m/s).
     # 0 eases it to a dead stop exactly at ground level, which is smoothest
     # on perfectly flat ground but lands hard whenever the ground or the
     # servo tracking is off by a millimetre or two. A small value makes
-    # contact happen at this speed instead, whenever it happens.
+    # contact happen at this speed instead, whenever it happens: the last
+    # stretch of the descent is a steady, slow probe at this speed rather
+    # than a curve still braking as it arrives.
     touchdown_velocity: 0.01
-
-    # Share of step_height spanned by the ground-matched ramps: the band the
-    # foot rises through on its way off the ground and sinks through on its
-    # way back down. Inside it the foot travels backwards at exactly ground
-    # speed, so it cannot scrub while it may still be touching; only above
-    # it does the foot start moving forwards.
-    #
-    # Set it to cover the height at which the foot has really let go —
-    # terrain bumps plus servo tracking error. A share rather than a
-    # distance, so it keeps its meaning when step_height is retuned: at
-    # step_height 0.06, 0.10 protects the bottom 6 mm. Values above 0.10 are
-    # clamped: past there the band cannot be crossed in the time available
-    # without throwing the foot.
-    # 0 disables the ramps and restores the plain two-curve arc.
-    #
-    # How *fast* the foot leaves and meets the ground is deliberately not
-    # tunable. The ramps always take a fixed slice of the swing, because
-    # that slice — not their height — decides how hard the foot must be
-    # thrown through the air to still complete its step in time. A taller
-    # band, or a quicker gait, therefore simply means a brisker departure.
-    # Raise this until the feet stop scuffing, and no further.
-    ramp_clearance_fraction: 0.12
 
     # ─── Cycle timing ───────────────────────────────────────────────
 
