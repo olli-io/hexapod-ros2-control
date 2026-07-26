@@ -67,8 +67,10 @@ class Strategy {
                            const LegContext& leg) const = 0;
 };
 
-// Linear cmd plus tangential yaw contribution at each hip:
-// v_leg = v_body + omega x r, in the body frame, for every leg.
+// Linear cmd plus tangential yaw contribution at each foot:
+// v_leg = v_body + omega x r_stance, in the body frame, for every leg. The
+// lever arm is the leg's nominal_stance (where the stride is actually laid
+// down), not its mount — see the note in the definition.
 std::map<std::string, std::pair<float, float>> per_leg_planar_velocity(
     const std::map<std::string, LegContext>& leg_contexts,
     std::pair<float, float> v_body_xy, float omega_z);

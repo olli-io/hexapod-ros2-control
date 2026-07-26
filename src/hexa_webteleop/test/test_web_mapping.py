@@ -112,9 +112,20 @@ gait_node:
     stride_length: 0.1
     min_swing_time: 0.30
     max_swing_time: 0.4
-    angular_z_max: 3.00
     yaw_bias: 0.6
     default_gait: tripod
+    standing_pose:
+      tip_radius: 0.135
+      body_height: 0.04
+      corner_leg_coxa_deg: 0
+"""
+
+# The angular stick cap is derived from the standing stance, so the caps loader
+# needs the leg mounts too.
+_GEOMETRY_YAML = """
+mounts:
+  l_front: { x: 0.083, y: 0.0575, yaw_deg: 30 }
+  l_middle: { x: 0.00, y: 0.082, yaw_deg: 90 }
 """
 
 _POSTURE_YAML = """
@@ -132,11 +143,13 @@ def cfg(tmp_path):
     web_path = tmp_path / "webteleop.yaml"
     gait_path = tmp_path / "gait.yaml"
     posture_path = tmp_path / "posture.yaml"
+    geometry_path = tmp_path / "geometry.yaml"
     web_path.write_text(_WEBTELEOP_YAML)
     gait_path.write_text(_GAIT_YAML)
     posture_path.write_text(_POSTURE_YAML)
+    geometry_path.write_text(_GEOMETRY_YAML)
     loaded_cfg, initial_mode, default_gait, caps = load_web_config(
-        web_path, gait_path, posture_path
+        web_path, gait_path, posture_path, geometry_path
     )
     return loaded_cfg, initial_mode, default_gait
 

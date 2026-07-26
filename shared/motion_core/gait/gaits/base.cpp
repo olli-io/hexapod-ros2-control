@@ -10,8 +10,12 @@ std::map<std::string, std::pair<float, float>> per_leg_planar_velocity(
     std::pair<float, float> v_body_xy, float omega_z) {
   std::map<std::string, std::pair<float, float>> out;
   for (const auto& [name, leg] : leg_contexts) {
-    const float r_x = leg.mount_xyz[0];
-    const float r_y = leg.mount_xyz[1];
+    // Lever arm is the *foot*, not the hip: the stride vector this velocity
+    // produces is applied at nominal_stance, so omega x r has to be the
+    // tangential velocity there or the realized yaw comes out short by
+    // |r_stance| / |r_mount| (~2.4x on this geometry).
+    const float r_x = leg.nominal_stance[0];
+    const float r_y = leg.nominal_stance[1];
     const float v_x = v_body_xy.first - omega_z * r_y;
     const float v_y = v_body_xy.second + omega_z * r_x;
     out[name] = {v_x, v_y};

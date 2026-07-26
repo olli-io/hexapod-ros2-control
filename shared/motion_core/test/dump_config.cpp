@@ -7,9 +7,12 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <string_view>
 
 #include "config_generated.hpp"
+#include "gait/engine.hpp"  // standing_pose_from_config / nominal_stance_from_config
+#include "gait/limits.hpp"  // outer_stance_radius / load_velocity_caps_from_config
 #include "leg_index.hpp"
 
 int main() {
@@ -30,16 +33,49 @@ int main() {
                 (double)s.coxa_len, (double)s.femur_len, (double)s.tibia_len);
   }
 
-  std::printf("\nStanding pose (rad): coxa=%.4f femur=%.4f tibia=%.4f\n",
-              (double)cfg::kStandingPose[0], (double)cfg::kStandingPose[1],
-              (double)cfg::kStandingPose[2]);
+  std::printf("\nStanding pose: tip_radius=%.4f m  body_height=%.4f m  "
+              "corner_leg_coxa=%.3f deg\n",
+              (double)cfg::kStandingPose.tip_radius,
+              (double)cfg::kStandingPose.body_height,
+              (double)(cfg::kStandingPose.corner_leg_coxa * rad2deg));
+  std::printf("Solved per-leg angles (deg: coxa / femur above horizontal / "
+              "tibia interior):\n");
+  const auto standing = hexa::gait::standing_pose_from_config();
+  for (int i = 0; i < hexa::kNumLegs; ++i) {
+    const auto& a = standing[static_cast<std::size_t>(i)];
+    const auto name = hexa::leg_name(hexa::leg_from_index(i));
+    std::printf("  %-9.*s  coxa=% 8.3f  femur=% 8.3f  tibia=% 8.3f\n",
+                static_cast<int>(name.size()), name.data(),
+                (double)(a[0] * rad2deg), (double)(-a[1] * rad2deg),
+                (double)((static_cast<float>(M_PI) - a[2]) * rad2deg));
+  }
 
-  std::printf("\nGait velocity caps (angular_max=%.2f rad/s):\n",
-              (double)cfg::kAngularMax);
+  // The angular cap is not a knob: it is each gait's linear cap divided by the
+  // lever arm a yaw rate acts through, i.e. the outermost standing foot's
+  // planar radius.
+  const auto nominal = hexa::gait::nominal_stance_from_config();
+  const float r_outer = hexa::gait::outer_stance_radius(nominal);
+  std::printf("\nStanding stance (body frame, planar radius):\n");
+  for (int i = 0; i < hexa::kNumLegs; ++i) {
+    const auto name = hexa::leg_name(hexa::leg_from_index(i));
+    const auto& p = nominal.at(hexa::gait::LEG_NAMES[i]);
+    std::printf("  %-9.*s  x=% 8.4f  y=% 8.4f  r=%.4f\n",
+                static_cast<int>(name.size()), name.data(), (double)p[0],
+                (double)p[1], (double)std::hypot(p[0], p[1]));
+  }
+  std::printf("  outer stance radius = %.4f m (yaw lever arm)\n",
+              (double)r_outer);
+
+  const auto caps = hexa::gait::load_velocity_caps_from_config(r_outer);
+  std::printf("\nGait velocity caps:\n");
   for (const auto& g : cfg::kGaits) {
-    std::printf("  %-9s duty=%.4f  linear_max=%.4f m/s  yaw_bias=%.4f  %s\n",
+    const std::string name(g.name.data());
+    std::printf("  %-9s duty=%.4f  linear_max=%.4f m/s  "
+                "angular_max=%.4f rad/s (%.1f deg/s)  yaw_bias=%.4f  %s\n",
                 g.name.data(), (double)g.duty_factor, (double)g.linear_max,
-                (double)g.yaw_bias, g.unstable ? "(unstable)" : "");
+                (double)caps.angular_max(name),
+                (double)(caps.angular_max(name) * rad2deg), (double)g.yaw_bias,
+                g.unstable ? "(unstable)" : "");
   }
   return 0;
 }

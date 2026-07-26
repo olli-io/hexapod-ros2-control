@@ -38,10 +38,15 @@ button-vs-axis class mismatches, and cross-section conflicts all raise.
 
 ## Values owned elsewhere (SSoT in `hexa_description/config/tuning.yaml`)
 
-- **Velocity caps** — via `hexa_common.load_velocity_caps`. Linear is
-  isotropic and per-gait (`stride_length × (1−β) / (min_swing_time × β)`,
-  re-scaled the moment a gait switch is accepted); angular is the explicit
-  `angular_z_max`. Edit `tuning.yaml`, not teleop config.
+- **Velocity caps** — via `hexa_common.load_velocity_caps`. Both are
+  per-gait and both are re-scaled the moment a gait switch is accepted.
+  Linear is isotropic (`stride_length × (1−β) / (min_swing_time × β)`);
+  angular is that same cap divided by the outermost standing foot's planar
+  radius, the lever arm a yaw rate acts through. There is no turn-rate knob
+  — to change it, change `stride_length`, `min_swing_time`, the gait's duty
+  factor, or the stance width (`standing_pose.tip_radius`). Because the
+  angular cap comes from the stance, the loader reads `geometry.yaml`
+  alongside `tuning.yaml`. Edit those, not teleop config.
 - **Animation cycler list** — via
   `hexa_posture.load_animation_mode_animations`
   (`animation_mode_animations`). Adding an entry exposes it on the

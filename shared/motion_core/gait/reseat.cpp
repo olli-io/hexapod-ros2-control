@@ -31,7 +31,9 @@ ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
 
 std::map<std::string, Vec3> reseat_nominal_stance(
     float target_height_m, const ReseatGeometry& geometry,
-    const std::map<std::string, kin::LegSpec>& leg_specs) {
+    const std::map<std::string, kin::LegSpec>& leg_specs,
+    const std::map<std::string, Vec3>& current_stance) {
+  require_all_legs(current_stance, "current_stance");
   const float d_new = geometry.default_foot_depth + target_height_m;
   // arcsin argument: positive when the tibia's vertical projection exceeds the
   // foot depth (femur tilts up).
@@ -54,8 +56,16 @@ std::map<std::string, Vec3> reseat_nominal_stance(
     if (it == leg_specs.end()) {
       throw std::invalid_argument("leg_specs missing " + name);
     }
-    const Vec3 body_xyz =
-        kin::leg_to_body(Vec3(r_new, 0.0f, -d_new), it->second);
+    // Keep the leg pointing where it already points: the standing splay (and
+    // anything else that swivelled the foot) is preserved, and only the radius
+    // and depth follow the new height. The azimuth does not depend on z, so the
+    // stored stance's height compensation is irrelevant here.
+    const Vec3 cur_leg = kin::body_to_leg(current_stance.at(name), it->second);
+    const float az = (std::hypot(cur_leg[0], cur_leg[1]) > 1e-6f)
+                         ? std::atan2(cur_leg[1], cur_leg[0])
+                         : 0.0f;
+    const Vec3 body_xyz = kin::leg_to_body(
+        Vec3(r_new * std::cos(az), r_new * std::sin(az), -d_new), it->second);
     // Add target_height so apply_body_pose's z-subtraction lands the foot in the
     // leg frame at -d_new.
     out[name] = Vec3(body_xyz[0], body_xyz[1], body_xyz[2] + target_height_m);

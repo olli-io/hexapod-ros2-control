@@ -204,3 +204,53 @@ TEST(BuildPinRuns, EmptyViewYieldsNoFrames) {
   const auto w = make(kShippedWiring);
   EXPECT_TRUE(hh::build_pin_runs(w.pin_order, {}).empty());
 }
+
+// ── is_flat_pin_map — whether the compact SETALL frame can express the pose ──
+//
+// SETALL carries no start/count header: it is exactly "all 18 servos, board
+// index 0..17". Anything else has to fall back to SET frames, so this predicate
+// must reject a near-miss rather than let one through.
+
+TEST(IsFlatPinMap, AcceptsShippedWiring) {
+  const auto w = make(kShippedWiring);
+  EXPECT_TRUE(hh::is_flat_pin_map(w.pin_order, 18));
+}
+
+TEST(IsFlatPinMap, RejectsAGap) {
+  // Board indices 0,1,2,4,5 — 18 servos' worth of pins would not be 0..17.
+  const auto w = make({
+      {"l_rear_coxa_joint", 1},
+      {"l_rear_femur_joint", 2},
+      {"l_rear_tibia_joint", 3},
+      {"r_rear_coxa_joint", 5},
+      {"r_rear_femur_joint", 6},
+  });
+  EXPECT_FALSE(hh::is_flat_pin_map(w.pin_order, 5));
+}
+
+TEST(IsFlatPinMap, RejectsNonZeroStart) {
+  const auto w = make({
+      {"l_rear_coxa_joint", 2},
+      {"l_rear_femur_joint", 3},
+      {"l_rear_tibia_joint", 4},
+  });
+  EXPECT_FALSE(hh::is_flat_pin_map(w.pin_order, 3));
+}
+
+TEST(IsFlatPinMap, RejectsWrongCount) {
+  const auto w = make(kShippedWiring);
+  EXPECT_FALSE(hh::is_flat_pin_map(w.pin_order, 17));
+  EXPECT_FALSE(hh::is_flat_pin_map(w.pin_order, 19));
+  // A consecutive-but-short harness is still not the full-table layout.
+  const auto shortw = make({
+      {"l_rear_coxa_joint", 1},
+      {"l_rear_femur_joint", 2},
+      {"l_rear_tibia_joint", 3},
+  });
+  EXPECT_FALSE(hh::is_flat_pin_map(shortw.pin_order, 18));
+  EXPECT_TRUE(hh::is_flat_pin_map(shortw.pin_order, 3));
+}
+
+TEST(IsFlatPinMap, EmptyViewIsNotAFullTable) {
+  EXPECT_FALSE(hh::is_flat_pin_map({}, 18));
+}

@@ -17,7 +17,6 @@
 #include <gtest/gtest.h>
 
 #include "config_generated.hpp"
-#include "gait/limits.hpp"
 #include "joy_mapping.hpp"
 
 #include "joy_golden_generated.hpp"
@@ -33,10 +32,13 @@ namespace cfg = hexa::config;
 constexpr float kTol = 2e-4f;
 
 tel::JoyConfig seed_config() {
-  const auto caps = hexa::gait::load_velocity_caps_from_config();
   tel::JoyConfig c;
-  c.gait_angular_z_max = cfg::kAngularMax;
-  c.gait_linear_max = caps.linear_max(std::string(cfg::kDefaultGait));
+  // Taken from the golden header rather than re-derived, so the port and the
+  // reference cannot disagree on the stick full-scale caps themselves — this
+  // test is about the mapping math, not the cap derivation (test_gait_unit and
+  // test_config_loader cover that).
+  c.gait_linear_max = joy_golden::kGaitLinearMax;
+  c.gait_angular_z_max = joy_golden::kGaitAngularZMax;
   return c;
 }
 

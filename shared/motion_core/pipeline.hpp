@@ -108,6 +108,7 @@ struct TickResult {
   std::string gait_select;               // requested strategy (accepted or not)
   bool gait_accepted = false;            // switch allowed in the current state
   float gait_linear_max = 0.0f;          // new stick cap iff accepted
+  float gait_angular_z_max = 0.0f;       // ditto, the yaw half
   bool has_animation_name = false;
   std::string animation_name;            // requested animation mode
   bool animation_accepted = false;       // known animation (else warn-and-ignore)
@@ -147,6 +148,11 @@ class Pipeline {
   hexa::gait::Engine& engine() { return *engine_; }
   const hexa::supervisor::Supervisor& supervisor() const { return supervisor_; }
   const hexa::posture::PostureController& posture() const { return posture_; }
+  // Per-leg resting joint angles, solved from the standing-pose scalars. The
+  // caller uses these to seed its own pre-first-tick joint dump.
+  const std::array<hexa::JointAngles, hexa::kNumLegs>& standing_pose() const {
+    return standing_pose_;
+  }
 
  private:
   // Compose the engine's per-leg body-frame foot targets into theta_ (the exact
@@ -155,6 +161,13 @@ class Pipeline {
   int compose_gait(const std::map<std::string, hexa::gait::LegOutput>& out,
                    const hexa::BodyPose& body_pose);
 
+  // Solved before engine_ — make_default_engine takes it by reference, and the
+  // theta_ seed below reads it. Declaration order is initialization order.
+  std::array<hexa::JointAngles, hexa::kNumLegs> standing_pose_;
+  // Standing foot positions, solved from standing_pose_. These are the lever arms
+  // a yaw command acts through, so Control shapes the envelope against them.
+  // Declared here so it is initialized before control_.
+  std::map<std::string, hexa::Vec3> nominal_stance_;
   std::unique_ptr<hexa::gait::Engine> engine_;
   hexa::gait::VelocityCaps caps_;
   hexa::control::Control control_;

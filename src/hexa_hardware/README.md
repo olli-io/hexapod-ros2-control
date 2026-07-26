@@ -75,6 +75,13 @@ Frames:
   digital output (e.g. the relay) interprets values 0 / 1 as low / high.
 - GET request — `[G | 0x80][start_pin][count]`.
 - GET reply — same shape as SET: `[G | 0x80][start_pin][count][val × count]`.
+- SETALL — `[0xD5][29 payload bytes]`, a fixed 30 bytes with no start/count
+  header. Drives **all 18 servos** from board index 0. The payload is the 18
+  values MSB-first, 11 bits each, concatenated into one bitstream and emitted 7
+  bits at a time into the low 7 bits of each byte (so payload bytes stay
+  MSB-clear and resync still works); the tail byte's low 5 bits are zero padding.
+  Value encoding is `pulse_us - 500`, range `0…2000` → `500…2500 µs`, clamped
+  board-side. Servo-only: the relay and all telemetry keep using SET/GET.
 
 The battery current/voltage indices reply in fixed-point centi-units
 (count × 0.01 = A / V); `read_battery` applies that one fixed factor and
@@ -84,12 +91,39 @@ servo2040 driver's `protocol.md` for the unit definition and index map.
 Recovery from a partial frame on the wire is trivial: discard bytes
 until one with MSB set arrives.
 
-## Joint → SET batching
+## Joint → frame batching
 
-Pin assignment is configurable so each leg's three joints occupy three
-consecutive pins (0–2, 3–5, …). `write()` sorts joints by pin index,
-splits into maximal consecutive runs, and emits one SET frame per run.
-With the default config that's six 5-byte-payload frames per cycle.
+`write()` sorts joints by board index once, in `on_init`, and precomputes the
+frame plans — the wiring fixes them, so nothing is rebuilt per tick.
+
+**Steady state** (energize sweep complete) sends the whole pose as **one 30-byte
+SETALL frame**. That number is the point: the equivalent SET is
+`[S][0][18]` + 36 data bytes = **39 bytes**, which exceeds the board's **32-byte
+UART RX FIFO**. If the firmware's main loop stalls while such a frame streams in,
+the FIFO overruns and the frame's **tail** is lost — i.e. the servo on the
+highest pin, silently and intermittently. 30 bytes fits the FIFO whole, so the
+loop can be busy for an entire frame and lose nothing.
+
+SETALL applies only when both hold (checked once in `on_init`, logged either
+way); otherwise `write()` falls back to the consecutive-run SET frames:
+
+- The harness is the flat board map 0…17 — every servo present, no gaps, no
+  offset (`is_flat_pin_map`, `leg_order.hpp`). SETALL carries no start/count
+  header, so it can express nothing else.
+- Every servo's `pulse_us` clamp is inside `[500, 2500]` µs. SETALL clamps a
+  sub-500 pulse *up* to 500 and drives it, where a SET below 500 means "hold
+  last position" in firmware — a tighter override would change meaning, so it
+  disables the fast path instead.
+
+**During the sweep ramp**, `write()` keeps emitting one SET frame per live leg
+(9 bytes each, comfortably inside the FIFO). SETALL cannot be used there: the
+board stages every channel in the frame, so a single SETALL energizes all 18
+servos at once and defeats the stagger, whose whole point is that un-commanded
+channels stay limp until their turn. Only the whole-table frame was ever at risk
+of losing its tail.
+
+A harness whose joints are **not** on consecutive pins still works — the run
+splitter emits one SET per maximal consecutive run — it just pays more frames.
 
 ## Servo rail: relay, then a per-leg energize sweep
 

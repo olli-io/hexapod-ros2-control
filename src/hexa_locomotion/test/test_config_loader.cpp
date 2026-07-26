@@ -56,10 +56,12 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     }
   }
   EXPECT_NEAR(loaded.coxa_to_bottom, baked.coxa_to_bottom, kTol);
-  for (int j = 0; j < 3; ++j) {
-    EXPECT_NEAR(loaded.standing_pose[j], baked.standing_pose[j], kTol)
-        << "standing_pose[" << j << "]";
-  }
+  EXPECT_NEAR(loaded.standing_pose.tip_radius, baked.standing_pose.tip_radius,
+              kTol);
+  EXPECT_NEAR(loaded.standing_pose.body_height, baked.standing_pose.body_height,
+              kTol);
+  EXPECT_NEAR(loaded.standing_pose.corner_leg_coxa,
+              baked.standing_pose.corner_leg_coxa, kTol);
 
   // ── gait engine ──
   const auto& le = loaded.engine;
@@ -91,13 +93,22 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.reseat_swing_clearance, be.reseat_swing_clearance, kTol);
 
   // ── velocity caps (per-gait, keyed by the registry names) ──
-  EXPECT_NEAR(loaded.caps.angular_max, baked.caps.angular_max, kTol);
+  // angular_max is derived, not read from YAML: the loader solves the standing
+  // stance from geometry.yaml + tuning.yaml and divides each gait's linear cap
+  // by the outermost foot's radius, so this leg of the parity check is what
+  // catches a drift in that derivation.
   ASSERT_EQ(loaded.caps.linear_max_by_gait.size(),
             baked.caps.linear_max_by_gait.size());
+  ASSERT_EQ(loaded.caps.angular_max_by_gait.size(),
+            baked.caps.angular_max_by_gait.size());
   for (const auto& [name, v] : baked.caps.linear_max_by_gait) {
     ASSERT_TRUE(loaded.caps.linear_max_by_gait.count(name)) << name;
     EXPECT_NEAR(loaded.caps.linear_max_by_gait.at(name), v, kTol)
         << "linear_max[" << name << "]";
+    ASSERT_TRUE(loaded.caps.angular_max_by_gait.count(name)) << name;
+    EXPECT_NEAR(loaded.caps.angular_max_by_gait.at(name),
+                baked.caps.angular_max_by_gait.at(name), kTol)
+        << "angular_max[" << name << "]";
     EXPECT_NEAR(loaded.caps.yaw_bias_by_gait.at(name),
                 baked.caps.yaw_bias_by_gait.at(name), kTol)
         << "yaw_bias[" << name << "]";

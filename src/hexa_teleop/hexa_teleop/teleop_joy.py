@@ -105,11 +105,11 @@ def _parse_mode_bindings(
 
 
 def _load_config(
-    path: Path, gait_yaml: Path, posture_yaml: Path
+    path: Path, gait_yaml: Path, posture_yaml: Path, geometry_yaml: Path
 ) -> tuple[JoyConfig, str, str, VelocityCaps, bool]:
     with path.open() as f:
         raw = yaml.safe_load(f)
-    caps = load_velocity_caps(gait_yaml)
+    caps = load_velocity_caps(gait_yaml, geometry_yaml)
     animation_list = load_animation_mode_animations(posture_yaml)
 
     gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
@@ -164,10 +164,11 @@ def _load_config(
         posture=posture_cfg,
         animation=ModeConfig(bindings=animation_bindings),
         gait_cycle=gait_cycle,
-        # Seed with the default gait's cap; the node swaps this in via
-        # dataclasses.replace whenever a /cmd_gait publish lands.
+        # Seed with the default gait's caps; the node swaps these in via
+        # dataclasses.replace whenever a /cmd_gait publish lands. Both are
+        # per-gait — the angular cap is the linear one over the stance radius.
         gait_linear_max=caps.linear_max(default_gait),
-        gait_angular_z_max=caps.angular_max,
+        gait_angular_z_max=caps.angular_max(default_gait),
         animation_list=animation_list,
     )
 
@@ -194,17 +195,19 @@ class TeleopJoyNode(Node):
         # Velocity caps (gait_node block) and the animation-mode list
         # (posture_node block) both come from hexa_description's tuning.yaml —
         # the single source of truth the gait/posture nodes also read.
-        tuning_yaml_path = (
-            Path(get_package_share_directory("hexa_description"))
-            / "config"
-            / "tuning.yaml"
+        description_config = (
+            Path(get_package_share_directory("hexa_description")) / "config"
         )
+        tuning_yaml_path = description_config / "tuning.yaml"
+        # The angular stick cap is the linear one over the outermost foot's
+        # standing radius, so the caps need the leg mounts as well.
+        geometry_yaml_path = description_config / "geometry.yaml"
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
         )
         self._cfg, initial_mode, default_gait, self._caps, self._arbitration_enabled = _load_config(
-            cfg_path, tuning_yaml_path, tuning_yaml_path
+            cfg_path, tuning_yaml_path, tuning_yaml_path, geometry_yaml_path
         )
         self._state = JoyState(
             mode=initial_mode,
@@ -227,10 +230,13 @@ class TeleopJoyNode(Node):
         cap_summary = ", ".join(
             f"{n}={v:.2f}" for n, v in sorted(self._caps.linear_max_by_gait.items())
         )
+        angular_summary = ", ".join(
+            f"{n}={v:.2f}" for n, v in sorted(self._caps.angular_max_by_gait.items())
+        )
         self.get_logger().info(
             f"velocity caps from {tuning_yaml_path}: "
             f"linear_max=({cap_summary}) m/s, "
-            f"angular_z_max={self._cfg.gait_angular_z_max:.2f} rad/s, "
+            f"angular_max=({angular_summary}) rad/s, "
             f"active gait={self._active_gait!r}"
         )
         self.get_logger().info(f"mode={self._state.mode}")
@@ -334,16 +340,22 @@ class TeleopJoyNode(Node):
             if self._latest_gait_state in _GAIT_SWITCH_STATES:
                 self.get_logger().info(f"switching gait to {out.gait_select!r}")
                 self._pub_cmd_gait.publish(String(data=out.gait_select))
-                # Update the active cap so the next stick read scales
+                # Update the active caps so the next stick read scales
                 # to the new gait's per-leg velocity ceiling. During a
                 # mid-walk switch the cap leads the engine for the
                 # length of its pause-and-reseat sequence — harmless,
                 # the engine clamps stride internally.
                 self._active_gait = out.gait_select
-                new_cap = self._caps.linear_max(self._active_gait)
-                self._cfg = dataclasses.replace(self._cfg, gait_linear_max=new_cap)
+                new_linear = self._caps.linear_max(self._active_gait)
+                new_angular = self._caps.angular_max(self._active_gait)
+                self._cfg = dataclasses.replace(
+                    self._cfg,
+                    gait_linear_max=new_linear,
+                    gait_angular_z_max=new_angular,
+                )
                 self.get_logger().info(
-                    f"stick linear_max={new_cap:.3f} m/s for gait "
+                    f"stick linear_max={new_linear:.3f} m/s, "
+                    f"angular_max={new_angular:.3f} rad/s for gait "
                     f"{self._active_gait!r}"
                 )
             else:

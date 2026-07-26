@@ -7,21 +7,19 @@
 // the change toward that target so a stick release ramps smoothly to a stop.
 //
 // The two ROS nodes collapse into one in-process Control: it owns the limiter,
-// the active gait, and the leg-mount geometry, and it recomputes the linear
-// acceleration cap on a gait switch (so the ramp time stays constant across
+// the active gait, and the standing foot positions, and it recomputes both
+// acceleration caps on a gait switch (so the ramp times stay constant across
 // gaits) and resets the limiter when the engine leaves the walking set
 // ({ENGAGING, GAIT}) so each STAND -> ENGAGING starts clean.
 #pragma once
 
-#include <array>
 #include <map>
 #include <string>
 #include <tuple>
 
-#include "config_generated.hpp"  // config::ControlConfig / LegSpec (parameterized ctor)
+#include "config_generated.hpp"  // config::ControlConfig (parameterized ctor)
 #include "gait/engine.hpp"   // hexa::gait::EngineState
 #include "gait/limits.hpp"   // VelocityCaps, scale_to_envelope
-#include "leg_index.hpp"     // hexa::kNumLegs
 #include "vec3.hpp"
 
 namespace hexa::control {
@@ -64,16 +62,13 @@ class BodyVelocityLimiter {
 // once per tick with the raw teleop command and the current engine state.
 class Control {
  public:
-  // Build from the baked config_generated.hpp constants.
-  Control();
-
   // Build from explicit tuning/geometry (hexa_locomotion's runtime-YAML path):
-  // control ramp times + snap tolerances, the per-gait velocity caps, the leg
-  // mounts (for the envelope cut), and the starting gait. The no-arg ctor
-  // delegates here with the baked constants.
+  // control ramp times + snap tolerances, the per-gait velocity caps, the
+  // standing foot positions (the lever arms the envelope cut works through), and
+  // the starting gait. The no-arg ctor delegates here with the baked constants.
   Control(const ::hexa::config::ControlConfig& control,
           const hexa::gait::VelocityCaps& caps,
-          const std::array<::hexa::config::LegSpec, hexa::kNumLegs>& leg_specs,
+          const std::map<std::string, hexa::Vec3>& nominal_stance,
           const std::string& default_gait);
 
   // Cut to the active gait's envelope, then rate-cap toward it. Resets the
@@ -83,8 +78,10 @@ class Control {
                                         hexa::gait::EngineState engine_state,
                                         float dt);
 
-  // Switch the active gait (recomputes the linear accel cap). No-op if `gait`
-  // is already active; unknown names throw std::out_of_range via the caps.
+  // Switch the active gait (recomputes both accel caps — the angular one is
+  // per-gait too, since it is the gait's linear cap over the stance radius).
+  // No-op if `gait` is already active; unknown names throw std::out_of_range via
+  // the caps.
   void set_gait(const std::string& gait);
   const std::string& active_gait() const { return active_gait_; }
 
@@ -92,10 +89,10 @@ class Control {
 
  private:
   float accel_linear_for(const std::string& gait) const;
-  float accel_angular() const;
+  float accel_angular_for(const std::string& gait) const;
 
   hexa::gait::VelocityCaps caps_;
-  std::map<std::string, hexa::Vec3> leg_mounts_;
+  std::map<std::string, hexa::Vec3> stance_xy_;
   float vmax_ramp_time_linear_;
   float vmax_ramp_time_angular_;
   std::string active_gait_;

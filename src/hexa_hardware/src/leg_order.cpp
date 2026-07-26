@@ -80,4 +80,13 @@ std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order) {
   return build_pin_runs(pin_order, all);
 }
 
+bool is_flat_pin_map(const std::vector<PinEntry>& pin_order,
+                     std::size_t expected) {
+  if (pin_order.size() != expected) return false;
+  for (std::size_t i = 0; i < pin_order.size(); ++i) {
+    if (pin_order[i].pin != i) return false;
+  }
+  return true;
+}
+
 }  // namespace hexa_hardware

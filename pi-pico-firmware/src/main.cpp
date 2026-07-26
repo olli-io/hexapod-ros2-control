@@ -171,10 +171,10 @@ int main() {
     // Latest commanded joint angles (for the heartbeat dump). Seeded with the
     // standing pose so the pre-first-tick heartbeat has valid values.
     float theta[servo_out::kNumJoints];
-    for (int i = 0; i < hexa::kNumLegs; ++i) {
-        theta[i * 3 + 0] = hexa::config::kStandingPose[0];
-        theta[i * 3 + 1] = hexa::config::kStandingPose[1];
-        theta[i * 3 + 2] = hexa::config::kStandingPose[2];
+    for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+        theta[i * 3 + 0] = pipeline.standing_pose()[i][0];
+        theta[i * 3 + 1] = pipeline.standing_pose()[i][1];
+        theta[i * 3 + 2] = pipeline.standing_pose()[i][2];
     }
 
     while (true) {
@@ -263,8 +263,10 @@ int main() {
             }
             if (res.has_gait_select) {
                 if (res.gait_accepted) {
-                    HEXA_DBG("[teleop] gait -> %s (linear_max=%.3f m/s)\n",
-                           res.gait_select.c_str(), (double)res.gait_linear_max);
+                    HEXA_DBG("[teleop] gait -> %s (linear_max=%.3f m/s, "
+                           "angular_max=%.3f rad/s)\n",
+                           res.gait_select.c_str(), (double)res.gait_linear_max,
+                           (double)res.gait_angular_z_max);
                 } else {
                     HEXA_DBG("[teleop] gait -> %s dropped (state=%s)\n",
                            res.gait_select.c_str(),

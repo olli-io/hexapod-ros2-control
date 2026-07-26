@@ -410,7 +410,7 @@ std::map<std::string, LegOutput> Engine::update(
       std::map<std::string, Vec3> target_stance;
       try {
         target_stance = reseat_nominal_stance(target_height_, *reseat_geometry_,
-                                              *leg_specs_);
+                                              *leg_specs_, nominal_);
       } catch (const std::invalid_argument&) {
         // Geometrically infeasible target — drop the reseat silently.
         return emit_stand();
@@ -701,29 +701,77 @@ std::array<kin::LegSpec, kNumLegs> baked_leg_specs() {
 }
 }  // namespace
 
-std::map<std::string, Vec3> nominal_stance_from(
-    const std::array<kin::LegSpec, kNumLegs>& specs,
-    const JointAngles& standing_pose) {
-  std::map<std::string, Vec3> out;
-  for (int i = 0; i < 6; ++i) {
-    const auto& spec = specs[static_cast<std::size_t>(i)];
-    out[LEG_NAMES[i]] =
-        kin::leg_to_body(kin::forward_kinematics(standing_pose, spec), spec);
-  }
-  return out;
-}
+namespace {
 
-std::map<std::string, Vec3> initial_stance_from(
+// Body-frame foot position per leg for a set of per-leg joint angles.
+std::map<std::string, Vec3> stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const std::array<JointAngles, kNumLegs>& initial_pose) {
+    const std::array<JointAngles, kNumLegs>& poses) {
   std::map<std::string, Vec3> out;
   for (int i = 0; i < 6; ++i) {
     const std::size_t idx = static_cast<std::size_t>(i);
     const auto& spec = specs[idx];
     out[LEG_NAMES[i]] =
-        kin::leg_to_body(kin::forward_kinematics(initial_pose[idx], spec), spec);
+        kin::leg_to_body(kin::forward_kinematics(poses[idx], spec), spec);
   }
   return out;
+}
+
+}  // namespace
+
+std::array<JointAngles, kNumLegs> standing_pose_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    const ::hexa::config::StandingPose& standing) {
+  // The foot tip sits tip_radius out from the coxa axis, swivelled by the leg's
+  // splay, at a depth that puts the body bottom body_height off the ground.
+  const float depth = coxa_to_bottom + standing.body_height;
+
+  std::array<JointAngles, kNumLegs> out{};
+  for (std::size_t i = 0; i < kNumLegs; ++i) {
+    // Splay mirrors front-to-back and left-to-right off the front-left leg;
+    // the middle legs always point straight out. Same rule as kInitialPose.
+    const Leg leg = static_cast<Leg>(i);
+    const bool middle = (leg == Leg::L_MIDDLE || leg == Leg::R_MIDDLE);
+    const bool flipped = (leg == Leg::L_REAR || leg == Leg::R_FRONT);
+    const float th_c =
+        middle ? 0.0f : (flipped ? -standing.corner_leg_coxa
+                                 : standing.corner_leg_coxa);
+
+    // IK recovers th_c from atan2(y, x) and solves femur/tibia from the radial
+    // reach, which is tip_radius whatever the splay — so femur/tibia come out
+    // uniform across the six legs. Throws UnreachableTarget if it cannot.
+    out[i] = kin::inverse_kinematics(
+        Vec3(standing.tip_radius * std::cos(th_c),
+             standing.tip_radius * std::sin(th_c), -depth),
+        specs[i]);
+
+    for (std::size_t j = 0; j < 3; ++j) {
+      const auto& lim = ::hexa::config::kJointLimits[j];
+      if (out[i][j] < lim.lower || out[i][j] > lim.upper) {
+        static constexpr std::array<const char*, 3> kJointNames = {
+            "coxa", "femur", "tibia"};
+        throw std::invalid_argument(
+            "standing pose " + std::string(kJointNames[j]) + " for " +
+            LEG_NAMES[i] + " is " + std::to_string(out[i][j]) +
+            " rad, outside the joint limit window [" +
+            std::to_string(lim.lower) + ", " + std::to_string(lim.upper) +
+            "] rad — check tuning.yaml standing_pose");
+      }
+    }
+  }
+  return out;
+}
+
+std::map<std::string, Vec3> nominal_stance_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const std::array<JointAngles, kNumLegs>& standing_pose) {
+  return stance_from(specs, standing_pose);
+}
+
+std::map<std::string, Vec3> initial_stance_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const std::array<JointAngles, kNumLegs>& initial_pose) {
+  return stance_from(specs, initial_pose);
 }
 
 std::map<std::string, kin::LegSpec> leg_specs_from(
@@ -737,13 +785,17 @@ std::map<std::string, kin::LegSpec> leg_specs_from(
 
 ReseatGeometry reseat_geometry_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const JointAngles& standing_pose) {
-  return default_geometry_from_pose(standing_pose, specs[0]);
+    const std::array<JointAngles, kNumLegs>& standing_pose) {
+  // One leg describes all six: femur/tibia are uniform, and the coxa component
+  // is irrelevant here (the geometry captures depth and tibia lean, both
+  // invariant under the leg's swivel). Reseat re-applies each leg's own
+  // azimuth when it places the targets.
+  return default_geometry_from_pose(standing_pose[0], specs[0]);
 }
 
 std::map<std::string, LegContext> build_leg_contexts_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const JointAngles& standing_pose) {
+    const std::array<JointAngles, kNumLegs>& standing_pose) {
   const auto nominal = nominal_stance_from(specs, standing_pose);
   std::map<std::string, LegContext> out;
   for (int i = 0; i < 6; ++i) {
@@ -758,8 +810,13 @@ std::map<std::string, LegContext> build_leg_contexts_from(
   return out;
 }
 
+std::array<JointAngles, kNumLegs> standing_pose_from_config() {
+  return standing_pose_from(baked_leg_specs(), ::hexa::config::kCoxaToBottom,
+                            ::hexa::config::kStandingPose);
+}
+
 std::map<std::string, Vec3> nominal_stance_from_config() {
-  return nominal_stance_from(baked_leg_specs(), ::hexa::config::kStandingPose);
+  return nominal_stance_from(baked_leg_specs(), standing_pose_from_config());
 }
 
 std::map<std::string, Vec3> initial_stance_from_config() {
@@ -771,18 +828,18 @@ std::map<std::string, kin::LegSpec> leg_specs_from_config() {
 }
 
 ReseatGeometry reseat_geometry_from_config() {
-  return reseat_geometry_from(baked_leg_specs(), ::hexa::config::kStandingPose);
+  return reseat_geometry_from(baked_leg_specs(), standing_pose_from_config());
 }
 
 std::map<std::string, LegContext> build_leg_contexts_from_config() {
-  return build_leg_contexts_from(baked_leg_specs(),
-                                 ::hexa::config::kStandingPose);
+  return build_leg_contexts_from(baked_leg_specs(), standing_pose_from_config());
 }
 
 std::unique_ptr<Engine> make_default_engine(
     const std::string& strategy_name,
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const EngineConfig& engine_cfg, const JointAngles& standing_pose,
+    const EngineConfig& engine_cfg,
+    const std::array<JointAngles, kNumLegs>& standing_pose,
     const std::array<JointAngles, kNumLegs>& initial_pose,
     float coxa_to_bottom) {
   auto factory = strategies().find(strategy_name);
@@ -800,7 +857,7 @@ std::unique_ptr<Engine> make_default_engine(
 std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
   return make_default_engine(
       strategy_name, baked_leg_specs(), engine_config_from_config(),
-      ::hexa::config::kStandingPose, ::hexa::config::kInitialPose,
+      standing_pose_from_config(), ::hexa::config::kInitialPose,
       ::hexa::config::kCoxaToBottom);
 }
 

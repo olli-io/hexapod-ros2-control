@@ -10,7 +10,9 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include "gait/engine.hpp"          // standing_pose_from / nominal_stance_from
 #include "gait/gaits/registry.hpp"  // hexa::gait::strategies()
+#include "gait/limits.hpp"          // hexa::gait::outer_stance_radius
 #include "gait/types.hpp"           // hexa::gait::LEG_NAMES
 #include "vec3.hpp"                 // hexa::Vec3
 
@@ -83,13 +85,13 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   }
 
   // ── standing pose (tuning.yaml gait_node.standing_pose, port of standing_pose) ──
+  // Scalars only; gait::standing_pose_from turns them into the per-leg joint
+  // triples (and validates them against the joint limits).
   const YAML::Node sp = g["standing_pose"];
   cfg.standing_pose = {
-      static_cast<float>(to_urdf_rad("coxa", sp["coxa_deg"].as<double>())),
+      f(sp["tip_radius"]), f(sp["body_height"]),
       static_cast<float>(
-          to_urdf_rad("femur", sp["femur_above_horizontal_deg"].as<double>())),
-      static_cast<float>(
-          to_urdf_rad("tibia", sp["tibia_interior_deg"].as<double>()))};
+          to_urdf_rad("coxa", sp["corner_leg_coxa_deg"].as<double>()))};
 
   // ── initial pose (geometry.yaml initial_pose, port of initial_pose) ──
   // femur/tibia uniform; coxa front/rear/middle by symmetry in degrees, then
@@ -154,8 +156,17 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   const float stride = f(g["stride_length"]);
   const float min_swing = f(g["min_swing_time"]);
   const float yaw_bias = f(g["yaw_bias"]);
-  cfg.caps.angular_max = f(g["angular_z_max"]);
+  // Lever arm a yaw rate acts through: the outermost standing foot's planar
+  // radius. Solved from the geometry above through the same helpers the pipeline
+  // uses, so this matches the pose the engine actually walks in. There is no
+  // angular knob in YAML — the cap is the linear one over this radius.
+  const float r_outer = hexa::gait::outer_stance_radius(
+      hexa::gait::nominal_stance_from(
+          cfg.leg_specs, hexa::gait::standing_pose_from(
+                             cfg.leg_specs, cfg.coxa_to_bottom,
+                             cfg.standing_pose)));
   cfg.caps.linear_max_by_gait.clear();
+  cfg.caps.angular_max_by_gait.clear();
   cfg.caps.yaw_bias_by_gait.clear();
   for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
     const float duty = factory()->duty_factor();
@@ -165,8 +176,10 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     // parity test in test_config_loader.cpp fails.
     const float swing_end =
         hexa::gait::swing_end_phase(duty, e.swing_phase_margin);
-    cfg.caps.linear_max_by_gait[gait_name] =
+    const float linear_max =
         stride * swing_end / (min_swing * (1.0f - swing_end));
+    cfg.caps.linear_max_by_gait[gait_name] = linear_max;
+    cfg.caps.angular_max_by_gait[gait_name] = linear_max / r_outer;
     // yaw_bias stays keyed to the gait's nominal duty: it is a feel knob, not a
     // timing budget.
     cfg.caps.yaw_bias_by_gait[gait_name] =

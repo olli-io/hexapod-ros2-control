@@ -54,4 +54,10 @@ std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order,
 // under a fully consecutive harness.
 std::vector<PinRun> build_pin_runs(const std::vector<PinEntry>& pin_order);
 
+// True if `pin_order` (ascending) is exactly the flat board map 0..expected-1
+// with no gaps, no offset and nothing missing. The board's all-servos fast path
+// carries no start/count header, so it can only express that one layout.
+bool is_flat_pin_map(const std::vector<PinEntry>& pin_order,
+                     std::size_t expected);
+
 }  // namespace hexa_hardware

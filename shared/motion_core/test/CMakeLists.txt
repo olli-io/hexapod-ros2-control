@@ -71,13 +71,6 @@ hexa_host_test(test_supervisor test_supervisor.cpp ${FW_SRC}/supervisor.cpp)
 # Header-only inrush policy shared by hexa_hardware and the Pico firmware.
 hexa_host_test(test_energize_sweep test_energize_sweep.cpp)
 
-# Human-readable config dump (not a test): prints the 6 symmetry-expanded leg
-# specs and derived velocity caps for the part-04 eyeball check.
-add_executable(dump_config dump_config.cpp)
-add_dependencies(dump_config gen_config)
-target_include_directories(dump_config PRIVATE ${FW_SRC})
-target_compile_options(dump_config PRIVATE -Wall -Wextra -Wdouble-promotion)
-
 # ── Unit + golden-trace tests (parts 05-08) ──
 # Each pure lib forked into ../.. (kinematics/, gait/, posture/) has its float-only
 # unit suite here, compiled under -Wdouble-promotion via hexa_host_test(). The
@@ -105,6 +98,15 @@ set(FW_GAIT_SOURCES
   ${GAIT_SRC}/engine.cpp
   ${KIN_SRC}/leg_ik.cpp
   ${KIN_SRC}/body_transform.cpp)
+
+# Human-readable config dump (not a test): prints the 6 symmetry-expanded leg
+# specs, the standing pose the scalars solve to, and the derived velocity caps
+# for the part-04 eyeball check. Links the gait sources for standing_pose_from.
+add_executable(dump_config dump_config.cpp ${FW_GAIT_SOURCES})
+add_dependencies(dump_config gen_config)
+target_include_directories(dump_config PRIVATE ${FW_SRC})
+target_compile_options(dump_config PRIVATE -Wall -Wextra -Wdouble-promotion
+                       -fexceptions)
 
 # Behavioural unit test: float-only, so it runs through hexa_host_test() and is
 # compiled under -Wdouble-promotion (the same gate as the firmware build). A
@@ -141,17 +143,18 @@ add_custom_command(
           --repo-root ${REPO_ROOT} --out ${JOY_GOLDEN}
   DEPENDS ${CMAKE_CURRENT_LIST_DIR}/gen_joy_golden.py
           ${REPO_ROOT}/src/hexa_teleop/hexa_teleop/joy_mapping.py
+          ${REPO_ROOT}/src/hexa_common/hexa_common/limits.py
           ${REPO_ROOT}/src/hexa_teleop/config/teleop_joy.yaml
           ${REPO_ROOT}/src/hexa_description/config/tuning.yaml
+          ${REPO_ROOT}/src/hexa_description/config/geometry.yaml
   COMMENT "Generating joy_golden_generated.hpp from the Python map_joy reference"
   VERBATIM)
 add_custom_target(gen_joy_golden DEPENDS ${JOY_GOLDEN})
 
-# map_joy is float-only (config_generated + caps), so it runs under
-# -Wdouble-promotion too.
+# map_joy is float-only (config_generated only — the stick caps come baked into
+# the golden header), so it runs under -Wdouble-promotion too.
 hexa_host_test(test_joy_mapping test_joy_mapping.cpp
-  ${FW_SRC}/joy_mapping.cpp
-  ${GAIT_SRC}/limits.cpp)
+  ${FW_SRC}/joy_mapping.cpp)
 add_dependencies(test_joy_mapping gen_joy_golden)
 target_include_directories(test_joy_mapping PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 

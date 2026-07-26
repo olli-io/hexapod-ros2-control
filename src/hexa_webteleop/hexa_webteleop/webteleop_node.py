@@ -91,18 +91,20 @@ class WebTeleopNode(Node):
         # Velocity caps (gait_node block) and the animation-mode list
         # (posture_node block) both come from hexa_description's tuning.yaml —
         # the single source of truth the gait/posture nodes also read.
-        tuning_yaml_path = (
-            Path(get_package_share_directory("hexa_description"))
-            / "config"
-            / "tuning.yaml"
+        description_config = (
+            Path(get_package_share_directory("hexa_description")) / "config"
         )
+        tuning_yaml_path = description_config / "tuning.yaml"
+        # The angular cap is the linear one over the outermost foot's standing
+        # radius, so the caps need the leg mounts as well.
+        geometry_yaml_path = description_config / "geometry.yaml"
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
         )
 
         self._cfg, initial_mode, default_gait, self._caps = load_web_config(
-            cfg_path, tuning_yaml_path, tuning_yaml_path
+            cfg_path, tuning_yaml_path, tuning_yaml_path, geometry_yaml_path
         )
         self._state = JoyState(
             mode=initial_mode,
@@ -252,10 +254,16 @@ class WebTeleopNode(Node):
                 self.get_logger().info(f"switching gait to {out.gait_select!r}")
                 self._pub_cmd_gait.publish(String(data=out.gait_select))
                 self._active_gait = out.gait_select
-                new_cap = self._caps.linear_max(self._active_gait)
-                self._cfg = dataclasses.replace(self._cfg, gait_linear_max=new_cap)
+                new_linear = self._caps.linear_max(self._active_gait)
+                new_angular = self._caps.angular_max(self._active_gait)
+                self._cfg = dataclasses.replace(
+                    self._cfg,
+                    gait_linear_max=new_linear,
+                    gait_angular_z_max=new_angular,
+                )
                 self.get_logger().info(
-                    f"stick linear_max={new_cap:.3f} m/s for gait "
+                    f"stick linear_max={new_linear:.3f} m/s, "
+                    f"angular_max={new_angular:.3f} rad/s for gait "
                     f"{self._active_gait!r}"
                 )
             else:

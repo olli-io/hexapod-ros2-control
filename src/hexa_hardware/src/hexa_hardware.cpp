@@ -10,6 +10,7 @@
 #include <stdexcept>
 
 #include "hexa_hardware/hardware_factory.hpp"
+#include "hexa_hardware/servo2040_protocol.hpp"
 
 namespace hexa_hardware {
 
@@ -173,6 +174,45 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
   batch_.reserve(joints_.size());
+
+  // Steady-state fast path. SETALL carries no start/count header — it is exactly
+  // "all 18 servos, board index 0..17" — so it applies only to the flat harness,
+  // and only while every clamp stays inside the range it can encode. That second
+  // condition is not cosmetic: SETALL clamps a sub-500 µs pulse *up* to 500 and
+  // drives it, whereas a SET below 500 means "hold last position" in firmware, so
+  // a tighter per-servo override would silently change meaning. Either way the
+  // fallback is the 39-byte SET the code has always sent.
+  setall_joint_idx_.clear();
+  if (!is_flat_pin_map(pin_order_, kSetAllServoCount)) {
+    RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                "Compact SETALL frame unavailable: wiring is not the flat "
+                "board map 0..%zu; using SET frames",
+                kSetAllServoCount - 1);
+  } else {
+    constexpr std::uint16_t kSetAllMinUs = kSetAllPulseBaseUs;
+    constexpr std::uint16_t kSetAllMaxUs = kSetAllPulseBaseUs + kSetAllValueMax;
+    const auto* out_of_range = [&]() -> const JointSlot* {
+      for (const auto& e : pin_order_) {
+        const auto& j = joints_[e.joint_idx];
+        if (j.cal.min_us < kSetAllMinUs || j.cal.max_us > kSetAllMaxUs) return &j;
+      }
+      return nullptr;
+    }();
+    if (out_of_range != nullptr) {
+      RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                  "Compact SETALL frame unavailable: joint '%s' clamps to "
+                  "[%u, %u] µs, outside the encodable [%u, %u]; using SET frames",
+                  out_of_range->name.c_str(), out_of_range->cal.min_us,
+                  out_of_range->cal.max_us, kSetAllMinUs, kSetAllMaxUs);
+    } else {
+      setall_joint_idx_.reserve(pin_order_.size());
+      for (const auto& e : pin_order_) setall_joint_idx_.push_back(e.joint_idx);
+      RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                  "Steady-state pose goes out as one %zu-byte SETALL frame "
+                  "(fits the board's 32-byte UART RX FIFO)",
+                  kSetAllFrameBytes);
+    }
+  }
 
   sweep_ = hexa::EnergizeSweep(
       static_cast<float>(config_.init.sweep_leg_interval_ms) * 1e-3f);
@@ -420,15 +460,24 @@ hardware_interface::return_type HexaHardware::write(
   const std::size_t n_legs =
       std::min(static_cast<std::size_t>(live), leg_order_.size());
 
-  // Once every leg is live, drive the whole table as one frame plan — the
-  // stagger is an inrush measure, not a wire format, and leaving it in place
-  // would split every steady-state tick into one frame per leg for the rest of
-  // the session. The last leg in pin order is the one that pays for that, and
-  // it is the one that goes missing. Same fallback the Pico takes
-  // (servo_out::command_legs -> command_all once n_legs >= kNumLegs).
+  // Once every leg is live, drive the whole table in one frame — the stagger is
+  // an inrush measure, not a wire format, and leaving it in place would split
+  // every steady-state tick into one frame per leg for the rest of the session.
+  // Same fallback the Pico takes (servo_out::command_legs -> command_all once
+  // n_legs >= kNumLegs).
+  //
+  // The ramp cannot use SETALL: the board stages every channel in the frame, so
+  // one SETALL energizes all 18 servos at once and defeats the stagger, whose
+  // whole point is that un-commanded channels stay limp until their turn. Per-leg
+  // SETs are 9 bytes each and well inside the FIFO anyway; only the whole-table
+  // frame was ever at risk of losing its tail.
   try {
     if (n_legs >= leg_order_.size()) {
-      send_runs(full_runs_);
+      if (!setall_joint_idx_.empty()) {
+        send_setall();
+      } else {
+        send_runs(full_runs_);
+      }
     } else {
       for (std::size_t leg = 0; leg < n_legs; ++leg) {
         send_runs(leg_runs_[leg]);
@@ -451,6 +500,15 @@ void HexaHardware::send_runs(const std::vector<PinRun>& runs) {
     }
     board_->send_servo_positions(run.start_pin, batch_);
   }
+}
+
+void HexaHardware::send_setall() {
+  batch_.clear();
+  for (const std::size_t joint_idx : setall_joint_idx_) {
+    const auto& j = joints_[joint_idx];
+    batch_.push_back(j.cal.to_pulse_us(j.cmd));
+  }
+  board_->send_all_servo_positions(batch_);
 }
 
 }  // namespace hexa_hardware

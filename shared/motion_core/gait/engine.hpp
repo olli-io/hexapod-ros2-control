@@ -242,6 +242,7 @@ class Engine {
 // All read the baked config_generated.hpp constants; no filesystem access.
 
 EngineConfig engine_config_from_config();
+std::array<JointAngles, kNumLegs> standing_pose_from_config();
 std::map<std::string, Vec3> nominal_stance_from_config();
 std::map<std::string, Vec3> initial_stance_from_config();
 std::map<std::string, kin::LegSpec> leg_specs_from_config();
@@ -259,9 +260,21 @@ std::unique_ptr<Engine> make_default_engine(
 // standing/initial pose, and engine config instead of the baked constexpr, so a
 // ROS caller can supply runtime-loaded values. The no-arg versions above delegate
 // to these with the config_generated.hpp constants (so the Pico is unchanged).
+
+// Per-leg resting joint angles from the standing-pose scalars (tip radius out
+// from the leg's own coxa axis, belly clearance, corner-leg splay). femur/tibia
+// come out uniform — the radial reach is the same for every leg — and only the
+// coxa varies, mirrored front-to-back and left-to-right with the middle legs at
+// zero. Throws hexa::UnreachableTarget if the tip radius / body height pair is
+// geometrically impossible, std::invalid_argument if a resulting angle falls
+// outside config::kJointLimits.
+std::array<JointAngles, kNumLegs> standing_pose_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    const ::hexa::config::StandingPose& standing);
+
 std::map<std::string, Vec3> nominal_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const JointAngles& standing_pose);
+    const std::array<JointAngles, kNumLegs>& standing_pose);
 std::map<std::string, Vec3> initial_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& initial_pose);
@@ -269,15 +282,16 @@ std::map<std::string, kin::LegSpec> leg_specs_from(
     const std::array<kin::LegSpec, kNumLegs>& specs);
 ReseatGeometry reseat_geometry_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const JointAngles& standing_pose);
+    const std::array<JointAngles, kNumLegs>& standing_pose);
 std::map<std::string, LegContext> build_leg_contexts_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const JointAngles& standing_pose);
+    const std::array<JointAngles, kNumLegs>& standing_pose);
 
 std::unique_ptr<Engine> make_default_engine(
     const std::string& strategy_name,
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const EngineConfig& engine_cfg, const JointAngles& standing_pose,
+    const EngineConfig& engine_cfg,
+    const std::array<JointAngles, kNumLegs>& standing_pose,
     const std::array<JointAngles, kNumLegs>& initial_pose, float coxa_to_bottom);
 
 // Wire string for /gait/state (folded, initialize, stand, ...).

@@ -93,35 +93,23 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
 
 Control::Control(const ::hexa::config::ControlConfig& control,
                  const hexa::gait::VelocityCaps& caps,
-                 const std::array<::hexa::config::LegSpec, hexa::kNumLegs>&
-                     leg_specs,
+                 const std::map<std::string, hexa::Vec3>& nominal_stance,
                  const std::string& default_gait)
     : caps_(caps),
+      stance_xy_(nominal_stance),
       vmax_ramp_time_linear_(control.vmax_ramp_time_linear),
       vmax_ramp_time_angular_(control.vmax_ramp_time_angular),
       active_gait_(default_gait),
-      limiter_(accel_linear_for(active_gait_), accel_angular(),
-               control.snap_tol_linear, control.snap_tol_angular) {
-  for (int i = 0; i < hexa::kNumLegs; ++i) {
-    leg_mounts_[hexa::gait::LEG_NAMES[static_cast<std::size_t>(i)]] =
-        leg_specs[static_cast<std::size_t>(i)].mount_xyz;
-  }
-}
-
-// tuning.yaml's control_node default_gait is kept aligned with teleop's
-// kDefaultGait (both "tripod") and the engine's make_default_engine default.
-Control::Control()
-    : Control(::hexa::config::kControl,
-              hexa::gait::load_velocity_caps_from_config(),
-              ::hexa::config::kLegSpecs,
-              std::string(::hexa::config::kDefaultGait)) {}
+      limiter_(accel_linear_for(active_gait_),
+               accel_angular_for(active_gait_), control.snap_tol_linear,
+               control.snap_tol_angular) {}
 
 float Control::accel_linear_for(const std::string& gait) const {
   return caps_.linear_max(gait) / vmax_ramp_time_linear_;
 }
 
-float Control::accel_angular() const {
-  return caps_.angular_max / vmax_ramp_time_angular_;
+float Control::accel_angular_for(const std::string& gait) const {
+  return caps_.angular_max(gait) / vmax_ramp_time_angular_;
 }
 
 void Control::set_gait(const std::string& gait) {
@@ -130,6 +118,9 @@ void Control::set_gait(const std::string& gait) {
   }
   active_gait_ = gait;
   limiter_.set_accel_linear(accel_linear_for(gait));
+  // The angular cap is the gait's linear cap over the stance radius, so it moves
+  // with the gait exactly as the linear one does.
+  limiter_.set_accel_angular(accel_angular_for(gait));
 }
 
 std::tuple<float, float, float> Control::shape(
@@ -148,8 +139,8 @@ std::tuple<float, float, float> Control::shape(
   }
 
   auto [sx, sy, sw] = hexa::gait::scale_to_envelope(
-      v_x, v_y, omega_z, leg_mounts_, caps_.linear_max(active_gait_),
-      caps_.angular_max, caps_.yaw_bias(active_gait_));
+      v_x, v_y, omega_z, stance_xy_, caps_.linear_max(active_gait_),
+      caps_.yaw_bias(active_gait_));
   return limiter_.step(sx, sy, sw, dt);
 }
 

@@ -60,17 +60,21 @@ NUM_BUTTONS = 9
 
 
 def load_web_config(
-    path: str | Path, gait_yaml: str | Path, posture_yaml: str | Path
+    path: str | Path,
+    gait_yaml: str | Path,
+    posture_yaml: str | Path,
+    geometry_yaml: str | Path,
 ) -> tuple[JoyConfig, str, str, VelocityCaps]:
-    """Load ``webteleop.yaml`` + gait/posture configs into a ``JoyConfig``.
+    """Load ``webteleop.yaml`` + gait/posture/geometry configs into a ``JoyConfig``.
 
     Returns ``(cfg, initial_mode, default_gait, caps)`` — same shape as
     ``teleop_joy._load_config`` so the node can consume both identically.
+    ``geometry_yaml`` supplies the leg mounts the angular cap is derived from.
     """
     path = Path(path)
     with path.open() as f:
         raw = yaml.safe_load(f)
-    caps = load_velocity_caps(gait_yaml)
+    caps = load_velocity_caps(gait_yaml, geometry_yaml)
     animation_list = load_animation_mode_animations(posture_yaml)
 
     gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
@@ -157,7 +161,7 @@ def load_web_config(
         animation=ModeConfig(bindings=animation_bindings),
         gait_cycle=gait_cycle,
         gait_linear_max=caps.linear_max(default_gait),
-        gait_angular_z_max=caps.angular_max,
+        gait_angular_z_max=caps.angular_max(default_gait),
         animation_list=animation_list,
     )
 

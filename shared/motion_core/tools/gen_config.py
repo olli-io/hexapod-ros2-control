@@ -211,24 +211,40 @@ def joint_limits(geometry: dict):
     return out
 
 
-# tuning.yaml gait_node standing_pose leaf key per joint type. The ros params
-# carry the joint name in the key, e.g. standing_pose.coxa_deg.
-_STANDING_FIELD = {
-    "coxa": "coxa_deg",
-    "femur": "femur_above_horizontal_deg",
-    "tibia": "tibia_interior_deg",
-}
+def standing_pose(gait: dict, geometry: dict) -> dict:
+    """At-rest stance scalars from tuning.yaml's gait_node standing_pose block.
 
-
-def standing_pose(gait: dict) -> tuple:
-    """Uniform (coxa, femur, tibia) at-rest angles — port of load_standing_pose.
-
-    Reads the standing pose from tuning.yaml's gait_node standing_pose block
-    (passed in as the unwrapped ``gait`` ros params), matching how the gait
-    node now sources it as ros parameters.
+    The stance is described by where the feet sit, not by joint angles: the
+    tip radius out from each leg's own coxa axis, the belly clearance, and the
+    corner-leg splay. The femur/tibia angles follow from a 2-link IK solve that
+    motion_core owns (gait::standing_pose_from) — deliberately not duplicated
+    here, so there is exactly one copy of that math.
     """
     sp = gait["standing_pose"]
-    return tuple(to_urdf_rad(jt, sp[_STANDING_FIELD[jt]]) for jt in JOINT_TYPES)
+    tip_radius = sp["tip_radius"]
+    body_height = sp["body_height"]
+
+    # Reachability guard so a bad edit fails at build time rather than throwing
+    # UnreachableTarget on the robot. The angles themselves are checked against
+    # the joint limits by standing_pose_from when the config loads.
+    leg = geometry["leg"]
+    coxa_len, femur_len, tibia_len = (
+        leg["coxa_length"], leg["femur_length"], leg["tibia_length"])
+    depth = geometry["body"]["coxa_to_bottom"] + body_height
+    if tip_radius <= coxa_len:
+        raise ValueError(
+            f"tuning.yaml standing_pose.tip_radius = {tip_radius} m must exceed "
+            f"the coxa length ({coxa_len} m)")
+    reach = math.hypot(tip_radius - coxa_len, depth)
+    if not (abs(femur_len - tibia_len) <= reach <= femur_len + tibia_len):
+        raise ValueError(
+            f"tuning.yaml standing_pose tip_radius = {tip_radius} m / "
+            f"body_height = {body_height} m puts the foot {reach:.4f} m from the "
+            f"femur joint; reach annulus is "
+            f"[{abs(femur_len - tibia_len):.4f}, {femur_len + tibia_len:.4f}] m")
+
+    return dict(tip_radius=tip_radius, body_height=body_height,
+                corner_leg_coxa=to_urdf_rad("coxa", sp["corner_leg_coxa_deg"]))
 
 
 def initial_pose(geometry: dict):
@@ -367,7 +383,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
          webteleop, display, sources) -> str:
     specs = leg_specs(geometry)
     limits = joint_limits(geometry)
-    stand = standing_pose(gait)
+    stand = standing_pose(gait, geometry)
     initial = initial_pose(geometry)
     caps = velocity_caps(gait)
     joints = hardware_joints(hardware, calibration, limits)
@@ -438,10 +454,19 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("")
 
     # ── standing / initial pose ──
-    w("// ── Rest / startup joint angles (rad, IK-convention) ──")
-    w("// Standing pose is uniform across legs; foot targets come from FK per leg.")
-    w(f"inline constexpr JointAngles kStandingPose = "
-      f"{{{fl(stand[0])}, {fl(stand[1])}, {fl(stand[2])}}};")
+    w("// ── Rest / startup pose ──")
+    w("// The standing pose is described by where the feet sit, not by joint")
+    w("// angles: gait::standing_pose_from solves the per-leg triple from these")
+    w("// (femur/tibia uniform, coxa mirrored by the corner splay).")
+    w("struct StandingPose {")
+    w("  float tip_radius;       // m, coxa axis -> foot tip, in the leg frame")
+    w("  float body_height;      // m, body bottom -> ground")
+    w("  float corner_leg_coxa;  // rad, front-left; mirrored fr/lr, middles 0")
+    w("};")
+    w("")
+    w(f"inline constexpr StandingPose kStandingPose = "
+      f"{{{fl(stand['tip_radius'])}, {fl(stand['body_height'])}, "
+      f"{fl(stand['corner_leg_coxa'])}}};")
     w("")
     w("// Per-leg startup pose (coxa varies by symmetry), indexed by Leg.")
     w("inline constexpr std::array<JointAngles, kNumLegs> kInitialPose = {{")
@@ -513,9 +538,6 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
           f"{'true' if c['unstable'] else 'false'}, {fl(c['linear_max'])}, "
           f"{fl(c['yaw_bias'])}}},  // {c['name']}")
     w("}};")
-    w("")
-    w(f"inline constexpr float kAngularMax = {fl(gait['angular_z_max'])};"
-      "  // rad/s, shared")
     w("")
 
     # ── teleop ──

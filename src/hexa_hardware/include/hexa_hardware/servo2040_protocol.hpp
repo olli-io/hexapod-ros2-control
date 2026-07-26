@@ -21,6 +21,22 @@ constexpr std::uint8_t kCmdGet = 'G' | 0x80;
 constexpr std::uint16_t kValueMax = 0x3FFF;  // 14-bit
 constexpr std::size_t kMaxBatch = 64;        // 128 pin space; one frame must fit comfortably
 
+// SETALL — the compact all-servos fast path (firmware main.h SETALL_*).
+//
+// A SET addressing all 18 servos is [S][0][18] + 36 data bytes = 39 bytes, which
+// exceeds the RP2040's 32-byte UART RX FIFO: if the firmware's main loop stalls
+// while the frame streams in, the FIFO overruns and the *tail* of the frame — the
+// last servo — is lost. SETALL packs the same pose into 30 bytes, which fits
+// entirely inside the FIFO, so the loop can be busy for a whole frame and lose
+// nothing. It is servo-only: the relay and all telemetry keep using SET/GET.
+constexpr std::uint8_t kCmdSetAll = 0x55 | 0x80;      // 0xD5
+constexpr std::size_t kSetAllServoCount = 18;
+constexpr int kSetAllValueBits = 11;
+constexpr std::uint16_t kSetAllPulseBaseUs = 500;     // value = pulse_us - base
+constexpr std::uint16_t kSetAllValueMax = 2000;       // base + 2000 = 2500 us
+constexpr std::size_t kSetAllPayloadBytes = 29;       // ceil(18 * 11 / 7)
+constexpr std::size_t kSetAllFrameBytes = 1 + kSetAllPayloadBytes;
+
 // Fixed command indices in the board's cmdPins space (see firmware main.h).
 // CURR and VOLT are consecutive, so one GET(kCurrIndex, 2) returns both.
 constexpr std::uint8_t kCurrIndex = 24;
@@ -49,6 +65,16 @@ constexpr float kAmpsPerCount = 0.01f;
 void encode_set(std::uint8_t start, std::span<const std::uint16_t> values,
                 std::vector<std::uint8_t>& out);
 
+// Encode a SETALL frame into `out` (cleared first). `pulses_us` must hold
+// exactly kSetAllServoCount pulse widths in board index order (0..17); each is
+// clamped to [500, 2500] µs, matching the firmware. The 18 values go out as one
+// MSB-first bitstream of 11-bit fields, emitted 7 bits at a time into the low 7
+// bits of each payload byte, so every payload byte keeps its MSB clear and
+// resync still works. The final byte's low 5 bits are zero padding.
+// Throws std::invalid_argument if `pulses_us` is the wrong length.
+void encode_setall(std::span<const std::uint16_t> pulses_us,
+                   std::vector<std::uint8_t>& out);
+
 // Encode a GET request frame (3 bytes) into `out`.
 void encode_get(std::uint8_t start, std::uint8_t count,
                 std::vector<std::uint8_t>& out);
@@ -70,6 +96,8 @@ class Servo2040Protocol final : public BoardProtocol {
 
   void send_servo_positions(std::uint8_t start_pin,
                             std::span<const std::uint16_t> values) override;
+  void send_all_servo_positions(
+      std::span<const std::uint16_t> pulses_us) override;
   void set_servo_power(bool on) override;
   bool read_battery(float& voltage_v, float& current_a,
                     int timeout_ms) override;

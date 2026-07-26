@@ -1,5 +1,8 @@
 #include "hexa_hardware/servo2040_protocol.hpp"
 
+#include <stdexcept>
+#include <string>
+
 namespace hexa_hardware {
 
 void encode_set(std::uint8_t start, std::span<const std::uint16_t> values,
@@ -13,6 +16,39 @@ void encode_set(std::uint8_t start, std::span<const std::uint16_t> values,
     std::uint16_t c = v > kValueMax ? kValueMax : v;
     out.push_back(static_cast<std::uint8_t>(c & 0x7F));
     out.push_back(static_cast<std::uint8_t>((c >> 7) & 0x7F));
+  }
+}
+
+void encode_setall(std::span<const std::uint16_t> pulses_us,
+                   std::vector<std::uint8_t>& out) {
+  if (pulses_us.size() != kSetAllServoCount) {
+    throw std::invalid_argument(
+        "encode_setall: expected " + std::to_string(kSetAllServoCount) +
+        " pulses, got " + std::to_string(pulses_us.size()));
+  }
+  out.clear();
+  out.reserve(kSetAllFrameBytes);
+  out.push_back(kCmdSetAll);
+  // Mirror of the firmware unpacker: an MSB-first bitstream of 11-bit fields,
+  // drained 7 bits at a time so every payload byte keeps its MSB clear. `acc`
+  // never holds more than 6 + 11 bits before the drain, so 32 bits is ample.
+  std::uint32_t acc = 0;
+  int nbits = 0;
+  for (const std::uint16_t pulse : pulses_us) {
+    std::uint16_t v = pulse < kSetAllPulseBaseUs
+                          ? 0
+                          : static_cast<std::uint16_t>(pulse - kSetAllPulseBaseUs);
+    if (v > kSetAllValueMax) v = kSetAllValueMax;
+    acc = (acc << kSetAllValueBits) | v;
+    nbits += kSetAllValueBits;
+    while (nbits >= 7) {
+      out.push_back(static_cast<std::uint8_t>((acc >> (nbits - 7)) & 0x7F));
+      nbits -= 7;
+    }
+  }
+  // 18 * 11 = 198 bits leaves 2 over; pad the tail byte's low 5 bits with zeros.
+  if (nbits > 0) {
+    out.push_back(static_cast<std::uint8_t>((acc << (7 - nbits)) & 0x7F));
   }
 }
 
@@ -50,6 +86,12 @@ bool decode_get_payload(std::span<const std::uint8_t> payload,
 void Servo2040Protocol::send_servo_positions(
     std::uint8_t start_pin, std::span<const std::uint16_t> values) {
   encode_set(start_pin, values, encode_buf_);
+  transport_.write(encode_buf_);
+}
+
+void Servo2040Protocol::send_all_servo_positions(
+    std::span<const std::uint16_t> pulses_us) {
+  encode_setall(pulses_us, encode_buf_);
   transport_.write(encode_buf_);
 }
 

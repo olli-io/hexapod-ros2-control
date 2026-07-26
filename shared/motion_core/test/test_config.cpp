@@ -90,10 +90,12 @@ TEST(JointLimits, DegToRadConventions) {
               static_cast<float>(M_PI) - deg(20.0f), kTol);
 }
 
-TEST(Pose, StandingUniform) {
-  EXPECT_NEAR(cfg::kStandingPose[0], 0.0f, kTol);
-  EXPECT_NEAR(cfg::kStandingPose[1], -deg(40.0f), kTol);
-  EXPECT_NEAR(cfg::kStandingPose[2], static_cast<float>(M_PI) - deg(74.7f), kTol);
+TEST(Pose, StandingScalars) {
+  // Where the feet sit, not joint angles — the per-leg triple is solved from
+  // these by gait::standing_pose_from (see test_gait_unit's StandingPose suite).
+  EXPECT_NEAR(cfg::kStandingPose.tip_radius, 0.1485f, kTol);
+  EXPECT_NEAR(cfg::kStandingPose.body_height, 0.05f, kTol);
+  EXPECT_NEAR(cfg::kStandingPose.corner_leg_coxa, 0.0f, kTol);
 }
 
 TEST(Pose, InitialPerLegSymmetry) {
@@ -133,7 +135,8 @@ TEST(VelocityCaps, TripodDerived) {
   EXPECT_NEAR(tripod.linear_max, 0.09f * 0.44f / (0.6f * 0.56f), 1e-4f);
   // yaw_bias_eff = 0.5 + (0.6-0.5)*(1.5-0.5) = 0.6.
   EXPECT_NEAR(tripod.yaw_bias, 0.6f, kTol);
-  EXPECT_NEAR(cfg::kAngularMax, 2.5f, kTol);
+  // No angular cap is baked: it is linear_max over the standing stance radius,
+  // derived at load time by load_velocity_caps_from_config.
 }
 
 TEST(VelocityCaps, StabilityFlags) {

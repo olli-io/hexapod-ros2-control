@@ -54,11 +54,15 @@ bool cmd_is_walking(float vx, float vy, float wz) {
 Pipeline::Pipeline() : Pipeline(PipelineConfig::baked()) {}
 
 Pipeline::Pipeline(const PipelineConfig& cfg)
-    : engine_(hexa::gait::make_default_engine(
-          cfg.default_gait, cfg.leg_specs, cfg.engine, cfg.standing_pose,
+    : standing_pose_(hexa::gait::standing_pose_from(
+          cfg.leg_specs, cfg.coxa_to_bottom, cfg.standing_pose)),
+      nominal_stance_(
+          hexa::gait::nominal_stance_from(cfg.leg_specs, standing_pose_)),
+      engine_(hexa::gait::make_default_engine(
+          cfg.default_gait, cfg.leg_specs, cfg.engine, standing_pose_,
           cfg.initial_pose, cfg.coxa_to_bottom)),
       caps_(cfg.caps),
-      control_(cfg.control, cfg.caps, cfg.leg_specs, cfg.default_gait),
+      control_(cfg.control, cfg.caps, nominal_stance_, cfg.default_gait),
       posture_(cfg.posture),
       // Supervisor safety stays baked (kInputTimeoutS / kBattery are from
       // webteleop/display YAML, outside the geometry+tuning scope).
@@ -75,8 +79,8 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
   // Teleop mapping + velocity shaping. The JoyConfig's stick scaling tracks the
   // active gait's caps; map_joy owns the mode FSM / posture baseline in
   // JoyState. (Joy state is baked/unused on the ROS path.)
-  joycfg_.gait_angular_z_max = cfg.caps.angular_max;
   joycfg_.gait_linear_max = cfg.caps.linear_max(cfg.default_gait);
+  joycfg_.gait_angular_z_max = cfg.caps.angular_max(cfg.default_gait);
   joystate_.mode = hexa::teleop::mode_from_string(hexa::config::kInitialMode);
   for (std::size_t i = 0; i < hexa::config::kGaitCycle.size(); ++i) {
     if (hexa::config::kGaitCycle[i] == cfg.default_gait) {
@@ -85,12 +89,12 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
     }
   }
 
-  // Seed the last-good angles with the standing pose (uniform per leg) so a leg
-  // held on the very first tick (before any successful compose) is valid.
-  for (int i = 0; i < hexa::kNumLegs; ++i) {
-    theta_[i * 3 + 0] = cfg.standing_pose[0];
-    theta_[i * 3 + 1] = cfg.standing_pose[1];
-    theta_[i * 3 + 2] = cfg.standing_pose[2];
+  // Seed the last-good angles with the standing pose so a leg held on the very
+  // first tick (before any successful compose) is valid.
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    theta_[i * 3 + 0] = standing_pose_[i][0];
+    theta_[i * 3 + 1] = standing_pose_[i][1];
+    theta_[i * 3 + 2] = standing_pose_[i][2];
   }
 }
 
@@ -175,8 +179,10 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
       engine_->set_strategy(name);
       control_.set_gait(name);
       joycfg_.gait_linear_max = caps_.linear_max(name);
+      joycfg_.gait_angular_z_max = caps_.angular_max(name);
       r.gait_accepted = true;
       r.gait_linear_max = joycfg_.gait_linear_max;
+      r.gait_angular_z_max = joycfg_.gait_angular_z_max;
     }
   }
 

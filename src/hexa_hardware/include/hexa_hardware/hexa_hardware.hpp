@@ -58,6 +58,10 @@ class HexaHardware : public hardware_interface::SystemInterface {
   // Emit one SET frame per run, each carrying the calibrated pulse widths of the
   // joints it covers. Throws whatever the transport throws.
   void send_runs(const std::vector<PinRun>& runs);
+  // Emit the whole pose as one compact SETALL frame, in board index order.
+  // Only callable once setall_joint_idx_ is populated (see on_init). Throws
+  // whatever the transport throws.
+  void send_setall();
   // Per-joint runtime state, ordered to match info_.joints.
   struct JointSlot {
     std::string name;
@@ -80,7 +84,12 @@ class HexaHardware : public hardware_interface::SystemInterface {
   // which costs one frame per live leg but leaves the rest of the servos limp.
   std::vector<PinRun> full_runs_;
   std::vector<std::vector<PinRun>> leg_runs_;
-  std::vector<std::uint16_t> batch_;  // reused SET payload buffer
+  // Steady-state fast path: JointSlot indices in board index order, one per
+  // servo, filled in on_init only when the harness and the per-servo clamps let
+  // the board's SETALL frame express the pose. Empty means "fall back to
+  // full_runs_" — SETALL carries no start/count header, so it is all or nothing.
+  std::vector<std::size_t> setall_joint_idx_;
+  std::vector<std::uint16_t> batch_;  // reused SET / SETALL payload buffer
 
   // Built once in on_init from cfg.connection / cfg.parser; transport
   // owns the link, protocol holds a reference into it.

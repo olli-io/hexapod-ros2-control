@@ -23,6 +23,16 @@ class BoardProtocol {
   virtual void send_servo_positions(std::uint8_t start_pin,
                                     std::span<const std::uint16_t> values) = 0;
 
+  // Drive every servo in one compact fixed-length frame — the board's
+  // all-servos fast path, which exists so a whole-robot pose fits inside the
+  // board's UART RX FIFO and cannot lose its tail to an overrun. Values are
+  // pulse widths in µs, in board index order starting at 0. Only valid on a
+  // harness whose servos occupy exactly those indices; the caller checks that
+  // and falls back to send_servo_positions() otherwise. Implementations throw
+  // std::invalid_argument if the span is the wrong length.
+  virtual void send_all_servo_positions(
+      std::span<const std::uint16_t> pulses_us) = 0;
+
   // Energise (true) or de-energise (false) the servo power rail. The relay
   // pin is chosen entirely on the board — the host addresses this by intent,
   // not by pin number. Enabling closes the relay with every servo LIMP: it never

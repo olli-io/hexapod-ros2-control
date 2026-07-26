@@ -198,9 +198,11 @@ class FirmwareBridgeNode : public rclcpp::Node {
     }
     if (res.has_gait_select) {
       if (res.gait_accepted) {
-        RCLCPP_INFO(get_logger(), "gait -> %s (linear_max=%.3f m/s)",
+        RCLCPP_INFO(get_logger(),
+                    "gait -> %s (linear_max=%.3f m/s, angular_max=%.3f rad/s)",
                     res.gait_select.c_str(),
-                    static_cast<double>(res.gait_linear_max));
+                    static_cast<double>(res.gait_linear_max),
+                    static_cast<double>(res.gait_angular_z_max));
       } else {
         RCLCPP_INFO(get_logger(), "gait -> %s dropped (state=%s)",
                     res.gait_select.c_str(),

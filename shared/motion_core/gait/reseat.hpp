@@ -25,15 +25,20 @@ struct ReseatGeometry {
 
 // Derive the reseat geometry from a standing-pose joint-angle triple
 // (theta_coxa, theta_femur, theta_tibia) and a leg's segment lengths (FK).
+// theta_coxa is deliberately unused: depth and tibia lean are both invariant
+// under the leg's swivel, so one leg's triple describes all six.
 ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
                                           const kin::LegSpec& leg_spec);
 
-// Body-frame nominal stance per leg at a target body height. Throws
-// std::invalid_argument if target_height_m is outside the geometrically feasible
-// range (arcsin argument leaves [-1, 1]).
+// Body-frame nominal stance per leg at a target body height. Each leg keeps the
+// swivel it currently stands at — current_stance supplies the azimuth, and only
+// the radius and depth move — so the standing splay survives a height change.
+// Throws std::invalid_argument if target_height_m is outside the geometrically
+// feasible range (arcsin argument leaves [-1, 1]).
 std::map<std::string, Vec3> reseat_nominal_stance(
     float target_height_m, const ReseatGeometry& geometry,
-    const std::map<std::string, kin::LegSpec>& leg_specs);
+    const std::map<std::string, kin::LegSpec>& leg_specs,
+    const std::map<std::string, Vec3>& current_stance);
 
 class ReseatController {
  public:

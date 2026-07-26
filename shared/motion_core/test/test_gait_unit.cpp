@@ -362,7 +362,7 @@ TEST(Engine, PeakTipSpeedStaysCloseToTheAnalyticalFloor) {
                         (cfg.min_swing_time * (1.0f - swing_end));
 
     auto e = g::make_default_engine(
-        "tripod", hexa::config::kLegSpecs, cfg, hexa::config::kStandingPose,
+        "tripod", hexa::config::kLegSpecs, cfg, g::standing_pose_from_config(),
         hexa::config::kInitialPose, hexa::config::kCoxaToBottom);
     e->start_initialize();
     for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
@@ -723,17 +723,210 @@ TEST(Engine, SetStrategyDefersWhileWalking) {
                   2.0f / 3.0f);
 }
 
-TEST(Limits, ScaleToEnvelopeIsNoOpWhenInRange) {
-  const auto caps = g::load_velocity_caps_from_config();
-  EXPECT_GT(caps.linear_max("tripod"), 0.0f);
-  std::map<std::string, g::Vec3> mounts;
-  for (int i = 0; i < 6; ++i) {
-    mounts[g::LEG_NAMES[i]] = g::Vec3(0.08f, 0.05f, 0.0f);
+// ── Standing pose: tip radius + body height + corner splay ──
+//
+// The stance is configured by where the feet sit, not by joint angles:
+// standing_pose_from solves the per-leg triple. These pin the splay mirroring,
+// the footprint the scalars describe, and — the reason the splay is safe to use
+// at all — that a reseat keeps each leg pointing where it already points.
+
+namespace {
+
+// A standing pose with the given corner splay, everything else as configured.
+::hexa::config::StandingPose standing_with_splay(float corner_leg_coxa_deg) {
+  ::hexa::config::StandingPose sp = hexa::config::kStandingPose;
+  sp.corner_leg_coxa = corner_leg_coxa_deg * static_cast<float>(M_PI) / 180.0f;
+  return sp;
+}
+
+constexpr float kSplayDeg = 15.0f;
+constexpr float kSplayRad = kSplayDeg * static_cast<float>(M_PI) / 180.0f;
+
+}  // namespace
+
+TEST(StandingPose, SplayMirrorsAcrossTheCornerLegs) {
+  const auto pose = g::standing_pose_from(hexa::config::kLegSpecs,
+                                          hexa::config::kCoxaToBottom,
+                                          standing_with_splay(kSplayDeg));
+
+  // Front-left is the reference; the mirroring negates front-to-back and
+  // left-to-right, and the middle legs always point straight out.
+  const std::array<float, 6> expect_coxa = {kSplayRad,  0.0f, -kSplayRad,
+                                            -kSplayRad, 0.0f, kSplayRad};
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    EXPECT_NEAR(pose[i][0], expect_coxa[i], 1e-6f) << g::LEG_NAMES[i];
+    // tip_radius is measured from each leg's own coxa axis, so the radial reach
+    // — and with it the femur/tibia pair — is identical for all six.
+    EXPECT_NEAR(pose[i][1], pose[0][1], 1e-6f) << g::LEG_NAMES[i] << " femur";
+    EXPECT_NEAR(pose[i][2], pose[0][2], 1e-6f) << g::LEG_NAMES[i] << " tibia";
   }
-  auto [vx, vy, wz] = g::scale_to_envelope(0.01f, 0.0f, 0.0f, mounts,
-                                           caps.linear_max("tripod"),
-                                           caps.angular_max, 0.6f);
+}
+
+TEST(StandingPose, ScalarsSetTheFootprint) {
+  const auto sp = standing_with_splay(kSplayDeg);
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+
+  const float depth = hexa::config::kCoxaToBottom + sp.body_height;
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const auto& spec = hexa::config::kLegSpecs[i];
+    const g::Vec3 foot = nominal.at(g::LEG_NAMES[i]);
+    const g::Vec3 in_leg = hexa::body_to_leg(foot, spec);
+
+    EXPECT_NEAR(std::hypot(in_leg[0], in_leg[1]), sp.tip_radius, 1e-5f)
+        << g::LEG_NAMES[i] << " tip radius from its own coxa axis";
+    EXPECT_NEAR(foot[2], -depth, 1e-5f) << g::LEG_NAMES[i] << " foot depth";
+    EXPECT_NEAR(std::atan2(in_leg[1], in_leg[0]), pose[i][0], 1e-5f)
+        << g::LEG_NAMES[i] << " heading is mount_yaw + coxa";
+
+    // Swing-arc mirroring keys off the sign of the nominal y (identity_y_sign),
+    // so a splay must never push a leg's nominal across the body centreline.
+    const bool left = g::LEG_NAMES[i][0] == 'l';
+    EXPECT_EQ(foot[1] > 0.0f, left) << g::LEG_NAMES[i] << " crossed y = 0";
+  }
+}
+
+TEST(StandingPose, RejectsASplayOutsideTheCoxaLimit) {
+  // Coxa travel is +/-45 deg (geometry.yaml); 60 must fail at load rather than
+  // straining a servo.
+  EXPECT_THROW(g::standing_pose_from(hexa::config::kLegSpecs,
+                                     hexa::config::kCoxaToBottom,
+                                     standing_with_splay(60.0f)),
+               std::invalid_argument);
+}
+
+TEST(Reseat, PreservesEachLegsSwivel) {
+  const auto sp = standing_with_splay(kSplayDeg);
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+  const auto geometry = g::reseat_geometry_from(hexa::config::kLegSpecs, pose);
+  const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
+
+  // At the pose's own height the reseat target is the nominal stance itself.
+  const auto same = g::reseat_nominal_stance(0.0f, geometry, specs, nominal);
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const g::Vec3 a = same.at(g::LEG_NAMES[i]);
+    const g::Vec3 b = nominal.at(g::LEG_NAMES[i]);
+    EXPECT_NEAR(a[0], b[0], 1e-5f) << g::LEG_NAMES[i] << ".x";
+    EXPECT_NEAR(a[1], b[1], 1e-5f) << g::LEG_NAMES[i] << ".y";
+    EXPECT_NEAR(a[2], b[2], 1e-5f) << g::LEG_NAMES[i] << ".z";
+  }
+
+  // Raising the body widens the footprint (the tibia lean is held), but the
+  // splay survives: every leg keeps the azimuth it was standing at.
+  const auto raised = g::reseat_nominal_stance(0.03f, geometry, specs, nominal);
+  bool widened = false;
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const auto& spec = hexa::config::kLegSpecs[i];
+    const g::Vec3 was = hexa::body_to_leg(nominal.at(g::LEG_NAMES[i]), spec);
+    const g::Vec3 now = hexa::body_to_leg(raised.at(g::LEG_NAMES[i]), spec);
+    EXPECT_NEAR(std::atan2(now[1], now[0]), std::atan2(was[1], was[0]), 1e-5f)
+        << g::LEG_NAMES[i] << " swivelled during the reseat";
+    if (std::hypot(now[0], now[1]) > std::hypot(was[0], was[1]) + 1e-4f) {
+      widened = true;
+    }
+  }
+  EXPECT_TRUE(widened) << "raising the body should have moved the feet out";
+}
+
+TEST(Limits, ScaleToEnvelopeIsNoOpWhenInRange) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto caps =
+      g::load_velocity_caps_from_config(g::outer_stance_radius(nominal));
+  EXPECT_GT(caps.linear_max("tripod"), 0.0f);
+  auto [vx, vy, wz] = g::scale_to_envelope(0.01f, 0.0f, 0.0f, nominal,
+                                           caps.linear_max("tripod"), 0.6f);
   EXPECT_NEAR(vx, 0.01f, 1e-6f);
   EXPECT_NEAR(vy, 0.0f, 1e-6f);
   EXPECT_NEAR(wz, 0.0f, 1e-6f);
+}
+
+// The IK/FK round trip must land on the closed form hexa_common/limits.py
+// implements (standing_stance_xy): the tip sits tip_radius out from the coxa
+// axis at the leg's splay, rotated into the body frame and offset by the mount.
+// Teleop derives its angular stick cap from that closed form while the pipeline
+// derives the envelope from this FK path, so a divergence here would silently
+// desynchronise the stick from the engine.
+TEST(Limits, StanceMatchesTheClosedFormTeleopUses) {
+  const auto nominal = g::nominal_stance_from_config();
+  const float tip = hexa::config::kStandingPose.tip_radius;
+  const float splay = hexa::config::kStandingPose.corner_leg_coxa;
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const auto leg = static_cast<hexa::Leg>(i);
+    const bool middle = (leg == hexa::Leg::L_MIDDLE || leg == hexa::Leg::R_MIDDLE);
+    const bool flipped = (leg == hexa::Leg::L_REAR || leg == hexa::Leg::R_FRONT);
+    const float th_c = middle ? 0.0f : (flipped ? -splay : splay);
+
+    const auto& spec = hexa::config::kLegSpecs[i];
+    const float angle = spec.mount_yaw + th_c;
+    const float want_x = spec.mount_xyz[0] + tip * std::cos(angle);
+    const float want_y = spec.mount_xyz[1] + tip * std::sin(angle);
+
+    const g::Vec3& got = nominal.at(g::LEG_NAMES[i]);
+    EXPECT_NEAR(got[0], want_x, 1e-5f) << g::LEG_NAMES[i] << " x";
+    EXPECT_NEAR(got[1], want_y, 1e-5f) << g::LEG_NAMES[i] << " y";
+  }
+}
+
+// The outer stance radius is the corner feet, and it is what turns the linear
+// cap into the angular one. No YAML knob is involved.
+TEST(Limits, OuterStanceRadiusIsTheFurthestFoot) {
+  const auto nominal = g::nominal_stance_from_config();
+  const float r = g::outer_stance_radius(nominal);
+  float expected = 0.0f;
+  for (const auto& [name, p] : nominal) {
+    (void)name;
+    expected = std::max(expected, std::hypot(p[0], p[1]));
+  }
+  EXPECT_NEAR(r, expected, 1e-6f);
+  // Comfortably outside the mount ring — this is the whole reason the yaw lever
+  // arm had to move from mount_xyz to nominal_stance.
+  float max_mount = 0.0f;
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const auto& m = hexa::config::kLegSpecs[i].mount_xyz;
+    max_mount = std::max(max_mount, std::hypot(m[0], m[1]));
+  }
+  EXPECT_GT(r, max_mount * 1.5f);
+}
+
+TEST(Limits, OuterStanceRadiusRejectsADegenerateStance) {
+  std::map<std::string, g::Vec3> on_axis;
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    on_axis[g::LEG_NAMES[i]] = g::Vec3(0.0f, 0.0f, -0.05f);
+  }
+  EXPECT_THROW(g::outer_stance_radius(on_axis), std::invalid_argument);
+}
+
+// Pure yaw past the envelope lands on linear_max / r_outer — the derived cap —
+// with no separate angular clamp in the path.
+TEST(Limits, ScaleToEnvelopeBoundsPureYawAtTheStanceRadius) {
+  const auto nominal = g::nominal_stance_from_config();
+  const float r_outer = g::outer_stance_radius(nominal);
+  const auto caps = g::load_velocity_caps_from_config(r_outer);
+  for (const float commanded : {2.0f, 6.0f, 50.0f}) {
+    auto [vx, vy, wz] = g::scale_to_envelope(
+        0.0f, 0.0f, commanded, nominal, caps.linear_max("tripod"),
+        caps.yaw_bias("tripod"));
+    EXPECT_NEAR(wz, caps.angular_max("tripod"), 1e-4f)
+        << "commanded " << commanded;
+    EXPECT_NEAR(vx, 0.0f, 1e-6f);
+    EXPECT_NEAR(vy, 0.0f, 1e-6f);
+  }
+}
+
+// The engine plans the stride at the foot, so a commanded yaw has to come out
+// of per_leg_planar_velocity as the foot's tangential speed. Using the mount
+// would understate it by |r_mount| / |r_stance|.
+TEST(Limits, PerLegYawVelocityUsesTheStanceRadius) {
+  const auto contexts = g::build_leg_contexts_from_config();
+  const float omega = 0.5f;
+  const auto vels = g::per_leg_planar_velocity(contexts, {0.0f, 0.0f}, omega);
+  for (const auto& [name, v] : vels) {
+    const g::Vec3& stance = contexts.at(name).nominal_stance;
+    const float r = std::hypot(stance[0], stance[1]);
+    EXPECT_NEAR(std::hypot(v.first, v.second), omega * r, 1e-5f)
+        << name << " yaw lever arm is not its stance radius";
+  }
 }

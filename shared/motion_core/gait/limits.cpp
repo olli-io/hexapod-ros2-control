@@ -1,21 +1,37 @@
 #include "gait/limits.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 
-#include "config_generated.hpp"  // hexa::config::kGaits, kAngularMax
+#include "config_generated.hpp"  // hexa::config::kGaits
 
 namespace hexa::gait {
 
-VelocityCaps load_velocity_caps_from_config() {
+float outer_stance_radius(const std::map<std::string, Vec3>& nominal_stance) {
+  float max_r = 0.0f;
+  for (const auto& [name, p] : nominal_stance) {
+    (void)name;
+    max_r = std::max(max_r, std::hypot(p[0], p[1]));
+  }
+  if (max_r <= 0.0f) {
+    throw std::invalid_argument(
+        "outer stance radius is zero — every foot sits on the body axis, so the "
+        "standing pose has no yaw authority; check tuning.yaml standing_pose");
+  }
+  return max_r;
+}
+
+VelocityCaps load_velocity_caps_from_config(float r_outer) {
   VelocityCaps caps;
-  caps.angular_max = ::hexa::config::kAngularMax;
   // The generator (gen_config.py) ports limits.cpp's derivation, so the per-gait
   // linear_max / yaw_bias are already baked into kGaits — mirror them out keyed
-  // by gait name.
+  // by gait name, and divide the linear cap by the lever arm for the angular one.
   for (const auto& g : ::hexa::config::kGaits) {
     const std::string name(g.name.data());
     caps.linear_max_by_gait[name] = g.linear_max;
+    caps.angular_max_by_gait[name] = g.linear_max / r_outer;
     caps.yaw_bias_by_gait[name] = g.yaw_bias;
   }
   return caps;
@@ -23,17 +39,11 @@ VelocityCaps load_velocity_caps_from_config() {
 
 std::tuple<float, float, float> scale_to_envelope(
     float v_x, float v_y, float omega_z,
-    const std::map<std::string, Vec3>& leg_mounts, float linear_max,
-    float angular_max, float yaw_bias) {
-  if (omega_z > angular_max) {
-    omega_z = angular_max;
-  } else if (omega_z < -angular_max) {
-    omega_z = -angular_max;
-  }
-
+    const std::map<std::string, Vec3>& stance_xy, float linear_max,
+    float yaw_bias) {
   const float cap_sq = linear_max * linear_max;
   float max_leg_v_sq = 0.0f;
-  for (const auto& [name, r] : leg_mounts) {
+  for (const auto& [name, r] : stance_xy) {
     (void)name;
     const float vlx = v_x - omega_z * r[1];
     const float vly = v_y + omega_z * r[0];
@@ -51,7 +61,7 @@ std::tuple<float, float, float> scale_to_envelope(
 
   float t_required = 0.0f;
   bool feasible = true;
-  for (const auto& [name, r] : leg_mounts) {
+  for (const auto& [name, r] : stance_xy) {
     (void)name;
     const float r_x = r[0];
     const float r_y = r[1];
@@ -82,7 +92,7 @@ std::tuple<float, float, float> scale_to_envelope(
 
   if (!feasible || rho * t_required >= 1.0f) {
     float max_r = 0.0f;
-    for (const auto& [name, r] : leg_mounts) {
+    for (const auto& [name, r] : stance_xy) {
       (void)name;
       const float rr = std::hypot(r[0], r[1]);
       if (rr > max_r) {

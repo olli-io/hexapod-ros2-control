@@ -57,7 +57,7 @@ joints:
     velocity: 7.25
   femur:
     lower_limit_deg: -55
-    upper_limit_deg: 96
+    upper_limit_deg: 86
     effort: 3.09
     velocity: 7.25
   tibia:

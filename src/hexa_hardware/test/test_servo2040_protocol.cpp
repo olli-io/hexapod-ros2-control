@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <random>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 #include "hexa_hardware/servo2040_protocol.hpp"
@@ -89,6 +91,141 @@ TEST(EncodeSet, AllBytesAreData) {
   for (std::size_t i = 1; i < out.size(); ++i) {
     EXPECT_EQ(out[i] & 0x80, 0x00) << "data byte " << i << " has MSB set";
   }
+}
+
+// ── SETALL — the compact all-servos frame ──────────────────────────────────
+//
+// The 39-byte whole-robot SET overruns the board's 32-byte UART RX FIFO when
+// the firmware's main loop stalls mid-arrival, and what gets lost is the frame's
+// tail — the last servo. SETALL packs the same pose into 30 bytes, so these
+// tests pin the wire format hard: the encoder must stay a bit-exact mirror of
+// the firmware unpacker or the whole robot goes to the wrong pose.
+
+namespace {
+
+// A representative pose spanning the encodable range, and the exact bytes the
+// spec's reference packer (protocol.md) emits for it. A golden vector, so a
+// future refactor cannot quietly change the format.
+const std::vector<std::uint16_t> kGoldenPulses = {
+    500,  617,  734,  851,  968,  1085, 1202, 1319, 1436,
+    1553, 1670, 1787, 1904, 2021, 2138, 2255, 2372, 2489};
+
+const std::vector<std::uint8_t> kGoldenFrame = {
+    0xD5, 0x00, 0x00, 0x3A, 0x47, 0x28, 0x57, 0x67, 0x28, 0x49,
+    0x15, 0x3E, 0x33, 0x1B, 0x54, 0x20, 0x76, 0x24, 0x54, 0x0F,
+    0x2F, 0x4B, 0x71, 0x66, 0x36, 0x6D, 0x7A, 0x43, 0x71, 0x20};
+
+// The firmware's unpack loop (chica-servo2040.cpp, SETALL_CMD branch),
+// reimplemented so the round-trip test checks against the board's own reading of
+// the bytes rather than against the encoder restated.
+std::vector<std::uint16_t> firmware_unpack(std::span<const std::uint8_t> frame) {
+  EXPECT_EQ(frame.size(), hh::kSetAllFrameBytes);
+  EXPECT_EQ(frame[0], hh::kCmdSetAll);
+  const auto raw = frame.subspan(1);
+  std::vector<std::uint16_t> out;
+  std::uint32_t acc = 0;
+  unsigned nbits = 0, bi = 0;
+  for (std::size_t s = 0; s < hh::kSetAllServoCount; ++s) {
+    while (nbits < static_cast<unsigned>(hh::kSetAllValueBits)) {
+      acc = (acc << 7) | (raw[bi++] & 0x7F);
+      nbits += 7;
+    }
+    unsigned value = (acc >> (nbits - hh::kSetAllValueBits)) &
+                     ((1u << hh::kSetAllValueBits) - 1);
+    nbits -= hh::kSetAllValueBits;
+    if (value > hh::kSetAllValueMax) value = hh::kSetAllValueMax;
+    out.push_back(static_cast<std::uint16_t>(hh::kSetAllPulseBaseUs + value));
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(EncodeSetAll, MatchesGoldenFrame) {
+  std::vector<std::uint8_t> out;
+  hh::encode_setall(kGoldenPulses, out);
+  EXPECT_EQ(out, kGoldenFrame);
+}
+
+// 30 bytes is the point of the exercise: it fits the board's 32-byte RX FIFO
+// whole, where the 39-byte SET did not.
+TEST(EncodeSetAll, FitsTheFifoAndKeepsPayloadMsbClear) {
+  std::vector<std::uint8_t> out;
+  hh::encode_setall(kGoldenPulses, out);
+  ASSERT_EQ(out.size(), 30u);
+  ASSERT_EQ(out.size(), hh::kSetAllFrameBytes);
+  EXPECT_LE(out.size(), 32u);
+  EXPECT_EQ(out[0], hh::kCmdSetAll);
+  for (std::size_t i = 1; i < out.size(); ++i) {
+    EXPECT_EQ(out[i] & 0x80, 0x00) << "payload byte " << i << " has MSB set";
+  }
+}
+
+TEST(EncodeSetAll, RoundTripsThroughTheFirmwareUnpacker) {
+  std::vector<std::uint8_t> out;
+  hh::encode_setall(kGoldenPulses, out);
+  EXPECT_EQ(firmware_unpack(out), kGoldenPulses);
+
+  // Endpoints and a flat pose, exactly.
+  const std::vector<std::vector<std::uint16_t>> poses = {
+      std::vector<std::uint16_t>(18, 500),
+      std::vector<std::uint16_t>(18, 2500),
+      std::vector<std::uint16_t>(18, 1500),
+  };
+  for (const auto& pose : poses) {
+    hh::encode_setall(pose, out);
+    EXPECT_EQ(firmware_unpack(out), pose);
+  }
+
+  // Randomised poses: a packing bug that only bites on a particular bit
+  // alignment shows up here and not in a hand-picked vector.
+  std::mt19937 rng(20260726);
+  std::uniform_int_distribution<int> us(500, 2500);
+  std::vector<std::uint16_t> pose(18);
+  for (int iter = 0; iter < 2000; ++iter) {
+    for (auto& p : pose) p = static_cast<std::uint16_t>(us(rng));
+    hh::encode_setall(pose, out);
+    ASSERT_EQ(firmware_unpack(out), pose) << "iteration " << iter;
+  }
+}
+
+// The firmware clamps out-of-range pulses into [500, 2500] and drives them; the
+// host must land on the same value rather than wrap or truncate.
+TEST(EncodeSetAll, ClampsOutOfRangePulses) {
+  std::vector<std::uint16_t> pose(18, 1500);
+  pose[0] = 400;    // below base
+  pose[1] = 0;      // far below
+  pose[17] = 3000;  // above max
+  std::vector<std::uint8_t> out;
+  hh::encode_setall(pose, out);
+  const auto decoded = firmware_unpack(out);
+  EXPECT_EQ(decoded[0], 500);
+  EXPECT_EQ(decoded[1], 500);
+  EXPECT_EQ(decoded[17], 2500);
+}
+
+// 18 * 11 = 198 bits leaves 2 bits over in the 29th byte; the rest is zero pad.
+TEST(EncodeSetAll, PadsTheTailByteWithZeros) {
+  std::vector<std::uint8_t> out;
+  hh::encode_setall(std::vector<std::uint16_t>(18, 2500), out);
+  EXPECT_EQ(out.back() & 0x1F, 0x00);
+}
+
+TEST(EncodeSetAll, RejectsWrongServoCount) {
+  std::vector<std::uint8_t> out;
+  EXPECT_THROW(hh::encode_setall(std::vector<std::uint16_t>(17, 1500), out),
+               std::invalid_argument);
+  EXPECT_THROW(hh::encode_setall(std::vector<std::uint16_t>(19, 1500), out),
+               std::invalid_argument);
+  EXPECT_THROW(hh::encode_setall(std::vector<std::uint16_t>{}, out),
+               std::invalid_argument);
+}
+
+TEST(SendAllServoPositions, WritesOneSetAllFrame) {
+  FakeTransport t;
+  hh::Servo2040Protocol proto(t);
+  proto.send_all_servo_positions(kGoldenPulses);
+  EXPECT_EQ(t.written, kGoldenFrame);
 }
 
 TEST(EncodeGet, ThreeByteFrame) {
