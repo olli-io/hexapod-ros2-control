@@ -1,15 +1,23 @@
-// Host spot-checks for the generated config (plan part 04).
+// Host invariant checks for the generated config (plan part 04).
 //
-// Guards that tools/gen_config.py keeps emitting the values the ROS2 loaders
-// (description_loader.cpp / limits.cpp / joint_calibration.cpp) produce — the
-// symmetry expansion, deg->rad conventions, derived velocity caps, and servo
-// calibration. Not exhaustive; it pins the load-bearing constants and the
-// tricky derived ones so a broken generator fails loudly.
+// Guards the *transformations* tools/gen_config.py performs — the symmetry
+// expansion, the deg->rad conventions, the per-gait velocity-cap derivation, the
+// servo wiring integrity — never the tuned values themselves. Nothing here
+// restates a number that also lives in a YAML under src/*/config/, so a retune
+// cannot break this suite.
+//
+// Value-level parity between the YAMLs and the baked config is proved instead by
+// hexa_locomotion/test/test_config_loader.cpp, which diffs the runtime yaml-cpp
+// loader against PipelineConfig::baked() field-by-field off the same files. That
+// is the test to reach for when the question is "did the generator read the right
+// key"; this one asks "did it do the right arithmetic with whatever it read".
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -22,10 +30,19 @@ using hexa::Leg;
 
 namespace {
 constexpr float kTol = 1e-5f;
-float deg(float d) { return d * static_cast<float>(M_PI) / 180.0f; }
+constexpr float kPi = static_cast<float>(M_PI);
 
 const cfg::LegSpec& spec(Leg leg) {
   return cfg::kLegSpecs[static_cast<std::size_t>(leg)];
+}
+
+// kGaits rows carry a NUL-padded char array, not a string.
+std::string_view gait_name(const cfg::GaitSpec& g) {
+  return std::string_view(g.name.data());
+}
+
+float initial_angle(Leg leg, std::size_t joint) {
+  return cfg::kInitialPose[static_cast<std::size_t>(leg)][joint];
 }
 }  // namespace
 
@@ -42,108 +59,144 @@ TEST(LegIndex, NameRoundTrip) {
   EXPECT_EQ(hexa::leg_index(Leg::R_REAR), 5);
 }
 
-TEST(LegSpecs, ReferenceMounts) {
-  // l_front reference mount from geometry.yaml (0.083, 0.0575, yaw 30deg).
-  EXPECT_NEAR(spec(Leg::L_FRONT).mount_xyz.x, 0.083f, kTol);
-  EXPECT_NEAR(spec(Leg::L_FRONT).mount_xyz.y, 0.0575f, kTol);
-  EXPECT_NEAR(spec(Leg::L_FRONT).mount_yaw, deg(30.0f), kTol);
-  // l_middle reference mount (0, 0.082, yaw 90deg).
-  EXPECT_NEAR(spec(Leg::L_MIDDLE).mount_xyz.x, 0.0f, kTol);
-  EXPECT_NEAR(spec(Leg::L_MIDDLE).mount_xyz.y, 0.082f, kTol);
-  EXPECT_NEAR(spec(Leg::L_MIDDLE).mount_yaw, deg(90.0f), kTol);
-}
-
 TEST(LegSpecs, SymmetryExpansion) {
-  // rear mirrors front about y: x -> -x, yaw -> pi - yaw.
-  EXPECT_NEAR(spec(Leg::L_REAR).mount_xyz.x, -0.083f, kTol);
-  EXPECT_NEAR(spec(Leg::L_REAR).mount_xyz.y, 0.0575f, kTol);
-  EXPECT_NEAR(spec(Leg::L_REAR).mount_yaw, deg(150.0f), kTol);
-  // right mirrors left about x: y -> -y, yaw -> -yaw.
-  // r_rear = (-0.083, -0.0575, -150deg) — the plan's headline check.
-  EXPECT_NEAR(spec(Leg::R_REAR).mount_xyz.x, -0.083f, kTol);
-  EXPECT_NEAR(spec(Leg::R_REAR).mount_xyz.y, -0.0575f, kTol);
-  EXPECT_NEAR(spec(Leg::R_REAR).mount_yaw, deg(-150.0f), kTol);
-  EXPECT_NEAR(spec(Leg::R_FRONT).mount_yaw, deg(-30.0f), kTol);
-  EXPECT_NEAR(spec(Leg::R_MIDDLE).mount_yaw, deg(-90.0f), kTol);
-}
+  // geometry.yaml carries only the two left reference mounts (l_front,
+  // l_middle); the generator expands the other four. Asserting the expansion as
+  // relations against those references pins the arithmetic for any mount
+  // geometry — the reference coordinates themselves are tuning, not logic.
 
-TEST(LegSpecs, SegmentLengths) {
-  for (const auto& s : cfg::kLegSpecs) {
-    EXPECT_NEAR(s.coxa_len, 0.042f, kTol);
-    EXPECT_NEAR(s.femur_len, 0.08f, kTol);
-    EXPECT_NEAR(s.tibia_len, 0.134f, kTol);
+  // The references must be genuinely off-axis, else every mirror below holds
+  // vacuously.
+  EXPECT_GT(spec(Leg::L_FRONT).mount_xyz.x, 0.0f);
+  EXPECT_GT(spec(Leg::L_FRONT).mount_xyz.y, 0.0f);
+  EXPECT_GT(spec(Leg::L_MIDDLE).mount_xyz.y, 0.0f);
+
+  // rear mirrors front about the body y axis: x -> -x, yaw -> pi - yaw.
+  EXPECT_NEAR(spec(Leg::L_REAR).mount_xyz.x, -spec(Leg::L_FRONT).mount_xyz.x,
+              kTol);
+  EXPECT_NEAR(spec(Leg::L_REAR).mount_xyz.y, spec(Leg::L_FRONT).mount_xyz.y,
+              kTol);
+  EXPECT_NEAR(spec(Leg::L_REAR).mount_xyz.z, spec(Leg::L_FRONT).mount_xyz.z,
+              kTol);
+  EXPECT_NEAR(spec(Leg::L_REAR).mount_yaw, kPi - spec(Leg::L_FRONT).mount_yaw,
+              kTol);
+
+  // right mirrors left about the body x axis: y -> -y, yaw -> -yaw, x kept.
+  const std::array<std::pair<Leg, Leg>, 3> mirrored = {{
+      {Leg::L_FRONT, Leg::R_FRONT},
+      {Leg::L_MIDDLE, Leg::R_MIDDLE},
+      {Leg::L_REAR, Leg::R_REAR},
+  }};
+  for (const auto& [left, right] : mirrored) {
+    const auto side = hexa::leg_name(right);
+    EXPECT_NEAR(spec(right).mount_xyz.x, spec(left).mount_xyz.x, kTol) << side;
+    EXPECT_NEAR(spec(right).mount_xyz.y, -spec(left).mount_xyz.y, kTol) << side;
+    EXPECT_NEAR(spec(right).mount_xyz.z, spec(left).mount_xyz.z, kTol) << side;
+    EXPECT_NEAR(spec(right).mount_yaw, -spec(left).mount_yaw, kTol) << side;
   }
-  EXPECT_NEAR(cfg::kCoxaToBottom, 0.03f, kTol);
 }
 
-TEST(JointLimits, DegToRadConventions) {
-  // coxa: deg -> rad, window [-45, 45] deg.
-  EXPECT_NEAR(cfg::kJointLimits[0].lower, deg(-45.0f), kTol);
-  EXPECT_NEAR(cfg::kJointLimits[0].upper, deg(45.0f), kTol);
-  // femur: -deg, so lower/upper swap after negation ([-55, 96] deg).
-  EXPECT_NEAR(cfg::kJointLimits[1].lower, -deg(96.0f), kTol);
-  EXPECT_NEAR(cfg::kJointLimits[1].upper, -deg(-55.0f), kTol);
-  // tibia: pi - deg, likewise swapped ([20, 158] deg).
-  EXPECT_NEAR(cfg::kJointLimits[2].lower,
-              static_cast<float>(M_PI) - deg(158.0f), kTol);
-  EXPECT_NEAR(cfg::kJointLimits[2].upper,
-              static_cast<float>(M_PI) - deg(20.0f), kTol);
+TEST(LegSpecs, SegmentsAreUniform) {
+  // All six legs are built from the same three segment lengths, so the
+  // generator broadcasting one YAML triple across the array is the invariant —
+  // the lengths themselves are geometry.
+  const auto& ref = spec(Leg::L_FRONT);
+  EXPECT_GT(ref.coxa_len, 0.0f);
+  EXPECT_GT(ref.femur_len, 0.0f);
+  EXPECT_GT(ref.tibia_len, 0.0f);
+  for (std::size_t i = 0; i < cfg::kLegSpecs.size(); ++i) {
+    const auto& s = cfg::kLegSpecs[i];
+    EXPECT_NEAR(s.coxa_len, ref.coxa_len, kTol) << hexa::LEG_NAMES[i];
+    EXPECT_NEAR(s.femur_len, ref.femur_len, kTol) << hexa::LEG_NAMES[i];
+    EXPECT_NEAR(s.tibia_len, ref.tibia_len, kTol) << hexa::LEG_NAMES[i];
+  }
+  EXPECT_GT(cfg::kCoxaToBottom, 0.0f);
 }
 
-TEST(Pose, StandingScalars) {
-  // Where the feet sit, not joint angles — the per-leg triple is solved from
-  // these by gait::standing_pose_from (see test_gait_unit's StandingPose suite).
-  EXPECT_NEAR(cfg::kStandingPose.tip_radius, 0.1485f, kTol);
-  EXPECT_NEAR(cfg::kStandingPose.body_height, 0.05f, kTol);
-  EXPECT_NEAR(cfg::kStandingPose.corner_leg_coxa, 0.0f, kTol);
+TEST(JointLimits, BracketTheInitialPose) {
+  for (std::size_t j = 0; j < cfg::kJointLimits.size(); ++j) {
+    EXPECT_LT(cfg::kJointLimits[j].lower, cfg::kJointLimits[j].upper)
+        << "joint " << j;
+  }
+
+  // Each joint type applies its own deg->rad convention (coxa plain, femur
+  // negated, tibia pi - x). A dropped negation or a missing `pi -` throws the
+  // startup tuck outside its own travel window, which is what this catches —
+  // without naming a single YAML number. Bounds are inclusive: the femur tuck is
+  // allowed to sit exactly on its stop.
+  //
+  // Femur and tibia only. The shipped geometry.yaml deliberately tucks the coxa
+  // past its travel window at startup (initial_pose.coxa.l_front_deg exceeds
+  // joints.coxa.upper_limit_deg), so a coxa bracket would not hold.
+  for (std::size_t i = 0; i < cfg::kInitialPose.size(); ++i) {
+    for (std::size_t j = 1; j < 3; ++j) {
+      const float angle = cfg::kInitialPose[i][j];
+      EXPECT_GE(angle, cfg::kJointLimits[j].lower - kTol)
+          << hexa::LEG_NAMES[i] << " joint " << j;
+      EXPECT_LE(angle, cfg::kJointLimits[j].upper + kTol)
+          << hexa::LEG_NAMES[i] << " joint " << j;
+    }
+  }
 }
 
 TEST(Pose, InitialPerLegSymmetry) {
-  // femur/tibia uniform; coxa per leg from l_front_deg=60, l_middle_deg=0.
-  EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::L_FRONT)][0], deg(60.0f), kTol);
-  EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::L_MIDDLE)][0], 0.0f, kTol);
-  EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::L_REAR)][0], deg(-60.0f), kTol);
-  EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::R_FRONT)][0], deg(-60.0f), kTol);
-  EXPECT_NEAR(cfg::kInitialPose[hexa::leg_index(Leg::R_REAR)][0], deg(60.0f), kTol);
-  // femur above_horizontal_deg=85 -> -radians(85); tibia interior 45.
-  EXPECT_NEAR(cfg::kInitialPose[0][1], -deg(85.0f), kTol);
-  EXPECT_NEAR(cfg::kInitialPose[0][2], static_cast<float>(M_PI) - deg(45.0f), kTol);
+  // geometry.yaml gives the coxa tuck for l_front and l_middle only; the rest
+  // are mirrored. femur/tibia are uniform across the hexapod.
+  const float front = initial_angle(Leg::L_FRONT, 0);
+  EXPECT_NE(front, 0.0f) << "a zero front tuck makes the mirrors vacuous";
+  EXPECT_NEAR(initial_angle(Leg::L_REAR, 0), -front, kTol);
+  EXPECT_NEAR(initial_angle(Leg::R_FRONT, 0), -front, kTol);
+  EXPECT_NEAR(initial_angle(Leg::R_REAR, 0), front, kTol);
+  EXPECT_NEAR(initial_angle(Leg::L_MIDDLE, 0), initial_angle(Leg::R_MIDDLE, 0),
+              kTol);
+
+  for (std::size_t i = 0; i < cfg::kInitialPose.size(); ++i) {
+    EXPECT_NEAR(cfg::kInitialPose[i][1], cfg::kInitialPose[0][1], kTol)
+        << hexa::LEG_NAMES[i] << " femur differs from leg 0";
+    EXPECT_NEAR(cfg::kInitialPose[i][2], cfg::kInitialPose[0][2], kTol)
+        << hexa::LEG_NAMES[i] << " tibia differs from leg 0";
+  }
 }
 
-TEST(Engine, GaitYamlKnobs) {
-  EXPECT_NEAR(cfg::kEngine.stride_length, 0.09f, kTol);
-  EXPECT_NEAR(cfg::kEngine.step_height, 0.06f, kTol);
-  EXPECT_NEAR(cfg::kEngine.swing_apex_fraction, 0.5f, kTol);
-  EXPECT_NEAR(cfg::kEngine.touchdown_velocity, 0.01f, kTol);
-  EXPECT_NEAR(cfg::kEngine.swing_phase_margin, 0.12f, kTol);
-  EXPECT_NEAR(cfg::kEngine.min_swing_time, 0.6f, kTol);
-  EXPECT_NEAR(cfg::kEngine.controller_dt, 0.005f, kTol);
-  EXPECT_NEAR(cfg::kEngine.init_pair_swing_time, 0.35f, kTol);
-  EXPECT_NEAR(cfg::kEngine.reseat_swing_clearance, 0.025f, kTol);
-}
+TEST(VelocityCaps, DerivedFromEngineKnobs) {
+  // linear_max is the stride covered in one stance, so it keys off the realized
+  // split rather than the nominal duty: swing_phase_margin hands part of each
+  // swing window back to stance. Recomputing it here from kEngine pins the
+  // derivation that gen_config.py ports out of pipeline_config_loader.cpp,
+  // for every gait rather than just tripod.
+  for (const auto& g : cfg::kGaits) {
+    const float swing_end =
+        (1.0f - g.duty_factor) * (1.0f - cfg::kEngine.swing_phase_margin);
+    const float want = cfg::kEngine.stride_length * swing_end /
+                       (cfg::kEngine.min_swing_time * (1.0f - swing_end));
+    EXPECT_NEAR(g.linear_max, want, 1e-6f) << gait_name(g);
+    EXPECT_GT(g.linear_max, 0.0f) << gait_name(g);
+  }
 
-TEST(VelocityCaps, TripodDerived) {
-  const auto& tripod = cfg::kGaits[0];
-  EXPECT_EQ(std::string_view(tripod.name.data()), "tripod");
-  EXPECT_NEAR(tripod.duty_factor, 0.5f, kTol);
-  EXPECT_FALSE(tripod.unstable);
-  // linear_max is stride_length covered in one stance, so it keys off the
-  // realized split, not the nominal duty: with a swing_phase_margin of 0.12 the
-  // tripod's swing window shrinks to 0.5*0.88 = 0.44 and stance grows to 0.56.
-  // linear_max = stride*swing_end/(min_swing*(1-swing_end))
-  //            = 0.09*0.44/(0.6*0.56) = 0.1179.
-  EXPECT_NEAR(tripod.linear_max, 0.09f * 0.44f / (0.6f * 0.56f), 1e-4f);
-  // yaw_bias_eff = 0.5 + (0.6-0.5)*(1.5-0.5) = 0.6.
-  EXPECT_NEAR(tripod.yaw_bias, 0.6f, kTol);
+  // yaw_bias is the raw tuning.yaml knob re-keyed to each gait's nominal duty as
+  //   0.5 + (raw - 0.5) * (1.5 - duty)
+  // The raw value is consumed at load time and never baked, so recover it as a
+  // ratio: it must come out the same for every gait.
+  const float ref = (cfg::kGaits[0].yaw_bias - 0.5f) /
+                    (1.5f - cfg::kGaits[0].duty_factor);
+  for (const auto& g : cfg::kGaits) {
+    EXPECT_NEAR((g.yaw_bias - 0.5f) / (1.5f - g.duty_factor), ref, 1e-6f)
+        << gait_name(g);
+  }
+  // Duties must actually differ across the catalogue, else the ratio holds
+  // trivially.
+  EXPECT_NE(cfg::kGaits.front().duty_factor, cfg::kGaits.back().duty_factor);
+
   // No angular cap is baked: it is linear_max over the standing stance radius,
   // derived at load time by load_velocity_caps_from_config.
 }
 
 TEST(VelocityCaps, StabilityFlags) {
-  // surf and crawl are the unstable ones (registry.cpp source of truth).
+  // surf and crawl are the unstable ones (registry.cpp source of truth — C++,
+  // not YAML, so pinning the names and duties here is single-sourced).
   auto by_name = [](std::string_view n) -> const cfg::GaitSpec& {
     for (const auto& g : cfg::kGaits)
-      if (std::string_view(g.name.data()) == n) return g;
+      if (gait_name(g) == n) return g;
     ADD_FAILURE() << "gait not found: " << n;
     return cfg::kGaits[0];
   };
@@ -154,76 +207,50 @@ TEST(VelocityCaps, StabilityFlags) {
   EXPECT_NEAR(by_name("ripple").duty_factor, 5.0f / 6.0f, kTol);
 }
 
-TEST(Teleop, HardwareIdentity) {
-  EXPECT_EQ(cfg::kButtons.start, 7);
-  EXPECT_EQ(cfg::kButtons.y, 3);
-  EXPECT_EQ(cfg::kAxes.right_stick_y, 4);
-  EXPECT_EQ(cfg::kAxes.l2, 2);
-  EXPECT_NEAR(cfg::kAxisSigns.left_stick_x, -1.0f, kTol);
-  EXPECT_NEAR(cfg::kAxisSigns.l2, 1.0f, kTol);  // no sign entry -> default +1
-  EXPECT_NEAR(cfg::kDeadband, 0.1f, kTol);
-  EXPECT_NEAR(cfg::kTriggerThreshold, 0.5f, kTol);
-  EXPECT_EQ(cfg::kInitialMode, "gait");
-  // kGaitCycle is the runtime rotation, already filtered by
-  // allow_unstable_gaits. With unstable gaits enabled, surf + crawl stay
-  // in the cycle, so the firmware cycler matches the ROS teleop node's
-  // accepted set.
-  EXPECT_TRUE(cfg::kAllowUnstableGaits);
-  ASSERT_EQ(cfg::kGaitCycle.size(), 5u);
-  EXPECT_EQ(cfg::kGaitCycle[0], "tripod");
-  EXPECT_EQ(cfg::kGaitCycle[1], "surf");
-  EXPECT_EQ(cfg::kGaitCycle[2], "tetrapod");
-  EXPECT_EQ(cfg::kGaitCycle[3], "crawl");
-  EXPECT_EQ(cfg::kGaitCycle[4], "ripple");
-}
-
-TEST(Teleop, PostureLimits) {
-  EXPECT_NEAR(cfg::kPostureLimits.x_max, 0.035f, kTol);
-  EXPECT_NEAR(cfg::kPostureLimits.roll_max_deg, 12.0f, kTol);
-  // No height_{max,min}_m here by design — the body-height envelope belongs to
-  // tuning.yaml's posture_node block (see Posture.PoseEnvelope), not to
-  // teleop_joy.yaml. Only the rate is teleop's.
-  EXPECT_NEAR(cfg::kPostureLimits.height_rate_m_per_s, 0.05f, kTol);
-}
-
-TEST(Posture, AnimationStack) {
-  ASSERT_EQ(cfg::kEnabledAnimations.size(), 3u);
-  EXPECT_EQ(cfg::kEnabledAnimations[0], "still");
-  EXPECT_EQ(cfg::kAnimationModeAnimations[0], "vertical_body_roll");
-  EXPECT_NEAR(cfg::kPosture.gait_sway_strength, 0.4f, kTol);
-  EXPECT_NEAR(cfg::kPosture.gait_bounce_arc_height, 0.1f, kTol);
-  EXPECT_NEAR(cfg::kPosture.body_roll_3d_horizontal_phase_offset, 0.25f, kTol);
-  // Posture layering fix: crossfade slew rate + layered-clamp reserves.
-  EXPECT_NEAR(cfg::kPosture.gait_activation_slew_rate, 4.0f, kTol);
-  EXPECT_NEAR(cfg::kPosture.animation_reserve_x, 0.02f, kTol);
-  EXPECT_NEAR(cfg::kPosture.animation_reserve_roll, 0.20f, kTol);
-  // Gait-active body animation is off by default — the body stays still while
-  // walking until the tuning switch is flipped.
-  EXPECT_FALSE(cfg::kPosture.gait_body_animations_enabled);
+TEST(Teleop, GaitCycleMatchesRegistry) {
+  // kGaitCycle is the runtime rotation baked from teleop_joy.yaml, already
+  // filtered by allow_unstable_gaits. Which gaits it lists is a preference; that
+  // every entry resolves against the linked registry and honours the filter is
+  // the invariant the firmware cycler depends on.
+  ASSERT_FALSE(cfg::kGaitCycle.empty());
+  std::vector<std::string_view> seen;
+  for (const std::string_view name : cfg::kGaitCycle) {
+    const auto it =
+        std::find_if(cfg::kGaits.begin(), cfg::kGaits.end(),
+                     [&](const cfg::GaitSpec& g) { return gait_name(g) == name; });
+    ASSERT_NE(it, cfg::kGaits.end()) << name << " is not a registered gait";
+    if (!cfg::kAllowUnstableGaits) {
+      EXPECT_FALSE(it->unstable)
+          << name << " is unstable but unstable gaits are disabled";
+    }
+    EXPECT_EQ(std::count(seen.begin(), seen.end(), name), 0)
+        << name << " appears twice in the cycle";
+    seen.push_back(name);
+  }
+  // The cycler starts on the default gait, so it has to be in the rotation.
+  EXPECT_NE(std::find(cfg::kGaitCycle.begin(), cfg::kGaitCycle.end(),
+                      cfg::kDefaultGait),
+            cfg::kGaitCycle.end())
+      << cfg::kDefaultGait << " is not in the cycle";
 }
 
 TEST(Posture, PoseEnvelope) {
   // The z pair is ABSOLUTE belly clearance; nominal_body_height is carried
   // alongside so PostureController can convert it to the offsets BodyPose::z
-  // is expressed in. Codegen refuses to emit a nominal outside the envelope.
-  EXPECT_NEAR(cfg::kPosture.body_height_max, 0.14f, kTol);
-  EXPECT_NEAR(cfg::kPosture.body_height_min, 0.02f, kTol);
+  // is expressed in. Codegen refuses to emit a nominal outside the envelope,
+  // and the nominal must track the standing pose it is derived from.
   EXPECT_NEAR(cfg::kPosture.nominal_body_height, cfg::kStandingPose.body_height,
               kTol);
+  EXPECT_GT(cfg::kPosture.body_height_min, 0.0f);
   EXPECT_LT(cfg::kPosture.body_height_min, cfg::kPosture.nominal_body_height);
   EXPECT_LT(cfg::kPosture.nominal_body_height, cfg::kPosture.body_height_max);
 
-  EXPECT_NEAR(cfg::kPosture.pose_limit_x, 0.05f, kTol);
-  EXPECT_NEAR(cfg::kPosture.pose_limit_y, 0.05f, kTol);
-  EXPECT_NEAR(cfg::kPosture.pose_limit_roll, 0.30f, kTol);
-  EXPECT_NEAR(cfg::kPosture.pose_limit_pitch, 0.30f, kTol);
-  EXPECT_NEAR(cfg::kPosture.pose_limit_yaw, 0.50f, kTol);
-}
-
-TEST(Control, RampAndSnap) {
-  EXPECT_NEAR(cfg::kControl.vmax_ramp_time_linear, 0.8f, kTol);
-  EXPECT_NEAR(cfg::kControl.vmax_ramp_time_angular, 1.0f, kTol);
-  EXPECT_NEAR(cfg::kControl.snap_tol_linear, 1e-4f, 1e-6f);
+  // Pose limits are magnitudes — a non-positive one would clamp its axis dead.
+  EXPECT_GT(cfg::kPosture.pose_limit_x, 0.0f);
+  EXPECT_GT(cfg::kPosture.pose_limit_y, 0.0f);
+  EXPECT_GT(cfg::kPosture.pose_limit_roll, 0.0f);
+  EXPECT_GT(cfg::kPosture.pose_limit_pitch, 0.0f);
+  EXPECT_GT(cfg::kPosture.pose_limit_yaw, 0.0f);
 }
 
 TEST(Hardware, ServoCalibration) {
@@ -231,27 +258,13 @@ TEST(Hardware, ServoCalibration) {
 
   // Row order is the pipeline's theta[] order (LEG_NAMES x {coxa, femur, tibia}),
   // NOT pin order — kJointCals[i] must calibrate theta[i]. The wiring is carried
-  // per row in `pin`. This is the hand-authored half of hardware.yaml (`servos`:
-  // pin + `reversed`), so it is worth pinning exactly; the endpoint pulse widths
-  // are calibration output and are only range-checked below.
-  struct Wiring {
-    std::uint8_t pin;
-    int direction;  // hardware.yaml `reversed: true` -> -1
-  };
-  constexpr Wiring kWiring[18] = {
-      {13, -1}, {14, +1}, {15, -1},  // l_front  {coxa, femur, tibia}
-      {7, -1},  {8, +1},  {9, -1},   // l_middle
-      {1, -1},  {2, +1},  {3, -1},   // l_rear
-      {16, -1}, {17, -1}, {18, +1},  // r_front
-      {10, -1}, {11, -1}, {12, +1},  // r_middle
-      {4, -1},  {5, -1},  {6, +1},   // r_rear
-  };
+  // per row in `pin`. Which pin a joint lands on is hardware.yaml's business; that
+  // the table is a consistent, physically realisable harness is this test's.
   for (std::size_t i = 0; i < cfg::kJointCals.size(); ++i) {
     const auto& j = cfg::kJointCals[i];
-    EXPECT_EQ(j.pin, kWiring[i].pin) << "row " << i;
-    EXPECT_EQ(j.direction, kWiring[i].direction) << "row " << i;
-    EXPECT_EQ(j.min_us, 500) << "row " << i;
-    EXPECT_EQ(j.max_us, 2500) << "row " << i;
+    EXPECT_TRUE(j.direction == 1 || j.direction == -1)
+        << "row " << i << " direction " << static_cast<int>(j.direction);
+    EXPECT_LT(j.min_us, j.max_us) << "row " << i;
     // Endpoints are measured magnitudes — they move every calibration run, so
     // only the invariants are pinned: both inside the electrical clamp, and
     // distinct (equal endpoints would make the slope zero).
@@ -269,13 +282,10 @@ TEST(Hardware, ServoCalibration) {
     EXPECT_FALSE(used[j.pin]) << "pin " << static_cast<int>(j.pin) << " wired twice";
     used[j.pin] = true;
   }
-  // urdf_rad_at_center from hardware.yaml deg_at_center (coxa 0, femur 54.9,
-  // tibia 69.7) — the sole source for the servo-center angle. Uniform per
-  // segment, so check one leg and trust the loop above for the rest.
-  EXPECT_NEAR(cfg::kJointCals[0].urdf_rad_at_center, 0.0f, kTol);          // coxa
-  EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(54.9f), kTol);   // femur
-  EXPECT_NEAR(cfg::kJointCals[2].urdf_rad_at_center,
-              static_cast<float>(M_PI) - deg(69.7f), kTol);                // tibia
+  // urdf_rad_at_center comes from hardware.yaml deg_at_center, which is uniform
+  // per segment across the build — so every leg's coxa/femur/tibia centre must
+  // agree with leg 0's. The angles themselves are a property of the physical
+  // build, not of the generator.
   for (std::size_t i = 0; i < cfg::kJointCals.size(); ++i) {
     EXPECT_NEAR(cfg::kJointCals[i].urdf_rad_at_center,
                 cfg::kJointCals[i % 3].urdf_rad_at_center, kTol)
@@ -283,7 +293,9 @@ TEST(Hardware, ServoCalibration) {
   }
   // Chica command-index map + scales per protocol.md (hexapod-servo2040-driver):
   // CURR=24, VOLT=25 (consecutive), RELAY=26, STATUS=27; telemetry in 0.01
-  // centi-units; STATUS trip current at 0.1 A/count.
+  // centi-units; STATUS trip current at 0.1 A/count. These are literals in
+  // gen_config.py mirroring an external wire contract, not repo YAML, so pinning
+  // them is single-sourced against the driver spec.
   EXPECT_EQ(cfg::kRelayPin, 26);
   EXPECT_EQ(cfg::kBatteryCurrentPin, 24);
   EXPECT_EQ(cfg::kBatteryVoltagePin, 25);
@@ -297,7 +309,8 @@ TEST(Hardware, LegsAreWiredRearToFront) {
   // Sorting the rows by pin must yield the harness order the energize sweep
   // brings legs up in. Both consumers derive this the same way — the firmware's
   // servo_out leg_pin_order() off kJointCals, hexa_hardware's build_leg_order()
-  // off hardware.yaml — so pinning it here pins both.
+  // off hardware.yaml — so pinning it here pins both. Rear-first is a stability
+  // requirement of the sweep, so a rewire should fail loudly.
   std::array<std::size_t, hexa::kNumLegs> order{};
   for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
   auto lowest_pin = [](std::size_t leg) {
@@ -325,14 +338,4 @@ TEST(Hardware, LegsAreWiredRearToFront) {
     EXPECT_EQ(cfg::kJointCals[leg * 3 + 2].pin, cfg::kJointCals[leg * 3].pin + 2)
         << hexa::LEG_NAMES[leg];
   }
-}
-
-TEST(Hardware, StartupKnobs) {
-  // hardware.yaml parser.get_period_ticks / init.sweep_leg_interval_ms — the two
-  // host-side pacing knobs the firmware bakes rather than loads.
-  EXPECT_EQ(cfg::kGetPeriodTicks, 10);
-  // Non-negative by construction (gen_config rejects a negative); 0 opts out of
-  // the per-leg energize stagger.
-  EXPECT_GE(cfg::kSweepLegIntervalMs, 0);
-  EXPECT_EQ(cfg::kSweepLegIntervalMs, 150);
 }

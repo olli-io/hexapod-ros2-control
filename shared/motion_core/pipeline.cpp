@@ -24,10 +24,10 @@ namespace {
 
 // Engine states in which a gait switch may be routed to the engine (mirrors
 // teleop_joy._GAIT_SWITCH_STATES). STAND swaps immediately; the others latch a
-// pending change the engine commits via its pause-and-reseat sequence.
+// pending change the engine commits once it has settled back to a stand.
 bool gait_switch_allowed(hexa::gait::EngineState s) {
   using E = hexa::gait::EngineState;
-  return s == E::STAND || s == E::GAIT || s == E::PAUSING || s == E::PAUSED ||
+  return s == E::STAND || s == E::GAIT || s == E::SETTLING ||
          s == E::RESEATING;
 }
 

@@ -9,6 +9,13 @@
 
 namespace hexa::gait {
 
+namespace {
+// How close to its target a foot counts as already in place. A settle leaves the
+// legs it got to exactly on nominal; a leg it did not get to is millimetres out,
+// and a height change moves every foot further than that again.
+constexpr float kInPlaceEpsilon = 1e-5f;
+}  // namespace
+
 ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
                                           const kin::LegSpec& leg_spec) {
   const float th_c = standing_angles[0];
@@ -76,11 +83,16 @@ std::map<std::string, Vec3> reseat_nominal_stance(
 ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
                                    std::map<std::string, Vec3> target_stance,
                                    float pair_swing_time, float pair_dwell_time,
-                                   float swing_clearance, float controller_dt)
+                                   const SwingProfile& swing,
+                                   float controller_dt)
     : pair_swing_time_(pair_swing_time),
       pair_dwell_time_(pair_dwell_time),
-      swing_clearance_(swing_clearance),
+      swing_(swing),
       controller_dt_(controller_dt) {
+  // A reseat travels the same chord whatever direction the body is facing, so
+  // the lateral arch is dropped; the rise/descent split and the touchdown probe
+  // are the gait's, so a foot re-plants as gently as it lands mid-walk.
+  swing_.width = 0.0f;
   require_all_legs(current_stance, "current_stance");
   require_all_legs(target_stance, "target_stance");
   if (pair_swing_time <= 0.0f) {
@@ -132,10 +144,10 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     }
     pair_idx_ += 1;
     t_in_pair_ = 0.0f;
-    if (pair_idx_ >= PAIR_ORDER.size()) {
-      done_ = true;
-    } else if (pair_dwell_time_ > 0.0f) {
-      // Hold before the next pair lifts; seeding deferred to dwell expiry.
+    // A dwell exists to let this pair land before the next one lifts, so it is
+    // only owed if a next one is actually going to lift. seed_pair_origin()
+    // decides that (and sets done_ when nothing is left).
+    if (pair_dwell_time_ > 0.0f && remaining_pair_needs_moving()) {
       dwell_remaining_ = pair_dwell_time_;
     } else {
       seed_pair_origin();
@@ -146,17 +158,21 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     return out;
   }
 
-  // Mid-pair: both active legs follow a rest-to-rest swing arc from their
-  // pair-start origin to their target. swing_width is zero (vertical lift over a
-  // linear XY chord — direction-agnostic).
+  // Mid-pair: the active legs follow a rest-to-rest swing arc from their
+  // pair-start origin to their target, shaped by the gait's swing profile
+  // (vertical lift over a linear XY chord — direction-agnostic). One of the two
+  // may already be standing on its target, in which case it stays down — the
+  // pair is mirrored to keep the body balanced, and lifting fewer feet only ever
+  // helps that.
   for (const auto& name : LEG_NAMES) {
-    if (name == active[0] || name == active[1]) {
+    const bool is_active = (name == active[0] || name == active[1]);
+    if (is_active && (pair_origin_.at(name) - target_.at(name)).norm() >
+                         kInPlaceEpsilon) {
       const Vec3 origin = pair_origin_[name];
       const Vec3 target = target_[name];
-      const SwingProfile profile{.clearance = swing_clearance_, .width = 0.0f};
       const Vec3 point =
           swing_arc(phase, origin, target, identity_y_sign(target),
-                    pair_swing_time_, profile, Vec3::Zero(), Vec3::Zero());
+                    pair_swing_time_, swing_, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {
@@ -166,8 +182,35 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
   return out;
 }
 
+bool ReseatController::remaining_pair_needs_moving() const {
+  for (std::size_t i = pair_idx_; i < PAIR_ORDER.size(); ++i) {
+    if (pair_needs_moving(i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ReseatController::pair_needs_moving(std::size_t idx) const {
+  for (const auto& name : PAIR_ORDER[idx]) {
+    if ((positions_.at(name) - target_.at(name)).norm() > kInPlaceEpsilon) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ReseatController::seed_pair_origin() {
+  while (pair_idx_ < PAIR_ORDER.size() && !pair_needs_moving(pair_idx_)) {
+    // Already standing where this pair is being sent. Snap out the float dust
+    // and move on — no swing, and no dwell to cover a swing that never happens.
+    for (const auto& name : PAIR_ORDER[pair_idx_]) {
+      positions_[name] = target_[name];
+    }
+    pair_idx_ += 1;
+  }
   if (pair_idx_ >= PAIR_ORDER.size()) {
+    done_ = true;
     return;
   }
   const std::array<std::string, 2>& active = PAIR_ORDER[pair_idx_];

@@ -58,13 +58,13 @@ Landed:
   trajectory, strategies, and the engine state machine (cold-start → walk → stop
   → gait switch); the `-Wdouble-promotion` compile is itself part of the gate.
 - **`test_gait` (part 06)** — replays a cmd_vel profile
-  (cold-start → stand → walk → stop → reseat) through the float engine and the
+  (cold-start → stand → walk → stop → settle) through the float engine and the
   double `hexa_gait_cpp` engine, both built from the same baked config, and diffs
   per-leg foot target / phase / stance every phase-locked tick (< 2e-3 m). The
-  deterministic wall-clock ladders (INITIALIZE / PAUSING / RESEATING) are
-  excluded from the strict diff: float-vs-double accumulation rounding can shift a
-  ramp boundary by one tick, a transient self-correcting offset, so only the
-  phase-clock-driven STAND/ENGAGING/GAIT/PAUSED window is diffed tightly.
+  deterministic wall-clock ladders (INITIALIZE / RESEATING) are excluded from the
+  strict diff: float-vs-double accumulation rounding can shift a ramp boundary by
+  one tick, a transient self-correcting offset, so only the phase-clock-driven
+  STAND/ENGAGING/GAIT/SETTLING window is diffed tightly.
 - **`test_control` (part 07)** — float-only unit tests of the
   `BodyVelocityLimiter` (constant-max-accel linear/vectorial/angular slew,
   flip-through-zero at one bounded rate, snap-to-zero, positive-accel guard) and

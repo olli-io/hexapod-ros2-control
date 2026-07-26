@@ -1,9 +1,9 @@
-// Gait engine — orchestrates clock, strategy, and the engagement / pause
+// Gait engine — orchestrates clock, strategy, and the engagement / reseat
 // controllers. Float fork of engine.hpp (plan part 06). The engine is the only
 // stateful component in the gait chain; strategies stay pure. update() routes
 // between modes based on the commanded body velocity through the
-// FOLDED/INITIALIZE/STAND/ENGAGING/GAIT/PAUSING/PAUSED/RESUMING/FOLDING/
-// RESEATING state machine.
+// FOLDED/INITIALIZE/STAND/ENGAGING/GAIT/SETTLING/FOLDING/RESEATING state
+// machine.
 //
 // The yaml builders of the double engine are replaced by *_from_config helpers
 // that read the baked config_generated.hpp (no filesystem on the RP2350).
@@ -20,7 +20,6 @@
 #include "gait/engagement.hpp"
 #include "gait/gaits/base.hpp"
 #include "gait/kinematics.hpp"
-#include "gait/pause.hpp"
 #include "gait/reseat.hpp"
 #include "gait/stand_transition.hpp"
 #include "gait/types.hpp"
@@ -33,9 +32,11 @@ enum class EngineState {
   STAND,
   ENGAGING,
   GAIT,
-  PAUSING,
-  PAUSED,
-  RESUMING,
+  // Command has gone to zero (or a gait change is pending): the gait keeps
+  // running at a hard-zero stride, so every touchdown lands on the leg's
+  // nominal stance and the walk re-plants its own feet. Ends when all six have
+  // touched down — at most one cycle.
+  SETTLING,
   FOLDING,
   RESEATING,
   FAULT,
@@ -56,10 +57,8 @@ struct EngineConfig {
   float swing_phase_margin = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
-  float pause_debounce_delay = 0.0f;
-  float pause_to_reseat_delay = 0.0f;
-  float gait_change_pause_to_reseat_delay = 0.0f;
-  float max_reset_time = 0.0f;
+  float settle_debounce_delay = 0.0f;
+  float settle_swing_time = 0.0f;
   float init_pair_swing_time = 0.0f;
   float init_lift_body_time = 0.0f;
   float init_swing_clearance = 0.0f;
@@ -80,6 +79,30 @@ struct EngineConfig {
     p.touchdown_velocity = touchdown_velocity;
     return p;
   }
+
+  // How a reseat swing is shaped. Its own clearance (a re-plant lifts far less
+  // than a step), but the gait's rise/descent split and touchdown probe: a foot
+  // re-planting has the same landing to make as one finishing a step, so it is
+  // eased the same way instead of falling back on the unshaped defaults.
+  SwingProfile reseat_profile() const {
+    SwingProfile p;
+    p.clearance = reseat_swing_clearance;
+    p.apex_fraction = swing_apex_fraction;
+    p.touchdown_velocity = touchdown_velocity;
+    return p;
+  }
+};
+
+// How far a stance anchor may drift from its leg's nominal stance.
+//
+// `band` is the excursion the gait designs for — half a stride, the AEP..PEP
+// envelope — which a steady walk rides exactly. `ceiling` is the hard limit the
+// anchor may never pass. Between the two the outward rate is eased to zero, so
+// the foot target stays velocity-continuous where a hard clip would kink it.
+struct StanceBand {
+  Vec3 nominal = Vec3::Zero();
+  float band = 0.0f;
+  float ceiling = 0.0f;
 };
 
 // Per-leg body-frame stance target as an integral from touchdown. Removes
@@ -90,10 +113,13 @@ class StanceIntegrator {
   StanceIntegrator();
   void seed(const std::map<std::string, Vec3>& last_targets,
             const std::map<std::string, bool>& last_stance);
-  // Returns the integrated body-frame target if in stance, else nullopt.
+  // Returns the integrated body-frame target if in stance, else nullopt. The
+  // integral is bounded by `bound`: without it a command reversal mid-stance
+  // walks the leg back past its own touchdown point with nothing to stop it.
   std::optional<Vec3> step(const std::string& name, bool in_stance,
                            const Vec3& swing_target,
-                           std::pair<float, float> v_leg, float dt);
+                           std::pair<float, float> v_leg, float dt,
+                           const StanceBand& bound);
   void reset();
   bool is_stance(const std::string& name) const { return is_stance_.at(name); }
 
@@ -178,7 +204,6 @@ class Engine {
   void apply_strategy(const std::string& name);
   std::unique_ptr<InitializeController> build_initialize();
   std::unique_ptr<FoldController> build_fold();
-  std::unique_ptr<PauseController> build_pause();
   std::unique_ptr<EngagementController> build_engagement();
   std::unique_ptr<ReseatController> build_reseat(
       const std::map<std::string, Vec3>& target_stance);
@@ -188,12 +213,36 @@ class Engine {
   bool cmd_is_zero(std::pair<float, float> v_body_xy, float omega_z) const;
   std::map<std::string, LegOutput> emit_stand() const;
   std::map<std::string, LegOutput> emit_held() const;
+  // `settling` overrides the command with a hard zero and runs the clock at the
+  // settle cycle time; see EngineState::SETTLING.
   std::map<std::string, LegOutput> tick_gait(float dt,
                                              std::pair<float, float> v_body_xy,
-                                             float omega_z, bool cmd_zero);
-  void enter_pausing();
-  void enter_resuming();
-  std::map<std::string, LegOutput> tick_pause(float dt);
+                                             float omega_z, bool settling);
+  // Every foot planted on its nominal stance — the standing pose, tested for
+  // rather than sequenced towards.
+  bool all_settled() const;
+  // No foot in the air. The gait's phase margin guarantees this window at every
+  // handover, so it is the earliest the reseat ladder can take over cleanly.
+  bool all_planted() const;
+  // Whether letting the gait finish the settle beats handing the remaining legs
+  // to the reseat ladder. A gait that swings its legs in many small groups walks
+  // them home one group at a time and takes a whole cycle over it; the ladder
+  // does three mirrored pairs regardless. Tripod wins on its own, the longer
+  // duty factors do not.
+  bool settle_beats_reseat() const;
+  // Forget every in-flight swing, including any leg the settle was holding down.
+  void reset_swing_state();
+  // One settle tick's exit test: stand if the feet are home, hand the rest to
+  // the reseat ladder if the gait would be slower at it, else keep settling.
+  void finish_or_hand_off_settle();
+  // SETTLING -> STAND: commit any pending gait change and hand the feet, already
+  // on nominal, to the standing hold.
+  void finish_settling();
+  // Give the feet, wherever they actually are, to the reseat ladder and enter
+  // RESEATING. The ladder arcs each one home and skips the ones already there,
+  // so it is the only correct way to reach a stand from a stance the gait did
+  // not re-plant itself — assigning nominal_ instead teleports them.
+  void hand_off_to_reseat();
   std::map<std::string, LegOutput> tick_reseat(float dt);
   std::map<std::string, LegOutput> tick_fold(float dt);
   std::map<std::string, LegOutput> tick_engagement(
@@ -213,7 +262,6 @@ class Engine {
   std::optional<GaitClock> clock_;
   StanceIntegrator stance_;
   SwingPlanner swing_;
-  std::unique_ptr<PauseController> pause_;
   std::unique_ptr<EngagementController> engagement_;
   std::unique_ptr<InitializeController> initialize_;
   std::unique_ptr<FoldController> fold_;
@@ -223,8 +271,20 @@ class Engine {
   std::map<std::string, Vec3> last_targets_;
   std::map<std::string, bool> last_stance_;
   float cmd_zero_elapsed_ = 0.0f;
-  float paused_elapsed_ = 0.0f;
-  std::map<std::string, bool> last_swing_flags_;
+  // Gain on the commanded velocity, eased 1 -> 0 across the debounce once the
+  // command is inside cmd_zero_tol (or a gait change is waiting), and eased back
+  // the same way if it returns.
+  //
+  // A command that small is one the engine has decided to call zero, but
+  // stride_vector still multiplies it by a whole stance — 3.5 s on a ripple — so
+  // 3 mm/s of "zero" is a 12 mm stride and half of that is live AEP. Zeroing it
+  // in one tick therefore snapped every airborne foot; a gait change, which
+  // settles from a *full* command, snapped them further. The settle is entered
+  // only once this reaches zero, so by then there is nothing left to step.
+  float cmd_gain_ = 1.0f;
+  // Per-leg: its lift-off came due while the settle was holding them, so it is
+  // sitting this swing window out. See the hold in tick_gait.
+  std::map<std::string, bool> held_down_;
 
   float applied_height_ = 0.0f;
   float target_height_ = 0.0f;

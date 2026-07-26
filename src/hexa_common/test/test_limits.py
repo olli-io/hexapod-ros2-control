@@ -40,7 +40,6 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
-        max_reset_time=0.6,
         yaw_bias=0.75,
         standing_pose=dict(
             tip_radius=0.135, body_height=0.04, corner_leg_coxa_deg=0

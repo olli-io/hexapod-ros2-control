@@ -5,7 +5,7 @@
 namespace hexa::display {
 
 const std::set<std::string>& idleGaitStates() {
-    static const std::set<std::string> kStates = {"folded", "stand", "paused"};
+    static const std::set<std::string> kStates = {"folded", "stand"};
     return kStates;
 }
 
@@ -21,9 +21,7 @@ const std::unordered_map<std::string, Expression>& defaultExpressionMap() {
         {"stand", Expression::NEUTRAL},
         {"engaging", Expression::NEUTRAL},
         {"gait", Expression::HAPPY},
-        {"pausing", Expression::NEUTRAL},
-        {"paused", Expression::SLEEPY},
-        {"resuming", Expression::NEUTRAL},
+        {"settling", Expression::NEUTRAL},
         {"reseating", Expression::NEUTRAL},
         {"folding", Expression::SLEEPY},
     };

@@ -135,11 +135,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.swing_phase_margin = f(g["swing_phase_margin"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
-  e.pause_debounce_delay = f(g["pause_debounce_delay"]);
-  e.pause_to_reseat_delay = f(g["pause_to_reseat_delay"]);
-  e.gait_change_pause_to_reseat_delay =
-      f(g["gait_change_pause_to_reseat_delay"]);
-  e.max_reset_time = f(g["max_reset_time"]);
+  e.settle_debounce_delay = f(g["settle"]["debounce_delay"]);
+  e.settle_swing_time = f(g["settle"]["swing_time"]);
   e.init_pair_swing_time = f(g["initialize"]["pair_swing_time"]);
   e.init_lift_body_time = f(g["initialize"]["lift_body_time"]);
   e.init_swing_clearance = f(g["initialize"]["swing_clearance"]);

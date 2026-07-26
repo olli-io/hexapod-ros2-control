@@ -48,15 +48,15 @@ gait_node:
     #                         front-to-back and left-to-right. The middle legs
     #                         always point straight out.
     standing_pose:
-      tip_radius: 0.135
-      body_height: 0.05
+      tip_radius: 0.140
+      body_height: 0.04
       corner_leg_coxa_deg: 0
 
     # ─── Stride geometry ────────────────────────────────────────────
 
     # How far a foot travels along the ground in one step (m).
     # Shorter = gentler on the joints, but slower top speed.
-    stride_length: 0.09
+    stride_length: 0.1
 
     # How high a foot lifts during a step (m).
     step_height: 0.04
@@ -117,24 +117,33 @@ gait_node:
     # Expect to experiment to find what feels right.
     yaw_bias: 0.6
 
-    # ─── Pausing descent ────────────────────────────────────────────
+    # ─── Settling to a stop ─────────────────────────────────────────
+    #
+    # When the command goes to zero the gait keeps running with a zero
+    # stride, so every foot's touchdown point collapses onto its resting
+    # stance: the walk re-plants its own feet, and the robot stands the
+    # moment the last one lands. A tripod stops this way in one cycle.
+    #
+    # Gaits that swing their legs in smaller groups are slower at it, and
+    # a crawl — whose swings run end to end, so all six feet are never
+    # down together — cannot finish this way at all. Those stop lifting
+    # new legs, land whatever is in the air, and hand the rest to the
+    # reseat ladder below. The engine picks whichever is quicker, so
+    # retuning either side moves the line on its own.
 
-    # Longest time (s) allowed to lower airborne feet to the ground when
-    # coming to a stop.
-    max_reset_time: 1.2
-
-    # ─── Pause state machine ────────────────────────────────────────
-
-    # Wait (s) after cmd_vel hits zero before actually pausing.
-    # Longer = fewer accidental pauses when the joystick crosses zero.
-    pause_debounce_delay: 0.4
-
-    # Wait (s) while paused before the feet return to the resting stance.
-    pause_to_reseat_delay: 0.2
-
-    # Shorter version of the above used when a gait change is pending, so
-    # switching gait mid-walk feels immediate.
-    gait_change_pause_to_reseat_delay: 0.1
+    settle:
+      # Wait (s) after cmd_vel hits zero before the gait commits to
+      # stopping. Longer = fewer accidental stops when the stick crosses
+      # zero.
+      debounce_delay: 0.4
+      # Time (s) a foot spends in the air while settling, which sets the
+      # settle's cycle time — and with it the worst-case stop, one cycle.
+      # A settling step covers at most half a stride, half of what a
+      # walking step does, so it can be quicker than min_swing_time
+      # without the foot moving any faster. Divided by the gait's swing
+      # window the same way min/max_swing_time are, so every gait gets
+      # the same airborne time.
+      swing_time: 0.45
 
     # ─── Cold-start sequence ────────────────────────────────────────
 
@@ -150,7 +159,12 @@ gait_node:
       # the foot's collision sphere, or Gazebo shoves the body up early.
       place_feet_clearance: 0.012
 
-    # ─── Return-to-stance sequence ──────────────────────────────────
+    # ─── Return-to-stance ladder ────────────────────────────────────
+    #
+    # Places the feet in three mirrored pairs, skipping any that are
+    # already standing where they are being sent. Used after a body
+    # height change, and by the gaits above that cannot settle
+    # themselves.
 
     reseat:
       # How long (s) the target height must hold steady before the feet
@@ -160,11 +174,11 @@ gait_node:
       # doesn't trigger a re-plant.
       height_change_threshold: 0.002
       # Time (s) to swing each mirrored pair of feet into place.
-      pair_swing_time: 0.2
+      pair_swing_time: 0.35
       # Pause (s) between pairs so each one lands before the next lifts.
       pair_dwell_time: 0.05
       # Extra foot lift (m) mid-swing. Small — feet start from the ground.
-      swing_clearance: 0.025
+      swing_clearance: 0.02
 
 # ═══ Control velocity shaping (control_node) ════════════════════════
 control_node:
@@ -272,19 +286,7 @@ posture_node:
     animation_reserve_pitch: 0.15
     animation_reserve_yaw: 0.15
 
-    # How far the body may be posed away from its resting stance. This is the
-    # only place the body-height envelope is set: teleop (gamepad and web) reads
-    # it from here rather than declaring its own.
-    #
-    # The two height values are ABSOLUTE belly clearance off the ground, same
-    # units and frame as gait_node's standing_pose.body_height (0.05) — not a
-    # plus/minus around it. They must bracket that value, or startup fails.
-    #
-    # Nothing re-checks the joint limits once the body is off its resting
-    # height, so these are the only guard there is. With the current geometry
-    # the femur runs out of downward travel (-35 deg) at about 0.151 m, so 0.14
-    # keeps roughly a centimetre in hand. The floor is far from any limit; it is
-    # set by how low you actually want the belly to sit.
+    # How far the body may be posed away from its resting stance (measured from ground to the bottom of the hexa).
     body_height_max_m: 0.14
     body_height_min_m: 0.02
 

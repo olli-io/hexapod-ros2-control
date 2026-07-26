@@ -91,7 +91,6 @@ set(FW_GAIT_SOURCES
   ${GAIT_SRC}/gaits/base.cpp
   ${GAIT_SRC}/gaits/registry.cpp
   ${GAIT_SRC}/engagement.cpp
-  ${GAIT_SRC}/pause.cpp
   ${GAIT_SRC}/stand_transition.cpp
   ${GAIT_SRC}/reseat.cpp
   ${GAIT_SRC}/limits.cpp

@@ -57,6 +57,8 @@ Use exactly these names in identifiers, log messages, and docstrings — not the
 - **animation** — a pure function from `AnimationContext` to a `BodyPose` offset; one ingredient in the posture stack. Use this word only for the posture animation-stack layers (`shared/motion_core/posture`), never for gait or kinematic motion.
 - **pose mode** — `/cmd_vel` is zero, body posture changes while feet stay planted.
 - **gait-active** — `/cmd_vel` is non-zero; posture animations run on top of the walking gait.
+- **settle** — how the robot stops: the gait keeps running at an exactly zero command, so every AEP collapses onto the leg's nominal stance and the walk re-plants its own feet. Ends when all six are home. Not *pause*, *stop sequence*, *re-plant*.
+- **reseat** — the mirrored-pair re-plant ladder. Three callers: a body-height change from a stand, a settle on a gait too slow (or, like crawl, unable) to walk its own legs home, and a command withdrawn mid-engagement (the engagement cannot re-plant its own feet at a zero command).
 
 Full definitions in `docs/leg-phases.md`. Do not introduce new synonyms.
 

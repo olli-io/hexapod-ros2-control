@@ -1,10 +1,12 @@
-// Stand -> Gait engagement and Paused -> Gait resume. Float fork of
-// engagement.hpp (plan part 06).
+// Stand -> Gait engagement. Float fork of engagement.hpp (plan part 06).
 //
-// One per-leg state machine (INITIAL_STANCE / INITIAL_SWING / GAIT_LIKE) drives
-// two entry points: engage mode (begin: STAND -> GAIT, one full master cycle
-// with a smoothstep body-velocity envelope) and resume mode (begin_resume:
-// PAUSED -> GAIT, seeded from the paused master phase, no envelope).
+// One per-leg state machine (INITIAL_STANCE / INITIAL_SWING / GAIT_LIKE) runs
+// one full master cycle from a standing start, under a smoothstep
+// body-velocity envelope, and hands the clock to the engine at master = 1.
+//
+// There is no resume counterpart: a stop runs through EngineState::SETTLING,
+// which never stops the gait clock, so a command that comes back is picked up
+// by the engine's own tick with nothing to re-enter.
 #pragma once
 
 #include <map>
@@ -41,13 +43,6 @@ class EngagementController {
   void begin(const Strategy& strategy,
              const std::map<std::string, LegContext>& leg_contexts);
 
-  // Arm the engagement from a PAUSED start, resuming from master_phase.
-  void begin_resume(const Strategy& strategy,
-                    const std::map<std::string, LegContext>& leg_contexts,
-                    const std::map<std::string, Vec3>& last_targets,
-                    const std::map<std::string, bool>& prev_swing_flags,
-                    float master_phase);
-
   std::map<std::string, LegOutput> update(float dt,
                                           std::pair<float, float> v_cmd_xy,
                                           float omega_cmd);
@@ -66,9 +61,6 @@ class EngagementController {
   float controller_dt_;
 
   EngagementState state_ = EngagementState::IDLE;
-  // "engage" — STAND -> GAIT; "resume" — PAUSED -> GAIT.
-  std::string mode_ = "engage";
-
   const Strategy* strategy_ = nullptr;
   std::map<std::string, LegContext> leg_contexts_;
   std::map<std::string, bool> is_initial_swing_;
@@ -83,7 +75,6 @@ class EngagementController {
   std::map<std::string, Vec3> foot_position_;
   std::map<std::string, Vec3> lift_off_position_;
   std::map<std::string, bool> has_lifted_off_;
-  std::map<std::string, bool> has_completed_first_swing_;
 };
 
 }  // namespace hexa::gait

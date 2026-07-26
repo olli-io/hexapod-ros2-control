@@ -76,11 +76,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.swing_phase_margin, be.swing_phase_margin, kTol);
   EXPECT_NEAR(le.controller_dt, be.controller_dt, kTol);
   EXPECT_NEAR(le.cmd_zero_tol, be.cmd_zero_tol, kTol);
-  EXPECT_NEAR(le.pause_debounce_delay, be.pause_debounce_delay, kTol);
-  EXPECT_NEAR(le.pause_to_reseat_delay, be.pause_to_reseat_delay, kTol);
-  EXPECT_NEAR(le.gait_change_pause_to_reseat_delay,
-              be.gait_change_pause_to_reseat_delay, kTol);
-  EXPECT_NEAR(le.max_reset_time, be.max_reset_time, kTol);
+  EXPECT_NEAR(le.settle_debounce_delay, be.settle_debounce_delay, kTol);
+  EXPECT_NEAR(le.settle_swing_time, be.settle_swing_time, kTol);
   EXPECT_NEAR(le.init_pair_swing_time, be.init_pair_swing_time, kTol);
   EXPECT_NEAR(le.init_lift_body_time, be.init_lift_body_time, kTol);
   EXPECT_NEAR(le.init_swing_clearance, be.init_swing_clearance, kTol);

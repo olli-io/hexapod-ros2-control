@@ -50,6 +50,42 @@ For zero body velocity, AEP and PEP both collapse onto the leg's
 **nominal stance position** — the default foot placement when standing
 still.
 
+AEP..PEP is also a **bound**, not just a description. A planted foot
+tracks the ground by integrating the commanded velocity, which under a
+steady walk carries it from AEP to PEP and no further. When the command
+turns *under* a planted foot — a stick reversal, say — that integral
+would otherwise run on past PEP with nothing to stop it, so the engine
+eases it to a halt a short grace band beyond. The trade is that a foot
+held at the bound slides against the ground for as long as the command
+keeps pushing it outward: reversing faster than one stride costs a few
+millimetres of slip, in exchange for a foot that can never be commanded
+outside the stance envelope its leg was sized for.
+
+The collapse is also how the robot stops. **Settling** is the gait run
+at an exactly zero command: AEP, PEP and the nominal stance are then the
+same point, so each foot's next swing carries it home and each planted
+foot stops dead. For a tripod that is the whole stop — the walk is its
+own re-plant, and it keeps the swing clearance, the touchdown probe and
+the gait's own guarantee about how many feet are down at once. Once all
+six are home, at most a cycle later, the engine says it is standing.
+
+A gait that swings its legs in smaller groups takes longer over the same
+thing, and one whose swings run end to end — a crawl — never has the
+instant with all six feet down that standing means, so it could not
+finish at all. Those stop differently: no leg that is down is allowed to
+start another swing, whatever is already in the air lands home, and the
+legs still out are handed to the **reseat** ladder, which places three
+mirrored pairs and skips any foot already standing where it is being
+sent. The engine picks between the two by which is quicker, so retuning
+either the settle or the ladder moves the line on its own.
+
+Releasing the stick before the walk has fully started — during the
+engagement ladder, which is one whole cycle long and so is where a short
+drive on a slow gait usually ends — goes to the reseat too. The
+engagement carries its planted feet at the commanded velocity, so a zero
+command only freezes them where they were; it has no way to walk them
+home, and the ladder is what puts them back.
+
 ## 3. Cycle-level parameters
 
 Properties of the gait cycle (the synchronized motion of all six legs):

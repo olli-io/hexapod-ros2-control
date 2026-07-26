@@ -157,9 +157,7 @@ bool posture_active(gait::EngineState state) {
     case E::STAND:
     case E::ENGAGING:
     case E::GAIT:
-    case E::PAUSING:
-    case E::PAUSED:
-    case E::RESUMING:
+    case E::SETTLING:
     case E::RESEATING:
       return true;
     case E::FOLDED:

@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 
+#include "gait/gaits/base.hpp"
 #include "gait/kinematics.hpp"
 #include "gait/types.hpp"
 
@@ -42,21 +43,33 @@ std::map<std::string, Vec3> reseat_nominal_stance(
 
 class ReseatController {
  public:
+  // swing shapes the pair's arc exactly as it shapes a gait swing; its width is
+  // ignored (a reseat is direction-agnostic, so the arc stays a vertical lift
+  // over a straight chord).
+  //
+  // A pair already standing on its targets is skipped outright, costing neither
+  // a swing nor a dwell: after a settle hands its leftovers over, some legs are
+  // already home, and lifting a foot to put it back where it is reads as a stray
+  // step. A height change moves all six, so nothing is skipped there.
   ReseatController(std::map<std::string, Vec3> current_stance,
                    std::map<std::string, Vec3> target_stance,
                    float pair_swing_time, float pair_dwell_time,
-                   float swing_clearance, float controller_dt);
+                   const SwingProfile& swing, float controller_dt);
 
   bool done() const { return done_; }
   std::map<std::string, LegOutput> update(float dt);
 
  private:
+  // Advance past any pair that is already on its targets, then latch the origins
+  // of the one that is left. Sets done_ if none is.
   void seed_pair_origin();
+  bool pair_needs_moving(std::size_t idx) const;
+  bool remaining_pair_needs_moving() const;
 
   std::map<std::string, Vec3> target_;
   float pair_swing_time_;
   float pair_dwell_time_;
-  float swing_clearance_;
+  SwingProfile swing_;
   float controller_dt_;
 
   std::map<std::string, Vec3> positions_;

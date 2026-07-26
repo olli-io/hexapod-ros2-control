@@ -75,7 +75,7 @@ PUBLISH_RATE_HZ = 50.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
 _GAIT_SWITCH_STATES: frozenset[str] = frozenset(
-    {"stand", "gait", "pausing", "paused", "reseating"}
+    {"stand", "gait", "settling", "reseating"}
 )
 
 

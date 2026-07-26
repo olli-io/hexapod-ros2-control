@@ -186,6 +186,47 @@ TEST(Pipeline, ForwardCommandWalks) {
   EXPECT_EQ(max_unreachable, 0) << "a foot target went unreachable while walking";
 }
 
+// Flicking the strafe stick from one stop to the other turns the command under
+// six planted feet. Composition check for that path: the whole chain — map_joy,
+// Control::shape's envelope cut and slew, the engine, IK — has to keep running
+// through a reversal at the real caps and ramp rate, with the gait never
+// dropping out and no foot going unreachable.
+//
+// Deliberately weaker than the engine-level reversal suite in test_gait_unit,
+// which samples at the 5 ms engine tick; this one runs at the 20 ms pipeline
+// tick, where a few-tick excursion window is easy to step over. Trust that suite
+// for the numbers and this one for the seam.
+TEST(Pipeline, StrafeReversalKeepsEveryFootReachable) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+
+  // right_stick_x is drive_y in gait mode (teleop_joy.yaml).
+  Pad left;
+  left.axes[bt_teleop::kRightStickX] = bt_teleop::kAxisMax;
+  Pad right;
+  right.axes[bt_teleop::kRightStickX] = bt_teleop::kAxisMin;
+
+  // A lateral engagement takes longer than a forward one; 600 ticks (12 s) is
+  // generous slack on the ~5 s it needs.
+  bool reached_gait = false;
+  int max_unreachable = 0;
+  for (int i = 0; i < 600; ++i) {
+    const pl::TickResult r = run(p, left, 1, now_us);
+    reached_gait = reached_gait || (r.engine_state == EngineState::GAIT);
+  }
+  ASSERT_TRUE(reached_gait) << "engine never engaged into GAIT on a strafe";
+
+  for (int i = 0; i < 400; ++i) {
+    const pl::TickResult r = run(p, right, 1, now_us);
+    max_unreachable = std::max(max_unreachable, r.unreachable);
+    EXPECT_EQ(r.engine_state, EngineState::GAIT)
+        << "the gait dropped out mid-reversal at tick " << i;
+  }
+  EXPECT_EQ(max_unreachable, 0)
+      << "a foot target went unreachable while reversing";
+}
+
 // A lost link is a safe-stop: the watchdog fires, the command is force-zeroed,
 // and the posture chain sees a non-walking body — the engine settles instead of
 // latching the last velocity.

@@ -101,7 +101,6 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/gait/gaits/base.cpp
     ${HEXA_SHARED}/gait/gaits/registry.cpp
     ${HEXA_SHARED}/gait/engagement.cpp
-    ${HEXA_SHARED}/gait/pause.cpp
     ${HEXA_SHARED}/gait/stand_transition.cpp
     ${HEXA_SHARED}/gait/reseat.cpp
     ${HEXA_SHARED}/gait/limits.cpp

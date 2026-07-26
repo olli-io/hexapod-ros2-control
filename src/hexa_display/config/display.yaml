@@ -17,9 +17,7 @@ display_node:
     expression_map.stand: neutral
     expression_map.engaging: neutral
     expression_map.gait: happy
-    expression_map.pausing: neutral
-    expression_map.paused: sleepy
-    expression_map.resuming: neutral
+    expression_map.settling: neutral
     expression_map.reseating: neutral
     expression_map.folding: sleepy
 

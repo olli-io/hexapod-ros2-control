@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <string>
+#include <tuple>
 
 #include <gtest/gtest.h>
 
@@ -18,6 +20,8 @@
 #include "gait/gaits/registry.hpp"
 #include "gait/limits.hpp"
 #include "gait/trajectory.hpp"
+#include "kinematics/body_transform.hpp"
+#include "kinematics/leg_ik.hpp"
 
 namespace g = hexa::gait;
 
@@ -331,8 +335,8 @@ TEST(Trajectory, SwingWidthArchesAndCloses) {
   EXPECT_NEAR(p.touchdown_velocity.y, 0.0f, 1e-3f);
 }
 
-// The arch does not depend on there being any lift: the pause descent builds a
-// profile with zero clearance and a non-zero width.
+// The two shape terms are independent: the lateral arch survives a profile that
+// asks for no lift at all, rather than collapsing with the clearance.
 TEST(Trajectory, SwingWidthSurvivesZeroClearance) {
   g::SwingProfile profile;
   profile.clearance = 0.0f;
@@ -677,7 +681,541 @@ TEST(Engine, TouchdownStaysVelocityContinuousWhileCommandRamps) {
       << "foot velocity steps at touchdown on " << worst_leg;
 }
 
-TEST(Engine, ZeroCommandPausesAndReseatsToStand) {
+// ── Direction reversal ──
+//
+// Flicking the stick from full left to full right turns the command under six
+// planted feet. The stance target is an integral from touchdown, so without a
+// bound a leg walks back past its own touchdown point for the rest of a stance
+// window — worst on the middle legs, whose own radial reach axis *is* body y.
+
+namespace {
+
+constexpr float kReversalDt = 0.005f;
+
+// The saturating lateral command for a gait, i.e. the cap
+// pipeline_config_loader derives and scale_to_envelope enforces.
+float saturating_speed(const g::EngineConfig& cfg, float duty_factor = 0.5f) {
+  const float swing_end = g::swing_end_phase(duty_factor, cfg.swing_phase_margin);
+  return cfg.stride_length * swing_end /
+         (cfg.min_swing_time * (1.0f - swing_end));
+}
+
+// One tick of BodyVelocityLimiter's vectorial linear slew, so the reversal these
+// tests drive is the one the robot actually sees. Lateral-only, so the vector
+// slew reduces to a scalar one.
+float slew_toward(float v, float target, float accel, float dt) {
+  const float step = accel * dt;
+  const float delta = target - v;
+  return std::fabs(delta) <= step ? target : v + std::copysign(step, delta);
+}
+
+struct ReversalStats {
+  float peak_excursion = 0.0f;   // max |target.xy - nominal.xy| over all legs
+  // Same, but stance legs only, where the target *is* the anchor and the bound
+  // therefore applies exactly — the swing arch and ground-line extension ride on
+  // top of it and would blur the guarantee.
+  float peak_stance_excursion = 0.0f;
+  float worst_velocity_jump = 0.0f;  // max tick-to-tick step, same stance streak
+  int unreachable = 0;               // ticks whose IK target left the workspace
+  int ticks = 0;
+  int clock_stalls = 0;   // ticks where master_phase() did not move
+  int frozen_swings = 0;  // airborne legs holding an identical target
+  std::string worst_leg;        // leg that hit peak_excursion
+  std::string unreachable_leg;  // first leg whose target left the workspace
+};
+
+// How hard the command turns. The engine is a library — nothing in it requires
+// the caller to slew — so both ends of the range have to hold.
+enum class Slew {
+  kLimiter,  // what BodyVelocityLimiter actually delivers
+  kInstant,  // a step command, e.g. a twist_mux source swap
+};
+
+// Walk laterally at `+speed` until the gait is steady, then turn the command to
+// `-speed` and keep going. `flip_offset` shifts the reversal within the gait
+// cycle, so a sweep covers every phase a leg can be caught in.
+ReversalStats drive_reversal(float speed, float flip_offset,
+                             bool reverse = true,
+                             Slew slew = Slew::kLimiter) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
+  const float accel =
+      slew == Slew::kInstant
+          ? std::numeric_limits<float>::max()
+          : speed / hexa::config::kControl.vmax_ramp_time_linear;
+
+  auto e = g::make_default_engine("tripod");
+  for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
+    e->update(kReversalDt, {0.0f, 0.0f}, 0.0f);
+    e->start_initialize();
+  }
+  EXPECT_EQ(e->state(), g::EngineState::STAND);
+
+  float v_y = 0.0f;
+  const auto tick = [&](float target) {
+    v_y = slew_toward(v_y, target, accel, kReversalDt);
+    return e->update(kReversalDt, {0.0f, v_y}, 0.0f);
+  };
+
+  // Settle: reach GAIT, then a couple of full cycles at the saturating command
+  // so every leg has cycled through the planner at least once.
+  for (int i = 0; i < 3000 && e->state() != g::EngineState::GAIT; ++i) {
+    tick(speed);
+  }
+  EXPECT_EQ(e->state(), g::EngineState::GAIT);
+  for (int i = 0; i < 600; ++i) tick(speed);
+  for (int i = 0; i < static_cast<int>(flip_offset / kReversalDt); ++i) {
+    tick(speed);
+  }
+
+  ReversalStats s;
+  struct LegTrace {
+    g::Vec3 target = g::Vec3::Zero();
+    g::Vec3 velocity = g::Vec3::Zero();
+    bool have = false;
+    int stance_streak = 0;
+    int swing_streak = 0;
+  };
+  std::map<std::string, LegTrace> trace;
+  float prev_master = e->master_phase();
+
+  for (int i = 0; i < 1200; ++i) {
+    const auto out = tick(reverse ? -speed : speed);
+    ++s.ticks;
+    if (std::fabs(e->master_phase() - prev_master) < 1e-9f) ++s.clock_stalls;
+    prev_master = e->master_phase();
+
+    for (const auto& [name, leg] : out) {
+      LegTrace& t = trace[name];
+      const g::Vec3 d = leg.foot_target - nominal.at(name);
+      const float excursion = std::hypot(d.x, d.y);
+      if (excursion > s.peak_excursion) {
+        s.peak_excursion = excursion;
+        s.worst_leg = name;
+      }
+      if (leg.stance) {
+        s.peak_stance_excursion = std::max(s.peak_stance_excursion, excursion);
+      }
+
+      const g::Vec3 in_leg =
+          hexa::body_to_leg(leg.foot_target, specs.at(name));
+      try {
+        (void)hexa::inverse_kinematics(in_leg, specs.at(name));
+      } catch (const hexa::UnreachableTarget&) {
+        ++s.unreachable;
+        if (s.unreachable_leg.empty()) s.unreachable_leg = name;
+      }
+
+      t.stance_streak = leg.stance ? t.stance_streak + 1 : 0;
+      t.swing_streak = leg.stance ? 0 : t.swing_streak + 1;
+      if (!leg.stance && t.have &&
+          (leg.foot_target - t.target).norm() < 1e-9f) {
+        ++s.frozen_swings;
+      }
+      // Only compare two samples taken inside the same stance streak, so the
+      // touchdown seam's deliberate vertical step is never differenced.
+      const g::Vec3 velocity =
+          t.have ? (leg.foot_target - t.target) / kReversalDt : g::Vec3::Zero();
+      if (t.have && t.stance_streak >= 3) {
+        const g::Vec3 jump = velocity - t.velocity;
+        s.worst_velocity_jump =
+            std::max(s.worst_velocity_jump, std::hypot(jump.x, jump.y));
+      }
+      t.velocity = velocity;
+      t.target = leg.foot_target;
+      t.have = true;
+    }
+  }
+  return s;
+}
+
+}  // namespace
+
+// The headline regression. A stance anchor that runs on past its band drives the
+// middle legs to the edge of their workspace — outward until the leg is dead
+// straight, and inward past the IK's *inner* annulus (|femur - tibia|), where
+// Pipeline::compose_gait silently freezes that leg on its last-good angles.
+TEST(Engine, StickReversalKeepsEveryFootReachable) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float cycle = cfg.max_swing_time /
+                      g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  // Against the slewed command, which is the only one the engine ever sees:
+  // Pipeline runs every tick through Control::shape / BodyVelocityLimiter. A
+  // stepped reversal additionally bulges the *swing*, whose lift-off ground line
+  // is latched at v_origin — a separate mechanism this bound does not address.
+  for (int i = 0; i < 12; ++i) {
+    const float offset = cycle * static_cast<float>(i) / 12.0f;
+    const ReversalStats s = drive_reversal(speed, offset);
+    EXPECT_EQ(s.unreachable, 0) << "flip offset " << offset
+                                << " left the workspace on " << s.unreachable_leg;
+  }
+}
+
+// The bound's guarantee is a hard ceiling on the anchor, not a tendency: however
+// hard the command turns, a planted foot stays within `1 + kStanceExcursionGrace`
+// of half a stride from its nominal. Unbounded, a stepped reversal walks it out
+// to three times that.
+TEST(Engine, StanceAnchorNeverPassesItsCeiling) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float band = 0.5f * cfg.stride_length;
+  // Mirrors kStanceExcursionGrace, which is engine-internal.
+  const float ceiling = band * 1.25f;
+  const float cycle = cfg.max_swing_time /
+                      g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  const float steady =
+      drive_reversal(speed, 0.0f, /*reverse=*/false).peak_stance_excursion;
+  EXPECT_NEAR(steady, band, speed * kReversalDt * 2.0f)
+      << "a steady walk should ride exactly on the band, and no further";
+
+  for (const Slew slew : {Slew::kLimiter, Slew::kInstant}) {
+    for (int i = 0; i < 12; ++i) {
+      const float offset = cycle * static_cast<float>(i) / 12.0f;
+      const ReversalStats s = drive_reversal(speed, offset, true, slew);
+      EXPECT_LT(s.peak_stance_excursion, ceiling)
+          << "flip offset " << offset << " on " << s.worst_leg;
+    }
+  }
+}
+
+// Whatever the bound does under a reversal, it has to be invisible the rest of
+// the time: at a constant command every stance leg tracks the ground exactly.
+TEST(Engine, SteadyWalkNeverTouchesTheStanceBound) {
+  const auto cfg = g::engine_config_from_config();
+  const auto nominal = g::nominal_stance_from_config();
+  const float speed = saturating_speed(cfg);
+
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  for (int i = 0; i < 3000 && e->state() != g::EngineState::GAIT; ++i) {
+    e->update(kReversalDt, {0.0f, speed}, 0.0f);
+  }
+  ASSERT_EQ(e->state(), g::EngineState::GAIT);
+  for (int i = 0; i < 600; ++i) e->update(kReversalDt, {0.0f, speed}, 0.0f);
+
+  std::map<std::string, g::Vec3> prev;
+  std::map<std::string, int> streak;
+  float worst_error = 0.0f;
+  float reached = 0.0f;
+  for (int i = 0; i < 1200; ++i) {
+    const auto out = e->update(kReversalDt, {0.0f, speed}, 0.0f);
+    for (const auto& [name, leg] : out) {
+      streak[name] = leg.stance ? streak[name] + 1 : 0;
+      if (leg.stance && streak[name] >= 2) {
+        // A planted foot tracks the ground exactly: -v_leg * dt, unattenuated.
+        const g::Vec3 d = leg.foot_target - prev[name];
+        worst_error =
+            std::max(worst_error, std::fabs(std::hypot(d.x, d.y) -
+                                            speed * kReversalDt));
+      }
+      const g::Vec3 e_xy = leg.foot_target - nominal.at(name);
+      if (leg.stance) reached = std::max(reached, std::hypot(e_xy.x, e_xy.y));
+      prev[name] = leg.foot_target;
+    }
+  }
+  EXPECT_LT(worst_error, 1e-5f) << "the bound is attenuating a steady walk";
+  // And it rides right up to the band, so the knee cannot be set any lower
+  // without biting in ordinary use.
+  EXPECT_NEAR(reached, 0.5f * cfg.stride_length, speed * kReversalDt * 2.0f);
+}
+
+// The bound is a wall, not a spring: a leg carried out to the ceiling has to come
+// back at full rate the moment the command turns, or it lags its own recovery.
+TEST(Engine, StanceAnchorRecoversInwardAtFullRate) {
+  const auto cfg = g::engine_config_from_config();
+  const float band = 0.5f * cfg.stride_length;
+  const float ceiling = band * 1.15f;
+  g::StanceIntegrator stance;
+  const g::Vec3 nominal(0.0f, 0.2f, -0.066f);
+  const g::StanceBand bound{nominal, band, ceiling};
+  const std::string leg = "l_middle";
+  constexpr float dt = 0.005f;
+  const float v = 0.15f;
+
+  // Seat the anchor on nominal, then drive it outward until it stops.
+  stance.step(leg, true, nominal, {0.0f, 0.0f}, dt, bound);
+  for (int i = 0; i < 4000; ++i) {
+    stance.step(leg, true, nominal, {0.0f, -v}, dt, bound);
+  }
+  const g::Vec3 pinned = *stance.step(leg, true, nominal, {0.0f, -v}, dt, bound);
+  EXPECT_LT(pinned.y - nominal.y, ceiling + 1e-6f)
+      << "the anchor passed its ceiling";
+  EXPECT_GT(pinned.y - nominal.y, band)
+      << "the drive never pushed the anchor out of its band";
+
+  const g::Vec3 back = *stance.step(leg, true, nominal, {0.0f, v}, dt, bound);
+  EXPECT_NEAR(pinned.y - back.y, v * dt, 1e-7f)
+      << "inward recovery is being attenuated";
+}
+
+// A hard clip on the anchor would bound the excursion just as well and put a
+// velocity kink in the foot target at the moment it bit. The eased saturation is
+// the reason this passes.
+TEST(Engine, FootTargetStaysVelocityContinuousAtTheStanceBound) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float cycle = cfg.max_swing_time /
+                      g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  for (int i = 0; i < 12; ++i) {
+    const float offset = cycle * static_cast<float>(i) / 12.0f;
+    const ReversalStats s = drive_reversal(speed, offset);
+    // A hard clip would shed the foot's whole ground speed in a single tick.
+    // Easing it across the grace band spreads that over ten or more, so state
+    // the bound against the speed itself rather than an absolute number that a
+    // stride_length retune would invalidate.
+    EXPECT_LT(s.worst_velocity_jump, 0.1f * speed) << "flip offset " << offset;
+  }
+}
+
+// The command crosses cmd_zero_tol on its way through a reversal. Holding the
+// targets there froze the whole gait for ~0.2 s with a leg hanging in the air.
+TEST(Engine, GaitKeepsRunningWhileTheCommandCrossesZero) {
+  const auto cfg = g::engine_config_from_config();
+  const ReversalStats s = drive_reversal(saturating_speed(cfg), 0.0f);
+  EXPECT_EQ(s.clock_stalls, 0) << "the gait clock stopped mid-reversal";
+  EXPECT_EQ(s.frozen_swings, 0) << "an airborne leg held its target";
+}
+
+// ── Settling to a stop ──
+//
+// Stopping is not a separate mechanism: at a zero command the stride collapses,
+// so every leg's AEP *is* its nominal stance and the gait re-plants its own feet
+// one swing at a time. SETTLING is that, run to completion — no pause ladder, no
+// reseat, no engagement pass to get back out of.
+
+namespace {
+
+// Walk laterally at `speed` until the gait is steady, then release the stick and
+// tick until STAND. `flip_offset` shifts the release within the gait cycle so a
+// sweep covers every phase a leg can be caught in. Returns what the settle did.
+struct SettleStats {
+  bool used_reseat = false;
+  bool reached_stand = false;
+  float settle_seconds = 0.0f;   // from the release to STAND
+  float worst_off_nominal = 0.0f;  // max |target.xy - nominal.xy| at the handoff
+  float worst_velocity_jump = 0.0f;  // max tick-to-tick step, same stance streak
+  int clock_stalls = 0;
+  int frozen_swings = 0;
+  int settling_ticks = 0;
+  int swings_after_release = 0;  // most lift-offs any one leg made after cmd zero
+  std::string worst_leg;
+  std::string last_state;
+  // Fastest a foot moved in one tick during the stop, and during the steady
+  // walk before it, as a yardstick.
+  float worst_tick_jump = 0.0f;
+  float walk_tick_jump = 0.0f;
+  std::string jump_leg;
+  float jump_at = 0.0f;
+  std::string jump_state;
+};
+
+SettleStats drive_settle(float speed, float flip_offset,
+                         const std::string& gait = "tripod",
+                         Slew slew = Slew::kLimiter) {
+  const auto nominal = g::nominal_stance_from_config();
+  // Releasing the stick does not step the engine's command to zero: Control
+  // slews it out over vmax_ramp_time_linear, so the last few swings before the
+  // command reads zero land at a shrinking stride, a little short of nominal.
+  // That ramp is the reason the settle has to judge where the feet are rather
+  // than count touchdowns.
+  const float accel =
+      slew == Slew::kInstant
+          ? std::numeric_limits<float>::max()
+          : speed / hexa::config::kControl.vmax_ramp_time_linear;
+
+  auto e = g::make_default_engine(gait);
+  run_to_stand(*e);
+  for (int i = 0; i < 6000 && e->state() != g::EngineState::GAIT; ++i) {
+    e->update(kReversalDt, {0.0f, speed}, 0.0f);
+  }
+  EXPECT_EQ(e->state(), g::EngineState::GAIT) << gait;
+  SettleStats s;
+  // Steady walk, and the yardstick it sets: the fastest any foot moves in one
+  // tick while the gait is doing its ordinary job.
+  {
+    std::map<std::string, g::Vec3> prev;
+    std::map<std::string, bool> have;
+    for (int i = 0; i < 1200; ++i) {
+      for (const auto& [n, leg] : e->update(kReversalDt, {0.0f, speed}, 0.0f)) {
+        if (have[n]) {
+          s.walk_tick_jump =
+              std::max(s.walk_tick_jump, (leg.foot_target - prev[n]).norm());
+        }
+        prev[n] = leg.foot_target;
+        have[n] = true;
+      }
+    }
+  }
+  for (int i = 0; i < static_cast<int>(flip_offset / kReversalDt); ++i) {
+    e->update(kReversalDt, {0.0f, speed}, 0.0f);
+  }
+
+  struct LegTrace {
+    g::Vec3 target = g::Vec3::Zero();
+    g::Vec3 velocity = g::Vec3::Zero();
+    bool have = false;
+    bool was_stance = true;
+    int stance_streak = 0;
+    int liftoffs = 0;
+  };
+  std::map<std::string, LegTrace> trace;
+  float prev_master = e->master_phase();
+  float v_y = speed;
+
+  // Everything the settle is judged on is measured from the moment the *engine*
+  // sees a zero command, not from the release: the ramp before that is ordinary
+  // walking, and the legs are supposed to keep stepping through it.
+  int zero_tick = -1;
+
+  for (int i = 0; i < 2000; ++i) {
+    v_y = slew_toward(v_y, 0.0f, accel, kReversalDt);
+    const auto out = e->update(kReversalDt, {0.0f, v_y}, 0.0f);
+    const bool cmd_zero =
+        std::fabs(v_y) < g::engine_config_from_config().cmd_zero_tol;
+    if (cmd_zero && zero_tick < 0) zero_tick = i;
+    if (e->state() == g::EngineState::SETTLING) ++s.settling_ticks;
+    if (e->state() == g::EngineState::RESEATING) s.used_reseat = true;
+    if (e->state() == g::EngineState::STAND) {
+      s.reached_stand = true;
+      s.settle_seconds = static_cast<float>(i - zero_tick) * kReversalDt;
+      for (const auto& [name, leg] : out) {
+        const g::Vec3 d = leg.foot_target - nominal.at(name);
+        const float off = std::hypot(d.x, d.y);
+        if (off > s.worst_off_nominal) {
+          s.worst_off_nominal = off;
+          s.worst_leg = name;
+        }
+      }
+      break;
+    }
+
+    if (std::fabs(e->master_phase() - prev_master) < 1e-9f) ++s.clock_stalls;
+    prev_master = e->master_phase();
+
+    for (const auto& [name, leg] : out) {
+      LegTrace& t = trace[name];
+      if (t.was_stance && !leg.stance && zero_tick >= 0) ++t.liftoffs;
+      t.was_stance = leg.stance;
+      s.swings_after_release = std::max(s.swings_after_release, t.liftoffs);
+      t.stance_streak = leg.stance ? t.stance_streak + 1 : 0;
+      if (!leg.stance && t.have && (leg.foot_target - t.target).norm() < 1e-9f) {
+        ++s.frozen_swings;
+      }
+      // Only differenced inside one stance streak, so the touchdown seam's
+      // deliberate vertical step is never sampled.
+      const g::Vec3 velocity =
+          t.have ? (leg.foot_target - t.target) / kReversalDt : g::Vec3::Zero();
+      if (t.have && t.stance_streak >= 3) {
+        const g::Vec3 jump = velocity - t.velocity;
+        s.worst_velocity_jump =
+            std::max(s.worst_velocity_jump, std::hypot(jump.x, jump.y));
+      }
+      if (t.have && zero_tick >= 0) {
+        const float jump = (leg.foot_target - t.target).norm();
+        if (jump > s.worst_tick_jump) {
+          s.worst_tick_jump = jump;
+          s.jump_leg = name;
+          s.jump_at = static_cast<float>(i - zero_tick) * kReversalDt;
+          s.jump_state = g::state_name(e->state());
+        }
+      }
+      t.velocity = velocity;
+      t.target = leg.foot_target;
+      t.have = true;
+    }
+  }
+  s.last_state = g::state_name(e->state());
+  return s;
+}
+
+// Worst case: the debounce, then one full settle cycle for the last leg to get
+// its turn in the air and land.
+float settle_budget(const g::EngineConfig& cfg) {
+  const float swing_end = g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+  return cfg.settle_debounce_delay + cfg.settle_swing_time / swing_end;
+}
+
+// The command the engine walks on, shaped through the same envelope the ROS /
+// firmware callers apply, so a per-gait test drives what the gait can actually
+// take rather than saturating the stance excursion bound.
+std::tuple<float, float, float> shaped_full_stick(const char* gait) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto caps =
+      g::load_velocity_caps_from_config(g::outer_stance_radius(nominal));
+  return g::scale_to_envelope(caps.linear_max(gait), 0.0f,
+                              caps.angular_max(gait), nominal,
+                              caps.linear_max(gait), caps.yaw_bias(gait));
+}
+
+}  // namespace
+
+// Releasing mid-engagement must re-plant the feet, not declare them home.
+//
+// The engagement integrates its stance legs at the *commanded* velocity, so a
+// zero command freezes each one where the walk had carried it — nothing brings
+// them back to nominal on their own, and a leg still waiting for its first
+// lift-off never swings at all. Assigning nominal_ at the handoff therefore
+// teleported every planted foot at once, with no lift. Worst on a ripple, whose
+// engagement is a full cycle long, so a short drive usually ends inside it.
+TEST(Engine, ReleasingMidEngagementReplantsInsteadOfTeleporting) {
+  constexpr float kTickDt = 0.005f;
+  const auto nominal = g::nominal_stance_from_config();
+
+  for (const char* gait : {"tripod", "tetrapod", "surf", "crawl", "ripple"}) {
+    const auto [v_x, v_y, omega] = shaped_full_stick(gait);
+    for (const int drive_ticks : {100, 300, 600}) {
+      auto e = g::make_default_engine(gait);
+      run_to_stand(*e);
+      for (int i = 0; i < drive_ticks; ++i) {
+        e->update(kTickDt, {v_x, v_y}, omega);
+      }
+
+      std::map<std::string, g::Vec3> prev;
+      float worst_jump = 0.0f;
+      std::string worst_leg;
+      bool stood = false;
+      for (int i = 0; i < 3000; ++i) {
+        const auto out = e->update(kTickDt, {0.0f, 0.0f}, 0.0f);
+        for (const auto& [name, leg] : out) {
+          auto it = prev.find(name);
+          if (it != prev.end()) {
+            const float jump = (leg.foot_target - it->second).norm();
+            if (jump > worst_jump) {
+              worst_jump = jump;
+              worst_leg = name;
+            }
+          }
+          prev[name] = leg.foot_target;
+        }
+        if (e->state() == g::EngineState::STAND && i > 3) {
+          stood = true;
+          break;
+        }
+      }
+
+      const std::string where =
+          std::string(gait) + " released after " + std::to_string(drive_ticks) +
+          " ticks";
+      ASSERT_TRUE(stood) << where << " never reached STAND";
+      // A swing at the settle's own pace is the fastest a foot is ever asked to
+      // move; anything beyond that is a teleport, not a step. The pre-fix
+      // handoff jumped up to half a stride in a single tick.
+      EXPECT_LT(worst_jump, 0.004f)
+          << where << ": " << worst_leg << " moved " << worst_jump * 1000.0f
+          << " mm in one tick";
+      for (const auto& n : g::LEG_NAMES) {
+        EXPECT_LT((prev.at(n) - nominal.at(n)).norm(), 1e-5f)
+            << where << ": stood on " << n << " off its nominal stance";
+      }
+    }
+  }
+}
+
+TEST(Engine, ZeroCommandSettlesToStand) {
   auto e = g::make_default_engine("tripod");
   run_to_stand(*e);
   for (int i = 0; i < 200 && e->state() != g::EngineState::GAIT; ++i) {
@@ -685,16 +1223,243 @@ TEST(Engine, ZeroCommandPausesAndReseatsToStand) {
   }
   ASSERT_EQ(e->state(), g::EngineState::GAIT);
 
-  // Drop the command: engine debounces, pauses, then reseats back to STAND.
+  // Drop the command: the engine debounces, settles, and stands. It never
+  // detours through a re-plant — RESEATING is the height-change path only.
+  bool saw_settling = false;
   bool returned = false;
   for (int i = 0; i < 400; ++i) {
     e->update(kDt, {0.0f, 0.0f}, 0.0f);
+    saw_settling = saw_settling || e->state() == g::EngineState::SETTLING;
+    EXPECT_NE(e->state(), g::EngineState::RESEATING);
     if (e->state() == g::EngineState::STAND) {
       returned = true;
       break;
     }
   }
+  EXPECT_TRUE(saw_settling);
   EXPECT_TRUE(returned);
+}
+
+// The premise of the whole design: a settling swing aims at the live AEP, which
+// at a zero stride *is* the nominal stance. If that ever stopped being exact,
+// the robot would stand on a stance it never re-planted onto.
+TEST(Engine, EveryFootLandsOnNominalWhenTheSettleFinishes) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float cycle =
+      cfg.max_swing_time / g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  for (int i = 0; i < 12; ++i) {
+    const float offset = cycle * static_cast<float>(i) / 12.0f;
+    const SettleStats s = drive_settle(speed, offset);
+    ASSERT_TRUE(s.reached_stand) << "release offset " << offset;
+    EXPECT_LT(s.worst_off_nominal, 1e-6f)
+        << "release offset " << offset << " stood on " << s.worst_leg
+        << " " << s.worst_off_nominal << " m off its nominal stance";
+  }
+}
+
+// The settle is bounded by its own cycle, whatever phase the release lands in —
+// there is no state that can sit and wait.
+TEST(Engine, SettleFinishesWithinOneCycle) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float budget = settle_budget(cfg);
+  const float cycle =
+      cfg.max_swing_time / g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  for (int i = 0; i < 12; ++i) {
+    const float offset = cycle * static_cast<float>(i) / 12.0f;
+    const SettleStats s = drive_settle(speed, offset);
+    ASSERT_TRUE(s.reached_stand) << "release offset " << offset;
+    EXPECT_LT(s.settle_seconds, budget + 4.0f * kReversalDt)
+        << "release offset " << offset;
+    EXPECT_GT(s.settling_ticks, 0) << "never entered SETTLING";
+  }
+}
+
+// No leg picks its foot up twice to reach the same place. This is what a latch
+// armed at the SETTLING edge got wrong: legs that had already re-planted during
+// the debounce were made to swing again to prove it, so a tripod stop took two
+// visible cycles instead of one.
+TEST(Engine, NoLegLiftsTwiceToSettle) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float cycle =
+      cfg.max_swing_time / g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  for (int i = 0; i < 12; ++i) {
+    const float offset = cycle * static_cast<float>(i) / 12.0f;
+    const SettleStats s = drive_settle(speed, offset);
+    ASSERT_TRUE(s.reached_stand) << "release offset " << offset;
+    EXPECT_FALSE(s.used_reseat) << "a tripod should settle on its own";
+    EXPECT_LE(s.swings_after_release, 1)
+        << "release offset " << offset << ": a leg swung "
+        << s.swings_after_release << " times to settle";
+  }
+}
+
+// ── The other gaits ──
+//
+// A tripod walks itself home in one cycle. The longer duty factors take longer
+// over it, and a crawl — whose swings run end to end, so there is never an
+// instant with all six feet down — cannot finish at all. Those hold their
+// lift-offs, let what is already in the air land, and hand the rest to the
+// reseat ladder. Which route a gait takes is a comparison the engine makes, not
+// a list of names, so the tests state the promise rather than re-derive it.
+
+namespace {
+
+// The ladder route's worst case, measured from the moment the command reads
+// zero: the debounce, one swing spent waiting for whatever is in the air to
+// land, then three mirrored pairs with a dwell between them. The engine only
+// picks the gait's own route when it is quicker than this, so it bounds every
+// stop whichever route was taken.
+float stop_budget(const g::EngineConfig& cfg) {
+  return cfg.settle_debounce_delay + cfg.settle_swing_time +
+         3.0f * cfg.reseat_pair_swing_time + 2.0f * cfg.reseat_pair_dwell_time;
+}
+
+// What the gait would need to walk every leg home itself: one cycle.
+float natural_budget(const g::EngineConfig& cfg, float duty) {
+  return cfg.settle_debounce_delay +
+         cfg.settle_swing_time / g::swing_end_phase(duty, cfg.swing_phase_margin);
+}
+
+}  // namespace
+
+TEST(Engine, EveryGaitSettlesOntoTheNominalStance) {
+  const auto cfg = g::engine_config_from_config();
+  const float budget = stop_budget(cfg);
+
+  for (const auto& [name, factory] : g::strategies()) {
+    const float duty = factory()->duty_factor();
+    const SettleStats s = drive_settle(saturating_speed(cfg, duty), 0.0f, name);
+
+    ASSERT_TRUE(s.reached_stand)
+        << name << " stuck in " << s.last_state << " after "
+        << s.settling_ticks << " settling ticks";
+    EXPECT_LT(s.worst_off_nominal, 1e-5f) << name << " on " << s.worst_leg;
+    // Whichever route it took, no foot was picked up twice to reach the same
+    // place — the gait swing and the ladder swing are alternatives, not stages.
+    EXPECT_LE(s.swings_after_release, 1) << name;
+    EXPECT_LT(s.settle_seconds, budget + 4.0f * kReversalDt)
+        << name << " settled in " << s.settle_seconds << " s against a "
+        << budget << " s budget (reseat: " << s.used_reseat << ")";
+    // Stopping must never move a foot faster than walking already does. This is
+    // what catches a discontinuity: a stop is slower motion than a walk, so any
+    // snap stands out against the gait's own yardstick immediately.
+    EXPECT_LT(s.worst_tick_jump, s.walk_tick_jump)
+        << name << " moved a foot " << s.worst_tick_jump * 1000.0f
+        << " mm in one tick while stopping, against " << s.walk_tick_jump * 1000.0f
+        << " mm walking — on " << s.jump_leg << " at t=" << s.jump_at << " in "
+        << s.jump_state;
+  }
+}
+
+// The two ends of the rule, pinned by name so a change of heart about either is
+// deliberate: a tripod is quick enough on its own, a crawl — whose swings run
+// end to end — never has the all-six-down instant that finishing needs.
+TEST(Engine, TripodSettlesItselfAndACrawlUsesTheReseat) {
+  const auto cfg = g::engine_config_from_config();
+  const auto route = [&](const std::string& gait) {
+    const float duty = g::strategies().at(gait)()->duty_factor();
+    return drive_settle(saturating_speed(cfg, duty), 0.0f, gait);
+  };
+
+  const SettleStats tripod = route("tripod");
+  ASSERT_TRUE(tripod.reached_stand);
+  EXPECT_FALSE(tripod.used_reseat) << "a tripod should settle on its own";
+  EXPECT_LT(tripod.settle_seconds,
+            natural_budget(cfg, 0.5f) + 4.0f * kReversalDt);
+
+  const SettleStats crawl = route("crawl");
+  ASSERT_TRUE(crawl.reached_stand);
+  EXPECT_TRUE(crawl.used_reseat)
+      << "a crawl never has all six feet down, so it cannot settle on its own";
+  EXPECT_LT(crawl.settle_seconds, stop_budget(cfg) + 4.0f * kReversalDt);
+}
+
+// A settle is the gait still running, so the two things that were wrong about
+// the old freeze must stay fixed all the way to the handoff: the clock keeps
+// turning and no airborne leg holds its target.
+TEST(Engine, SettleKeepsTheGaitRunning) {
+  const auto cfg = g::engine_config_from_config();
+  const SettleStats s = drive_settle(saturating_speed(cfg), 0.0f);
+  EXPECT_EQ(s.clock_stalls, 0) << "the gait clock stopped while settling";
+  EXPECT_EQ(s.frozen_swings, 0) << "an airborne leg held its target";
+}
+
+// Arming the settle swaps the clock from max_cycle_time to the settle cycle
+// time. That reshapes any in-flight swing arc, so check it does not show up as
+// a step in the foot target.
+TEST(Engine, SettleArmsWithoutSteppingTheFootTarget) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  const float cycle =
+      cfg.max_swing_time / g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+
+  for (int i = 0; i < 12; ++i) {
+    const float offset = cycle * static_cast<float>(i) / 12.0f;
+    const SettleStats s = drive_settle(speed, offset);
+    EXPECT_LT(s.worst_velocity_jump, 0.1f * speed)
+        << "release offset " << offset;
+  }
+}
+
+// The clock never stops, so a command that comes back mid-settle is picked up by
+// the ordinary gait tick — no engagement ladder to re-run, and no jump in the
+// foot targets from re-entering one.
+TEST(Engine, CommandReturningMidSettleResumesTheGaitDirectly) {
+  const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  for (int i = 0; i < 3000 && e->state() != g::EngineState::GAIT; ++i) {
+    e->update(kReversalDt, {0.0f, speed}, 0.0f);
+  }
+  ASSERT_EQ(e->state(), g::EngineState::GAIT);
+
+  // Steady walk, and the yardstick it sets: how much a foot's velocity changes
+  // in one ordinary tick. A resume that re-entered an engagement, or dropped a
+  // held leg into an arc already part-way along, would blow straight past it.
+  float walk_accel = 0.0f;
+  std::map<std::string, g::Vec3> prev, prev_step;
+  std::map<std::string, int> seen;
+  for (int i = 0; i < 600; ++i) {
+    for (const auto& [name, leg] : e->update(kReversalDt, {0.0f, speed}, 0.0f)) {
+      const g::Vec3 step = leg.foot_target - prev[name];
+      if (seen[name] >= 2) {
+        walk_accel = std::max(walk_accel, (step - prev_step[name]).norm());
+      }
+      prev_step[name] = step;
+      prev[name] = leg.foot_target;
+      ++seen[name];
+    }
+  }
+  ASSERT_GT(walk_accel, 0.0f);
+
+  // Release for a shade longer than the debounce, so SETTLING is entered but
+  // nowhere near done.
+  const int release_ticks =
+      static_cast<int>(cfg.settle_debounce_delay / kReversalDt) + 20;
+  for (int i = 0; i < release_ticks; ++i) {
+    for (const auto& [name, leg] : e->update(kReversalDt, {0.0f, 0.0f}, 0.0f)) {
+      prev_step[name] = leg.foot_target - prev[name];
+      prev[name] = leg.foot_target;
+    }
+  }
+  ASSERT_EQ(e->state(), g::EngineState::SETTLING);
+
+  const auto out = e->update(kReversalDt, {0.0f, speed}, 0.0f);
+  EXPECT_EQ(e->state(), g::EngineState::GAIT)
+      << "a returning command should resume the gait on the same tick";
+  for (const auto& [name, leg] : out) {
+    const g::Vec3 step = leg.foot_target - prev.at(name);
+    EXPECT_LT((step - prev_step.at(name)).norm(), walk_accel)
+        << name << " changed velocity more on the resume tick than it ever does"
+        << " while walking";
+  }
 }
 
 TEST(Engine, SetStrategyDefersWhileWalking) {
@@ -708,8 +1473,8 @@ TEST(Engine, SetStrategyDefersWhileWalking) {
   EXPECT_TRUE(e->set_strategy("tetrapod"));
   EXPECT_EQ(e->pending_strategy_name().value_or(""), "tetrapod");
 
-  // Keep commanding forward; the engine pauses, reseats, applies the change,
-  // and re-engages under the new strategy.
+  // Keep commanding forward; the engine settles to a stand anyway, applies the
+  // change at the handoff, and re-engages under the new strategy.
   bool applied = false;
   for (int i = 0; i < 600; ++i) {
     e->update(kDt, {0.06f, 0.0f}, 0.0f);
@@ -788,11 +1553,15 @@ TEST(StandingPose, ScalarsSetTheFootprint) {
 }
 
 TEST(StandingPose, RejectsASplayOutsideTheCoxaLimit) {
-  // Coxa travel is +/-45 deg (geometry.yaml); 60 must fail at load rather than
-  // straining a servo.
+  // A splay past the coxa travel window must fail at load rather than strain a
+  // servo. Derive the offending angle from the configured limit rather than
+  // naming a number, so widening the window in geometry.yaml can never turn
+  // this into a silent no-op.
+  const float coxa_limit_deg =
+      hexa::config::kJointLimits[0].upper * 180.0f / static_cast<float>(M_PI);
   EXPECT_THROW(g::standing_pose_from(hexa::config::kLegSpecs,
                                      hexa::config::kCoxaToBottom,
-                                     standing_with_splay(60.0f)),
+                                     standing_with_splay(coxa_limit_deg + 15.0f)),
                std::invalid_argument);
 }
 

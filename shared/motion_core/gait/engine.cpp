@@ -1,6 +1,7 @@
 #include "gait/engine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -16,6 +17,40 @@ constexpr float kHeightNoiseEpsilon = 1e-6f;
 // touchdown seam at gaits where the swing end is not representable).
 constexpr float kStanceSeamEpsilon = 1e-9f;
 
+// How close to its nominal stance a planted foot counts as re-planted. A foot
+// that landed at a zero stride is on live_aep(nominal, 0) == nominal exactly,
+// and the stance integrator then holds it there at zero velocity, so this only
+// has to absorb float noise. Anything a real command left behind sits
+// millimetres out, not microns.
+constexpr float kSettledEpsilon = 1e-5f;
+
+// Does this gait ever have all six feet on the ground at once? A leg lifts when
+// its own phase wraps to 0 — at master pymod(-offset, 1) — and lands swing_end
+// later, so a window with nothing in the air exists exactly where two successive
+// lift-offs are further apart than one swing. A tripod has one at every
+// handover; a crawl, whose swings run end to end, has none, and its feet can
+// therefore never all be home at the same instant.
+bool has_all_down_window(const PhaseOffsets& offsets, float swing_end) {
+  // Fixed-size and sorted in place: this runs on the control tick, and the
+  // RP2350 does not want a heap allocation there.
+  std::array<float, kNumLegs> starts{};
+  std::size_t n = 0;
+  for (const auto& [name, offset] : offsets.offsets()) {
+    (void)name;
+    starts[n++] = pymod(-offset, 1.0f);
+  }
+  std::sort(starts.begin(), starts.begin() + n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const bool last = (i + 1 == n);
+    const float gap = last ? (starts[0] + 1.0f - starts[n - 1])
+                           : starts[i + 1] - starts[i];
+    if (gap > swing_end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Per-gait cycle-time bounds derived from swing-phase bounds. Both ends scale by
 // 1 / swing_end so the swing-phase foot-velocity envelope is gait-agnostic, and
 // so a leg still gets a full min_swing_time..max_swing_time in the air once the
@@ -27,6 +62,56 @@ std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
   }
   const float scale = 1.0f / swing_end;
   return {cfg.min_swing_time * scale, cfg.max_swing_time * scale};
+}
+
+// How far past its design band a stance anchor may drift before the integrator
+// stops it, as a fraction of the band. The band is half a stride — exactly the
+// AEP..PEP envelope a steady walk rides — so the grace is only what a leg
+// borrows while the command turns under it.
+//
+// It is also the distance the foot has to shed its ground speed over, so it
+// trades excursion against how hard the foot is braked. On this geometry a full
+// lateral reversal peaks 14 mm past the band unbounded, and 0.25 gives up 8 mm
+// of that for a braking step of ~8% of stance speed per tick — a tenth of what a
+// hard clip would do, and well under what a swing already asks of the same leg.
+constexpr float kStanceExcursionGrace = 0.25f;
+
+// Quintic smoothstep. 0 -> 1 with zero slope and zero curvature at both ends.
+float ease5(float u) {
+  return u * u * u * (10.0f + u * (-15.0f + 6.0f * u));
+}
+
+// Ease the outward part of one stance step to zero as the anchor leaves its
+// band. Inward and tangential motion is untouched, so a leg carried out recovers
+// at full rate the moment the command turns — the bound is a wall, not a spring,
+// and it never lags.
+//
+// The gain is 1 with zero slope at `band`, so ordinary walking — which rides
+// exactly on the band at AEP and PEP — is untouched, and float noise at the
+// boundary attenuates as O(eps^3) rather than stepping. It is 0 at `ceiling`,
+// which the anchor therefore can never pass. The inward/outward test can only
+// flip where the radial rate is already zero, so the foot target stays
+// velocity-continuous across it.
+//
+// It shapes the *increment*, never the accumulated state: a soft-clip re-applied
+// to the state every tick is not idempotent, and would creep the anchor inward
+// even at zero velocity.
+std::pair<float, float> ease_outward(float e_x, float e_y, float d_x, float d_y,
+                                     float band, float ceiling) {
+  const float m = std::hypot(e_x, e_y);
+  if (m <= band || ceiling <= band) {
+    return {d_x, d_y};
+  }
+  const float u_x = e_x / m;
+  const float u_y = e_y / m;
+  const float radial = d_x * u_x + d_y * u_y;
+  if (radial <= 0.0f) {
+    return {d_x, d_y};  // heading back toward nominal
+  }
+  const float gain =
+      1.0f - ease5(std::min((m - band) / (ceiling - band), 1.0f));
+  const float blocked = (1.0f - gain) * radial;
+  return {d_x - blocked * u_x, d_y - blocked * u_y};
 }
 }  // namespace
 
@@ -51,18 +136,25 @@ std::optional<Vec3> StanceIntegrator::step(const std::string& name,
                                            bool in_stance,
                                            const Vec3& swing_target,
                                            std::pair<float, float> v_leg,
-                                           float dt) {
+                                           float dt, const StanceBand& bound) {
   if (!in_stance) {
     is_stance_[name] = false;
     return std::nullopt;
   }
   if (!is_stance_[name]) {
+    // The touchdown seed is the live AEP, which stride_vector's magnitude clamp
+    // already keeps inside the band — saturating it would only put a step back
+    // in at the seam.
     anchor_[name] = swing_target;
     is_stance_[name] = true;
     return anchor_[name];
   }
   Vec3& a = anchor_[name];
-  a = Vec3(a[0] - v_leg.first * dt, a[1] - v_leg.second * dt, a[2]);
+  const auto [d_x, d_y] =
+      ease_outward(a[0] - bound.nominal[0], a[1] - bound.nominal[1],
+                   -v_leg.first * dt, -v_leg.second * dt, bound.band,
+                   bound.ceiling);
+  a = Vec3(a[0] + d_x, a[1] + d_y, a[2]);
   return a;
 }
 
@@ -164,7 +256,6 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
   }
 
   clock_.emplace(strategy_->phase_offsets());
-  pause_ = build_pause();
   engagement_ = build_engagement();
   initialize_ = build_initialize();
 
@@ -172,12 +263,12 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
   last_targets_ = initial_;
   for (const auto& n : LEG_NAMES) {
     last_stance_[n] = true;
-    last_swing_flags_[n] = false;
+    held_down_[n] = false;
   }
 }
 
 float Engine::master_phase() const {
-  if (state_ == EngineState::ENGAGING || state_ == EngineState::RESUMING) {
+  if (state_ == EngineState::ENGAGING) {
     return engagement_->exit_master();
   }
   return clock_->master();
@@ -200,8 +291,8 @@ bool Engine::set_strategy(const std::string& name) {
     }
     return true;
   }
-  if (state_ == EngineState::GAIT || state_ == EngineState::PAUSING ||
-      state_ == EngineState::PAUSED || state_ == EngineState::RESEATING) {
+  if (state_ == EngineState::GAIT || state_ == EngineState::SETTLING ||
+      state_ == EngineState::RESEATING) {
     if (!pending_strategy_name_.has_value() && name == strategy_name_) {
       return true;
     }
@@ -233,10 +324,10 @@ void Engine::enter_fault() {
   last_targets_ = initial_;
   for (const auto& n : LEG_NAMES) {
     last_stance_[n] = true;
-    last_swing_flags_[n] = false;
+    held_down_[n] = false;
   }
   cmd_zero_elapsed_ = 0.0f;
-  paused_elapsed_ = 0.0f;
+  cmd_gain_ = 1.0f;
   pending_fold_ = false;
   pending_strategy_name_.reset();
 }
@@ -281,13 +372,6 @@ std::unique_ptr<FoldController> Engine::build_fold() {
       config_.controller_dt);
 }
 
-std::unique_ptr<PauseController> Engine::build_pause() {
-  return std::make_unique<PauseController>(
-      nominal_, config_.step_height, config_.swing_width, config_.controller_dt,
-      /*descent_speed=*/config_.stride_length / config_.min_swing_time,
-      /*min_reset_time=*/config_.min_swing_time, config_.max_reset_time);
-}
-
 std::unique_ptr<EngagementController> Engine::build_engagement() {
   const float swing_end =
       swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
@@ -305,7 +389,7 @@ std::unique_ptr<ReseatController> Engine::build_reseat(
   // every tick).
   return std::make_unique<ReseatController>(
       last_targets_, target_stance, config_.reseat_pair_swing_time,
-      config_.reseat_pair_dwell_time, config_.reseat_swing_clearance,
+      config_.reseat_pair_dwell_time, config_.reseat_profile(),
       config_.controller_dt);
 }
 
@@ -315,7 +399,6 @@ void Engine::commit_new_nominal(const std::map<std::string, Vec3>& new_nominal,
     nominal_[n] = new_nominal.at(n);
     legs_[n].nominal_stance = nominal_[n];
   }
-  pause_ = build_pause();
   engagement_ = build_engagement();
   applied_height_ = applied_height;
 }
@@ -351,8 +434,18 @@ std::map<std::string, LegOutput> Engine::update(
   } else {
     cmd_zero_elapsed_ = 0.0f;
   }
-  const bool should_pause =
-      cmd_zero && (cmd_zero_elapsed_ >= config_.pause_debounce_delay);
+  // Ease the command out rather than dropping it. The rate is one debounce from
+  // full to nothing, so a released stick reaches zero exactly as the debounce
+  // expires and the settle arms onto a command that is already still.
+  const bool wants_still =
+      cmd_zero || pending_strategy_name_.has_value() ||
+      state_ == EngineState::SETTLING;
+  const float gain_rate = config_.settle_debounce_delay > 0.0f
+                              ? dt / config_.settle_debounce_delay
+                              : 1.0f;
+  cmd_gain_ = wants_still ? std::max(0.0f, cmd_gain_ - gain_rate)
+                          : std::min(1.0f, cmd_gain_ + gain_rate);
+  const bool should_settle = wants_still && cmd_gain_ <= 0.0f;
   height_stable_elapsed_ += dt;
 
   if (state_ == EngineState::FOLDED || state_ == EngineState::FAULT) {
@@ -429,91 +522,90 @@ std::map<std::string, LegOutput> Engine::update(
   }
 
   if (state_ == EngineState::ENGAGING) {
+    // A command withdrawn mid-engagement hands the feet straight to the reseat
+    // ladder. The engagement cannot be run out at a zero command and cannot be
+    // trusted to leave the feet home:
+    //
+    //  - Its stance legs integrate the *commanded* velocity, so a zero command
+    //    freezes each one where the walk had carried it. Nothing brings them
+    //    back, and a leg still waiting for its first lift-off never swings at
+    //    all.
+    //  - Its swing branch, by contrast, evaluates the strategy closed form,
+    //    which at a zero stride *is* the nominal stance. So every leg teleports
+    //    onto nominal the moment its own phase reaches lift-off — no lift, no
+    //    arc — and the rest were declared home at the handoff.
+    //
+    // On a ripple that was the whole stop: its engagement is a full cycle long
+    // (3.4 s), so a short drive usually ends inside it, and every planted foot
+    // jumped up to half a stride at once. The ladder below arcs each foot home
+    // instead, and skips the ones already there — so an early abort, where
+    // nothing has moved yet, still costs nothing.
     if (cmd_zero) {
-      enter_pausing();
-      return tick_pause(dt);
+      hand_off_to_reseat();
+      return tick_reseat(dt);
     }
     auto out = tick_engagement(dt, v_body_xy, omega_z);
     if (engagement_->state() == EngagementState::DONE) {
       clock_->reset(engagement_->exit_master());
       stance_.seed(last_targets_, last_stance_);
-      swing_.reset();
+      reset_swing_state();
       state_ = EngineState::GAIT;
     }
     return out;
   }
 
   if (state_ == EngineState::GAIT) {
-    if (pending_strategy_name_.has_value()) {
-      enter_pausing();
-      return tick_pause(dt);
+    // A pending gait change is already folded into should_settle, via
+    // cmd_gain_: it eases the command out first rather than entering the settle
+    // at walking speed and dropping it there.
+    if (should_settle) {
+      // Nothing to arm: the clock, the stance integrator and the swing planner
+      // all carry straight on, which is what makes a settle abortable for free.
+      state_ = EngineState::SETTLING;
+      auto out = tick_gait(dt, {0.0f, 0.0f}, 0.0f, /*settling=*/true);
+      // The debounce already ran the gait at a zero stride, so the feet may
+      // well be home the moment the settle arms.
+      finish_or_hand_off_settle();
+      return out;
     }
-    if (should_pause) {
-      enter_pausing();
-      return tick_pause(dt);
-    }
-    return tick_gait(dt, v_body_xy, omega_z, cmd_zero);
+    return tick_gait(dt, v_body_xy, omega_z, /*settling=*/false);
   }
 
-  if (state_ == EngineState::PAUSING) {
+  if (state_ == EngineState::SETTLING) {
+    // The clock never stopped and every foot is riding a live AEP, so a command
+    // that comes back just carries on walking — no engagement pass to re-enter.
     if (!cmd_zero && !pending_strategy_name_.has_value()) {
-      enter_resuming();
-      return tick_engagement(dt, v_body_xy, omega_z);
+      state_ = EngineState::GAIT;
+      return tick_gait(dt, v_body_xy, omega_z, /*settling=*/false);
     }
-    auto out = tick_pause(dt);
-    if (pause_->state() == PauseState::PAUSED) {
-      state_ = EngineState::PAUSED;
-      paused_elapsed_ = 0.0f;
-    }
+    auto out = tick_gait(dt, {0.0f, 0.0f}, 0.0f, /*settling=*/true);
+    finish_or_hand_off_settle();
     return out;
   }
 
-  if (state_ == EngineState::PAUSED) {
-    if (!cmd_zero && !pending_strategy_name_.has_value()) {
-      enter_resuming();
-      return tick_engagement(dt, v_body_xy, omega_z);
-    }
-    paused_elapsed_ += dt;
-    const float dwell = pending_strategy_name_.has_value()
-                            ? config_.gait_change_pause_to_reseat_delay
-                            : config_.pause_to_reseat_delay;
-    if (paused_elapsed_ >= dwell) {
-      reseat_ = build_reseat(nominal_);
-      reseat_target_stance_ = nominal_;
-      reseat_target_height_ = applied_height_;
-      state_ = EngineState::RESEATING;
-      return tick_reseat(dt);
-    }
-    return emit_held();
-  }
-
-  // RESUMING.
-  if (cmd_zero) {
-    enter_pausing();
-    return tick_pause(dt);
-  }
-  auto out = tick_engagement(dt, v_body_xy, omega_z);
-  if (engagement_->state() == EngagementState::DONE) {
-    clock_->reset(engagement_->exit_master());
-    stance_.seed(last_targets_, last_stance_);
-    state_ = EngineState::GAIT;
-  }
-  return out;
+  // Every state has its own branch above (RESEATING among them); this is only
+  // reachable if one is added without one.
+  return emit_held();
 }
 
 std::map<std::string, LegOutput> Engine::tick_gait(
-    float dt, std::pair<float, float> v_body_xy, float omega_z,
-    bool cmd_zero) {
-  // Hold the previous tick's targets verbatim during the cmd-zero debounce.
-  if (cmd_zero) {
-    const auto phases = clock_->phases();
-    std::map<std::string, LegOutput> out;
-    for (const auto& n : LEG_NAMES) {
-      out[n] = LegOutput{last_targets_[n], phases.at(n), last_stance_[n]};
-    }
-    return out;
+    float dt, std::pair<float, float> v_body_xy, float omega_z, bool settling) {
+  // A zero command is not a special case: derive_cycle_time falls back to
+  // max_cycle_time, stride_vector collapses to zero, and AEP == PEP == nominal,
+  // so the gait steps in place until the debounce arms the settle. Holding the
+  // targets instead would freeze an airborne leg mid-arc and put a step in the
+  // velocity -> foot-target map at cmd_zero_tol.
+  //
+  // Settling takes that to its conclusion. cmd_gain_ has already eased the
+  // command to a standstill by the time this state is reached, so the zero here
+  // costs nothing — it just makes the AEP land on nominal to the last bit.
+  if (settling) {
+    v_body_xy = {0.0f, 0.0f};
+    omega_z = 0.0f;
+  } else {
+    v_body_xy = {v_body_xy.first * cmd_gain_, v_body_xy.second * cmd_gain_};
+    omega_z *= cmd_gain_;
   }
-
   const float stride_length = config_.stride_length;
   const float swing_end =
       swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
@@ -529,11 +621,33 @@ std::map<std::string, LegOutput> Engine::tick_gait(
 
   const auto [min_cycle_time, max_cycle_time] =
       cycle_time_bounds(config_, swing_end);
-  const float cycle_time =
+  // Scaled by 1 / swing_end exactly as cycle_time_bounds scales the walk's, so
+  // every gait gets the same airborne time out of one settle_swing_time. Faded
+  // in on the same gain as the command, so the clock never changes rate under a
+  // foot that is already in the air.
+  const float settle_cycle_time =
+      config_.settle_swing_time / std::max(swing_end, 1.0e-6f);
+  const float walk_cycle_time =
       derive_cycle_time(max_leg_v, config_.stride_length, stance_fraction,
                         min_cycle_time, max_cycle_time);
+  const float cycle_time =
+      settling ? settle_cycle_time
+               : cmd_gain_ * walk_cycle_time +
+                     (1.0f - cmd_gain_) * settle_cycle_time;
   const float stance_time = cycle_time * stance_fraction;
   const float swing_time = cycle_time * swing_end;
+
+  // On the ladder's route the gait's job is only to land what is already in the
+  // air: no leg that is down may start a swing, or a gait whose swings overlap
+  // end to end would never give the ladder the all-planted moment it starts
+  // from. A held leg does not move at all — the command is zero, so its stance
+  // target was standing still anyway.
+  const bool hold_liftoffs = settling && !settle_beats_reseat();
+
+  // A steady walk rides exactly on `stance_band` at AEP and PEP, so the bound is
+  // free until the command turns under a planted leg.
+  const float stance_band = 0.5f * stride_length;
+  const float stance_ceiling = stance_band * (1.0f + kStanceExcursionGrace);
 
   clock_->advance(dt, cycle_time);
   const auto phases = clock_->phases();
@@ -555,23 +669,39 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     // fallback for stance legs that have never lifted off under the planner.
     const Vec3 strategy_target =
         strategy_->foot_target(phases.at(name), stride, leg);
-    const bool stance = phases.at(name) >= swing_end - kStanceSeamEpsilon;
+    bool stance = phases.at(name) >= swing_end - kStanceSeamEpsilon;
+    if (stance) {
+      held_down_[name] = false;
+    } else if (!swing_.is_swing(name) && (hold_liftoffs || held_down_[name])) {
+      // Its lift-off came due while lift-offs were held, so it sits the window
+      // out. The flag outlives the settle on purpose: dropping it the moment a
+      // command came back would start the arc at the phase the leg had reached,
+      // i.e. part-way along, and jump the foot. Cleared when the phase leaves
+      // the swing window and the leg is a plain stance leg again.
+      held_down_[name] = true;
+      stance = true;
+    }
+    const Vec3 nominal = nominal_[name];
+    // Read off nominal_ every tick so a reseat's new stance is picked up on the
+    // next one, with no second copy to keep in step.
+    const StanceBand bound{nominal, stance_band, stance_ceiling};
 
     Vec3 target;
     if (stance) {
       Vec3 touchdown_anchor;
       if (swing_.is_swing(name)) {
-        // Touchdown edge: adopt the latched swing target as the new anchor.
+        // Touchdown edge: adopt the latched swing target as the new anchor. At a
+        // zero stride that target is the leg's nominal stance, which is how a
+        // settle re-plants without a re-plant pass.
         touchdown_anchor = swing_.target(name);
         swing_.touchdown(name);
       } else {
         touchdown_anchor = strategy_target;
       }
       auto integrated =
-          stance_.step(name, true, touchdown_anchor, {v_x, v_y}, dt);
+          stance_.step(name, true, touchdown_anchor, {v_x, v_y}, dt, bound);
       target = *integrated;  // in_stance=true always returns a position
     } else {
-      const Vec3 nominal = nominal_[name];
       const Vec3 aep = live_aep(nominal, stride_vec);
       if (!swing_.is_swing(name)) {
         // Lift-off edge: capture the origin end, held for the whole swing.
@@ -587,7 +717,7 @@ std::map<std::string, LegOutput> Engine::tick_gait(
           swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
       target = swing_.evaluate(name, phase_in_swing, swing_profile);
       // Keep the stance integrator's per-leg flag in sync.
-      stance_.step(name, false, target, {v_x, v_y}, dt);
+      stance_.step(name, false, target, {v_x, v_y}, dt, bound);
     }
 
     out[name] = LegOutput{target, phases.at(name), stance};
@@ -597,26 +727,105 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   return out;
 }
 
-void Engine::enter_pausing() {
+// Standing is a position, not a sequence: every foot planted, on its nominal
+// stance. Asking the question this way rather than counting touchdowns since the
+// settle armed is what keeps the debounce free — a leg that already re-planted
+// while the command was ramping out does not have to do it again to be believed.
+bool Engine::all_settled() const {
   for (const auto& n : LEG_NAMES) {
-    last_swing_flags_[n] = !last_stance_[n];
+    if (!last_stance_.at(n)) {
+      return false;
+    }
+    if ((last_targets_.at(n) - nominal_.at(n)).norm() > kSettledEpsilon) {
+      return false;
+    }
   }
-  pause_->begin(last_targets_, last_swing_flags_);
-  stance_.reset();
+  return true;
+}
+
+bool Engine::all_planted() const {
+  for (const auto& n : LEG_NAMES) {
+    if (!last_stance_.at(n)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Engine::settle_beats_reseat() const {
+  const float swing_end =
+      swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
+  if (swing_end <= 0.0f) {
+    return false;
+  }
+  // Standing means every foot down on nominal at the same instant, so a gait
+  // that never has all six down cannot finish a settle on its own however long
+  // it is given.
+  if (!has_all_down_window(strategy_->phase_offsets(), swing_end)) {
+    return false;
+  }
+  // Worst case for the gait: the last leg to get its turn is a whole cycle away.
+  const float natural = config_.settle_swing_time / swing_end;
+  // Worst case for the ladder: one swing spent waiting for the legs already in
+  // the air to land, then three mirrored pairs with a dwell between them.
+  const float pairs = static_cast<float>(PAIR_ORDER.size());
+  const float ladder = config_.settle_swing_time +
+                       pairs * config_.reseat_pair_swing_time +
+                       (pairs - 1.0f) * config_.reseat_pair_dwell_time;
+  return natural <= ladder;
+}
+
+void Engine::reset_swing_state() {
   swing_.reset();
-  state_ = EngineState::PAUSING;
+  for (const auto& n : LEG_NAMES) {
+    held_down_[n] = false;
+  }
 }
 
-void Engine::enter_resuming() {
-  engagement_->begin_resume(*strategy_, legs_, last_targets_, last_swing_flags_,
-                            clock_->master());
-  state_ = EngineState::RESUMING;
+void Engine::finish_or_hand_off_settle() {
+  if (all_settled()) {
+    finish_settling();
+    return;
+  }
+  if (settle_beats_reseat() || !all_planted()) {
+    return;  // keep walking the feet home, or wait for the airborne one to land
+  }
+  // The gait would take a whole cycle to get round every leg, and on a long duty
+  // factor that is several times what the ladder needs. Hand the legs that are
+  // still out to the reseat, which lifts three mirrored pairs and skips whatever
+  // the settle already brought home. Every foot is planted here, so the ladder
+  // starts from rest with nothing in the air to snap down.
+  hand_off_to_reseat();
 }
 
-std::map<std::string, LegOutput> Engine::tick_pause(float dt) {
-  auto out = pause_->update(dt);
-  capture_state(out);
-  return out;
+void Engine::hand_off_to_reseat() {
+  // build_reseat reads last_targets_, so the ladder starts from where the feet
+  // actually are — including anything still in the air, which it arcs down
+  // rather than dropping.
+  stance_.reset();
+  reset_swing_state();
+  reseat_ = build_reseat(nominal_);
+  reseat_target_stance_ = nominal_;
+  reseat_target_height_ = applied_height_;
+  state_ = EngineState::RESEATING;
+}
+
+void Engine::finish_settling() {
+  // Commit a pending gait change at the handoff — the new strategy's phase
+  // offsets are only meaningful from a standing start.
+  std::optional<std::string> pending = pending_strategy_name_;
+  pending_strategy_name_.reset();
+  if (pending.has_value() && *pending != strategy_name_) {
+    apply_strategy(*pending);
+  }
+  stance_.reset();
+  reset_swing_state();
+  state_ = EngineState::STAND;
+  // A no-op by construction: the last leg landed on nominal and the other five
+  // have been frozen there since their own touchdowns. Stated anyway, so STAND
+  // is never entered holding a stale target.
+  last_targets_ = nominal_;
+  for (const auto& n : LEG_NAMES) last_stance_[n] = true;
 }
 
 std::map<std::string, LegOutput> Engine::tick_reseat(float dt) {
@@ -677,10 +886,8 @@ EngineConfig engine_config_from_config() {
   cfg.swing_phase_margin = c.swing_phase_margin;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;
-  cfg.pause_debounce_delay = c.pause_debounce_delay;
-  cfg.pause_to_reseat_delay = c.pause_to_reseat_delay;
-  cfg.gait_change_pause_to_reseat_delay = c.gait_change_pause_to_reseat_delay;
-  cfg.max_reset_time = c.max_reset_time;
+  cfg.settle_debounce_delay = c.settle_debounce_delay;
+  cfg.settle_swing_time = c.settle_swing_time;
   cfg.init_pair_swing_time = c.init_pair_swing_time;
   cfg.init_lift_body_time = c.init_lift_body_time;
   cfg.init_swing_clearance = c.init_swing_clearance;
@@ -868,9 +1075,7 @@ std::string state_value(EngineState s) {
     case EngineState::STAND: return "stand";
     case EngineState::ENGAGING: return "engaging";
     case EngineState::GAIT: return "gait";
-    case EngineState::PAUSING: return "pausing";
-    case EngineState::PAUSED: return "paused";
-    case EngineState::RESUMING: return "resuming";
+    case EngineState::SETTLING: return "settling";
     case EngineState::FOLDING: return "folding";
     case EngineState::RESEATING: return "reseating";
     case EngineState::FAULT: return "fault";
@@ -885,9 +1090,7 @@ std::string state_name(EngineState s) {
     case EngineState::STAND: return "STAND";
     case EngineState::ENGAGING: return "ENGAGING";
     case EngineState::GAIT: return "GAIT";
-    case EngineState::PAUSING: return "PAUSING";
-    case EngineState::PAUSED: return "PAUSED";
-    case EngineState::RESUMING: return "RESUMING";
+    case EngineState::SETTLING: return "SETTLING";
     case EngineState::FOLDING: return "FOLDING";
     case EngineState::RESEATING: return "RESEATING";
     case EngineState::FAULT: return "FAULT";

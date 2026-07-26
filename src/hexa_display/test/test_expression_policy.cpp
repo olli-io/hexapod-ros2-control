@@ -211,8 +211,8 @@ TEST(ExpressionPolicy, NoFaceAnimationWhenBusyOrWarning) {
     auto folded = makeInputs();
     folded.gait_state = "folded";
 
-    auto paused = makeInputs();
-    paused.gait_state = "paused";
+    auto settling = makeInputs();
+    settling.gait_state = "settling";
 
     auto animating = makeInputs();
     animating.animation_mode = "body_roll_3d";
@@ -224,8 +224,8 @@ TEST(ExpressionPolicy, NoFaceAnimationWhenBusyOrWarning) {
     critical.gait_state = std::nullopt;
     critical.battery_critical = true;
 
-    for (const auto& in : {walking, turning, pose_tilt, pose_yaw, folded, paused,
-                           animating, low, critical}) {
+    for (const auto& in : {walking, turning, pose_tilt, pose_yaw, folded,
+                           settling, animating, low, critical}) {
         EXPECT_FALSE(selectFaceAnimation(in, CONFIG).has_value());
     }
 }

@@ -57,12 +57,11 @@ TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
 # Engine states in which a gait switch may be published. STAND swaps
 # immediately; the others latch a pending change that the engine
-# commits via its pause-and-reseat sequence. The gait is locked during
-# engaging / resuming, and a switch is meaningless during initialize /
-# folding / folded. The empty pre-first-publish state stays refused
-# for free.
+# commits once it has settled back to a stand. The gait is locked during
+# engaging, and a switch is meaningless during initialize / folding /
+# folded. The empty pre-first-publish state stays refused for free.
 _GAIT_SWITCH_STATES: frozenset[str] = frozenset(
-    {"stand", "gait", "pausing", "paused", "reseating"}
+    {"stand", "gait", "settling", "reseating"}
 )
 
 
@@ -346,9 +345,9 @@ class TeleopJoyNode(Node):
                 self._pub_cmd_gait.publish(String(data=out.gait_select))
                 # Update the active caps so the next stick read scales
                 # to the new gait's per-leg velocity ceiling. During a
-                # mid-walk switch the cap leads the engine for the
-                # length of its pause-and-reseat sequence — harmless,
-                # the engine clamps stride internally.
+                # mid-walk switch the cap leads the engine for as long
+                # as it takes to settle — harmless, the engine clamps
+                # stride internally.
                 self._active_gait = out.gait_select
                 new_linear = self._caps.linear_max(self._active_gait)
                 new_angular = self._caps.angular_max(self._active_gait)

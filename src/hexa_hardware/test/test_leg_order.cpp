@@ -41,9 +41,18 @@ std::vector<std::string> leg_names(const std::vector<hh::LegGroup>& legs) {
   return out;
 }
 
-// The shipped hardware.yaml wiring, listed in the URDF/controller joint order
-// (l_front, l_middle, l_rear, r_front, r_middle, r_rear) so the test also
-// covers the reorder between that and the harness.
+// A full-harness fixture, listed in the URDF/controller joint order (l_front,
+// l_middle, l_rear, r_front, r_middle, r_rear) so the tests also cover the
+// reorder between that and the pin order.
+//
+// This is NOT a copy of hardware.yaml that has to be kept in sync with it — the
+// layout is forced by what the tests below exercise: 18 servos densely filling
+// pins 1..18 (so is_flat_pin_map accepts it and the whole table collapses to one
+// SET run) with each leg on three consecutive pins, ascending rear -> front. Those
+// constraints admit exactly one assignment. Whether the real file still matches
+// it is asserted where the real file is actually loaded — see
+// Hardware.LegsAreWiredRearToFront in shared/motion_core/test/test_config.cpp,
+// which derives the order from kJointCals rather than restating pins.
 const std::vector<std::pair<std::string, int>> kShippedWiring = {
     {"l_front_coxa_joint", 13},  {"l_front_femur_joint", 14},
     {"l_front_tibia_joint", 15}, {"l_middle_coxa_joint", 7},

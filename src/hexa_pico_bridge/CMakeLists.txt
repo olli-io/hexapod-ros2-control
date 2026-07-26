@@ -70,7 +70,6 @@ set(FW_PIPELINE_SOURCES
   ${FW_SRC}/gait/gaits/base.cpp
   ${FW_SRC}/gait/gaits/registry.cpp
   ${FW_SRC}/gait/engagement.cpp
-  ${FW_SRC}/gait/pause.cpp
   ${FW_SRC}/gait/stand_transition.cpp
   ${FW_SRC}/gait/reseat.cpp
   ${FW_SRC}/gait/limits.cpp

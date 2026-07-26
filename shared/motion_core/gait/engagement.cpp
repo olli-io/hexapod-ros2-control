@@ -38,7 +38,6 @@ EngagementController::EngagementController(
     first_lift_off_master_[name] = 0.0f;
     first_touchdown_master_[name] = 0.0f;
     has_lifted_off_[name] = false;
-    has_completed_first_swing_[name] = false;
   }
   foot_position_ = nominal_;
   lift_off_position_ = nominal_;
@@ -53,7 +52,6 @@ void EngagementController::begin(
         "strategy duty_factor does not match controller duty_factor");
   }
 
-  mode_ = "engage";
   strategy_ = &strategy;
   leg_contexts_ = leg_contexts;
   const auto& offsets = strategy.phase_offsets().offsets();
@@ -94,65 +92,7 @@ void EngagementController::begin(
     // Initial-swing legs lift off from NOMINAL at master = 0; initial-stance
     // legs snapshot when they cross INITIAL_STANCE -> INITIAL_SWING.
     has_lifted_off_[name] = is_initial_swing_[name];
-    has_completed_first_swing_[name] = false;
   }
-
-  state_ = EngagementState::ENGAGING;
-}
-
-void EngagementController::begin_resume(
-    const Strategy& strategy,
-    const std::map<std::string, LegContext>& leg_contexts,
-    const std::map<std::string, Vec3>& last_targets,
-    const std::map<std::string, bool>& prev_swing_flags, float master_phase) {
-  require_all_legs(leg_contexts, "leg_contexts");
-  require_all_legs(last_targets, "last_targets");
-  if (strategy.duty_factor() != duty_factor_) {
-    throw std::invalid_argument(
-        "strategy duty_factor does not match controller duty_factor");
-  }
-  if (!(master_phase >= 0.0f && master_phase < 1.0f)) {
-    throw std::invalid_argument("master_phase must be in [0, 1)");
-  }
-
-  mode_ = "resume";
-  strategy_ = &strategy;
-  leg_contexts_ = leg_contexts;
-  const auto& offsets = strategy.phase_offsets().offsets();
-
-  std::map<std::string, Vec3> lift_off_position = nominal_;
-  for (const auto& name : LEG_NAMES) {
-    const float phase = pymod(master_phase + offsets.at(name), 1.0f);
-    auto flag = prev_swing_flags.find(name);
-    const bool was_swing = flag != prev_swing_flags.end() && flag->second;
-    if (was_swing) {
-      // Was airborne: merge arc starts now from the lowered position.
-      is_initial_swing_[name] = true;
-      first_lift_off_master_[name] = master_phase;
-      first_touchdown_master_[name] =
-          master_phase + std::max(0.0f, swing_end_ - phase);
-      lift_off_position[name] = last_targets.at(name);
-      has_lifted_off_[name] = true;
-    } else {
-      // Was stance: integrate stance until phase wraps to 0, then swing.
-      is_initial_swing_[name] = false;
-      first_lift_off_master_[name] = master_phase + (1.0f - phase);
-      first_touchdown_master_[name] = first_lift_off_master_[name] + swing_end_;
-      has_lifted_off_[name] = false;
-    }
-  }
-
-  smoothstep_window_ = 1.0f;  // unused in resume mode
-
-  master_ = master_phase;
-  v_body_x_ = 0.0f;
-  v_body_y_ = 0.0f;
-  omega_ = 0.0f;
-  for (const auto& name : LEG_NAMES) {
-    foot_position_[name] = last_targets.at(name);
-    has_completed_first_swing_[name] = false;
-  }
-  lift_off_position_ = lift_off_position;
 
   state_ = EngagementState::ENGAGING;
 }
@@ -177,16 +117,28 @@ std::map<std::string, LegOutput> EngagementController::update(
                         min_cycle_time_, max_cycle_time_);
   const float stance_time = cycle_time * stance_fraction;
 
-  // 2) Advance master phase. Engage mode clamps at 1.0; resume advances freely.
+  // 2) Advance master phase. The ladder runs for exactly one cycle, and it stops
+  // one step *short* of the wrap rather than landing on it: at master == 1 every
+  // phase folds back to pymod(1 + offset) == offset, so every leg whose offset
+  // lies inside the swing window would be re-evaluated as though it were that
+  // far into a swing it never started — a teleport straight off the stance it is
+  // standing on, and at a zero command (the abandoned-engagement case) straight
+  // onto nominal. Ending just below the wrap leaves the phases where the feet
+  // actually are; the engine picks the gait clock up from exit_master() and its
+  // own lift-off logic starts those swings from the foot's real position.
+  bool ladder_finished = false;
   if (cycle_time > 0.0f) {
-    const float advanced = master_ + dt / cycle_time;
-    master_ = (mode_ == "engage") ? std::min(advanced, 1.0f) : advanced;
+    const float next = master_ + dt / cycle_time;
+    if (next >= 1.0f) {
+      ladder_finished = true;
+    } else {
+      master_ = next;
+    }
   }
 
-  // 3) Body velocity envelope (engage mode only).
+  // 3) Body velocity envelope.
   float envelope;
-  if (mode_ == "engage" && smoothstep_window_ > 0.0f &&
-      master_ < smoothstep_window_) {
+  if (smoothstep_window_ > 0.0f && master_ < smoothstep_window_) {
     envelope = smoothstep_env(master_ / smoothstep_window_);
   } else {
     envelope = 1.0f;
@@ -230,7 +182,6 @@ std::map<std::string, LegOutput> EngagementController::update(
         foot_position_[name] = foot;
       }
       out[name] = LegOutput{foot, phase, in_stance};
-      has_completed_first_swing_[name] = true;
     } else if (master_ >= first_lift_off) {
       // INITIAL_SWING: arc from the lift-off snapshot to the live AEP.
       if (!has_lifted_off_[name]) {
@@ -272,21 +223,8 @@ std::map<std::string, LegOutput> EngagementController::update(
     }
   }
 
-  if (mode_ == "engage") {
-    if (master_ >= 1.0f) {
-      state_ = EngagementState::DONE;
-    }
-  } else {
-    bool all_done = true;
-    for (const auto& name : LEG_NAMES) {
-      if (!has_completed_first_swing_[name]) {
-        all_done = false;
-        break;
-      }
-    }
-    if (all_done) {
-      state_ = EngagementState::DONE;
-    }
+  if (ladder_finished) {
+    state_ = EngagementState::DONE;
   }
 
   return out;
