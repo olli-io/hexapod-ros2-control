@@ -56,9 +56,20 @@ parser:
 #   coxa  — deg from radial (0 = leg straight out from hip)
 #   femur — above_horizontal_deg (positive raises the knee)
 #   tibia — interior_deg (180 = fully extended)
+#
+# These are properties of the assembled build, not of a calibration sweep: the
+# angle each joint actually sits at when its servo is centered. A wrong value
+# is a rigid offset on every command for that segment — joint_calibration.cpp
+# maps `us = center_us + direction * (theta - urdf_rad_at_center) * slope`.
+#
+# femur was 40.0 and measured ~14.9 deg high on this build: the folded pose
+# commands 85 deg above horizontal and the joint sits visibly past it, and the
+# standing pose puts the foot tip 155 mm out from the coxa axis instead of the
+# 135 mm tuning.yaml asks for (+1.57 mm of tip radius per degree of femur
+# offset). Re-measure against a known command after any femur horn re-index.
 deg_at_center:
   coxa: 0.0
-  femur: 40.0
+  femur: 55
   tibia: 69.7
 
 servo_defaults:

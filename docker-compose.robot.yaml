@@ -53,7 +53,9 @@ services:
       # Runtime-tuning overlay, mounted over the image's baked copy so an edit
       # to ~/hexa-robot/tuning.yaml applies on a bare `hexa robot restart` — the
       # node re-reads it at startup, no image rebuild and no container recreate.
-      # Deploy seeds this file from tuning.yaml.default; if it's absent the node
+      # Every deploy refreshes this file from the repo copy (shipped alongside
+      # as tuning.yaml.default), backing up an on-Pi edit as tuning.yaml.bak —
+      # so the mount can never pin a stale schema. If it's absent the node
       # falls through to the packages' base YAML defaults.
       - ./tuning.yaml:/workspace/install/share/hexa_description/config/tuning.yaml:ro
     device_cgroup_rules:

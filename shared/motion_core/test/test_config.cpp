@@ -249,11 +249,11 @@ TEST(Hardware, ServoCalibration) {
     EXPECT_FALSE(used[j.pin]) << "pin " << static_cast<int>(j.pin) << " wired twice";
     used[j.pin] = true;
   }
-  // urdf_rad_at_center from hardware.yaml deg_at_center (coxa 0, femur 40,
+  // urdf_rad_at_center from hardware.yaml deg_at_center (coxa 0, femur 54.9,
   // tibia 69.7) — the sole source for the servo-center angle. Uniform per
   // segment, so check one leg and trust the loop above for the rest.
   EXPECT_NEAR(cfg::kJointCals[0].urdf_rad_at_center, 0.0f, kTol);          // coxa
-  EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(40.0f), kTol);   // femur
+  EXPECT_NEAR(cfg::kJointCals[1].urdf_rad_at_center, -deg(54.9f), kTol);   // femur
   EXPECT_NEAR(cfg::kJointCals[2].urdf_rad_at_center,
               static_cast<float>(M_PI) - deg(69.7f), kTol);                // tibia
   for (std::size_t i = 0; i < cfg::kJointCals.size(); ++i) {

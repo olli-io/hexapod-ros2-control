@@ -239,6 +239,21 @@ This ships the image tarball, the compose file, and the launcher
 (relay open, hardware inactive). The shipped launcher is what makes
 `./hexa robot <cmd>` work on the Pi.
 
+Two files on the Pi are config rather than image content, and they update
+differently:
+
+- **`~/hexa-robot/.env`** — seed-once from `.env.robot.sample`. It holds
+  host-specific GIDs and device names the repo cannot know, so a redeploy never
+  touches it once it exists.
+- **`~/hexa-robot/tuning.yaml`** — refreshed from the repo on **every** deploy.
+  The compose bind-mount puts this file over the image's baked copy, so a
+  seed-once overlay would shadow every tuning change you ever deploy and pin
+  the schema the Pi was first provisioned with. If the on-Pi file differs from
+  the repo's, deploy saves it as `tuning.yaml.bak` and says so, then overwrites.
+  Tune on the Pi freely between deploys (`hexa robot restart` re-reads it) —
+  just fold anything worth keeping back into
+  `src/hexa_description/config/tuning.yaml`.
+
 ## 5. Edit `~/hexa-robot/.env` on the Pi
 
 - **`INPUT_GID`** — value from step 3 (typically something like`996`).

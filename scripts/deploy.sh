@@ -156,10 +156,12 @@ cmd_push() {
     # the Pi host rather than in the container, so it chirps before Docker is up.
     scp "systemd/boot-tune.sh" "systemd/hexa-boot-tune.service" \
         "${host}:~/hexa-robot/systemd/"
-    # Runtime-tuning overlay: ship as a .default seed. The compose bind-mounts
-    # ~/hexa-robot/tuning.yaml over the image's copy so edits apply on a bare
-    # `hexa robot restart` (no image rebuild). Shipped as a seed — like .env —
-    # so a re-deploy never clobbers the operator's on-Pi tuning.
+    # Runtime-tuning overlay. The compose bind-mounts ~/hexa-robot/tuning.yaml
+    # over the image's copy so an on-Pi edit applies on a bare `hexa robot
+    # restart` (no image rebuild). The repo stays the source of truth, so a
+    # deploy always refreshes it — a seed-once overlay silently shadows the
+    # image's fresh copy and pins whatever schema the Pi was first deployed
+    # with. Any on-Pi edit is preserved as tuning.yaml.bak, not discarded.
     scp "src/hexa_description/config/tuning.yaml" \
         "${host}:~/hexa-robot/tuning.yaml.default"
 
@@ -170,9 +172,16 @@ set -euo pipefail
 cd ~/hexa-robot
 gunzip -c "${basename_tar}" | docker load
 # First-time provisioning: drop a .env from the sample if there isn't one.
+# .env stays seed-once — it holds host-specific GIDs and device names that
+# the repo cannot know.
 [ -f .env ] || cp .env.robot.sample .env
-# Same for the tuning overlay — seed it once, then leave operator edits alone.
-[ -f tuning.yaml ] || cp tuning.yaml.default tuning.yaml
+# The tuning overlay always tracks the repo. Back up an on-Pi edit first so
+# tuning done on the robot is recoverable rather than lost.
+if [ -f tuning.yaml ] && ! cmp -s tuning.yaml tuning.yaml.default; then
+    cp tuning.yaml tuning.yaml.bak
+    echo ">> on-Pi tuning.yaml differed from the repo — saved as tuning.yaml.bak"
+fi
+cp tuning.yaml.default tuning.yaml
 chmod +x systemd/boot-tune.sh
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF

@@ -49,7 +49,7 @@ gait_node:
     #                         always point straight out.
     standing_pose:
       tip_radius: 0.135
-      body_height: 0.04
+      body_height: 0.06
       corner_leg_coxa_deg: 0
 
     # ─── Stride geometry ────────────────────────────────────────────
@@ -115,7 +115,7 @@ gait_node:
     # falls on turning vs. moving. 0.5 = share equally; higher = protect
     # turn responsiveness at the cost of straight-line accuracy.
     # Expect to experiment to find what feels right.
-    yaw_bias: 0.4
+    yaw_bias: 0.6
 
     # ─── Pausing descent ────────────────────────────────────────────
 
