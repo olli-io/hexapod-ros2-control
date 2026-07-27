@@ -2,10 +2,10 @@
 // body-pose clamp envelope.
 //
 // Pins the one behaviour tuning.yaml's `gait_body_animations_enabled` promises:
-// with it false the body holds still through a walk (no sway, no bounce, no
-// ANIMATION-mode roll), and with it true the same tick moves the body. Everything
-// else about the stack (filters, engine-state gating) is exercised through
-// test_pipeline.
+// with it false the default stack holds the body still through a walk (no sway,
+// no bounce — but an explicitly selected ANIMATION-mode stack still runs), and
+// with it true the same tick moves the body. Everything else about the stack
+// (filters, engine-state gating) is exercised through test_pipeline.
 //
 // The clamp cases below pin the absolute-to-offset conversion: tuning.yaml
 // states belly clearance off the ground, BodyPose::z is a delta from the
@@ -89,16 +89,19 @@ TEST(PostureGaitAnimationSwitch, EnabledMovesTheBodyWhileWalking) {
          "the switch is on";
 }
 
-// The switch covers the ANIMATION-mode stacks too, not just the default one:
-// "no body animation while gait-active" means the demo rolls stay off as well.
-TEST(PostureGaitAnimationSwitch, DisabledAlsoSilencesAnimationMode) {
+// The switch governs only the DEFAULT stack's implicit gait animations. An
+// explicitly selected ANIMATION-mode stack is exempt: the user asked for that
+// animation, so the demo rolls run while gait-active regardless of the switch.
+TEST(PostureGaitAnimationSwitch, AnimationModeExemptFromSwitch) {
   PostureController posture{with_switch(false)};
   ASSERT_TRUE(posture.set_animation_mode("body_roll_3d"));
-  EXPECT_TRUE(is_identity(walk_until_settled(posture)));
+  EXPECT_FALSE(is_identity(walk_until_settled(posture)))
+      << "gait_body_animations_enabled=false must not silence an explicitly "
+         "selected ANIMATION-mode stack";
 
-  PostureController enabled{with_switch(true)};
-  ASSERT_TRUE(enabled.set_animation_mode("body_roll_3d"));
-  EXPECT_FALSE(is_identity(walk_until_settled(enabled)));
+  // Deselecting back to the default stack re-arms the switch.
+  ASSERT_TRUE(posture.set_animation_mode(""));
+  EXPECT_TRUE(is_identity(walk_until_settled(posture)));
 }
 
 // ── pose clamp envelope ───────────────────────────────────────────────────

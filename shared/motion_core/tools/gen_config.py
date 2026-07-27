@@ -487,6 +487,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("swing_width", gait["swing_width"]),
         ("swing_apex_fraction", gait["swing_apex_fraction"]),
         ("touchdown_velocity", gait["touchdown_velocity"]),
+        ("touchdown_probe_height", gait["touchdown_probe_height"]),
+        ("liftoff_velocity", gait["liftoff_velocity"]),
         ("swing_phase_margin", gait["swing_phase_margin"]),
         ("controller_dt", gait["controller_dt"]),
         ("cmd_zero_tol", gait["cmd_zero_tol"]),
@@ -794,10 +796,15 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     #   - input_timeout_s     — hexa_webteleop safety watchdog (the gamepad has no
     #     ROS equivalent; the webteleop timeout is the canonical "stale input"
     #     value the firmware mirrors for its BT link),
-    #   - get_period_ticks    — hexa_hardware aux GET decimation (poll every Nth
-    #     control tick),
-    #   - battery_* thresholds — hexa_display BatteryMonitor debounce (0.0
-    #     disables a flag; shipped disabled — the divider scale is uncalibrated).
+    #   - get_period_ticks    — the firmware's own aux GET decimation (poll every
+    #     Nth control tick). Firmware-only: hexa_hardware runs the same poll off
+    #     its control cycle entirely, paced by parser.aux_period_ms in wall
+    #     clock, because there a GET round trip inside the 200 Hz cycle overran
+    #     the controller-manager budget,
+    #   - battery thresholds  — hardware.yaml `battery:`, the undervoltage
+    #     ladder's SSoT (0.0 disables a rung; shipped disabled — the divider
+    #     scale is uncalibrated). hexa_display's battery_*_v params are the
+    #     face's expression mapping, not the safety policy.
     w("// ── Integration / failsafe (part 09) ──")
     safety = (webteleop.get("safety", {}) or {})
     input_timeout_s = float(safety.get("input_timeout_s", 0.5))
@@ -816,17 +823,32 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w(f"inline constexpr int kSweepLegIntervalMs = {sweep_ms};"
       "  // hardware.yaml init.sweep_leg_interval_ms; per-leg energize stagger")
     w("")
+    # Ordered warning_v > fold_v > cutoff_v so a deeper rung implies the
+    # shallower ones. A rung at 0.0 is disabled and skipped by the check.
     dp = display["display_node"]["ros__parameters"]
-    w("struct BatteryThresholds {  // hexa_display BatteryMonitor (0 disables a flag)")
-    w("  float warning_v;")
-    w("  float critical_v;")
+    batt = (hardware.get("battery", {}) or {})
+    rungs = [float(batt.get(k, 0.0)) for k in ("warning_v", "fold_v", "cutoff_v")]
+    for name, value in zip(("warning_v", "fold_v", "cutoff_v"), rungs):
+        if value < 0.0:
+            raise SystemExit(f"hardware.yaml battery.{name} must be >= 0")
+    enabled = [(n, v) for n, v in zip(("warning_v", "fold_v", "cutoff_v"), rungs) if v > 0.0]
+    for (hi_name, hi), (lo_name, lo) in zip(enabled, enabled[1:]):
+        if lo >= hi:
+            raise SystemExit(
+                f"hardware.yaml battery.{lo_name} ({lo}) must be below "
+                f"battery.{hi_name} ({hi}) — the ladder escalates downward")
+    hysteresis_v = float(batt.get("hysteresis_v", 0.3))
+    hold_s = float(batt.get("hold_s", 3.0))
+    w("struct BatteryThresholds {  // undervoltage ladder (0 disables a rung)")
+    w("  float warning_v;  // rung 1: beep, robot stays drivable")
+    w("  float fold_v;     // rung 2: fold, then cut the rail at FOLDED")
+    w("  float cutoff_v;   // rung 3: cut the rail now, latched off")
     w("  float hysteresis_v;")
     w("  float hold_s;")
     w("};")
     w("inline constexpr BatteryThresholds kBattery = {"
-      + ", ".join(fl(dp[k]) for k in (
-          "battery_warning_v", "battery_critical_v",
-          "battery_hysteresis_v", "battery_hold_s")) + "};")
+      + ", ".join(fl(v) for v in (*rungs, hysteresis_v, hold_s))
+      + "};  // hardware.yaml battery:")
     w("")
 
     # ── Face expression/gaze policy + SH1122 panel (part 11) ──

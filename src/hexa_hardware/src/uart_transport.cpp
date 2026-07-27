@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <mutex>
 #include <poll.h>
 #include <stdexcept>
 #include <termios.h>
@@ -78,6 +79,10 @@ void UartTransport::write(std::span<const std::uint8_t> data) {
   if (fd_ < 0) {
     throw std::runtime_error("hexa_hardware: write on closed UART");
   }
+  // Whole-frame exclusion: two threads emit frames (SET from the control
+  // cycle, GET from the aux poll) and a half-written frame would desync the
+  // board's parser.
+  const std::lock_guard<std::mutex> lock(write_mu_);
   std::size_t written = 0;
   while (written < data.size()) {
     const ssize_t n = ::write(fd_, data.data() + written, data.size() - written);

@@ -1,0 +1,28 @@
+# Plays whatever tune the container last wrote to the spool. Triggered by
+# hexa-tune-spool.path — never enabled on its own, so it only ever runs in
+# response to a write.
+#
+# Template — @HOME_DIR@ is substituted by `./hexa robot install-tune`, which
+# writes the rendered unit to /etc/systemd/system/hexa-tune-spool.service. Do
+# not install this file by hand; the placeholder is not a valid systemd value.
+#
+# The two tunes that come through here are `up` (hexa_hardware activated: the
+# stack is live and the servo link is open) and `fault` (the board latched an
+# over-current trip). The script only reads the spool — writing it back would
+# be another modification of the file the .path unit watches, and the trigger
+# would loop.
+
+[Unit]
+Description=Play a hexapod buzzer tune requested by the container
+
+[Service]
+Type=oneshot
+# Root: exporting a sysfs PWM channel needs it, same as the boot unit.
+User=root
+# TUNE_WAIT_S=0: this only ever runs long after boot. If the PWM tree is not
+# there by now it never will be, and a beep must not sit in a retry loop.
+Environment=TUNE_WAIT_S=0
+ExecStart=@HOME_DIR@/systemd/buzzer.sh --spool @HOME_DIR@/log/buzzer
+# The longest tune (fault) is ~2 s. A stuck player must not pile up against
+# the next request.
+TimeoutStartSec=15

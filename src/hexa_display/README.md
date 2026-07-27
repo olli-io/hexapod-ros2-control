@@ -37,14 +37,27 @@ This package keeps only the ROS + Linux-panel code:
 - **Face animations** — looping gaze/blink sequences: **breathing** until the
   first `/gait/state` arrives, **idling** look-around once idle/level/command-free.
   Suppressed by battery warning, animation mode, `cmd_vel`, or a tilted pose.
+- **Text mode** — a non-empty `/display/text` message replaces the eyes with the
+  message text (vendored Pixel Operator 16 px font from `shared/display_core/fonts`,
+  ASCII + Latin-1): hard-breaks on `\n`, word-wraps to the panel width, centers
+  the block, at most 4 lines of ~42 chars. An empty string returns to the face.
+  The policy keeps ticking underneath, so the face resumes with current state;
+  the panel only reflushes when the message changes. The subscription is
+  transient_local, so publishers must match, e.g.:
+
+  ```
+  ros2 topic pub --once --qos-durability transient_local \
+    /display/text std_msgs/msg/String "data: 'Hello hexapod'"
+  ```
 
 ## Topics (subscribes only)
 
 - `/gait/state` (`std_msgs/String`), `/cmd_vel` (`geometry_msgs/Twist`),
   `/body/pose` (`hexa_interfaces/BodyPose`), `/animation/mode` (`std_msgs/String`,
-  transient_local depth 1), and a battery topic
-  (`sensor_msgs/BatteryState`, default `/hexa_hardware_aux/battery_state`, real
-  robot only).
+  transient_local depth 1), `/display/text` (`std_msgs/String`, transient_local
+  depth 1 — non-empty shows the text screen, empty returns the face), and a
+  battery topic (`sensor_msgs/BatteryState`, default
+  `/hexa_hardware_aux/battery_state`, real robot only).
 
 ## Configuration
 

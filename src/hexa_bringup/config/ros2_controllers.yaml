@@ -13,6 +13,22 @@ controller_manager:
     update_rate: 200 # Hz
     use_sim_time: false
 
+    # SCHED_FIFO priority for the control thread. 50 is above every SCHED_OTHER
+    # thread on the Pi — the executor, hexa_locomotion, the face renderer — so
+    # the 5 ms cycle stops losing whole timeslices to them, which is what the
+    # idle-robot overruns looked like (~5.4-6.0 ms stalls landing in the read
+    # phase and the update phase alike). It stays well under the 99 ceiling
+    # deliberately: at 90+ a spin or a deadlock here can starve kernel worker
+    # threads badly enough to take ssh down with it. Nothing else runs RT; if
+    # hexa_locomotion is ever promoted it must sit *below* this.
+    #
+    # Needs a non-zero rtprio ulimit in the container (docker-compose.robot.yaml)
+    # or the node logs "Could not enable FIFO RT scheduling policy" and carries
+    # on at normal priority. The Pi runs a plain PREEMPT kernel, where hardirqs
+    # are not threaded, so 50 contends with nothing; on a PREEMPT_RT kernel the
+    # irq/* threads sit at 50 and this wants to be 49.
+    thread_priority: 50
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 

@@ -88,8 +88,13 @@ bool decode_get_payload(std::span<const std::uint8_t> payload,
                         std::vector<std::uint16_t>& values);
 
 // BoardProtocol implementation for the Servo 2040 / Chica protocol.
-// Holds a Transport& (not owned); the controller-manager calls in from
-// a single thread, so no synchronisation is required.
+// Holds a Transport& (not owned).
+//
+// Threading: the send path (`send_servo_positions`, `send_all_servo_positions`,
+// `set_servo_power`) is called from the controller-manager thread, and the GET
+// path (`read_battery`, `read_status`) from the aux thread. The two share no
+// mutable state — each owns its own scratch buffers below — and the Transport
+// serializes the frames themselves, so neither path locks.
 class Servo2040Protocol final : public BoardProtocol {
  public:
   explicit Servo2040Protocol(Transport& transport) : transport_(transport) {}
@@ -111,8 +116,13 @@ class Servo2040Protocol final : public BoardProtocol {
                std::vector<std::uint16_t>& out, int timeout_ms);
 
   Transport& transport_;
-  // Reusable buffers to avoid per-call allocation on the hot path.
-  std::vector<std::uint8_t> encode_buf_;
+  // Reusable buffers to avoid per-call allocation. Split by thread, not by
+  // convenience: `send_buf_` belongs to the send path (controller-manager
+  // thread), the three `get_*` buffers to the GET path (aux thread). Sharing
+  // one encode buffer across both would be a data race.
+  std::vector<std::uint8_t> send_buf_;
+  std::vector<std::uint8_t> get_buf_;
+  std::vector<std::uint8_t> get_payload_buf_;
   std::vector<std::uint16_t> decode_buf_;
 };
 

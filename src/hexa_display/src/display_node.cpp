@@ -6,6 +6,11 @@
 // velocity command, the user body pose, the posture animation mode, and the
 // battery state, and drives the renderer target directly — the policy half and
 // the render half share one process, so there is no /display/* topic hop.
+//
+// Text mode: a non-empty /display/text message replaces the eyes with the
+// message (Pixel Operator font, word-wrapped, centered); an empty message
+// returns to the face. The policy keeps ticking underneath so the face resumes
+// with current state.
 
 #include <chrono>
 #include <cstdint>
@@ -32,6 +37,7 @@
 #include "expression_policy.hpp"
 #include "face_animation.hpp"
 #include "face_animation_runner.hpp"
+#include "text_screen.hpp"
 
 namespace {
 
@@ -102,8 +108,8 @@ public:
             "gpio_chip", cfg.gpio_chip, readOnly("GPIO character device"));
         cfg.dc_line = declare_parameter<int>("dc_line", 24, readOnly("DC GPIO line"));
         cfg.rst_line = declare_parameter<int>("rst_line", 25, readOnly("RST GPIO line"));
-        cfg.cs_line = declare_parameter<int>("cs_line", 8,
-                                             readOnly("CS GPIO line, -1 to disable"));
+        cfg.cs_line = declare_parameter<int>(
+            "cs_line", -1, readOnly("CS GPIO line, -1 to leave CS to the controller"));
         cfg.headless = declare_parameter<bool>(
             "headless", false, readOnly("run without touching SPI/GPIO"));
         const int render_hz = std::max(1, static_cast<int>(declare_parameter<int>(
@@ -185,6 +191,13 @@ public:
         _sub_battery = create_subscription<sensor_msgs::msg::BatteryState>(
             battery_topic, rclcpp::SensorDataQoS(),
             [this](const sensor_msgs::msg::BatteryState& m) { _battery_voltage = m.voltage; });
+        // Text mode input. transient_local so a late display start still shows
+        // the message; an empty string hands the panel back to the face.
+        rclcpp::QoS text_qos(1);
+        text_qos.transient_local();
+        _sub_text = create_subscription<std_msgs::msg::String>(
+            "/display/text", text_qos,
+            [this](const std_msgs::msg::String& m) { _display_text = m.data; });
 
         // Policy tick on the node clock (sim-time aware). The renderer eases gaze
         // and blinks autonomously, so a low rate suffices.
@@ -259,6 +272,20 @@ private:
     }
 
     void renderTick() {
+        if (!_display_text.empty()) {
+            // Text mode: the message is static, so redraw only on change (the
+            // string compare replaces the eye path's sameFrame skip).
+            if (_display_text != _drawn_text) {
+                _drawn_text = _display_text;
+                _panel.clearBuffer();
+                hexa::display::drawTextScreen(_panel.u8g2(), _display_text, _text_cfg);
+                _panel.present();
+            }
+            _haveFrame = false;  // repaint the face when text mode ends
+            return;
+        }
+        _drawn_text.clear();
+
         const eyes::AnimFrame f = _anim.update(_target, nowMs());
         // Skip the float-heavy raster entirely when the animation frame is
         // unchanged — between blinks and once gaze has settled the face is
@@ -282,6 +309,8 @@ private:
     eyes::AnimFrame _lastFrame{};
     bool _haveFrame = false;
     std::chrono::steady_clock::time_point _t0{};
+    hexa::display::TextScreenConfig _text_cfg;
+    std::string _drawn_text;  // text currently on the panel ("" = face)
 
     // Policy half.
     PolicyConfig _config;
@@ -295,12 +324,14 @@ private:
     hexa_interfaces::msg::BodyPose _body_pose;
     std::string _animation_mode;
     std::optional<double> _battery_voltage;
+    std::string _display_text;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gait;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr _sub_vel;
     rclcpp::Subscription<hexa_interfaces::msg::BodyPose>::SharedPtr _sub_pose;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_animation;
     rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr _sub_battery;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_text;
     rclcpp::TimerBase::SharedPtr _policy_timer;
     rclcpp::TimerBase::SharedPtr _render_timer;
 };

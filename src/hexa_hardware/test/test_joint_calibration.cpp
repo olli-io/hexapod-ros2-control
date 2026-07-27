@@ -122,6 +122,7 @@ TEST(LoadHardwareConfig, ParsesYaml) {
   baud: 230400
 parser:
   type: servo2040
+  aux_period_ms: 250
   get_period_ticks: 5
 deg_at_center:
   coxa: 30.0
@@ -141,7 +142,7 @@ servos:
   EXPECT_EQ(cfg.connection.device, "/dev/ttyUSB0");
   EXPECT_EQ(cfg.connection.baud, 230400);
   EXPECT_EQ(cfg.parser.type, "servo2040");
-  EXPECT_EQ(cfg.parser.get_period_ticks, 5);
+  EXPECT_EQ(cfg.parser.aux_period_ms, 250);
 
   ASSERT_EQ(cfg.joints.count("l_front_coxa_joint"), 1u);
   const auto& coxa = cfg.joints.at("l_front_coxa_joint");
@@ -204,6 +205,54 @@ servos:
 )";
   EXPECT_THROW(load("sweep_neg", hw, cal_yaml({{2000, 1000}})),
                std::runtime_error);
+}
+
+TEST(LoadHardwareConfig, AuxPeriodDefaults) {
+  // No `parser` block → the shipped 100 ms aux poll.
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("aux_default", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.parser.aux_period_ms, 100);
+}
+
+TEST(LoadHardwareConfig, AuxPeriodZeroDisablesThePoll) {
+  const std::string hw = R"(parser:
+  aux_period_ms: 0
+servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("aux_zero", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.parser.aux_period_ms, 0);
+}
+
+TEST(LoadHardwareConfig, RejectsNegativeAuxPeriod) {
+  const std::string hw = R"(parser:
+  aux_period_ms: -1
+servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  EXPECT_THROW(load("aux_neg", hw, cal_yaml({{2000, 1000}})),
+               std::runtime_error);
+}
+
+TEST(LoadHardwareConfig, ParsesBuzzerSpool) {
+  const std::string hw = R"(buzzer:
+  spool: /workspace/log/buzzer
+servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("buzzer", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_EQ(cfg.buzzer.spool, "/workspace/log/buzzer");
+}
+
+TEST(LoadHardwareConfig, BuzzerSpoolDefaultsToDisabled) {
+  // No `buzzer` block → no path → HexaHardware writes no tune requests at all.
+  const std::string hw = R"(servos:
+  l_front_coxa_joint: { pin: 1 }
+)";
+  const auto cfg = load("buzzer_default", hw, cal_yaml({{2000, 1000}}));
+  EXPECT_TRUE(cfg.buzzer.spool.empty());
 }
 
 TEST(LoadHardwareConfig, DegAtCenterOptional) {

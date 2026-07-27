@@ -39,10 +39,12 @@
 #include "EyeRaster.h"
 #include "Expression.h"
 #include "FaceNames.h"
+#include "Sh1122Panel.h"
 
 #include "expression_policy.hpp"
 #include "face_animation.hpp"
 #include "face_animation_runner.hpp"
+#include "text_screen.hpp"
 
 using hexa::display::BatteryMonitor;
 using hexa::display::decide;
@@ -148,6 +150,35 @@ void drawFrame(const RenderState& state) {
     fflush(stdout);
 }
 
+// Text-mode frame: the full 256x64 text panel as 128x16 Braille cells. Reads
+// the headless panel buffer through textScreenPixel; the panel setup is
+// U8G2_MIRROR (physical mount), so x is flipped back here.
+void drawTextFrame(const u8g2_t* g) {
+    auto tpx = [g](int x, int y) {
+        return hexa::display::textScreenPixel(g, 255 - x, y) ? 1 : 0;
+    };
+    static char out[32 * 1024];
+    char* p = out;
+    p += sprintf(p, "\x1b[H");
+    for (int cy = 0; cy < 64 / 4; ++cy) {
+        for (int cx = 0; cx < 256 / 2; ++cx) {
+            const int x = cx * 2, y = cy * 4;
+            const int b = tpx(x, y) | tpx(x, y + 1) << 1 | tpx(x, y + 2) << 2 |
+                          tpx(x + 1, y) << 3 | tpx(x + 1, y + 1) << 4 |
+                          tpx(x + 1, y + 2) << 5 | tpx(x, y + 3) << 6 |
+                          tpx(x + 1, y + 3) << 7;
+            *p++ = '\xE2';
+            *p++ = static_cast<char>(0xA0 | (b >> 6));
+            *p++ = static_cast<char>(0x80 | (b & 0x3F));
+        }
+        p += sprintf(p, "\x1b[K\n");
+    }
+    p += sprintf(p, "\x1b[K TEXT MODE (/display/text, empty msg returns the "
+                    "face) · q quit\x1b[J");
+    fwrite(out, 1, static_cast<size_t>(p - out), stdout);
+    fflush(stdout);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -231,6 +262,11 @@ public:
         _sub_battery = create_subscription<sensor_msgs::msg::BatteryState>(
             battery_topic, rclcpp::SensorDataQoS(),
             [this](const sensor_msgs::msg::BatteryState& m) { _battery_voltage = m.voltage; });
+        rclcpp::QoS text_qos(1);
+        text_qos.transient_local();
+        _sub_text = create_subscription<std_msgs::msg::String>(
+            "/display/text", text_qos,
+            [this](const std_msgs::msg::String& m) { _display_text = m.data; });
 
         _policy_timer = create_wall_timer(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -245,6 +281,9 @@ public:
     void requestBlink() { _anim.requestBlink(); }
 
     const RenderState& target() const { return _target; }
+
+    // Latest /display/text message ("" = face mode).
+    const std::string& displayText() const { return _display_text; }
 
 private:
     Expression parseExpressionParam(const std::string& param) {
@@ -305,12 +344,14 @@ private:
     hexa_interfaces::msg::BodyPose _body_pose;
     std::string _animation_mode;
     std::optional<double> _battery_voltage;
+    std::string _display_text;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gait;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr _sub_vel;
     rclcpp::Subscription<hexa_interfaces::msg::BodyPose>::SharedPtr _sub_pose;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_animation;
     rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr _sub_battery;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_text;
     rclcpp::TimerBase::SharedPtr _policy_timer;
 };
 
@@ -343,13 +384,33 @@ int main(int argc, char** argv) {
         // Render loop: wall-clock ~30 fps, decoupled from the policy timer.
         // spin_some() services the subscriptions and the policy tick; the frame
         // is pulled from EyeAnim and painted to the terminal each iteration.
+        // Text-mode render target: a headless panel, same u8g2 pipeline as
+        // display_node's real one.
+        face::Sh1122Panel textPanel;
+        face::PanelConfig textCfg;
+        textCfg.headless = true;
+        textPanel.begin(textCfg);
+        const hexa::display::TextScreenConfig textLayout;
+        std::string drawnText;
+
         while (rclcpp::ok()) {
             rclcpp::spin_some(node);
-            const eyes::AnimFrame f = node->frame(nowMs());
-            memset(g_fb, 0, sizeof(g_fb));
-            eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, sink, nullptr);
-            eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, sink, nullptr);
-            drawFrame(node->target());
+            const std::string& text = node->displayText();
+            if (!text.empty()) {
+                if (text != drawnText) {
+                    drawnText = text;
+                    textPanel.clearBuffer();
+                    hexa::display::drawTextScreen(textPanel.u8g2(), text, textLayout);
+                }
+                drawTextFrame(textPanel.u8g2());
+            } else {
+                drawnText.clear();
+                const eyes::AnimFrame f = node->frame(nowMs());
+                memset(g_fb, 0, sizeof(g_fb));
+                eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, sink, nullptr);
+                eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, sink, nullptr);
+                drawFrame(node->target());
+            }
             if (!pollInput(*node)) break;
             usleep(33000);
         }

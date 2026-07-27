@@ -21,13 +21,28 @@ SERVICE_NAME="hexa-robot.service"
 SERVICE_TEMPLATE="systemd/${SERVICE_NAME}"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 
-# Boot-jingle unit + player. A separate opt-in from the stack's unit above: the
-# buzzer is optional hardware, and it runs on the host (not in the container),
-# since the point is to chirp long before Docker exists.
-TUNE_SERVICE_NAME="hexa-boot-tune.service"
-TUNE_TEMPLATE="systemd/${TUNE_SERVICE_NAME}"
-TUNE_SERVICE_PATH="/etc/systemd/system/${TUNE_SERVICE_NAME}"
-TUNE_SCRIPT="systemd/boot-tune.sh"
+# Buzzer player + its units. A separate opt-in from the stack's unit above: the
+# buzzer is optional hardware. It always runs on the host, never in the
+# container — the boot tune has to chirp long before Docker exists, and the
+# container cannot reach the PWM sysfs anyway (see systemd/buzzer.sh).
+TUNE_SCRIPT="systemd/buzzer.sh"
+# All four go in together; splitting them would leave the robot half-audible.
+#   hexa-boot-tune.service      the Pi is alive (boot)
+#   hexa-shutdown-tune.service  power can be cut (shutdown)
+#   hexa-tune-spool.path/.service  relays the container's own beeps (up, fault)
+TUNE_UNITS=(
+    hexa-boot-tune.service
+    hexa-shutdown-tune.service
+    hexa-tune-spool.path
+    hexa-tune-spool.service
+)
+# The subset with an [Install] section. hexa-tune-spool.service is started by
+# its .path and is deliberately not enablable on its own.
+TUNE_ENABLE_UNITS=(
+    hexa-boot-tune.service
+    hexa-shutdown-tune.service
+    hexa-tune-spool.path
+)
 
 # Name of the <ros2_control> block in the URDF. Must match the constant in
 # hexa_bringup/launch/robot.launch.py.
@@ -52,11 +67,14 @@ Commands:
   install-service             Install + enable the hexa-robot systemd unit (needs
                               sudo), so 'boot' runs on power-on.
   uninstall-service           Disable + remove the systemd unit.
-  install-tune                Install + enable the boot-jingle unit (needs sudo),
-                              so the buzzer chirps on power-on. Optional hardware,
-                              so it is a separate opt-in from install-service.
-  uninstall-tune              Disable + remove the boot-jingle unit.
-  play-tune                   Play the jingle now (buzzer bring-up, no reboot).
+  install-tune                Install + enable the buzzer units (needs sudo): boot
+                              and shutdown tunes, plus the spool watcher that relays
+                              the container's own beeps (stack up, over-current
+                              trip). Optional hardware, so it is a separate opt-in
+                              from install-service.
+  uninstall-tune              Disable + remove the buzzer units.
+  play-tune [tune]            Play a tune now, no reboot and no trip needed
+                              (boot | up | shutdown | fault; default boot).
   status                      Container state + hardware-component state.
   logs [-f]                   docker compose logs.
   shell                       Interactive shell inside the container.
@@ -214,13 +232,17 @@ cmd_uninstall_service() {
     echo ">> Removed. 'hexa robot up' is the manual path again."
 }
 
-# Same render-and-enable dance as install-service, for the buzzer unit. Kept a
+# Same render-and-enable dance as install-service, for the buzzer units. Kept a
 # separate opt-in because the buzzer is optional hardware.
 cmd_install_tune() {
     [[ $# -eq 0 ]] || die "install-tune: unexpected argument '$1'"
-    [[ -f "${TUNE_TEMPLATE}" ]] || die "missing ${TUNE_TEMPLATE} — re-run 'hexa deploy push' to ship it"
     [[ -f "${TUNE_SCRIPT}" ]] || die "missing ${TUNE_SCRIPT} — re-run 'hexa deploy push' to ship it"
     command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this host does not run systemd"
+
+    local unit
+    for unit in "${TUNE_UNITS[@]}"; do
+        [[ -f "systemd/${unit}" ]] || die "missing systemd/${unit} — re-run 'hexa deploy push' to ship it"
+    done
 
     chmod +x "${TUNE_SCRIPT}"
 
@@ -228,40 +250,51 @@ cmd_install_tune() {
     rendered="$(mktemp)"
     # shellcheck disable=SC2064  # expand ${rendered} now, at trap-set time
     trap "rm -f '${rendered}'" EXIT
-    sed -e "s|@HOME_DIR@|${REPO_ROOT}|g" "${TUNE_TEMPLATE}" > "${rendered}"
+    for unit in "${TUNE_UNITS[@]}"; do
+        sed -e "s|@HOME_DIR@|${REPO_ROOT}|g" "systemd/${unit}" > "${rendered}"
+        echo ">> Installing /etc/systemd/system/${unit} (sudo)"
+        sudo install -m 644 "${rendered}" "/etc/systemd/system/${unit}" || die "install failed"
+    done
 
-    echo ">> Installing ${TUNE_SERVICE_PATH} (sudo)"
-    sudo install -m 644 "${rendered}" "${TUNE_SERVICE_PATH}" || die "install failed"
     sudo systemctl daemon-reload
-    sudo systemctl enable "${TUNE_SERVICE_NAME}"
+    sudo systemctl enable "${TUNE_ENABLE_UNITS[@]}"
+    # The spool watcher is the only one that does anything between boots, so
+    # start it now rather than leaving the robot mute until the next reboot.
+    sudo systemctl start hexa-tune-spool.path
 
-    echo ">> Enabled. The jingle plays on every boot."
-    echo "   Hear it now:   ./hexa robot play-tune"
-    echo "   Watch it:      journalctl -u ${TUNE_SERVICE_NAME} -b"
+    echo ">> Enabled. The buzzer now sounds on boot, on shutdown, when the stack"
+    echo "   comes up, and on an over-current trip."
+    echo "   Hear one now:  ./hexa robot play-tune [boot|up|shutdown|fault]"
+    echo "   Watch them:    journalctl -u hexa-boot-tune -u hexa-shutdown-tune -u hexa-tune-spool -b"
 }
 
 cmd_uninstall_tune() {
     [[ $# -eq 0 ]] || die "uninstall-tune: unexpected argument '$1'"
     command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this host does not run systemd"
 
-    echo ">> Disabling and removing ${TUNE_SERVICE_PATH} (sudo)"
-    sudo systemctl disable --now "${TUNE_SERVICE_NAME}" || true
-    sudo rm -f "${TUNE_SERVICE_PATH}"
+    echo ">> Disabling and removing the buzzer units (sudo)"
+    sudo systemctl disable --now "${TUNE_ENABLE_UNITS[@]}" || true
+    local unit
+    for unit in "${TUNE_UNITS[@]}"; do
+        sudo rm -f "/etc/systemd/system/${unit}"
+    done
     sudo systemctl daemon-reload
-    echo ">> Removed. The robot boots silent again."
+    echo ">> Removed. The robot is silent again."
 }
 
-# Play the jingle on demand — buzzer bring-up without a reboot. Needs root for
-# the sysfs PWM export, same as the unit.
+# Play a tune on demand — buzzer bring-up without a reboot, and the only way to
+# hear `up` / `fault` without provoking one. Needs root for the sysfs PWM
+# export, same as the units.
 cmd_play_tune() {
-    [[ $# -eq 0 ]] || die "play-tune: unexpected argument '$1' (tune it with the TUNE_* env vars instead)"
+    local tune="${1:-boot}"
+    [[ $# -le 1 ]] || die "play-tune: unexpected argument '$2'"
     [[ -f "${TUNE_SCRIPT}" ]] || die "missing ${TUNE_SCRIPT} — re-run 'hexa deploy push' to ship it"
     chmod +x "${TUNE_SCRIPT}" 2>/dev/null || true
     if [[ "$(id -u)" -eq 0 ]]; then
-        "${TUNE_SCRIPT}"
+        "${TUNE_SCRIPT}" "${tune}"
     else
         # -E so a one-off `TUNE_MELODY=... ./hexa robot play-tune` survives sudo.
-        sudo -E "${TUNE_SCRIPT}"
+        sudo -E "${TUNE_SCRIPT}" "${tune}"
     fi
 }
 

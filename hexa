@@ -49,8 +49,10 @@ Commands:
                               drivable once 'up' finishes; 'down' is the safe-stop. 'boot' is
                               the unattended 'up' the systemd unit runs; 'install-service'
                               enables that unit so the stack comes up on power-on.
-                              'install-tune' separately enables the boot jingle on the
-                              optional buzzer ('play-tune' sounds it without a reboot).
+                              'install-tune' separately enables the optional buzzer's
+                              units — boot / shutdown tunes plus the spool watcher that
+                              relays the container's stack-up and over-current beeps
+                              ('play-tune [tune]' sounds one without a reboot).
                               Runs locally (on the Pi) by default; -H/--host re-dispatches
                               over ssh to a remote Pi.
   kill                        Stop and remove the sim + pico containers.

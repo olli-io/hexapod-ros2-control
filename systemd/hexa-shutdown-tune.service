@@ -1,0 +1,37 @@
+# Shutdown beep on the passive buzzer (GPIO18 hardware PWM) — the mirror of
+# hexa-boot-tune.service. When it stops sounding, the Pi is done writing and
+# the power switch is safe.
+#
+# Template — @HOME_DIR@ is substituted by `./hexa robot install-tune`, which
+# writes the rendered unit to /etc/systemd/system/hexa-shutdown-tune.service
+# and enables it. Do not install this file by hand; the placeholder is not a
+# valid systemd value.
+#
+# The late-shutdown recipe: DefaultDependencies=no keeps systemd from ordering
+# this before the shutdown transaction, WantedBy/After=final.target puts it in
+# the last stage — after every normal unit has stopped, hexa-robot.service
+# included, so the relay is already open and the container already gone. The
+# root filesystem is read-only by then, which costs nothing: the script only
+# reads itself and writes sysfs.
+
+[Unit]
+Description=Hexapod shutdown beep (passive buzzer)
+DefaultDependencies=no
+After=final.target
+ConditionPathIsDirectory=/sys/class/pwm
+
+[Service]
+Type=oneshot
+# Root: exporting a sysfs PWM channel needs it. Also true by default this late
+# in shutdown, but say it, same as the boot unit.
+User=root
+# TUNE_WAIT_S=0: the PWM tree has been up for the whole session by now. Waiting
+# for it here would only ever add dead time to a shutdown.
+Environment=TUNE_WAIT_S=0
+ExecStart=@HOME_DIR@/systemd/buzzer.sh shutdown
+# Hard ceiling on how long a buzzer can delay a power-off. The tune is ~1 s;
+# anything near this bound means the script is stuck, and it gets killed.
+TimeoutStartSec=10
+
+[Install]
+WantedBy=final.target

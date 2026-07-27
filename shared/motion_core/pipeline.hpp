@@ -84,9 +84,15 @@ struct TickResult {
   int unreachable = 0;                   // legs that held last-good this tick
 
   // Failsafe / telemetry / LED decision. force_zero was already applied to the
-  // command inside tick(); the caller drives the relay + LED off this.
+  // command inside tick(); the caller drives the relay + LED off this, and
+  // decision.undervolt_stage off whatever alarm channel it has (hexa_hardware's
+  // buzzer spool on the Pi, the status LED on the Pico).
   hexa::supervisor::Decision decision{};
   bool relay_energized = false;          // == decision.relay_energized
+
+  // Rung 2 queued a fold this tick AND the engine accepted it. One-tick edge for
+  // the caller's log; false if the request was refused.
+  bool undervolt_fold_requested = false;
 
   // Engine / posture snapshot for logging + diagnostics.
   hexa::gait::EngineState engine_state = hexa::gait::EngineState::FOLDED;

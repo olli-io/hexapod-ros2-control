@@ -8,8 +8,12 @@
 # Deliberately separate from hexa-robot.service: not every build has a buzzer
 # fitted, and installing the ROS stack's boot unit should not silently start
 # making noise. Nothing depends on this unit — it is a pure side effect, and a
-# missing or broken buzzer can never hold up the boot (boot-tune.sh exits 0 on
+# missing or broken buzzer can never hold up the boot (buzzer.sh exits 0 on
 # every hardware failure).
+#
+# One of the four buzzer units `install-tune` puts in place; the others are
+# hexa-shutdown-tune.service and the hexa-tune-spool .path/.service pair that
+# relays the container's beeps.
 
 [Unit]
 Description=Hexapod boot jingle (passive buzzer)
@@ -21,7 +25,7 @@ Type=oneshot
 # Root: exporting a sysfs PWM channel needs it, and this avoids depending on a
 # udev rule to chown the tree.
 User=root
-ExecStart=@HOME_DIR@/systemd/boot-tune.sh
+ExecStart=@HOME_DIR@/systemd/buzzer.sh boot
 # Generous relative to a ~1 s jingle; covers the script's wait for the RP1 PWM
 # driver to probe on a cold boot.
 TimeoutStartSec=30

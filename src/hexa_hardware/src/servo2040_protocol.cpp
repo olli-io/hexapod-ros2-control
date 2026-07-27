@@ -85,14 +85,14 @@ bool decode_get_payload(std::span<const std::uint8_t> payload,
 
 void Servo2040Protocol::send_servo_positions(
     std::uint8_t start_pin, std::span<const std::uint16_t> values) {
-  encode_set(start_pin, values, encode_buf_);
-  transport_.write(encode_buf_);
+  encode_set(start_pin, values, send_buf_);
+  transport_.write(send_buf_);
 }
 
 void Servo2040Protocol::send_all_servo_positions(
     std::span<const std::uint16_t> pulses_us) {
-  encode_setall(pulses_us, encode_buf_);
-  transport_.write(encode_buf_);
+  encode_setall(pulses_us, send_buf_);
+  transport_.write(send_buf_);
 }
 
 void Servo2040Protocol::set_servo_power(bool on) {
@@ -134,27 +134,42 @@ bool Servo2040Protocol::get_raw(std::uint8_t start, std::uint8_t count,
                                 std::vector<std::uint16_t>& out, int timeout_ms) {
   if (!transport_.is_open()) return false;
 
-  encode_get(start, count, encode_buf_);
-  transport_.write(encode_buf_);
+  encode_get(start, count, get_buf_);
+  transport_.write(get_buf_);
 
   // Resync: drop bytes until we see a command byte (MSB set). Discard any
   // command that isn't G (e.g. a stray S echo).
+  //
+  // Bounded, because each iteration renews the read timeout: a board streaming
+  // junk faster than the timeout would otherwise hold this loop forever and
+  // starve every later poll — battery telemetry and, worse, the over-current
+  // STATUS read. Failing the poll instead just drops one sample; the caller
+  // retries on the next aux period. The bound is generous — the board sends
+  // nothing unsolicited, so the only legitimate leading garbage is one stale
+  // GET reply (at most 3 + 2 * kMaxBatch bytes).
+  constexpr int kResyncMaxBytes = 3 + 2 * static_cast<int>(kMaxBatch);
   std::uint8_t b = 0;
-  while (true) {
+  bool synced = false;
+  for (int i = 0; i < kResyncMaxBytes; ++i) {
     if (transport_.read(std::span<std::uint8_t>(&b, 1), timeout_ms) != 1) {
       return false;
     }
     if ((b & 0x80) == 0) continue;
-    if (b == kCmdGet) break;
+    if (b == kCmdGet) {
+      synced = true;
+      break;
+    }
   }
+  if (!synced) return false;
+
   // Read payload: [start][count][2*count value bytes].
   const std::size_t payload_len = 2 + static_cast<std::size_t>(count) * 2;
-  std::vector<std::uint8_t> payload(payload_len);
-  if (transport_.read(payload, timeout_ms) != payload_len) {
+  get_payload_buf_.assign(payload_len, 0);
+  if (transport_.read(get_payload_buf_, timeout_ms) != payload_len) {
     return false;
   }
   std::uint8_t reply_start = 0;
-  if (!decode_get_payload(payload, reply_start, out)) return false;
+  if (!decode_get_payload(get_payload_buf_, reply_start, out)) return false;
   return reply_start == start && out.size() == count;
 }
 

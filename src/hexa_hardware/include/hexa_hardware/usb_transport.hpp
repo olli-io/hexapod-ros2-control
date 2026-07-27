@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 #include "hexa_hardware/transport.hpp"
@@ -36,6 +37,9 @@ class UsbTransport final : public Transport {
   int interface_ = 0;
   std::uint8_t ep_in_ = 0x81;
   std::uint8_t ep_out_ = 0x01;
+  // Whole-frame write exclusion, per the Transport contract. See
+  // UartTransport::write_mu_ — same rule, same reason.
+  std::mutex write_mu_;
 };
 
 }  // namespace hexa_hardware

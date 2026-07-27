@@ -31,6 +31,12 @@ display_node:
     # 0.0 disables a threshold. Shipped disabled: the hardware.yaml
     # voltage-divider scale is uncalibrated — set real pack thresholds
     # once it is.
+    #
+    # These drive the FACE ONLY — which expression the eyes wear on a weak
+    # pack, not the safety policy. The undervoltage ladder that beeps, folds
+    # and cuts the servo rail is `battery:` in
+    # hexa_description/config/hardware.yaml; keep these in step with its
+    # warning_v / fold_v if you want the face to agree.
     battery_warning_v: 0.0
     battery_critical_v: 0.0
     battery_hysteresis_v: 0.3
@@ -51,6 +57,15 @@ display_node:
     pose_pitch_threshold_rad: 0.08
     pose_tilt_threshold_rad: 0.08
 
+    # Text mode has no knobs here: publish a non-empty std_msgs/String on
+    # /display/text (transient_local) to replace the eyes with the message
+    # (Pixel Operator font, word-wrapped, centered, 4 lines max); publish an
+    # empty string to return to the face. Layout defaults live in
+    # shared/display_core/text_screen.hpp (TextScreenConfig). The subscription
+    # is transient_local, so CLI publishers must match:
+    #   ros2 topic pub --once --qos-durability transient_local \
+    #     /display/text std_msgs/msg/String "data: 'Hello'"
+
     # Face animations. breathing (slow vertical gaze drift) runs while
     # no /gait/state has been heard yet — the robot stack (servo UART,
     # gait engine) is still initializing. idling (look-around-and-blink
@@ -65,12 +80,16 @@ display_node:
     spi_speed_hz: 8000000
 
     # Control pins on the GPIO character device, by chip + line offset (BCM
-    # numbering on a Raspberry Pi). CS is driven manually; set cs_line: -1 to
-    # disable it (panel CS tied low, or hardware CE used instead).
+    # numbering on a Raspberry Pi). cs_line: -1 leaves CS to the SPI controller
+    # (panel CS on CE0 / GPIO8, or tied low); a line >= 0 drives CS manually.
+    #
+    # -1 is what the Pi 5 needs. Its spi0 node claims GPIO8 as "spi0 CS0", so a
+    # userspace request for line 8 is refused, and the RP1 controller does not
+    # implement SPI_NO_CS — manual CS is simply not on the menu there.
     gpio_chip: "/dev/gpiochip0"
     dc_line: 24
     rst_line: 25
-    cs_line: 8
+    cs_line: -1
 
     # Render loop rate (Hz), decoupled from update_rate_hz. Animation timing is
     # wall-clock regardless. Frames are only pushed over SPI when they actually

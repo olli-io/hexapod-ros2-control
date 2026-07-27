@@ -17,6 +17,7 @@
 #include <rclcpp_lifecycle/state.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 
 #include "energize_sweep.hpp"  // shared/motion_core (build-interface include)
 #include "hexa_hardware/board_protocol.hpp"
@@ -51,10 +52,30 @@ class HexaHardware : public hardware_interface::SystemInterface {
 
  private:
   // Drive the physical relay toward relay_cmd_, forcing it off while a fault is
-  // latched, and arm/disarm the energize sweep on the edge. Transport is touched
-  // only here / read() / write() — all on the controller-manager thread — so the
-  // relay_cmd_ subscription callback merely stores the intent.
+  // latched, and arm/disarm the energize sweep on the edge. Called from read(),
+  // so every relay SET stays on the controller-manager thread alongside the
+  // servo SETs — the aux thread only ever *asks* for a cut, via the atomics
+  // below. Each call is one 5-byte frame, never a round trip.
   void apply_relay();
+
+  // Poll the board's aux registers — battery telemetry, then the latched fault
+  // STATUS — and publish what changed. Runs on the aux thread, every
+  // config_.parser.aux_period_ms.
+  //
+  // This is the only place that issues GETs, and GETs are blocking round trips:
+  // the host writes a request and waits on the board's reply, which costs
+  // whatever the Servo2040's own loop takes to turn around. That is why it lives
+  // here and not in read(). On the controller-manager thread it shared a 5 ms
+  // budget (200 Hz) with the whole control cycle, so every poll risked a
+  // "controller_manager: Overrun detected!" and a bad link cost a 50 ms timeout
+  // per GET — twenty missed cycles. Off that thread, a slow or silent board
+  // costs stale telemetry and nothing else.
+  void poll_aux();
+
+  // Handle an undervoltage rung (aux executor thread): request the buzzer tune
+  // on the rung-1 edge, set the sticky cutoff latch at rung 3. Never touches the
+  // transport — apply_relay() on the CM thread reads the latch.
+  void on_undervoltage(std::uint8_t stage);
   // Emit one SET frame per run, each carrying the calibrated pulse widths of the
   // joints it covers. Throws whatever the transport throws.
   void send_runs(const std::vector<PinRun>& runs);
@@ -98,7 +119,9 @@ class HexaHardware : public hardware_interface::SystemInterface {
 
   // Internal node, used solely to publish aux sensor readings (battery,
   // currents). Spun on a private thread so the executor doesn't need to
-  // know about us.
+  // know about us. That same thread also runs poll_aux() — every blocking
+  // board round trip in this component happens on it, never on the control
+  // cycle.
   std::shared_ptr<rclcpp::Node> aux_node_;
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::BatteryState>> battery_pub_;
   std::thread aux_spin_thread_;
@@ -106,21 +129,37 @@ class HexaHardware : public hardware_interface::SystemInterface {
 
   // Fault / relay-recovery handshake (real-board over-current path).
   // /hardware/fault publishes the board's latched trip; /hardware/relay_cmd is
-  // the locomotion supervisor's arm intent. relay_cmd_ is written by the aux
-  // executor thread and read on the CM thread, hence atomic; all transport
+  // the locomotion supervisor's arm intent. relay_cmd_ and faulted_ are written
+  // by the aux thread and read on the CM thread, hence atomic; all transport
   // access (SET RELAY) stays on the CM thread in apply_relay().
   std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> fault_pub_;
   std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> relay_sub_;
   std::atomic<bool> relay_cmd_{false};   // desired arm state from locomotion
-  bool relay_on_ = false;                // physical relay currently energised
-  bool faulted_ = false;                 // board trip latched (until STATUS clean)
+  bool relay_on_ = false;                // physical relay currently energised (CM thread)
+  std::atomic<bool> faulted_{false};     // board trip latched (until STATUS clean)
+  // Set by poll_aux() on a trip edge, consumed by apply_relay() on the next CM
+  // tick. A trip must be answered with SET RELAY 0 *unconditionally*: that frame
+  // is what clears the board's sticky latch, and without it STATUS never reads
+  // clean again and the robot can never be re-armed. The relay ladder in
+  // apply_relay() only sends it on an ON->OFF edge, so a trip observed with
+  // relay_on_ already false would otherwise go unanswered.
+  std::atomic<bool> clear_latch_pending_{false};
+
+  // Undervoltage rung from the locomotion supervisor (/hardware/undervoltage;
+  // 0 none, 1 warn, 2 fold, 3 cutoff). This node owns the two rungs that need
+  // it specifically: rung 1 requests the buzzer tune (we hold the spool), and
+  // rung 3 sets a local rail latch, so the cut survives a locomotion restart
+  // republishing a stale relay_cmd_. In-memory — restarting this process (a
+  // power cycle, in practice) is the reset.
+  std::shared_ptr<rclcpp::Subscription<std_msgs::msg::UInt8>> undervolt_sub_;
+  std::atomic<std::uint8_t> undervolt_stage_{0};  // written by the aux thread
+  std::atomic<bool> undervolt_cutoff_{false};     // sticky: rung 3 seen
+  std::uint8_t undervolt_beeped_{0};  // highest rung already announced (aux thread)
 
   // Inrush stagger: at the relay OFF->ON edge the legs are driven one at a time
   // (config_.init.sweep_leg_interval_ms apart) instead of all 18 servos in one
   // tick. Re-seeded from the config in on_init.
   hexa::EnergizeSweep sweep_{0.0f};
-
-  int read_tick_ = 0;
 };
 
 }  // namespace hexa_hardware

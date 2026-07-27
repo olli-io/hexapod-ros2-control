@@ -4,6 +4,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/executors.hpp>
 #include <rclcpp/logging.hpp>
@@ -18,6 +19,18 @@ namespace {
 
 constexpr auto kLogger = "hexa_hardware";
 
+// Per-GET reply deadline for the aux poll. Generous because it no longer costs
+// anything on the control path: a board that never answers just delays the next
+// poll by this much on the aux thread. See HexaHardware::poll_aux.
+constexpr int kAuxReadTimeoutMs = 50;
+
+// How long the aux thread will block waiting for a subscription callback before
+// looping round to re-check the poll deadline and the shutdown flag. Bounds the
+// jitter on the aux poll period; also the reason this loop uses spin_once rather
+// than spin_some, which returns immediately when idle and would busy-spin a core
+// against the 200 Hz control thread.
+constexpr auto kAuxSpinTimeout = std::chrono::milliseconds(10);
+
 // True if every joint declares the position command + position/velocity state
 // interfaces that the URDF promises.
 bool joint_interfaces_ok(const hardware_interface::ComponentInfo& j) {
@@ -31,6 +44,38 @@ bool joint_interfaces_ok(const hardware_interface::ComponentInfo& j) {
     if (s.name == hardware_interface::HW_IF_VELOCITY) has_vel = true;
   }
   return has_pos && has_vel;
+}
+
+// Wire form of hexa::supervisor::UndervoltStage, which this package cannot
+// include (hexa_hardware links no motion_core).
+constexpr std::uint8_t kUndervoltWarn = 1;
+constexpr std::uint8_t kUndervoltCutoff = 3;
+
+// Ask the host to sound the buzzer.
+//
+// Not a beep — a request for one. The buzzer is on the Pi's hardware PWM, and
+// this process cannot drive it: Docker mounts /sys read-only, and every
+// /sys/class/pwm/pwmchipN is a symlink into /sys/devices, so an export from in
+// here fails with EROFS no matter how the class directory is bound. Reaching it
+// would take a privileged container, which is far too much to pay for a beep.
+// So the tune name goes into a file on the bind-mounted log volume and the
+// host's hexa-tune-spool.path unit plays it (systemd/buzzer.sh).
+//
+// Best-effort by construction: an empty spool path, a read-only volume, or no
+// watcher installed all mean silence and nothing else. The buzzer is optional
+// hardware and must never be able to fail a control-path call.
+void request_tune(const std::string& spool, const char* tune) {
+  if (spool.empty()) return;
+  // Truncate: the spool carries one pending tune, not a queue, and the write
+  // itself is the trigger the host watches for.
+  std::ofstream out(spool, std::ios::out | std::ios::trunc);
+  if (!out) {
+    RCLCPP_WARN(rclcpp::get_logger(kLogger),
+                "Cannot write buzzer spool '%s' — no '%s' tune.", spool.c_str(),
+                tune);
+    return;
+  }
+  out << tune << '\n';
 }
 
 }  // namespace
@@ -231,6 +276,17 @@ hardware_interface::CallbackReturn HexaHardware::on_init(
                 "Energize sweep disabled — every leg comes up at once");
   }
 
+  if (config_.parser.aux_period_ms > 0) {
+    RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                "Aux poll (battery + fault STATUS) every %d ms on the aux "
+                "thread; the control cycle issues no GETs",
+                config_.parser.aux_period_ms);
+  } else {
+    RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                "Aux poll disabled — no battery telemetry, and an over-current "
+                "trip will not be reported");
+  }
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -280,12 +336,32 @@ hardware_interface::CallbackReturn HexaHardware::on_configure(
         [this](std_msgs::msg::Bool::SharedPtr m) {
           relay_cmd_.store(m->data);
         });
+    // Undervoltage ladder from the locomotion supervisor. Latched, so a
+    // restarted hardware node re-learns a cutoff instead of coming up willing
+    // to close the rail on a condemned pack.
+    undervolt_sub_ = aux_node_->create_subscription<std_msgs::msg::UInt8>(
+        "/hardware/undervoltage", rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::UInt8::SharedPtr m) {
+          on_undervoltage(m->data);
+        });
     aux_spin_run_ = true;
     aux_spin_thread_ = std::thread([this]() {
       rclcpp::executors::SingleThreadedExecutor exec;
       exec.add_node(aux_node_);
+      const auto period =
+          std::chrono::milliseconds(config_.parser.aux_period_ms);
+      auto next_poll = std::chrono::steady_clock::now() + period;
       while (aux_spin_run_.load() && rclcpp::ok()) {
-        exec.spin_some(std::chrono::milliseconds(50));
+        // Blocks until a callback arrives or the timeout expires, so this
+        // thread sleeps instead of competing with the control cycle for CPU.
+        exec.spin_once(kAuxSpinTimeout);
+        if (config_.parser.aux_period_ms <= 0) continue;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_poll) continue;
+        // Re-base off `now` rather than accumulating: a poll that overruns its
+        // period (a board timing out) must not leave a backlog to catch up on.
+        next_poll = now + period;
+        poll_aux();
       }
     });
   }
@@ -301,7 +377,17 @@ hardware_interface::CallbackReturn HexaHardware::on_activate(
   // engine is still FOLDED). The energize sweep then brings the legs up one at
   // a time. Same path serves cold start and over-current recovery.
   relay_on_ = false;
-  faulted_ = false;
+  clear_latch_pending_.store(false);
+  // The set_servo_power(false) below clears the board latch, so a fault the aux
+  // poll saw before activation is answered here. Retract it on the topic too:
+  // /hardware/fault is transient_local, so a stale `true` would outlive this and
+  // hold the engine in FAULT — and poll_aux, finding faulted_ already false,
+  // never publishes the retraction itself.
+  if (faulted_.exchange(false) && fault_pub_) {
+    std_msgs::msg::Bool fm;
+    fm.data = false;
+    fault_pub_->publish(fm);
+  }
   sweep_.disarm();
   relay_cmd_.store(false);
   try {
@@ -316,7 +402,14 @@ hardware_interface::CallbackReturn HexaHardware::on_activate(
     j.prev_pos = j.pos;
     j.vel = 0.0;
   }
-  read_tick_ = 0;
+
+  // "The robot is up." Everything above succeeded, so the servo link is open
+  // and the stack is live — the last milestone of a cold start that a human
+  // standing next to a folded, limp robot cannot otherwise see. Deliberately
+  // here rather than on the relay closing: the rail is a separate, later
+  // decision (a gamepad Start), and it has the legs moving to announce it.
+  request_tune(config_.buzzer.spool, "up");
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -352,80 +445,91 @@ hardware_interface::return_type HexaHardware::read(
     j.prev_pos = j.pos;
   }
 
-  // Battery GETs are rate-limited; the SET path owns the bus most of the time.
-  // One GET fetches both voltage and current in engineering units (the board
-  // owns the units); publish only on a good read.
-  if (config_.parser.get_period_ticks > 0 &&
-      ++read_tick_ >= config_.parser.get_period_ticks) {
-    read_tick_ = 0;
-
-    if (battery_pub_ && board_) {
-      float voltage_v = 0.0f;
-      float current_a = 0.0f;
-      if (board_->read_battery(voltage_v, current_a, 50)) {
-        sensor_msgs::msg::BatteryState msg;
-        msg.header.stamp = aux_node_->now();
-        msg.voltage = voltage_v;
-        msg.current = current_a;
-        msg.present = true;
-        battery_pub_->publish(msg);
-      }
-    }
-
-    // Poll the board's latched fault register. On a fresh trip: clear the sticky
-    // latch (SET RELAY 0, which also resets the board's staged-pose flag),
-    // publish the fault so the engine latches FAULT, and log the trip current.
-    // Once STATUS reads clean again, drop the published fault so the operator's
-    // Start (recovery) is honoured.
-    if (board_) {
-      bool tripped = false;
-      float trip_amps = 0.0f;
-      if (board_->read_status(tripped, trip_amps, 50)) {
-        if (tripped && !faulted_) {
-          faulted_ = true;
-          try {
-            board_->set_servo_power(false);
-          } catch (const std::exception& e) {
-            RCLCPP_WARN(rclcpp::get_logger(kLogger),
-                        "Latch clear (SET RELAY 0) failed: %s", e.what());
-          }
-          relay_on_ = false;
-          sweep_.disarm();
-          if (fault_pub_) {
-            std_msgs::msg::Bool fm;
-            fm.data = true;
-            fault_pub_->publish(fm);
-          }
-          RCLCPP_ERROR(rclcpp::get_logger(kLogger),
-                       "Over-current trip: %.1f A. Servo rail disabled; "
-                       "reposition feet and press Start to recover.",
-                       static_cast<double>(trip_amps));
-        } else if (!tripped && faulted_) {
-          faulted_ = false;
-          if (fault_pub_) {
-            std_msgs::msg::Bool fm;
-            fm.data = false;
-            fault_pub_->publish(fm);
-          }
-          RCLCPP_INFO(rclcpp::get_logger(kLogger),
-                      "Fault latch cleared; ready to re-initialize.");
-        }
-      }
-    }
-  }
-
+  // Nothing here blocks. Aux telemetry and the fault STATUS are round trips and
+  // live on the aux thread (poll_aux); this reads only what that thread has
+  // already latched into atomics. The single frame apply_relay() may emit is a
+  // write, which returns as soon as the kernel accepts the bytes.
   apply_relay();
   return hardware_interface::return_type::OK;
 }
 
+void HexaHardware::poll_aux() {
+  if (!board_ || !transport_ || !transport_->is_open()) return;
+
+  // One GET fetches both voltage and current in engineering units (the board
+  // owns the units); publish only on a good read.
+  if (battery_pub_) {
+    float voltage_v = 0.0f;
+    float current_a = 0.0f;
+    if (board_->read_battery(voltage_v, current_a, kAuxReadTimeoutMs)) {
+      sensor_msgs::msg::BatteryState msg;
+      msg.header.stamp = aux_node_->now();
+      msg.voltage = voltage_v;
+      msg.current = current_a;
+      msg.present = true;
+      battery_pub_->publish(msg);
+    }
+  }
+
+  // Poll the board's latched fault register. On a fresh trip: publish the fault
+  // so the engine latches FAULT, log the trip current, and ask the CM thread for
+  // the SET RELAY 0 that clears the board's sticky latch (and resets its
+  // staged-pose flag) — every relay frame stays on that thread, and the request
+  // is answered within one 5 ms tick. Once STATUS reads clean again, drop the
+  // published fault so the operator's Start (recovery) is honoured.
+  bool tripped = false;
+  float trip_amps = 0.0f;
+  if (!board_->read_status(tripped, trip_amps, kAuxReadTimeoutMs)) return;
+
+  if (tripped && !faulted_.load()) {
+    faulted_.store(true);
+    clear_latch_pending_.store(true);
+    if (fault_pub_) {
+      std_msgs::msg::Bool fm;
+      fm.data = true;
+      fault_pub_->publish(fm);
+    }
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger),
+                 "Over-current trip: %.1f A. Servo rail disabled; "
+                 "reposition feet and press Start to recover.",
+                 static_cast<double>(trip_amps));
+    // A trip drops the whole robot on the spot and the log is the only
+    // other place it shows up, so say it out loud. Once per trip edge —
+    // the latch keeps this branch from re-firing until STATUS reads clean.
+    request_tune(config_.buzzer.spool, "fault");
+  } else if (!tripped && faulted_.load()) {
+    faulted_.store(false);
+    if (fault_pub_) {
+      std_msgs::msg::Bool fm;
+      fm.data = false;
+      fault_pub_->publish(fm);
+    }
+    RCLCPP_INFO(rclcpp::get_logger(kLogger),
+                "Fault latch cleared; ready to re-initialize.");
+  }
+}
+
 void HexaHardware::apply_relay() {
   if (!board_) return;
-  // Force the rail off while a trip is latched; otherwise follow the locomotion
-  // supervisor's arm intent. SET RELAY 1 closes the relay with every servo limp
-  // — it never moves a servo on its own — so there is nothing to stage first;
-  // write() drives the legs afterwards, staggered by the sweep armed here.
-  const bool desired = relay_cmd_.load() && !faulted_;
+  // Force the rail off while a trip or the undervoltage cutoff is latched;
+  // otherwise follow the locomotion supervisor's arm intent. SET RELAY 1 closes
+  // the relay with every servo limp — it never moves a servo on its own — so
+  // there is nothing to stage first; write() drives the legs afterwards,
+  // staggered by the sweep armed here. The undervoltage latch is checked here,
+  // not only upstream, because this process drives SET RELAY: it is what makes
+  // rung 3 hold against a locomotion restart republishing a stale arm intent.
   try {
+    // Answer a trip first and unconditionally: this frame is what clears the
+    // board's sticky latch, so STATUS can read clean and the robot can be
+    // re-armed. Running it ahead of the ladder also leaves relay_on_ false, so
+    // the ladder below (desired is false — faulted_ is set) then does nothing.
+    if (clear_latch_pending_.exchange(false)) {
+      board_->set_servo_power(false);
+      relay_on_ = false;
+      sweep_.disarm();
+    }
+    const bool desired =
+        relay_cmd_.load() && !faulted_.load() && !undervolt_cutoff_.load();
     if (desired && !relay_on_) {
       board_->set_servo_power(true);
       relay_on_ = true;
@@ -439,6 +543,41 @@ void HexaHardware::apply_relay() {
     RCLCPP_WARN_THROTTLE(rclcpp::get_logger(kLogger), *aux_node_->get_clock(),
                          1000, "Relay drive failed: %s", e.what());
   }
+}
+
+void HexaHardware::on_undervoltage(std::uint8_t stage) {
+  undervolt_stage_.store(stage);
+  if (stage >= kUndervoltCutoff) {
+    undervolt_cutoff_.store(true);  // sticky; apply_relay() reads it every cycle
+  }
+
+  // Announce each rung once, on its rising edge. The topic is latched, so a
+  // restart of this node replays the current rung — track the edge here rather
+  // than assume it from the topic.
+  if (stage <= undervolt_beeped_) return;
+  const std::uint8_t previous = undervolt_beeped_;
+  undervolt_beeped_ = stage;
+
+  if (stage == kUndervoltWarn) {
+    RCLCPP_WARN(rclcpp::get_logger(kLogger),
+                "Undervoltage rung 1/3: pack low. Sounding the buzzer; the "
+                "robot is still drivable — walk it back and charge it.");
+    request_tune(config_.buzzer.spool, "undervolt");
+    return;
+  }
+
+  // Rungs 2 and 3 announce themselves by folding or sitting down. Beep only if
+  // rung 1 never got the chance — a pack falling off a cliff, or warning_v
+  // disabled — so a collapse is never silent.
+  if (previous < kUndervoltWarn) {
+    request_tune(config_.buzzer.spool, "undervolt");
+  }
+  RCLCPP_ERROR(rclcpp::get_logger(kLogger),
+               "Undervoltage rung %u/3: servo rail cut%s.",
+               static_cast<unsigned>(stage),
+               stage >= kUndervoltCutoff
+                   ? " and latched off — power-cycle the robot after charging"
+                   : " once folded");
 }
 
 hardware_interface::return_type HexaHardware::write(

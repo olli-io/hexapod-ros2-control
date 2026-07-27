@@ -73,6 +73,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.swing_width, be.swing_width, kTol);
   EXPECT_NEAR(le.swing_apex_fraction, be.swing_apex_fraction, kTol);
   EXPECT_NEAR(le.touchdown_velocity, be.touchdown_velocity, kTol);
+  EXPECT_NEAR(le.touchdown_probe_height, be.touchdown_probe_height, kTol);
+  EXPECT_NEAR(le.liftoff_velocity, be.liftoff_velocity, kTol);
   EXPECT_NEAR(le.swing_phase_margin, be.swing_phase_margin, kTol);
   EXPECT_NEAR(le.controller_dt, be.controller_dt, kTol);
   EXPECT_NEAR(le.cmd_zero_tol, be.cmd_zero_tol, kTol);

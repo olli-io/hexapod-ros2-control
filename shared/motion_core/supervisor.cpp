@@ -10,10 +10,11 @@ namespace hexa::supervisor {
 // of 0 disables the flag; it raises after hold_s below threshold and clears
 // above threshold + hysteresis with no hold on the way up.
 
-BatteryMonitor::BatteryMonitor(float warning_v, float critical_v,
+BatteryMonitor::BatteryMonitor(float warning_v, float fold_v, float cutoff_v,
                                float hysteresis_v, float hold_s)
     : warning_v_(warning_v),
-      critical_v_(critical_v),
+      fold_v_(fold_v),
+      cutoff_v_(cutoff_v),
       hysteresis_v_(hysteresis_v),
       hold_s_(hold_s) {}
 
@@ -46,16 +47,18 @@ void BatteryMonitor::step(Flag& f, float voltage, float t,
 
 void BatteryMonitor::update(float voltage_v, float t_s) {
   step(warn_, voltage_v, t_s, warning_v_);
-  step(crit_, voltage_v, t_s, critical_v_);
-  low_ = warn_.active;
-  critical_ = crit_.active;
+  step(fold_, voltage_v, t_s, fold_v_);
+  step(cutoff_, voltage_v, t_s, cutoff_v_);
+  warn_active_ = warn_.active;
+  fold_active_ = fold_.active;
+  cutoff_active_ = cutoff_.active;
 }
 
 // ── Supervisor ──────────────────────────────────────────────────────────────
 
 Supervisor::Supervisor(const Config& cfg)
     : cfg_(cfg),
-      battery_(cfg.battery_warning_v, cfg.battery_critical_v,
+      battery_(cfg.battery_warning_v, cfg.battery_fold_v, cfg.battery_cutoff_v,
                cfg.battery_hysteresis_v, cfg.battery_hold_s) {}
 
 Decision Supervisor::step(const Observation& obs) {
@@ -63,8 +66,26 @@ Decision Supervisor::step(const Observation& obs) {
   if (obs.battery_valid) {
     battery_.update(obs.battery_v, static_cast<float>(obs.now_us) * 1e-6f);
   }
-  const bool batt_low = battery_.low();
-  const bool batt_critical = battery_.critical();
+
+  // Undervoltage ladder: take the deepest rung the flags justify, then latch it
+  // (see UndervoltStage). Reading the deepest rung rather than chaining them
+  // means a config with only cutoff_v set still escalates correctly.
+  UndervoltStage observed = UndervoltStage::kNone;
+  if (battery_.warn()) observed = UndervoltStage::kWarn;
+  if (battery_.fold()) observed = UndervoltStage::kFold;
+  if (battery_.cutoff()) observed = UndervoltStage::kCutoff;
+  if (observed > stage_) {
+    stage_ = observed;
+  }
+  // Tracked separately from stage_ so climbing kFold -> kCutoff does not re-fire
+  // a fold the cutoff is about to make moot.
+  const bool request_fold = stage_ >= UndervoltStage::kFold && !fold_requested_;
+  if (request_fold) {
+    fold_requested_ = true;
+  }
+  const bool batt_warn = stage_ >= UndervoltStage::kWarn;
+  const bool batt_fold = stage_ >= UndervoltStage::kFold;
+  const bool batt_cutoff = stage_ == UndervoltStage::kCutoff;
 
   // Input watchdog — mirror hexa_webteleop's stale-input rule. A live link that
   // stops delivering frames for input_timeout_s is stale (pad edging out of
@@ -89,33 +110,37 @@ Decision Supervisor::step(const Observation& obs) {
   // (hexa::EnergizeSweep) so closing the relay is not an inrush spike.
   //
   // Disarm on a clean fold — the *rising* edge of `folded`, i.e. a completed
-  // FOLDING -> FOLDED park, the safe moment to cut — or on a critical battery
-  // (protect the electronics) or a latched over-current. Being folded at boot is
-  // not a park: at that point the rail is not armed yet, so the edge is a no-op
-  // and the next tick arms. A stale link / lost pilot deliberately does NOT drop
-  // the rail: the robot holds its stand and settles; cutting servo power
-  // mid-stance would collapse it.
+  // FOLDING -> FOLDED park, the safe moment to cut — or on a stage-3 cutoff, or
+  // on a latched over-current. Being folded at boot is not a park: at that point
+  // the rail is not armed yet, so the edge is a no-op and the next tick arms. A
+  // stale link / lost pilot deliberately does NOT drop the rail: the robot holds
+  // its stand and settles; cutting servo power mid-stance would collapse it.
+  //
+  // Rung 2 does not cut the rail itself — it folds (request_fold above) and lets
+  // the clean-fold edge cut once parked, so the legs fold under power. Rung 3 is
+  // the backstop if that fold never completes. Re-arming is blocked from rung 2
+  // on, not just at the cutoff: unloading the rail lets the voltage rebound, and
+  // a gate reading only the live flags would re-arm into the same sag.
   const bool fold_completed = obs.folded && !prev_folded_;
   prev_folded_ = obs.folded;
   if (relay_armed_) {
-    if (fold_completed || batt_critical || obs.fault) {
+    if (fold_completed || batt_cutoff || obs.fault) {
       relay_armed_ = false;
     }
-  } else if (obs.bt_connected && obs.armable && !batt_critical && !obs.fault) {
+  } else if (obs.bt_connected && obs.armable && !batt_fold && !obs.fault) {
     relay_armed_ = true;
   }
 
-  // Safe-stop aggregate: main zeroes the command on a stale link OR a low/
-  // critical battery, so the robot never keeps walking on stale input or a weak
-  // pack — it settles to a stand. (A stale link still holds the rail; only a
-  // critical battery / clean fold drops it, above.)
-  const bool force_zero = input_stale || batt_low || batt_critical;
+  // Safe-stop aggregate: main zeroes the command on a stale link OR the ladder
+  // at rung 2+, so the robot settles to a stand while the fold runs. Rung 1 is
+  // deliberately absent — a warning that immobilizes the robot strands it.
+  const bool force_zero = input_stale || batt_fold;
 
-  // Fault = a condition that demands the alarm cadence. Battery low/critical is
-  // always a fault; a lost link is a fault only once armed (losing the pilot
+  // Fault = a condition that demands the alarm cadence. Any ladder rung is a
+  // fault; a lost link is a fault only once armed (losing the pilot
   // mid-operation), so pre-link boot scanning stays a calm slow blink.
   const bool bt_lost = relay_armed_ && !obs.bt_connected;
-  const bool fault = batt_low || batt_critical || bt_lost || obs.fault;
+  const bool fault = batt_warn || bt_lost || obs.fault;
 
   // Solid means "linked and actually walking" — gated on the safe-stop: a stale
   // link or weak pack zeroes the command (the robot settles), so the LED must
@@ -133,8 +158,9 @@ Decision Supervisor::step(const Observation& obs) {
   d.input_stale = input_stale;
   d.force_zero = force_zero;
   d.relay_energized = relay_armed_;
-  d.battery_low = batt_low;
-  d.battery_critical = batt_critical;
+  d.undervolt_stage = stage_;
+  d.request_fold = request_fold;
+  d.undervolt_cutoff = batt_cutoff;
   d.fault = fault;
   d.led = led;
   return d;

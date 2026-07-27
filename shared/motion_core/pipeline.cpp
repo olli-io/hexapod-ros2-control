@@ -64,12 +64,14 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
       caps_(cfg.caps),
       control_(cfg.control, cfg.caps, nominal_stance_, cfg.default_gait),
       posture_(cfg.posture),
-      // Supervisor safety stays baked (kInputTimeoutS / kBattery are from
-      // webteleop/display YAML, outside the geometry+tuning scope).
+      // Supervisor safety stays baked (kInputTimeoutS is from webteleop YAML and
+      // kBattery from hardware.yaml's `battery:` ladder, both outside the
+      // geometry+tuning scope).
       supervisor_(hexa::supervisor::Config{
           hexa::config::kInputTimeoutS,
           hexa::config::kBattery.warning_v,
-          hexa::config::kBattery.critical_v,
+          hexa::config::kBattery.fold_v,
+          hexa::config::kBattery.cutoff_v,
           hexa::config::kBattery.hysteresis_v,
           hexa::config::kBattery.hold_s,
           kTickPeriodUs,
@@ -205,6 +207,14 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   const hexa::supervisor::Decision dec = supervisor_.step(obs);
   r.decision = dec;
   r.relay_energized = dec.relay_energized;
+
+  // Undervoltage rung 2: queue one fold, the same request the Start button
+  // makes. After the init edge above, so a same-tick Start cannot stand the
+  // robot back up onto a spent pack. If the engine refuses, rung 3 is the
+  // backstop that cuts the rail regardless of posture.
+  if (dec.request_fold) {
+    r.undervolt_fold_requested = engine_->request_fold();
+  }
 
   // Safe-stop: on a stale/lost link OR a low/critical battery, zero the command
   // before shaping so the engine settles (pauses -> reseats) instead of latching

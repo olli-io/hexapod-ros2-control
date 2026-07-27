@@ -288,12 +288,16 @@ BodyPose PostureController::update(
   // gait-active animations fade against the idle ones (the node owns the
   // transition, not the animations).
   ctx.walking = true;
-  // Master switch: with gait body animations off the gait regime contributes
-  // nothing, so the crossfade fades the idle animations out to a still body
-  // instead of into the walking ones. The activation still tracks `walking`, so
-  // the fade itself (and its reversal on stopping) is unchanged.
-  const BodyPose gait_out =
-      gait_body_animations_enabled_ ? stack.eval(ctx) : IDENTITY;
+  // Master switch: with gait body animations off the DEFAULT stack's gait
+  // regime contributes nothing, so the crossfade fades the idle animations out
+  // to a still body instead of into the walking ones. An explicitly selected
+  // ANIMATION-mode stack is exempt — the user asked for that animation, so the
+  // switch only governs the implicit gait_sway/gait_bounce layers. The
+  // activation still tracks `walking`, so the fade itself (and its reversal on
+  // stopping) is unchanged.
+  const bool gait_regime_suppressed =
+      !gait_body_animations_enabled_ && animation_mode_.empty();
+  const BodyPose gait_out = gait_regime_suppressed ? IDENTITY : stack.eval(ctx);
   ctx.walking = false;
   const BodyPose idle_out = stack.eval(ctx);
   const BodyPose animated = lerp(idle_out, gait_out, activation_);

@@ -19,7 +19,8 @@ image tarball, and run as a long-lived service.
 - Wired Ethernet or Wi-Fi.
 - Optional: 256×64 SH1122 OLED face on the Pi SPI bus (spidev0.0 +
   DC/RST/CS on GPIO), rendered directly by `hexa_display`.
-- Optional: passive buzzer on GPIO18 for the boot jingle.
+- Optional: passive buzzer on GPIO18 for the boot, shutdown, stack-up,
+  over-current, and undervoltage tunes.
 
 Pi GPIO allocation, so nothing added later steals a line. All numbers are
 **BCM GPIO**, never header pin positions — the two differ on every Pi, and BCM
@@ -27,7 +28,11 @@ is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
 
 - **GPIO14, GPIO15** — UART0 TXD / RXD, the Servo 2040 link.
 - **GPIO8, GPIO9, GPIO10, GPIO11** — SPI0 (CE0, MISO, MOSI, SCLK) for the
-  SH1122 face.
+  SH1122 face. CE0 is driven by the SPI controller, not by `hexa_display`
+  (`cs_line: -1`): the Pi 5's spi0 node claims GPIO8 as `spi0 CS0`, so
+  userspace cannot request the line, and its RP1 controller rejects
+  `SPI_NO_CS` (`unsupported mode bits 40` in `dmesg`) — the two together rule
+  out a manually driven CS on a Pi 5.
 - **GPIO24, GPIO25** — the face's DC / RST control lines.
 - **GPIO18** — hardware PWM for the buzzer (RP1 PWM0 channel 2, alt function
   `a3`).
@@ -154,11 +159,38 @@ the panel.
 Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO18 (BCM)
 and **−** to GND; add a ~100 Ω resistor in series if it is too loud.
 
-The jingle is played by `systemd/boot-tune.sh` — POSIX shell writing the
-kernel's sysfs PWM interface, with no Python, gpiozero, or any other package
-installed. It runs on the **Pi host**, not in the container: the point is a
-chirp seconds after the kernel hands off, long before Docker and the ROS stack
-exist.
+Tunes are played by `systemd/buzzer.sh` — POSIX shell writing the kernel's
+sysfs PWM interface, with no Python, gpiozero, or any other package installed.
+It runs on the **Pi host**, never in the container, for two reasons: the boot
+tune has to chirp seconds after the kernel hands off, long before Docker and
+the ROS stack exist; and the container cannot reach the PWM at all — Docker
+mounts `/sys` read-only, and every `/sys/class/pwm/pwmchipN` is a symlink into
+`/sys/devices`, so an export from inside fails with `EROFS` however the class
+directory is bound.
+
+The robot has five tunes, differing in contour so they are told apart through a
+closing door:
+
+- **`boot`** — rising two notes. The Pi has power and the kernel is up. Played
+  by `hexa-boot-tune.service`.
+- **`up`** — rising triad. The ROS stack is live and the servo link is open
+  (`hexa_hardware` activated). Requested by the container.
+- **`shutdown`** — falling, the mirror of `boot`. The last thing before power
+  is cut: when it stops, the switch is safe. Played by
+  `hexa-shutdown-tune.service`.
+- **`fault`** — two-tone klaxon, repeated, ~2 s. The Servo 2040 latched an
+  over-current trip and dropped the rail. Requested by the container.
+- **`undervolt`** — one flat sustained tone, ~1.8 s. Rung 1 of the undervoltage
+  ladder: the pack is low but the robot is **still drivable**, so walk it back
+  and charge it. The opposite contour to `fault` because it calls for the
+  opposite response. Requested by the container, once per power cycle.
+
+The three container-borne tunes take a detour, since the container cannot drive
+the buzzer itself: `hexa_hardware` writes the tune name into
+`/workspace/log/buzzer` (the `buzzer.spool` path in `hardware.yaml`), which
+compose bind-mounts from `~/hexa-robot/log`, and the host's
+`hexa-tune-spool.path` unit sees the write and runs `buzzer.sh --spool` with
+it. Blank `buzzer.spool` to stop the requests at the source.
 
 Enable the PWM block:
 
@@ -176,14 +208,18 @@ cat /sys/class/pwm/pwmchip*/npwm    # the 4-channel one is RP1's
 cd ~/hexa-robot && ./hexa robot play-tune
 ```
 
+`play-tune` takes a tune name, so each one can be heard without provoking it —
+`./hexa robot play-tune fault` is the only sane way to audition that one.
+
 The chip number moves with the kernel and the overlays in play, so
-`boot-tune.sh` discovers it (4 channels = RP1) rather than hardcoding
+`buzzer.sh` discovers it (4 channels = RP1) rather than hardcoding
 `pwmchip2`, and re-asserts the pin's alt mode with `pinctrl` in case the
 overlay in `config.txt` did not. If discovery picks wrong, pin it with
 `TUNE_PWMCHIP=/sys/class/pwm/pwmchipN`.
 
 Tune it without editing the script — the same `NOTE:beats` melody format the
-gpiozero recipes use, `REST` for silence:
+gpiozero recipes use, `REST` for silence. `TUNE_MELODY` overrides whichever
+tune was named:
 
 ```
 TUNE_MELODY="C5:1 E5:1 G5:1 C6:1 REST:1 G5:1 C6:3" TUNE_TEMPO=0.11 \
@@ -192,7 +228,8 @@ TUNE_MELODY="C5:1 E5:1 G5:1 C6:1 REST:1 G5:1 C6:3" TUNE_TEMPO=0.11 \
 
 `TUNE_GPIO`, `TUNE_CHANNEL`, and `TUNE_PIN_ALT` cover a different buzzer pin.
 Every hardware failure — no buzzer, no overlay, busy channel — logs a line and
-exits 0, so the tune can never hold up a boot.
+exits 0, so a tune can never hold up a boot, a shutdown, or the fault path that
+asked for it.
 
 ## 3. Note hardware IDs
 
@@ -430,26 +467,76 @@ Inspecting and undoing:
   design; disable the unit if you want the robot to stay down.
 - **`./hexa robot uninstall-service`** — disable and delete the unit entirely.
 
-## 6d. Boot jingle on boot (optional)
+## 6c-2. Undervoltage ladder
 
-With the buzzer wired and the PWM overlay in place (step 2c), enable the
-jingle:
+A draining pack is handled in three escalating rungs, decided by the locomotion
+supervisor (`shared/motion_core/supervisor.hpp`) off `~/battery_state` and
+published on `/hardware/undervoltage`:
+
+- **rung 1 — warn.** The `undervolt` tune sounds once and the status LED goes to
+  the fault cadence. Nothing else changes: the robot stays **drivable**, so it
+  can be walked back to the bench.
+- **rung 2 — fold.** The gait command is zeroed and a fold is queued, as a
+  **Start** from a stand would. The rail is cut on the `FOLDING → FOLDED` park
+  edge, so the legs go down under power instead of collapsing mid-stance.
+- **rung 3 — cutoff.** The rail is cut immediately, whatever the posture, and
+  latched open — the pack is too far gone to finish a fold.
+
+Two properties to know before tuning it:
+
+- **The ladder only escalates.** Cutting the rail unloads the pack and the
+  voltage rebounds past the threshold that just fired, so a ladder that followed
+  it back up would cut, re-arm, sag and cut again.
+- **A cutoff is cleared by power-cycling the robot**, and nothing else. Nothing
+  is written to disk; the latch lives in the supervisor and in `hexa_hardware`,
+  so the cut survives a locomotion restart. `~/reload_config` is refused from
+  rung 2 up, since a rebuilt pipeline would start clean and re-arm.
+
+Thresholds live in `battery:` in `hexa_description/config/hardware.yaml` — one
+source for the supervisor, the baked firmware config, and `hexa_hardware`. They
+ship **disabled** (`0.0` on all three rungs) because the Servo 2040's
+voltage-divider scale is uncalibrated. Measure the pack against `~/battery_state`
+first, then set all three in descending order (codegen rejects a mis-ordered
+ladder). Until then the robot beeps, folds and cuts for over-current only.
+
+## 6d. Buzzer units (optional)
+
+With the buzzer wired and the PWM overlay in place (step 2c), enable the four
+buzzer units in one go:
 
 ```
 cd ~/hexa-robot && ./hexa robot install-tune
 ```
 
-- **`hexa-boot-tune.service`** — a `Type=oneshot` unit, `WantedBy=multi-user.target`,
-  running `systemd/boot-tune.sh` as root (exporting a sysfs PWM channel needs
-  it). Nothing `Requires=` it, so it is a pure side effect.
+Each runs `systemd/buzzer.sh` as root — exporting a sysfs PWM channel needs it
+— and nothing `Requires=` any of them, so they are pure side effects:
+
+- **`hexa-boot-tune.service`** — `Type=oneshot`, `WantedBy=multi-user.target`.
+  Plays `boot`.
+- **`hexa-shutdown-tune.service`** — `Type=oneshot`, `DefaultDependencies=no`,
+  `WantedBy=final.target`. Plays `shutdown` in the last stage of the shutdown
+  transaction, after every normal unit (`hexa-robot.service` included) has
+  stopped, so the relay is already open and the container already gone.
+- **`hexa-tune-spool.path`** — watches `~/hexa-robot/log/buzzer` with
+  `PathModified=` and triggers the service below on each write.
+  `PathExists=` would stay satisfied and restart it in a loop.
+- **`hexa-tune-spool.service`** — plays whatever tune the container last wrote
+  (`up`, `fault`, `undervolt`). Triggered only by the `.path`, never enabled on
+  its own. It
+  only reads the spool: writing it back would be another modification of the
+  watched file, and the trigger would loop.
+
+Notes:
+
 - **Separate from `install-service`** on purpose — the buzzer is optional
   hardware, and enabling the ROS stack's boot unit should not silently start
   making noise.
-- **`./hexa robot uninstall-tune`** — disable and delete it; the robot boots
+- **`./hexa robot uninstall-tune`** — disable and delete all four; the robot is
   silent again.
-- **`journalctl -u hexa-boot-tune -b`** — why it stayed quiet, if it did.
+- **`journalctl -u hexa-boot-tune -u hexa-shutdown-tune -u hexa-tune-spool -b`**
+  — why one stayed quiet, if it did.
 
-`hexa robot up` / `down` keep working unchanged with the unit installed.
+`hexa robot up` / `down` keep working unchanged with the units installed.
 
 ## 7. Re-deploy
 

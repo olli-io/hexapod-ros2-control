@@ -130,7 +130,10 @@ void Sh1122Panel::spiWrite(const uint8_t* data, size_t len) {
 bool Sh1122Panel::begin(const PanelConfig& cfg) {
     _headless = cfg.headless;
 
-    u8g2_Setup_sh1122_256x64_f(&_u8g2, U8G2_R0, &Sh1122Panel::byteCb,
+    // U8G2_MIRROR: the panel is mounted so a straight (U8G2_R0) raster reads
+    // mirrored left-to-right; flip here in the Linux seam so the shared eye
+    // core stays bit-identical across targets.
+    u8g2_Setup_sh1122_256x64_f(&_u8g2, U8G2_MIRROR, &Sh1122Panel::byteCb,
                                &Sh1122Panel::gpioCb);
     u8x8_SetUserPtr(u8g2_GetU8x8(&_u8g2), this);
 
@@ -140,17 +143,28 @@ bool Sh1122Panel::begin(const PanelConfig& cfg) {
         return true;
     }
 
-    // SPI bus: manual CS (SPI_NO_CS), mode 0, MSB first, 8-bit words.
+    // SPI bus: mode 0, MSB first, 8-bit words.
     _spi_fd = open(cfg.spi_device.c_str(), O_RDWR);
     if (_spi_fd < 0) {
         fprintf(stderr, "[Sh1122Panel] open %s: %s\n",
                 cfg.spi_device.c_str(), strerror(errno));
         return false;
     }
-    uint8_t mode = SPI_MODE_0 | SPI_NO_CS;
+    // A manually driven CS (cs_line >= 0) wants the controller to leave its own
+    // CS alone. Not every controller can: the Pi 4's bcm2835 honors SPI_NO_CS,
+    // the Pi 5's RP1 (spi-dw-mmio) rejects it outright — EINVAL, with
+    // "unsupported mode bits 40" in dmesg. Fall back to plain mode 0 there and
+    // let the hardware CS toggle; the panel is either on the controller's own
+    // CE line (cs_line: -1, the Pi 5 wiring) or on a line the controller does
+    // not touch.
+    uint8_t mode = SPI_MODE_0;
+    if (cfg.cs_line >= 0) {
+        uint8_t no_cs = SPI_MODE_0 | SPI_NO_CS;
+        if (ioctl(_spi_fd, SPI_IOC_WR_MODE, &no_cs) == 0) mode = no_cs;
+    }
     uint8_t bits = 8;
     uint32_t speed = cfg.spi_speed_hz;
-    if (ioctl(_spi_fd, SPI_IOC_WR_MODE, &mode) < 0 ||
+    if ((mode == SPI_MODE_0 && ioctl(_spi_fd, SPI_IOC_WR_MODE, &mode) < 0) ||
         ioctl(_spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0 ||
         ioctl(_spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
         fprintf(stderr, "[Sh1122Panel] spidev config: %s\n", strerror(errno));

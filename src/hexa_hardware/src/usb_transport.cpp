@@ -4,6 +4,7 @@
 
 #include <charconv>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -165,6 +166,7 @@ void UsbTransport::write(std::span<const std::uint8_t> data) {
   if (handle_ == nullptr) {
     throw std::runtime_error("hexa_hardware: write on closed USB transport");
   }
+  const std::lock_guard<std::mutex> lock(write_mu_);
   int sent = 0;
   const int rc = libusb_bulk_transfer(
       as_handle(handle_), ep_out_,

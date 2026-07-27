@@ -45,7 +45,52 @@ connection:
 
 parser:
   type: servo2040 # selects the BoardProtocol (currently only servo2040).
-  get_period_ticks: 10 # poll aux every Nth read() (100 Hz read → 10 Hz aux)
+  # Aux poll period (battery + over-current STATUS), in milliseconds. 0 disables
+  # it. Wall-clock, and read only by hexa_hardware, which runs those GETs on its
+  # aux thread: they are blocking board round trips and have no business on the
+  # 200 Hz control cycle, whose whole budget is 5 ms.
+  aux_period_ms: 100
+  # The same poll on the Pico, which paces it in control ticks because it
+  # deliberately keeps the round trip inside its own tick budget. Read only by
+  # gen_config.py (-> kGetPeriodTicks); hexa_hardware ignores it.
+  get_period_ticks: 10
+
+# Host buzzer requests. The buzzer is on the Pi's hardware PWM, which this
+# process cannot reach (Docker mounts /sys read-only and every pwmchip class
+# entry is a symlink into it), so beeps go out as a tune name written here and
+# the host's hexa-tune-spool.path unit plays it with systemd/buzzer.sh. Three
+# tunes are requested: `up` when the component activates, `fault` on an
+# over-current trip, and `undervolt` on rung 1 of the ladder below. Blank the
+# path to disable — a missing buzzer is silent either way, this just stops the
+# write.
+buzzer:
+  # Container-side path. Must be on the log volume, which compose bind-mounts
+  # from ~/hexa-robot/log — that shared inode is the whole mechanism.
+  spool: /workspace/log/buzzer
+
+# Undervoltage ladder — the source of truth for the motion_core supervisor (which
+# owns the policy), the baked firmware config, and hexa_hardware (buzzer + rail
+# latch). Three escalating responses to a draining pack, each armed after hold_s
+# below its threshold:
+#   warning_v — buzzer beep only; the robot stays drivable so it can be walked
+#               back to the bench.
+#   fold_v    — fold and safe-stop; the rail is cut once parked at FOLDED, so the
+#               robot goes down under control.
+#   cutoff_v  — cut the rail immediately, whatever the posture, and refuse to
+#               re-arm. Cleared by power-cycling the robot; nothing on disk.
+# The ladder only escalates: cutting the rail unloads the pack and the voltage
+# rebounds, so de-escalating would cut / re-arm / sag in a loop.
+#
+# 0.0 disables a rung. SHIPPED DISABLED — the Servo2040's voltage-divider scale
+# is uncalibrated, so a threshold here would fire against a meaningless number.
+# Measure the pack against `~/battery_state` first, then set all three in
+# descending order (codegen rejects a mis-ordered ladder).
+battery:
+  warning_v: 0.0
+  fold_v: 0.0
+  cutoff_v: 0.0
+  hysteresis_v: 0.3 # rise above threshold+hysteresis to clear (pre-latch only)
+  hold_s: 3.0 # seconds below a threshold before that rung arms
 
 # The relay pin and battery-telemetry units are NOT configured here: the relay
 # GPIO is owned by the Servo2040 firmware, and voltage/current arrive in fixed

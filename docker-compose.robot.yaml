@@ -60,3 +60,14 @@ services:
       - ./tuning.yaml:/workspace/install/share/hexa_description/config/tuning.yaml:ro
     device_cgroup_rules:
       - 'c 13:* rmw'
+    # Real-time scheduling for the controller_manager control thread. Docker
+    # hands a container RLIMIT_RTPRIO 0, so ros2_control_node's
+    # sched_setscheduler(SCHED_FIFO) is refused ("Could not enable FIFO RT
+    # scheduling policy: Operation not permitted") and the 200 Hz cycle competes
+    # with every other thread for CFS timeslices. A non-zero rtprio limit is
+    # enough on its own — Linux lets an unprivileged process take SCHED_FIFO up
+    # to its own limit, no capability needed. The priority actually used is
+    # controller_manager's `thread_priority` (50) in
+    # hexa_bringup/config/ros2_controllers.yaml; this only raises the ceiling.
+    ulimits:
+      rtprio: 99

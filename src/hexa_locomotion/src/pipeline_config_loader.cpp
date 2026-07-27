@@ -132,6 +132,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.swing_width = f(g["swing_width"]);
   e.swing_apex_fraction = f(g["swing_apex_fraction"]);
   e.touchdown_velocity = f(g["touchdown_velocity"]);
+  e.touchdown_probe_height = f(g["touchdown_probe_height"]);
+  e.liftoff_velocity = f(g["liftoff_velocity"]);
   e.swing_phase_margin = f(g["swing_phase_margin"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);

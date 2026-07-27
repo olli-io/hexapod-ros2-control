@@ -64,11 +64,17 @@ struct ConnectionConfig {
 };
 
 // Board-protocol settings; the factory reads `type` to pick a concrete
-// BoardProtocol. `get_period_ticks` paces auxiliary GETs against the
-// read() cycle and is consumed by HexaHardware, not by the protocol.
+// BoardProtocol. `aux_period_ms` paces auxiliary GETs (battery + STATUS) and is
+// consumed by HexaHardware, not by the protocol.
+//
+// Wall-clock, not ticks: those GETs are request/response round trips and run on
+// the aux thread, which has no tick to decimate against. The Pico firmware paces
+// the same poll with `parser.get_period_ticks`, which stays a tick count there
+// because it deliberately keeps the round trip inside its control tick. 0
+// disables the poll.
 struct ParserConfig {
   std::string type = "servo2040";
-  int get_period_ticks = 10;
+  int aux_period_ms = 100;
 };
 
 // Startup behaviour. The board never drives a servo the host has not commanded,
@@ -81,16 +87,30 @@ struct InitConfig {
   int sweep_leg_interval_ms = 150;
 };
 
+// Host buzzer, if one is fitted. The buzzer hangs off the Pi's hardware PWM,
+// which this process cannot reach — Docker mounts /sys read-only and the
+// pwmchip class entries are symlinks into it — so a beep is a request, not an
+// action: HexaHardware writes a tune name into `spool` and the host's
+// hexa-tune-spool.path unit runs systemd/buzzer.sh with it. The path must land
+// on a volume the host shares (the bind-mounted log directory).
+struct BuzzerConfig {
+  // Empty (the default) disables the requests entirely — no buzzer fitted, no
+  // spool watcher installed, or simply not wanted.
+  std::string spool;
+};
+
 struct HardwareConfig {
   ConnectionConfig connection;
   ParserConfig parser;
   InitConfig init;
+  BuzzerConfig buzzer;
 
   std::unordered_map<std::string, JointCalibration> joints;
 };
 
 // Load + validate hardware config. `hardware_path` is the YAML with wiring,
-// connection/parser, an optional `init` block (energize-sweep stagger),
+// connection/parser, an optional `init` block (energize-sweep stagger), an
+// optional `buzzer` block (host beep spool),
 // `deg_at_center`, a shared `servo_defaults.pulse_us`
 // clamp, and a per-servo `{pin, reversed?, pulse_us?}` map under `servos`. The
 // relay pin and battery-telemetry units are board-owned (fixed protocol

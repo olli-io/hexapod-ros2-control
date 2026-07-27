@@ -8,7 +8,8 @@
 // servo-rail relay, set the status LED. It folds several ROS-side mechanisms
 // into one onboard unit:
 //   - the hexa_webteleop input watchdog (stale input -> zero velocity),
-//   - the hexa_display BatteryMonitor (hysteresis-debounced low/critical),
+//   - the hexa_display BatteryMonitor (hysteresis-debounced), widened into the
+//     three-rung undervoltage ladder (beep -> fold+cut -> hard cutoff),
 //   - the relay-arming discipline the real bringup enforces by launch order,
 //   - a status-LED policy standing in for the dropped hexa_display face.
 //
@@ -27,26 +28,48 @@ namespace hexa::supervisor {
 //   slow blink  — idle / standing (armed, feet planted, not walking) or
 //                 pre-link scanning at boot,
 //   solid       — BT linked and walking (gait active),
-//   fast blink  — fault: low/critical battery, or a lost link mid-operation.
+//   fast blink  — fault: any rung of the undervoltage ladder, or a lost link
+//                 mid-operation.
 enum class LedPattern { kSlowBlink, kSolid, kFastBlink };
 
+// The undervoltage ladder — three escalating responses to a draining pack:
+//
+//   kWarn   — beep, nothing else. The robot stays drivable on purpose, so it can
+//             be walked home.
+//   kFold   — command a fold and safe-stop. The rail is cut by the clean-fold
+//             edge once parked, so the robot goes down under control.
+//   kCutoff — drop the rail now, whatever the posture, and refuse to re-arm.
+//
+// MONOTONIC within a power cycle. Cutting the rail unloads the pack and the
+// voltage rebounds, so a ladder that de-escalated would cut, re-arm, sag and cut
+// again. The latch is in-memory: a power cycle is the only reset.
+enum class UndervoltStage : std::uint8_t {
+  kNone = 0,
+  kWarn = 1,
+  kFold = 2,
+  kCutoff = 3,
+};
+
 // Hysteresis-debounced battery flags — float port of hexa_display's
-// BatteryMonitor. A threshold of 0 disables that flag entirely (shipped
-// default: the divider scale is uncalibrated). A flag raises only after the
-// voltage stays below the threshold for hold_s seconds, and clears once it
-// rises above threshold + hysteresis (good news is immediate — no hold on the
-// way up).
+// BatteryMonitor, widened to the three rungs above. A threshold of 0 disables
+// that rung (shipped default: the divider scale is uncalibrated). A flag raises
+// only after the voltage stays below the threshold for hold_s seconds, and
+// clears once it rises above threshold + hysteresis (no hold on the way up).
+//
+// Bidirectional by design: the Supervisor owns the latching. A sag that recovers
+// before hold_s never arms a rung, which is what keeps load transients out.
 class BatteryMonitor {
  public:
-  BatteryMonitor(float warning_v, float critical_v, float hysteresis_v,
-                 float hold_s);
+  BatteryMonitor(float warning_v, float fold_v, float cutoff_v,
+                 float hysteresis_v, float hold_s);
 
   // Feed a fresh voltage sample taken at monotonic time t_s (seconds). Call
   // only when a real reading is available; between samples the flags hold.
   void update(float voltage_v, float t_s);
 
-  bool low() const { return low_; }
-  bool critical() const { return critical_; }
+  bool warn() const { return warn_active_; }
+  bool fold() const { return fold_active_; }
+  bool cutoff() const { return cutoff_active_; }
 
  private:
   // One debounced threshold. below_since is valid only while has_since is set
@@ -59,21 +82,25 @@ class BatteryMonitor {
   void step(Flag& f, float voltage, float t, float threshold) const;
 
   float warning_v_;
-  float critical_v_;
+  float fold_v_;
+  float cutoff_v_;
   float hysteresis_v_;
   float hold_s_;
-  bool low_ = false;
-  bool critical_ = false;
+  bool warn_active_ = false;
+  bool fold_active_ = false;
+  bool cutoff_active_ = false;
   Flag warn_;
-  Flag crit_;
+  Flag fold_;
+  Flag cutoff_;
 };
 
 // Static configuration, sourced from the baked config (config_generated.hpp)
 // plus the loop's tick geometry.
 struct Config {
   float input_timeout_s;          // stale-input watchdog window
-  float battery_warning_v;        // 0 disables
-  float battery_critical_v;       // 0 disables
+  float battery_warning_v;        // ladder rung 1 (beep);      0 disables
+  float battery_fold_v;           // ladder rung 2 (fold+cut);  0 disables
+  float battery_cutoff_v;         // ladder rung 3 (cut+latch); 0 disables
   float battery_hysteresis_v;
   float battery_hold_s;
   std::uint64_t tick_period_us;   // nominal control-tick period
@@ -103,12 +130,17 @@ struct Observation {
 struct Decision {
   bool input_stale;       // watchdog fired (stale/lost BT link)
   bool force_zero;        // main must zero cmd_vel this tick — the aggregate
-                          //   safe-stop: stale input OR a low/critical battery.
-                          //   The engine then settles (pauses → reseats) rather
-                          //   than walking on stale input or a weak pack.
+                          //   safe-stop: stale input OR the ladder at kFold+.
+                          //   NOT set by kWarn, which stays drivable.
   bool relay_energized;   // drive servo_out::set_relay(...)
-  bool battery_low;       // debounced warning flag
-  bool battery_critical;  // debounced critical flag
+
+  // Undervoltage ladder (see UndervoltStage). `undervolt_stage` is latched;
+  // `request_fold` is a one-tick edge on first reaching kFold, so the caller
+  // queues exactly one fold rather than re-asking every tick.
+  UndervoltStage undervolt_stage;
+  bool request_fold;
+
+  bool undervolt_cutoff;  // == (undervolt_stage == kCutoff); rail latched off
   bool fault;             // aggregate fault (drives the fast-blink LED)
   LedPattern led;
 };
@@ -136,11 +168,18 @@ class Supervisor {
 
   bool relay_armed() const { return relay_armed_; }
 
+  // Monotonic for the life of this object — see UndervoltStage.
+  UndervoltStage undervolt_stage() const { return stage_; }
+
  private:
   Config cfg_;
   BatteryMonitor battery_;
   bool relay_armed_ = false;
   bool prev_folded_ = false;  // for the FOLDING -> FOLDED park edge
+
+  // Latched ladder rung. In-memory only: a power cycle is the sole reset.
+  UndervoltStage stage_ = UndervoltStage::kNone;
+  bool fold_requested_ = false;  // the kFold edge has already been emitted
 
   TickStats tick_;
   bool have_last_tick_ = false;

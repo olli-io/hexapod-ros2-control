@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <string>
 
 #include "hexa_hardware/transport.hpp"
@@ -24,6 +25,13 @@ class UartTransport final : public Transport {
   std::string device_;
   int baud_;
   int fd_ = -1;
+  // Serializes write() only, per the Transport contract: a SET from the
+  // controller-manager thread and a GET request from the aux thread must not
+  // interleave their bytes. Deliberately not held across read() — the control
+  // cycle must never wait on a board round trip. Contention is a single
+  // ::write() of at most a 30-byte frame, so the control thread's worst case
+  // here is microseconds.
+  std::mutex write_mu_;
 };
 
 }  // namespace hexa_hardware

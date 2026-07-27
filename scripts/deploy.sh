@@ -151,10 +151,16 @@ cmd_push() {
     # opts in once with `./hexa robot install-service`, so a redeploy can't
     # silently change the Pi's systemd state.
     scp "systemd/hexa-robot.service" "${host}:~/hexa-robot/systemd/"
-    # Boot jingle: the player plus its unit template. Same deal — shipped, never
+    # Buzzer: the player plus its four unit templates. Same deal — shipped, never
     # installed; `./hexa robot install-tune` is the operator's opt-in. Runs on
-    # the Pi host rather than in the container, so it chirps before Docker is up.
-    scp "systemd/boot-tune.sh" "systemd/hexa-boot-tune.service" \
+    # the Pi host rather than in the container, both so it chirps before Docker
+    # is up and because the container cannot reach the PWM sysfs at all; the
+    # spool pair is how the container's own beeps get out.
+    scp "systemd/buzzer.sh" \
+        "systemd/hexa-boot-tune.service" \
+        "systemd/hexa-shutdown-tune.service" \
+        "systemd/hexa-tune-spool.path" \
+        "systemd/hexa-tune-spool.service" \
         "${host}:~/hexa-robot/systemd/"
     # Runtime-tuning overlay. The compose bind-mounts ~/hexa-robot/tuning.yaml
     # over the image's copy so an on-Pi edit applies on a bare `hexa robot
@@ -182,7 +188,7 @@ if [ -f tuning.yaml ] && ! cmp -s tuning.yaml tuning.yaml.default; then
     echo ">> on-Pi tuning.yaml differed from the repo — saved as tuning.yaml.bak"
 fi
 cp tuning.yaml.default tuning.yaml
-chmod +x systemd/boot-tune.sh
+chmod +x systemd/buzzer.sh
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 

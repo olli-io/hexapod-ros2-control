@@ -33,6 +33,21 @@ device drivers at link time.
 
 Vendored at u8g2 commit `cbceaa1`.
 
+## `fonts/` — text-mode font (generated here, not synced)
+
+The display's text mode draws with **Pixel Operator**
+(https://www.dafont.com/pixel-operator.font, CC0), a true pixel font with a
+16 px native em. Unlike `core/` and `u8g2/` this directory is owned by this
+repo, not `sync.sh`:
+
+- `PixelOperator.ttf` — vendored source font (CC0, so redistribution is fine).
+- `hexa_text_font.{c,h}` — the generated u8g2 font array
+  (`u8g2_font_hexa_text_16`, ASCII + Latin-1), checked in.
+
+Regenerate with `tools/gen_font.py` (host: needs Pillow + u8g2's `bdfconv`;
+build recipe in the script docstring) after changing the TTF, pixel size, or
+character set.
+
 ## Re-syncing
 
 Run `./sync.sh` from a full repo checkout (with the u8g2 submodule

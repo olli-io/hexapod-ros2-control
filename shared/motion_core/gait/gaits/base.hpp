@@ -38,9 +38,20 @@ struct SwingProfile {
   // lowering this lengthens the descent and lands the foot more gently — at the
   // cost of a steeper climb off the ground.
   float apex_fraction = 0.5f;
-  // Vertical speed the foot still carries as it meets the ground. Reached with
-  // zero vertical acceleration, and approached over the whole descent.
+  // Vertical speed the foot still carries as it meets the ground, and the speed
+  // of the probe below.
   float touchdown_velocity = 0.0f;
+  // Height above the touchdown point over which the descent is a straight line
+  // at exactly touchdown_velocity, rather than a curve still braking as it
+  // arrives. This is the band a foot may meet the ground anywhere inside and
+  // still land at the intended speed, so it is what has to beat the servos'
+  // position resolution. 0 restores the plain braked descent.
+  float touchdown_probe_height = 0.0f;
+  // Vertical speed the foot leaves the ground at. The mirror of
+  // touchdown_velocity: 0 peels the foot off with zero initial slope, which
+  // makes it creep through the first fraction of a millimetre; a non-zero value
+  // breaks contact at a definite speed instead.
+  float liftoff_velocity = 0.0f;
 };
 
 // Per-tick stride description for one leg. stride_vector is the body-frame

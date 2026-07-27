@@ -26,8 +26,9 @@ find_package(hexa_interfaces REQUIRED)
 set(DISPLAY_CORE ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/display_core)
 
 # Vendored u8g2 C core (framework-independent), compiled into its own library
-# so --gc-sections can drop the unused device drivers. The 38 MB font-data
-# blobs are intentionally not vendored — the face draws no text.
+# so --gc-sections can drop the unused device drivers. u8g2's 38 MB font-data
+# blobs are intentionally not vendored — the text mode draws with the repo's
+# own generated font (shared/display_core/fonts, from tools/gen_font.py).
 file(GLOB U8G2_SRCS "${DISPLAY_CORE}/u8g2/*.c")
 add_library(u8g2_core STATIC ${U8G2_SRCS})
 target_include_directories(u8g2_core PUBLIC "${DISPLAY_CORE}/u8g2")
@@ -43,13 +44,16 @@ set(CORE_SRCS
 )
 
 # Pure support library: the shared expression/gaze policy + face-animation
-# sequences/clock (from shared/display_core) and the Linux SH1122 panel driver.
+# sequences/clock + text screen (from shared/display_core) and the Linux
+# SH1122 panel driver.
 # No rclcpp — every piece is unit-testable standalone (the gtest suites link
 # this directly). Built on the vendored eye core + u8g2.
 add_library(hexa_display_support STATIC
   ${DISPLAY_CORE}/expression_policy.cpp
   ${DISPLAY_CORE}/face_animation.cpp
   ${DISPLAY_CORE}/face_animation_runner.cpp
+  ${DISPLAY_CORE}/text_screen.cpp
+  ${DISPLAY_CORE}/fonts/hexa_text_font.c
   src/Sh1122Panel.cpp
   ${CORE_SRCS}
 )
@@ -100,6 +104,7 @@ if(BUILD_TESTING)
     test_face_animation
     test_face_animation_runner
     test_face
+    test_text_screen
   )
   foreach(test_name ${display_tests})
     ament_add_gtest(${test_name} test/${test_name}.cpp)

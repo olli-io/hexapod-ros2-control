@@ -65,25 +65,70 @@ gait_node:
     swing_width: 0.02
 
     # Share of the airborne time spent rising to the top of the arc.
-    # 0.5 splits the step evenly. Lower values hand the descent more of the
-    # swing, so the foot settles onto the ground more gently for the same
-    # step height — at the cost of an equally steeper climb off it. 0.5 is
-    # the point where neither end is working harder than the other; move it
-    # down only if the feet still land harder than they lift.
+    # 0.5 splits the step evenly.
+    #
+    # Keep this near the middle. It is tempting to lower it to buy a gentler
+    # landing, but the foot's forward travel is spread over the whole swing
+    # while its height is not: drop this and the foot tops out early and then
+    # sweeps most of the way to its touchdown point at low altitude, where it
+    # can catch on anything the step was meant to clear. The foot should come
+    # down onto the target from above, not slide in towards it.
+    #
+    # The gentle landing is bought by touchdown_velocity and
+    # touchdown_probe_height instead, which cost no altitude.
     #
     # The foot is never allowed to scrub either way: it leaves and meets the
     # ground travelling at exactly ground speed whatever this is set to.
     # That comes from the shape of the swing curve, not from a tuning value.
     swing_apex_fraction: 0.35
 
-    # How fast the foot is still descending as it meets the ground (m/s).
-    # 0 eases it to a dead stop exactly at ground level, which is smoothest
-    # on perfectly flat ground but lands hard whenever the ground or the
-    # servo tracking is off by a millimetre or two. A small value makes
-    # contact happen at this speed instead, whenever it happens: the last
-    # stretch of the descent is a steady, slow probe at this speed rather
-    # than a curve still braking as it arrives.
-    touchdown_velocity: 0.001
+    # How fast the foot is still descending as it meets the ground (m/s),
+    # and the speed of the probe below.
+    #
+    # Do not set this too low. Two reasons, both counter-intuitive. It sets
+    # how long the probe lasts (probe height divided by this speed), so a
+    # slow probe is a long one, and a long one stops being a drop onto the
+    # target and becomes a low sweep towards it. And at 200 Hz a speed this
+    # small moves the foot less than one servo step per tick, so the descent
+    # the servos actually perform is a staircase rather than the slow, steady
+    # approach asked for.
+    touchdown_velocity: 0.05
+
+    # How far above the ground the descent stops braking and becomes a
+    # straight line at exactly touchdown_velocity (m).
+    #
+    # This is the knob that matters on real servos. A curve that only
+    # *approaches* touchdown_velocity reaches it in the limit at ground
+    # level and nowhere else: half a millimetre up it is still coming down
+    # many times faster. Since the servos can only resolve the foot's height
+    # to a couple of tenths of a millimetre, contact in practice always
+    # happens early, up on the fast part of the curve, and the leg lands hard
+    # and takes the body's weight with a jolt. That is the forward jerk felt
+    # at each handover.
+    #
+    # A straight final segment lands at the same gentle speed anywhere
+    # inside its height, so this wants to be comfortably larger than the
+    # servos' resolution and than the height error between legs. Raising it
+    # buys tolerance about *when* contact happens; the costs are that a foot
+    # meeting the ground at the top of the band is then pressed this far into
+    # it before the swing ends, and that the probe lasts proportionally
+    # longer (see touchdown_velocity). 2–3 mm is a good starting point.
+    # 0 restores the plain braked descent.
+    touchdown_probe_height: 0.0025
+
+    # How fast the foot leaves the ground at the start of a step (m/s).
+    # The mirror of touchdown_velocity. 0 peels the foot off with zero
+    # initial speed, which leaves it creeping through the first fraction of
+    # a millimetre — inside a single servo step — while the leg is still
+    # carrying weight, so the handover of load smears out and lands where
+    # the quantisation happens to put it. A non-zero value breaks contact at
+    # a definite speed instead. Nothing is touching the ground afterwards,
+    # so there is nothing for a brisk lift to jar against.
+    #
+    # As with touchdown_velocity, worth keeping above one servo step per
+    # 200 Hz tick so the break from the ground is a move rather than a
+    # rounding error.
+    liftoff_velocity: 0.08
 
     # ─── Cycle timing ───────────────────────────────────────────────
 
@@ -138,11 +183,15 @@ gait_node:
       debounce_delay: 0.4
       # Time (s) a foot spends in the air while settling, which sets the
       # settle's cycle time — and with it the worst-case stop, one cycle.
+      # Divided by the gait's swing window the same way min/max_swing_time
+      # are, so every gait gets the same airborne time.
+      #
       # A settling step covers at most half a stride, half of what a
       # walking step does, so it can be quicker than min_swing_time
-      # without the foot moving any faster. Divided by the gait's swing
-      # window the same way min/max_swing_time are, so every gait gets
-      # the same airborne time.
+      # without the foot moving any faster horizontally. It lifts the foot
+      # exactly as high, though, so the margin here is only as wide as
+      # swing_apex_fraction leaves the climb: shorten either and a stop
+      # starts out-accelerating a walk vertically, which it must not.
       swing_time: 0.45
 
     # ─── Cold-start sequence ────────────────────────────────────────
@@ -202,7 +251,10 @@ control_node:
 # are dimensionless.
 posture_node:
   ros__parameters:
-    # Master switch for body movement while gait-active. Gait body animations are an experimental feature and may require extensive tinkering.
+    # Master switch for the default stack's body movement while gait-active
+    # (gait_sway, gait_bounce). An explicitly selected animation mode is exempt
+    # and always runs. Gait body animations are an experimental feature and may
+    # require extensive tinkering.
     gait_body_animations_enabled: false
 
     # Animations that run while walking. Each must be a known animation name.

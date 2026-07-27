@@ -53,7 +53,7 @@ The factory (`hardware_factory.hpp`) picks both from
       baud: 115200
     parser:
       type: servo2040
-      get_period_ticks: 10
+      aux_period_ms: 100
 
 Adding a new board is one new `BoardProtocol` subclass plus a branch
 in `make_board_protocol`. Adding a new physical layer is one new
@@ -150,6 +150,28 @@ live so far:
   joint names + pin table, so a rewired harness re-orders the sweep with it.
 - The same edge serves cold start and over-current recovery.
 
+## Buzzer requests
+
+Two moments are worth hearing rather than reading out of a log: the stack
+coming up, and an over-current trip. Both write a tune name to
+`buzzer.spool` (`hardware.yaml`, default `/workspace/log/buzzer`):
+
+- **`up`** — from `on_activate`, once everything else there has succeeded. The
+  servo link is open and the stack is live.
+- **`fault`** — from the trip edge in `read()`, once per trip; the latch keeps
+  the branch from re-firing until `STATUS` reads clean again.
+
+The write is a *request*, not a beep. The buzzer is on the Pi's hardware PWM,
+which this process cannot drive: Docker mounts `/sys` read-only, and every
+`/sys/class/pwm/pwmchipN` is a symlink into `/sys/devices`, so an export from
+inside the container fails with `EROFS` however the class directory is bound —
+reaching it would take a privileged container, far too much to pay for a beep.
+So the name lands in the bind-mounted log volume and the host's
+`hexa-tune-spool.path` unit plays it with `systemd/buzzer.sh`. Blank
+`buzzer.spool` to stop the writes; a missing spool, a read-only volume, or an
+uninstalled watcher all mean silence and nothing else. See
+`docs/robot-environment.md`.
+
 ## State feedback
 
 `read()` echoes the last commanded position into the position state
@@ -157,11 +179,65 @@ interface (hobby servos don't report shaft angle) and computes velocity
 as the numerical derivative. Joint state is **not** polled from the
 board.
 
-The battery bus **is** polled via a single GET, rate-limited by
-`parser.get_period_ticks` so SETs aren't starved, and republished in
-engineering units on `~/battery_state` (`sensor_msgs/BatteryState`) from an
-internal node. It needs no host config: the units are protocol-defined and
-the sensors are always present on the board.
+The battery bus **is** polled via a single GET, every `parser.aux_period_ms` on
+the aux thread (see "Threading" below), and republished in engineering units on
+`~/battery_state` (`sensor_msgs/BatteryState`) from an internal node. It needs no
+host config beyond that period: the units are protocol-defined and the sensors
+are always present on the board.
+
+That reading is telemetry only — this node sets no thresholds against it. The
+undervoltage **policy** lives in the locomotion supervisor
+(`shared/motion_core/supervisor.hpp`), which consumes `~/battery_state`, runs the
+debounced three-rung ladder from `hardware.yaml`'s `battery:` block, and
+publishes the rung on `/hardware/undervoltage` (`std_msgs/UInt8`; 0 none, 1 warn,
+2 fold, 3 cutoff; latched, escalate-only). This node subscribes and owns the two
+rungs that need it specifically:
+
+- **rung 1** — requests the `undervolt` buzzer tune (this process owns the tune
+  spool), once on the rung's rising edge.
+- **rung 3** — sets a sticky local latch forcing `apply_relay()` to hold the rail
+  open regardless of `/hardware/relay_cmd`, so "refuse to turn it on again"
+  survives a locomotion restart republishing a stale `true`. In memory only;
+  restarting this process (a power cycle, in practice) is the sole reset.
+
+## Threading
+
+Two threads touch the board, split by one rule: **the control cycle never waits
+on the board.**
+
+- **controller-manager thread** — `read()` and `write()`, called at the
+  `update_rate` in `hexa_bringup/config/ros2_controllers.yaml` (200 Hz, a 5 ms
+  budget for the entire control cycle). It only ever *writes*: the servo
+  SET/SETALL frame in `write()`, and the occasional relay SET from
+  `apply_relay()`. A write returns as soon as the kernel accepts the bytes.
+- **aux thread** — the internal `hexa_hardware_aux` node's executor, plus
+  `poll_aux()` every `parser.aux_period_ms`. It owns every GET, and GETs are
+  blocking request/response round trips whose cost is set by the Servo2040's own
+  loop turnaround, not by the wire.
+
+The GETs used to run inline in `read()`, decimated by a `parser.get_period_ticks`
+tick count. That put a board round trip inside the 5 ms control budget: a healthy
+poll flirted with `controller_manager: Overrun detected!`, and a board that went
+quiet cost the full 50 ms reply timeout *per GET* — two of them back to back,
+twenty missed cycles. Off that thread, a slow or silent board costs stale
+telemetry and nothing else. The Pico firmware still paces the same poll in ticks
+(`parser.get_period_ticks`, read only by `gen_config.py`) because it deliberately
+keeps the round trip inside its own tick budget.
+
+What crosses between the threads is only ever a plain value:
+
+- `Transport::write()` is internally serialized so a SET and a GET request can
+  never interleave their bytes. Reads take no lock — sharing one with `write()`
+  would reintroduce exactly the stall this split removes, and serial is full
+  duplex, so a concurrent write cannot corrupt an in-flight read.
+- `Servo2040Protocol` gives the send path and the GET path separate scratch
+  buffers, so the two threads share no mutable state.
+- `poll_aux()` never drives the relay. A trip sets two atomics — the fault latch
+  and a latch-clear request — and `apply_relay()` emits the actual `SET RELAY 0`
+  on the next control tick, ≤5 ms later. That keeps every relay frame on one
+  thread while preserving the rule that a trip is answered unconditionally: that
+  frame is what clears the board's sticky latch, without which `STATUS` never
+  reads clean and the robot can never be re-armed.
 
 ## Lifecycle
 
@@ -169,8 +245,8 @@ the sensors are always present on the board.
 - `on_configure` — open the Transport.
 - `on_activate` — `set_servo_power(false)` (known-off baseline, which also
   clears any latch), reset commands to the current echoed state so the first
-  cycle doesn't snap. Activating never powers the rail; `apply_relay()` closes
-  it once the supervisor asks.
+  cycle doesn't snap, request the `up` buzzer tune. Activating never powers the
+  rail; `apply_relay()` closes it once the supervisor asks.
 - `on_deactivate` — `set_servo_power(false)`.
 - `on_cleanup` — close serial, stop the aux publisher thread.
 
@@ -178,8 +254,12 @@ the sensors are always present on the board.
 
 Config lives in `hexa_description/config/`, split in two:
 
-- `hardware.yaml` — wiring: `connection`, `parser`, `init`
-  (`sweep_leg_interval_ms`), `deg_at_center`, a shared
+- `hardware.yaml` — wiring: `connection`, `parser` (`aux_period_ms`; the
+  sibling `get_period_ticks` paces the same poll on the Pico and is ignored
+  here), `init`
+  (`sweep_leg_interval_ms`), `buzzer` (`spool`), `battery` (the undervoltage
+  ladder's thresholds — read by the supervisor and baked into the firmware by
+  `gen_config.py`, not by this node), `deg_at_center`, a shared
   `servo_defaults.pulse_us` clamp, and a `servos` map of per-servo
   `{pin, reversed?, pulse_us?}` (keyed by URDF joint name; `reversed`/`pulse_us`
   default when omitted). No relay/aux pins: the relay and battery sensors are

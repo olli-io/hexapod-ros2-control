@@ -883,6 +883,8 @@ EngineConfig engine_config_from_config() {
   cfg.swing_width = c.swing_width;
   cfg.swing_apex_fraction = c.swing_apex_fraction;
   cfg.touchdown_velocity = c.touchdown_velocity;
+  cfg.touchdown_probe_height = c.touchdown_probe_height;
+  cfg.liftoff_velocity = c.liftoff_velocity;
   cfg.swing_phase_margin = c.swing_phase_margin;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;

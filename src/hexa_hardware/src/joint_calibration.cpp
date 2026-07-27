@@ -213,8 +213,13 @@ HardwareConfig load_hardware_config(const std::string& hardware_path,
 
   if (const auto parser = root["parser"]) {
     if (parser["type"]) cfg.parser.type = parser["type"].as<std::string>();
-    if (parser["get_period_ticks"]) {
-      cfg.parser.get_period_ticks = parser["get_period_ticks"].as<int>();
+    if (parser["aux_period_ms"]) {
+      const int ms = parser["aux_period_ms"].as<int>();
+      if (ms < 0) {
+        throw std::runtime_error(
+            "hexa_hardware: parser.aux_period_ms must be >= 0");
+      }
+      cfg.parser.aux_period_ms = ms;
     }
   }
 
@@ -227,6 +232,10 @@ HardwareConfig load_hardware_config(const std::string& hardware_path,
       }
       cfg.init.sweep_leg_interval_ms = ms;
     }
+  }
+
+  if (const auto buzzer = root["buzzer"]) {
+    if (buzzer["spool"]) cfg.buzzer.spool = buzzer["spool"].as<std::string>();
   }
 
   DegAtCenter deg_at_center;

@@ -32,10 +32,12 @@
 
 #include <geometry_msgs/msg/twist.hpp>
 #include <hexa_interfaces/msg/body_pose.hpp>
+#include <sensor_msgs/msg/battery_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include "gait/engine.hpp"   // hexa::gait::state_value
@@ -50,6 +52,8 @@ using Empty = std_msgs::msg::Empty;
 using BoolMsg = std_msgs::msg::Bool;
 using StringMsg = std_msgs::msg::String;
 using Float64MultiArray = std_msgs::msg::Float64MultiArray;
+using UInt8Msg = std_msgs::msg::UInt8;
+using BatteryState = sensor_msgs::msg::BatteryState;
 using BodyPoseMsg = hexa_interfaces::msg::BodyPose;
 using Trigger = std_srvs::srv::Trigger;
 
@@ -76,6 +80,12 @@ class LocomotionNode : public rclcpp::Node {
     // late-joining hardware node catches the current intent.
     pub_relay_ = create_publisher<BoolMsg>(
         "/hardware/relay_cmd", rclcpp::QoS(1).transient_local());
+    // Undervoltage rung (UndervoltStage as uint8: 0 none, 1 warn, 2 fold,
+    // 3 cutoff). hexa_hardware turns rung 1 into a buzzer request and latches
+    // its own rail off at rung 3, so the cutoff holds even if this node dies.
+    // Latched; escalate-only, so the topic never counts down.
+    pub_undervolt_ = create_publisher<UInt8Msg>(
+        "/hardware/undervoltage", rclcpp::QoS(1).transient_local());
 
     sub_vel_ = create_subscription<Twist>(
         "/cmd_vel", 10, [this](Twist::SharedPtr m) { on_cmd_vel(*m); });
@@ -91,6 +101,16 @@ class LocomotionNode : public rclcpp::Node {
     sub_fault_ = create_subscription<BoolMsg>(
         "/hardware/fault", rclcpp::QoS(1).transient_local(),
         [this](BoolMsg::SharedPtr m) { fault_level_ = m->data; });
+    // Pack telemetry from hexa_hardware's aux node (~10 Hz). Drives the
+    // supervisor's undervoltage ladder; with no publisher (sim) it stays kNone.
+    battery_topic_ = declare_parameter<std::string>(
+        "battery_topic", "/hexa_hardware_aux/battery_state");
+    sub_battery_ = create_subscription<BatteryState>(
+        battery_topic_, rclcpp::SensorDataQoS(),
+        [this](BatteryState::SharedPtr m) {
+          battery_v_ = m->voltage;
+          battery_unconsumed_ = true;
+        });
     // /cmd_gait and /animation/mode are latched by teleop (transient_local,
     // depth 1) so a late-joining node catches the last selection.
     const auto latched = rclcpp::QoS(1).transient_local();
@@ -186,8 +206,13 @@ class LocomotionNode : public rclcpp::Node {
     in.buttons = 0;
     in.bt_connected = fresh;
     in.last_input_us = have_cmd_vel_ ? last_cmd_vel_us_ : 0;
-    in.battery_valid = false;  // no battery telemetry in sim
-    in.battery_v = 0.0f;
+    // Consume-once: feed a sample only on ticks one arrived. The board polls at
+    // ~10 Hz against this 200 Hz tick, so re-presenting the same reading would
+    // run the debounce hold against stale data — and keep counting after the
+    // publisher died.
+    in.battery_valid = battery_unconsumed_;
+    in.battery_v = battery_unconsumed_ ? battery_v_ : 0.0f;
+    battery_unconsumed_ = false;
     in.hardware_fault = fault_level_;
     in.dt = hexa::pipeline::kDt;
 
@@ -223,6 +248,55 @@ class LocomotionNode : public rclcpp::Node {
       pub_relay_->publish(rm);
       last_relay_ = res.relay_energized;
       have_relay_ = true;
+    }
+
+    publish_undervolt_stage(res);
+  }
+
+  // Announce a rung change on /hardware/undervoltage. The first tick publishes
+  // the baseline (kNone) for a late-joining hexa_hardware; after that only
+  // escalations go out, at most three more per power cycle.
+  //
+  // Floored at whatever we last sent, independently of the supervisor's latch:
+  // `~/reload_config` swaps in a fresh pipeline that restarts at kNone, and this
+  // node outlives the swap, so without the floor a reload would broadcast a
+  // de-escalation. (The reload is refused from kFold up; the floor covers kWarn.)
+  void publish_undervolt_stage(const hexa::pipeline::TickResult& res) {
+    using Stage = hexa::supervisor::UndervoltStage;
+    const Stage stage = res.decision.undervolt_stage;
+    if (have_undervolt_ && stage <= last_undervolt_) {
+      return;
+    }
+    UInt8Msg um;
+    um.data = static_cast<std::uint8_t>(stage);
+    pub_undervolt_->publish(um);
+    last_undervolt_ = stage;
+    have_undervolt_ = true;
+
+    switch (stage) {
+      case Stage::kNone:
+        break;
+      case Stage::kWarn:
+        RCLCPP_WARN(get_logger(),
+                    "UNDERVOLTAGE rung 1/3 (%.2f V): pack low — buzzer sounding. "
+                    "Still drivable; walk the robot back and charge it.",
+                    static_cast<double>(battery_v_));
+        break;
+      case Stage::kFold:
+        RCLCPP_ERROR(get_logger(),
+                     "UNDERVOLTAGE rung 2/3 (%.2f V): folding and cutting the "
+                     "servo rail. Command zeroed%s.",
+                     static_cast<double>(battery_v_),
+                     res.undervolt_fold_requested
+                         ? ""
+                         : " — engine REFUSED the fold, rung 3 will cut anyway");
+        break;
+      case Stage::kCutoff:
+        RCLCPP_ERROR(get_logger(),
+                     "UNDERVOLTAGE rung 3/3 (%.2f V): servo rail cut now and "
+                     "latched off. Power-cycle the robot after charging.",
+                     static_cast<double>(battery_v_));
+        break;
     }
   }
 
@@ -267,6 +341,18 @@ class LocomotionNode : public rclcpp::Node {
   // reported (unlike startup's load_pipeline_config, which falls back to baked —
   // we don't want a bad edit to silently swap in the baked config mid-session).
   void on_reload_config(const Trigger::Request&, Trigger::Response& res) {
+    // A fresh pipeline's supervisor starts at kNone, which would clear a latched
+    // undervoltage cutoff and re-arm the rail on a condemned pack. The latch must
+    // survive until the robot is power-cycled, so refuse the hot-swap.
+    if (last_undervolt_ >= hexa::supervisor::UndervoltStage::kFold) {
+      res.success = false;
+      res.message =
+          "config reload refused: undervoltage cutoff latched (rung " +
+          std::to_string(static_cast<int>(last_undervolt_)) +
+          "/3). Charge the pack and power-cycle the robot.";
+      RCLCPP_ERROR(get_logger(), "%s", res.message.c_str());
+      return;
+    }
     const std::string share =
         ament_index_cpp::get_package_share_directory("hexa_description");
     const std::string geometry_path = share + "/config/geometry.yaml";
@@ -309,17 +395,25 @@ class LocomotionNode : public rclcpp::Node {
   bool fault_level_ = false;
   bool last_relay_ = false;
   bool have_relay_ = false;
+  std::string battery_topic_;
+  float battery_v_ = 0.0f;
+  bool battery_unconsumed_ = false;  // a sample arrived since the last tick
+  hexa::supervisor::UndervoltStage last_undervolt_ =
+      hexa::supervisor::UndervoltStage::kNone;
+  bool have_undervolt_ = false;
 
   rclcpp::Time boot_;
   rclcpp::Subscription<Twist>::SharedPtr sub_vel_;
   rclcpp::Subscription<BodyPoseMsg>::SharedPtr sub_pose_;
   rclcpp::Subscription<Empty>::SharedPtr sub_init_;
   rclcpp::Subscription<BoolMsg>::SharedPtr sub_fault_;
+  rclcpp::Subscription<BatteryState>::SharedPtr sub_battery_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_gait_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_anim_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_cmd_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_state_;
   rclcpp::Publisher<BoolMsg>::SharedPtr pub_relay_;
+  rclcpp::Publisher<UInt8Msg>::SharedPtr pub_undervolt_;
   rclcpp::Service<Trigger>::SharedPtr srv_reload_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

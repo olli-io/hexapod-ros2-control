@@ -134,6 +134,9 @@ int main() {
     hexa::pipeline::Pipeline pipeline;
 
     hexa::supervisor::LedPattern led_pattern = hexa::supervisor::LedPattern::kSlowBlink;
+    // Last announced undervoltage rung, for the edge-triggered [safety] log.
+    hexa::supervisor::UndervoltStage undervolt_stage =
+        hexa::supervisor::UndervoltStage::kNone;
 
     HEXA_DBG("\n=== hexa Pico 2 W firmware ===\n");
     HEXA_DBG("board: pico2_w (RP2350)  build: %s %s\n", __DATE__, __TIME__);
@@ -288,9 +291,21 @@ int main() {
                 HEXA_DBG("[safety] relay %s (state=%s%s)\n",
                        relay_state ? "ENERGIZED" : "dropped",
                        hexa::gait::state_value(pipeline.engine().state()).c_str(),
-                       res.decision.battery_critical ? ", battery critical" : "");
+                       res.decision.undervolt_cutoff ? ", undervoltage cutoff" : "");
             }
             led_pattern = res.decision.led;
+
+            // Undervoltage ladder edges. The Pico has no buzzer — the tune spool
+            // is a Pi-host mechanism — so rung 1 shows up as the fast-blink LED
+            // (the supervisor already faults on any rung) plus this line. Rungs 2
+            // and 3 announce themselves through the relay log above.
+            if (res.decision.undervolt_stage != undervolt_stage) {
+                undervolt_stage = res.decision.undervolt_stage;
+                HEXA_DBG("[safety] undervoltage rung %u/3 (%.2f V)%s\n",
+                       static_cast<unsigned>(undervolt_stage),
+                       static_cast<double>(last_batt_v),
+                       res.undervolt_fold_requested ? " — folding" : "");
+            }
 
             last_unreachable = res.unreachable;
             std::copy(std::begin(res.theta), std::end(res.theta), std::begin(theta));
