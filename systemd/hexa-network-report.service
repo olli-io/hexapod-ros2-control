@@ -1,0 +1,28 @@
+# Tells the container which network mode the Pi came up in.
+#
+# Template — @HOME_DIR@ is substituted by `./hexa robot install-network`, which
+# writes the rendered unit to /etc/systemd/system/hexa-network-report.service
+# and enables it. Do not install this file by hand; the placeholder is not a
+# valid systemd value.
+#
+# The host is the authority on which mode the radio is in, and the container has
+# no way to look. Without this, hexa_buttons would come up with no idea and the
+# info screen would omit the hotspot credentials until someone pressed the
+# button. Changes nothing — it only reports.
+#
+# Runs at boot and, because install-network starts it once, immediately on
+# install too.
+
+[Unit]
+Description=Report the hexapod's current network mode to the container
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=@HOME_DIR@/systemd/network-mode.sh --report --state @HOME_DIR@/log/network.state
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

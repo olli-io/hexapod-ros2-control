@@ -43,7 +43,9 @@ Commands:
   robot [-H user@host] <subcommand> [args]
                               Operate the running robot container. Subcommands: up, down,
                               restart, boot, install-service, uninstall-service,
-                              install-tune, uninstall-tune, play-tune, status,
+                              install-tune, uninstall-tune, play-tune,
+                              install-network, uninstall-network, network-mode,
+                              status,
                               logs [-f], shell. 'up' boots the container cold then energizes
                               (relay on) — teleop is part of the launch, so the robot is
                               drivable once 'up' finishes; 'down' is the safe-stop. 'boot' is
@@ -53,6 +55,11 @@ Commands:
                               units — boot / shutdown tunes plus the spool watcher that
                               relays the container's stack-up and over-current beeps
                               ('play-tune [tune]' sounds one without a reboot).
+                              'install-network' enables the network-mode units, so
+                              holding the info button 3 s flips the Pi between joining
+                              wifi and hosting the 'hexapod' hotspot that serves the
+                              web teleop ('network-mode [toggle|hotspot|station|status]'
+                              switches without a button).
                               Runs locally (on the Pi) by default; -H/--host re-dispatches
                               over ssh to a remote Pi.
   kill                        Stop and remove the sim + pico containers.

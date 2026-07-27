@@ -297,3 +297,31 @@ TEST(BatteryMonitorTest, CriticalIndependentOfWarning) {
     EXPECT_EQ(monitor.update(6.9, 0.0), (BatteryMonitor::Flags{true, false}));
     EXPECT_EQ(monitor.update(6.3, 1.0), (BatteryMonitor::Flags{true, true}));
 }
+
+// The busy flag is the top of the precedence ladder: it is the one state the
+// operator asked for by hand (a front-panel hold — a pairing scan or a
+// network-mode switch), so nothing may take the panel while they wait on the
+// spinners. The node ORs /bluetooth/scanning and /display/busy into it, which
+// is why the field is not named after either topic.
+TEST(ExpressionPolicy, BusyWearsTheScanningExpressionGazeCentered) {
+    auto in = makeInputs();
+    in.busy = true;
+    const DisplayTarget target = decide(in, CONFIG, kIdleTarget);
+    EXPECT_EQ(target.expression, Expression::SCANNING);
+    EXPECT_EQ(target.gaze, GazeDirection::CENTER);
+}
+
+TEST(ExpressionPolicy, BusyOutranksEvenACriticalPack) {
+    auto in = makeInputs();
+    in.busy = true;
+    in.battery_critical = true;
+    in.battery_low = true;
+    EXPECT_EQ(decide(in, CONFIG, kIdleTarget).expression, Expression::SCANNING);
+}
+
+TEST(ExpressionPolicy, BusySuppressesFaceAnimations) {
+    // A drift animation would fight the spinners for the gaze they own.
+    auto in = makeInputs();
+    in.busy = true;
+    EXPECT_FALSE(selectFaceAnimation(in, CONFIG).has_value());
+}

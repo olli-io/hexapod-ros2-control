@@ -1,0 +1,31 @@
+# Performs whatever network-mode switch the container last wrote to the spool.
+# Triggered by hexa-network-spool.path — never enabled on its own, so it only
+# ever runs in response to a write.
+#
+# Template — @HOME_DIR@ is substituted by `./hexa robot install-network`, which
+# writes the rendered unit to /etc/systemd/system/hexa-network-spool.service. Do
+# not install this file by hand; the placeholder is not a valid systemd value.
+#
+# The script only reads the spool and answers in a *different* file
+# (log/network.state) — writing the spool back would be another modification of
+# the file the .path unit watches, and the trigger would loop.
+#
+# Running here rather than from the operator's shell is also what makes the
+# switch survive its own side effects: taking wlan0 into AP mode drops any ssh
+# session on it, and a oneshot detached from that session still finishes.
+
+[Unit]
+Description=Switch the hexapod between wifi station and hotspot mode
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+# Root: NetworkManager profile changes and the nftables redirect both need it.
+User=root
+ExecStart=@HOME_DIR@/systemd/network-mode.sh --spool @HOME_DIR@/log/network --state @HOME_DIR@/log/network.state
+# An AP activation is seconds; a station reassociating and taking a DHCP lease
+# can be considerably longer. Generous on purpose — this may outlast the panel's
+# own network_timeout_s, which is fine: the script still finishes and writes the
+# state file, and the node's periodic re-render picks the truth up.
+TimeoutStartSec=120

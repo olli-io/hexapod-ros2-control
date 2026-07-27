@@ -9,12 +9,16 @@ Debounce and hold *detection* are not here — gpiozero's ``Button`` owns them
 (``bounce_time`` / ``hold_time``), below userspace. What is here is everything
 that decides what the operator sees:
 
-- info button — press toggles the battery/address screen.
+- info button — press toggles the battery/address screen; a hold asks the host
+  to switch the Pi between wifi station and hotspot mode.
 - bluetooth button — press toggles the controller-status screen; a hold starts
   a pairing scan instead, and the release ending that hold is swallowed so it
   cannot toggle a screen back on.
 - while a scan runs, either button cancels it, as does ``scan_timeout_s``, as
   does a controller actually connecting.
+- while a network switch runs, neither button cancels it. The host is already
+  committed to an ``nmcli`` call by then, so there is nothing to call off, and
+  a panel handed back early would be showing a mode the radio has already left.
 
 Toggling happens on **release**, not press, so a hold has its full ``hold_time``
 to declare itself before anything appears on the panel.
@@ -35,6 +39,12 @@ class Screen(str, Enum):
     #: it is a distinct state because it latches /bluetooth/scanning and obeys
     #: its own, much longer, timeout.
     SCANNING = "scanning"
+    #: The host is switching the radio between station and hotspot mode. Wears
+    #: the same spinners as SCANNING (and renders no text, for the same reason),
+    #: but it is the one state nothing can cancel.
+    NETWORK_SWITCHING = "network_switching"
+    #: How the switch turned out — the hotspot's credentials, or why it failed.
+    NETWORK_INFO = "network_info"
 
 
 class Event(Enum):
@@ -42,10 +52,21 @@ class Event(Enum):
 
     INFO_PRESS = "info_press"
     INFO_RELEASE = "info_release"
+    INFO_HOLD = "info_hold"
     BT_PRESS = "bt_press"
     BT_RELEASE = "bt_release"
     BT_HOLD = "bt_hold"
     TICK = "tick"
+
+
+def wants_spinners(screen: Screen) -> bool:
+    """Does this screen want the face wearing its scanning animation?
+
+    A function rather than the node testing ``is Screen.SCANNING`` inline, so
+    that "which states spin" has one definition and adding a third cannot leave
+    the publisher behind.
+    """
+    return screen in (Screen.SCANNING, Screen.NETWORK_SWITCHING)
 
 
 @dataclass(frozen=True)
@@ -59,6 +80,13 @@ class ScreenConfig:
     screen_timeout_s: float = 6.0
     #: Backstop for a pairing scan that finds nothing.
     scan_timeout_s: float = 30.0
+    #: Backstop for a network switch the host never reports the end of. Falls
+    #: to NETWORK_INFO rather than NONE, so the panel says what went wrong
+    #: instead of quietly going back to the face.
+    network_timeout_s: float = 60.0
+    #: The result screen holds longer than an ordinary one — it carries a
+    #: password somebody has to type into a phone.
+    network_info_timeout_s: float = 20.0
 
 
 def pull_kwargs(*, active_low: bool, bias_pull_up: bool) -> dict:
@@ -120,6 +148,7 @@ class ScreenSequencer:
         handler = {
             Event.INFO_PRESS: self._on_info_press,
             Event.INFO_RELEASE: self._on_info_release,
+            Event.INFO_HOLD: self._on_info_hold,
             Event.BT_PRESS: self._on_bt_press,
             Event.BT_RELEASE: self._on_bt_release,
             Event.BT_HOLD: self._on_bt_hold,
@@ -135,11 +164,29 @@ class ScreenSequencer:
             self._set(Screen.NONE, t)
         return self._screen
 
+    def on_network_result(self, t: float) -> Screen:
+        """The host finished a switch, one way or the other.
+
+        Only acts from NETWORK_SWITCHING: a result that arrives after
+        ``network_timeout_s`` has already given up must not seize a panel the
+        operator has moved on from. The screen it lands on renders from the
+        node's *current* cached state, so a late result still corrects the text
+        while NETWORK_INFO is up.
+        """
+        self._changed = False
+        if self._screen is Screen.NETWORK_SWITCHING:
+            self._set(Screen.NETWORK_INFO, t)
+        return self._screen
+
     # --- handlers ---------------------------------------------------------
 
     def _on_info_press(self, t: float) -> None:
         self._info_press_seen = True
         self._suppress_info_release = False  # a fresh press clears a stale flag
+        if self._screen is Screen.NETWORK_SWITCHING:
+            # Swallowed, but NOT a cancel — see the module docstring.
+            self._suppress_info_release = True
+            return
         if self._screen is Screen.SCANNING:
             # The press *is* the cancel, so its release must not go on to open
             # this button's screen.
@@ -154,9 +201,31 @@ class ScreenSequencer:
             return
         self._toggle(Screen.BATTERY, t)
 
+    def _on_info_hold(self, t: float) -> None:
+        """Ask the host to switch network mode.
+
+        Same shape as ``_on_bt_hold``, including the suppress-release flag that
+        makes both gpiozero orderings land here, and the press-seen guard —
+        which matters more on this button than on the other one. gpiozero's hold
+        thread runs from construction, so a button physically jammed down at
+        startup would otherwise fire a hold nobody asked for, and this hold
+        takes the robot off the network.
+        """
+        if not self._info_press_seen:
+            return
+        if self._screen is Screen.NETWORK_SWITCHING:
+            # Already in flight. Returning without _set also means the timeout
+            # clock is not restarted by leaning on the button.
+            return
+        self._suppress_info_release = True
+        self._set(Screen.NETWORK_SWITCHING, t)
+
     def _on_bt_press(self, t: float) -> None:
         self._bt_press_seen = True
         self._suppress_bt_release = False
+        if self._screen is Screen.NETWORK_SWITCHING:
+            self._suppress_bt_release = True
+            return
         if self._screen is Screen.SCANNING:
             self._suppress_bt_release = True
             self._set(Screen.NONE, t)
@@ -174,6 +243,10 @@ class ScreenSequencer:
             return
         if self._screen is Screen.SCANNING:
             return
+        if self._screen is Screen.NETWORK_SWITCHING:
+            # No pairing scan on top of a switch: the radio is about to flap,
+            # and a scan started across it would find nothing anyway.
+            return
         # gpiozero fires this from the hold thread and `when_released` from the
         # pin thread, so within a hair of hold_time the two can arrive in either
         # order. Arming the flag either way makes both orders end in SCANNING:
@@ -188,6 +261,15 @@ class ScreenSequencer:
             # A scan deliberately ignores screen_timeout_s: it is a job in
             # progress, not something the operator is reading.
             if t - self._entered_at >= self._config.scan_timeout_s:
+                self._set(Screen.NONE, t)
+        elif self._screen is Screen.NETWORK_SWITCHING:
+            # A job in progress too, but it ends on the result screen: this
+            # backstop only ever fires when the host never answered, and that
+            # is exactly the case the operator most needs told about.
+            if t - self._entered_at >= self._config.network_timeout_s:
+                self._set(Screen.NETWORK_INFO, t)
+        elif self._screen is Screen.NETWORK_INFO:
+            if t - self._entered_at >= self._config.network_info_timeout_s:
                 self._set(Screen.NONE, t)
         elif self._screen is not Screen.NONE:
             if t - self._entered_at >= self._config.screen_timeout_s:

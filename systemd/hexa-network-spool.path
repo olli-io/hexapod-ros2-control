@@ -1,0 +1,38 @@
+# Watches the spool file the container asks for network-mode switches with.
+#
+# Template — @HOME_DIR@ is substituted by `./hexa robot install-network`, which
+# writes the rendered unit to /etc/systemd/system/hexa-network-spool.path and
+# enables it. Do not install this file by hand; the placeholder is not a valid
+# systemd value.
+#
+# Why a spool at all: the same wall the buzzer hits. The ROS stack runs in an
+# unprivileged container — host networking, non-root user, no D-Bus socket, no
+# NET_ADMIN — so it cannot reach NetworkManager to switch the radio, and
+# reaching it would take a privileged container, far too much for a button.
+# So hexa_buttons writes a request into the log volume (already bind-mounted,
+# so the host and the container share the inode) and this unit relays it out to
+# systemd/network-mode.sh, which answers in log/network.state.
+#
+# PathModified, not PathExists: PathExists stays satisfied for as long as the
+# file is there, which would restart the service in a loop forever. PathModified
+# fires per write and re-arms. If the file does not exist yet, systemd watches
+# the closest existing parent directory and picks up its creation.
+#
+# Note that a .path unit does not queue: a second write landing while the
+# service is still running is not replayed. That is fine here because the
+# sequencer refuses a second hold while a switch is in flight (ScreenSequencer's
+# NETWORK_SWITCHING guard), so the container cannot generate one.
+
+[Unit]
+Description=Watch the hexapod network-mode spool for container-borne requests
+# Be watching before the stack can write. inotify only reports what happens
+# while a watch is open, so a spool write that lands first is simply lost. No-op
+# if the stack's unit is not installed.
+Before=hexa-robot.service
+
+[Path]
+PathModified=@HOME_DIR@/log/network
+Unit=hexa-network-spool.service
+
+[Install]
+WantedBy=multi-user.target

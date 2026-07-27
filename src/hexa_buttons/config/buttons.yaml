@@ -23,7 +23,7 @@ button_node:
     # ${GPIO_CHIP} the host calls it onto this fixed node), and the trailing
     # number is what gpiozero's lgpio pin factory is pinned to.
     gpio_chip: "/dev/gpiochip0"
-    info_line: 5 # battery percentage + web teleop address
+    info_line: 5 # battery percentage + web teleop address; hold to switch network mode
     bluetooth_line: 6 # controller status; hold to pair
     #
     # These two collapse onto gpiozero's pull_up/active_state pair, which are
@@ -47,9 +47,10 @@ button_node:
     # Passed to gpiozero's Button(bounce_time=...): a level has to survive this
     # long to count as a real edge. Applied below userspace.
     debounce_s: 0.03
-    # Passed to Button(hold_time=...): the hold on the Bluetooth button that
-    # starts a pairing scan. The bluetooth screen advertises this same number,
-    # so the two can never disagree.
+    # Passed to Button(hold_time=...) for BOTH buttons: the hold on the
+    # Bluetooth button that starts a pairing scan, and the hold on the info
+    # button that switches network mode. The screens advertise this same
+    # number, so the panel can never promise a hold the buttons do not honour.
     hold_s: 3.0
     # An info screen hands the panel back to the face this long after it went
     # up. Pressing the same button again dismisses it early; pressing the other
@@ -84,6 +85,45 @@ button_node:
     # Interfaces to prefer when picking the address to show, in order. Anything
     # not listed is used only if none of these has an IPv4 address.
     ip_interfaces: ["wlan0", "eth0"]
+
+    # --- Network mode switch (info button, hold) ---
+    #
+    # Holding the info button asks the host to flip the Pi between joining a
+    # wifi network and hosting the `hexapod` hotspot that serves the web teleop.
+    #
+    # It has to be the host that does it. The stack runs in an unprivileged
+    # container with host networking, no D-Bus socket and no NET_ADMIN, so it
+    # cannot run nmcli — the same wall the buzzer hits with the PWM sysfs, and
+    # the same way around it: write a request into the bind-mounted log volume
+    # and let a host systemd .path unit relay it out to systemd/network-mode.sh.
+    #
+    # So this whole block is INERT until `./hexa robot install-network` has been
+    # run on the Pi. Without it a hold spins the face for network_ack_timeout_s
+    # and then says so on the panel.
+    network_toggle_enabled: true
+    # Container-side paths; the host sees these as ~/hexa-robot/log/network and
+    # ~/hexa-robot/log/network.state. The first is written here and read there,
+    # the second the other way round — never both on one file, or the host's
+    # own .path watcher would retrigger itself forever.
+    network_spool: /workspace/log/network
+    network_state_file: /workspace/log/network.state
+    # How long to wait for the host to admit it exists. network-mode.sh writes
+    # `result=switching` before it touches the radio, so silence past this means
+    # the units were never installed — worth saying at once rather than after
+    # network_timeout_s.
+    network_ack_timeout_s: 5.0
+    # Backstop for a switch the host took but never reported the end of. Ends on
+    # the result screen, not the face, so a silent failure still says something.
+    # Generous: an AP coming up plus a station reassociating with DHCP is slow.
+    network_timeout_s: 60.0
+    # The result screen holds longer than an ordinary one — it carries a
+    # password somebody has to type into a phone.
+    network_info_timeout_s: 20.0
+    #
+    # The SSID and password are deliberately NOT here. network-mode.sh owns
+    # them (HEXA_AP_SSID / HEXA_AP_PSK) and reports them back in the state file,
+    # so there is one source of truth and the panel cannot advertise
+    # credentials the radio is not actually using.
 
     # Separator between a label and its value. ASCII on purpose: the display's
     # bundled Pixel Operator font covers ASCII + Latin-1 only, so a U+2192

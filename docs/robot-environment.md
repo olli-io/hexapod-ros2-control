@@ -376,70 +376,117 @@ note below).
 
 ## 6b. Wi-Fi hotspot for web teleop (optional)
 
-**Teleop already works by connecting to the Pi's local ip**
+**Teleop already works by connecting to the Pi's local ip.** The web teleop
+(`hexa_webteleop`) hosts an HTTP + WebSocket server on port 8080 inside the
+container, and with `network_mode: host` that server is reachable on every one
+of the Pi's interfaces. Nothing below is needed on a network you already have.
 
-The web teleop (`hexa_webteleop`) hosts an HTTP + WebSocket server on
-port 8080 inside the container. With `network_mode: host` the server is
-reachable on any of the Pi's network interfaces. To let phones connect
-without an existing Wi-Fi network, configure the Pi as a standalone AP:
+What this adds is a way to reach the robot where there is no such network:
+**hold the info button (GPIO5) for three seconds** and the Pi stops joining
+Wi-Fi and starts hosting its own. Hold it again to go back. The face wears its
+scanning spinners while the switch runs, and the info screen then carries the
+credentials.
 
-Install hostapd and dnsmasq:
+- **network** — `hexapod`
+- **password** — `hexahexa`
+- **the robot** — `http://192.168.4.1/`, or any address at all (see the portal below)
 
-```
-sudo apt install -y hostapd dnsmasq
-sudo systemctl stop hostapd dnsmasq
-```
+### Install
 
-Configure a static IP on the wireless interface. Add to
-`/etc/dhcpcd.conf` (or the NetworkManager equivalent on Pi OS Bookworm+):
-
-```
-interface wlan0
-    static ip_address=192.168.50.1/24
-    nohook wpa_supplicant
-```
-
-Configure dnsmasq (`/etc/dnsmasq.conf`):
+Shipped by every deploy, installed only when you ask — the same opt-in shape as
+the buzzer units, and for a stronger reason: this can take the Pi off the
+network you are ssh'd in over.
 
 ```
-interface=wlan0
-dhcp-range=192.168.50.10,192.168.50.50,255.255.255.0,24h
+ssh -t <host> 'cd ~/hexa-robot && ./hexa robot install-network'
 ```
 
-Configure hostapd (`/etc/hostapd/hostapd.conf`):
+That renders the three unit templates into `/etc/systemd/system`, enables them,
+writes the captive-DNS drop-in, and seeds the state file. `uninstall-network`
+reverses all of it. To switch without a button fitted:
 
 ```
-interface=wlan0
-driver=nl80211
-ssid=Hexapod
-hw_mode=g
-channel=7
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase=hexapod123
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
+./hexa robot network-mode status      # which mode is the radio in
+./hexa robot network-mode toggle      # flip it
+./hexa robot network-mode hotspot     # or name the target
+./hexa robot network-mode station
 ```
 
-Point hostapd at the config and enable both services:
+### Requirements
 
-```
-sudo sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
-sudo systemctl enable hostapd dnsmasq
-sudo systemctl start hostapd dnsmasq
-```
+- **NetworkManager managing wlan0** — Pi OS Bookworm or newer. `nmcli` does all
+  the work, so there is no `hostapd` and no `dnsmasq` package to install: an AP
+  profile with `ipv4.method=shared` makes NetworkManager run its own dnsmasq for
+  DHCP and DNS on that interface.
+- **A Wi-Fi country set** — `raspi-config`, Localisation Options, WLAN Country.
+  An access point will not start without a regulatory domain; the script checks
+  for this and reports `No wifi country is set` on the panel rather than failing
+  opaquely.
 
-After the Pi reboots, phones can join the **Hexapod** Wi-Fi network
-(password `hexapod123`) and navigate to `http://192.168.50.1:8080` to
-open the webapp. The container's host-network WS server is reachable
-on the AP interface directly — no port mapping or bridge needed.
+### How the button reaches the host
 
-The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by
-default, and the webapp prompts to claim control when it connects. See
+The ROS stack runs in an unprivileged container — host networking, non-root
+user, no D-Bus socket, no `NET_ADMIN` — so it cannot talk to NetworkManager at
+all. It uses the same escape hatch as the buzzer: `hexa_buttons` writes a
+request into the bind-mounted log volume, and a host `systemd .path` unit runs
+`systemd/network-mode.sh` out here.
+
+- **`log/network`** — container to host. One line: an action and a token.
+  Watched by `hexa-network-spool.path`, which runs `hexa-network-spool.service`.
+- **`log/network.state`** — host to container. `key=value` lines naming the
+  mode, the credentials, and how the last request went. Written tmp + rename so
+  a 20 Hz poll can never read half a line.
+- **`hexa-network-report.service`** — writes that state file at boot, so the
+  container knows which mode the Pi came up in without having to ask.
+
+The host is the authority on which mode the radio is in — the AP profile being
+active is the whole definition — which is why the button sends `toggle` rather
+than naming a target. Failures come back as short tokens the panel turns into
+sentences: `Could not start the hotspot`, `No network helper installed`,
+`wlan0 is not managed by NM`, and so on.
+
+### The captive portal
+
+Two pieces, no reverse proxy. `hexa_webteleop` already binds `0.0.0.0:8080`, so
+nginx or traefik in front of it would be a hop and a daemon for nothing.
+
+- **Wildcard DNS** — `/etc/NetworkManager/dnsmasq-shared.d/hexa-captive.conf`
+  holds `address=/#/192.168.4.1`, so every hostname resolves to the robot.
+  NetworkManager only starts the dnsmasq that reads it for a `shared`
+  connection, so the file is inert in station mode; it is written once at
+  install rather than toggled.
+- **A port 80 redirect** — an nftables rule in its own `hexa_portal` table sends
+  port 80 on the AP interface to 8080, so the address needs no `:8080` on the
+  end. This also catches clients that ignore DHCP's DNS and hard-code a
+  resolver, which the wildcard alone cannot reach. Added when the hotspot comes
+  up, torn down with one `nft delete table` when it goes.
+
+The OS probe URLs are deliberately **not** hijacked, so phones show their usual
+"no internet" notice instead of auto-opening a sign-in window. That is the
+better trade for this app: iOS's Captive Network Assistant is a cut-down
+browser, and the teleop UI is a WebSocket gamepad surface that wants a real one.
+Open `http://hexapod/` — or anything else — in Safari or Chrome.
+
+### Consequences worth knowing
+
+- **One radio.** `wlan0` cannot be an access point and a client at the same
+  time, so entering hotspot mode drops any ssh session over Wi-Fi, and the
+  hotspot has no route to the internet. That islanding is the point, but it also
+  means the switch is one-way from a Wi-Fi shell — use ethernet, a console, or
+  the button.
+- **A reboot always comes back in station mode.** The AP profile is created with
+  `autoconnect no` on purpose: a robot that crashed and came back hosting an AP
+  would be unreachable from the workstation.
+- **A hotspot that fails to start rolls back.** The script records the station
+  profile that was up before it touches anything, and puts it back if the AP
+  will not activate, rather than leaving the robot with no network at all.
+- **Ethernet, if plugged in, is a route.** `ipv4.method=shared` NATs AP clients
+  to whatever uplink exists. With `wlan0` as the AP and nothing on `eth0` there
+  is no uplink and the hotspot is islanded; plug ethernet in and clients get out
+  through it.
+
+The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by default,
+and the webapp prompts to claim control when it connects. See
 `src/hexa_webteleop/README.md` for the arbitration protocol.
 
 ## 6c. Start on boot (optional)

@@ -37,10 +37,15 @@ This package keeps only the ROS + Linux-panel code:
   `scanning` force center.
 - **`scanning`** — the one animated expression: the neutral eyes' ring with a
   gap taken out of it, turning once a second. It runs while `hexa_buttons`
-  reports a pairing scan on `/bluetooth/scanning`, and it outranks everything
-  else because the operator asked for it by hand and is watching the panel for
-  it. `AnimFrame::phase` carries the angle; it is quantized into 30 steps a turn
-  so the dirty-flush skip still holds between steps.
+  reports itself busy with something the operator asked for by holding a
+  front-panel button — a pairing scan on `/bluetooth/scanning`, or a
+  network-mode switch on `/display/busy`. The node ORs the two into
+  `PolicyInputs::busy`, which is named after neither topic: two signals because
+  they mean different things, one expression because the face's answer to both
+  is "wait, I am working". It outranks everything else because the operator is
+  watching the panel for it. `AnimFrame::phase` carries the angle; it is
+  quantized into 30 steps a turn so the dirty-flush skip still holds between
+  steps.
 - **Face animations** — looping gaze/blink sequences: **breathing** until the
   first `/gait/state` arrives, **idling** look-around once idle/level/command-free.
   Suppressed by battery warning, animation mode, Bluetooth scanning, `cmd_vel`,
@@ -64,13 +69,19 @@ This package keeps only the ROS + Linux-panel code:
   `/body/pose` (`hexa_interfaces/BodyPose`), `/animation/mode` (`std_msgs/String`,
   transient_local depth 1), `/display/text` (`std_msgs/String`, transient_local
   depth 1 — non-empty shows the text screen, empty returns the face),
-  `/bluetooth/scanning` (`std_msgs/Bool`, transient_local depth 1 — true wears
-  the spinners), and a battery topic (`sensor_msgs/BatteryState`, default
-  `/hexa_hardware_aux/battery_state`, real robot only).
+  `/bluetooth/scanning` and `/display/busy` (both `std_msgs/Bool`,
+  transient_local depth 1 — either true wears the spinners), and a battery topic
+  (`sensor_msgs/BatteryState`, default `/hexa_hardware_aux/battery_state`, real
+  robot only).
 
-`/display/text` and `/bluetooth/scanning` are both published by `hexa_buttons`
-(the front-panel GPIO buttons). That package depends on this one's topic names;
-nothing here depends on it, so the face stays a pure sink.
+Note that text mode wins over the face unconditionally: a non-empty
+`/display/text` is drawn and `renderTick` returns before any eye is rasterized,
+so the spinners are only visible while the text topic is empty. `hexa_buttons`
+relies on this — its busy screens render an empty string on purpose.
+
+`/display/text`, `/bluetooth/scanning` and `/display/busy` are all published by
+`hexa_buttons` (the front-panel GPIO buttons). That package depends on this
+one's topic names; nothing here depends on it, so the face stays a pure sink.
 
 ## Configuration
 

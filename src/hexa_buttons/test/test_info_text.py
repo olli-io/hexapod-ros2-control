@@ -1,14 +1,29 @@
 """Unit tests for the strings the front-panel buttons put on the display."""
 import dataclasses
 
+import pytest
+
 from hexa_buttons import (
+    LINE_BUDGET,
+    MODE_HOTSPOT,
+    MODE_STATION,
+    RESULT_ERROR,
+    RESULT_OK,
     InfoConfig,
+    NetworkState,
     Screen,
     battery_percent,
     battery_screen,
     bluetooth_screen,
+    network_error_reason,
+    network_screen,
     screen_text,
 )
+
+HOTSPOT = NetworkState(
+    mode=MODE_HOTSPOT, result=RESULT_OK, ssid="hexapod", psk="hexahexa"
+)
+STATION = NetworkState(mode=MODE_STATION, result=RESULT_OK)
 
 
 def test_battery_percent_maps_the_configured_span_linearly():
@@ -99,11 +114,147 @@ def test_screen_text_dispatches_to_each_screen():
     assert screen_text(Screen.BLUETOOTH, **kwargs).startswith("Connected to:")
 
 
-def test_screen_text_renders_nothing_for_none_and_scanning():
-    """SCANNING's spinners are the face, so text mode has to be off for them to
-    show — same as NONE."""
+def test_screen_text_renders_nothing_for_none_and_the_busy_screens():
+    """The spinners are the face, so text mode has to be off for them to show —
+    same as NONE."""
     kwargs = dict(
         voltage=7.5, ip="10.0.0.5", controller="", config=InfoConfig(), hold_s=3.0
     )
     assert screen_text(Screen.NONE, **kwargs) == ""
     assert screen_text(Screen.SCANNING, **kwargs) == ""
+    assert screen_text(Screen.NETWORK_SWITCHING, **kwargs) == ""
+
+
+# --- network mode ---------------------------------------------------------
+
+
+def test_the_battery_screen_carries_the_credentials_in_hotspot_mode():
+    """So the network a phone has to join is always one tap away, not only
+    visible in the seconds after a switch."""
+    assert battery_screen(7.5, "192.168.4.1", InfoConfig(), HOTSPOT) == (
+        "Battery -> 50 %  ( 7.5 V )\n"
+        "Control -> 192.168.4.1:8080\n"
+        "WiFi -> hexapod / hexahexa"
+    )
+
+
+def test_the_battery_screen_is_unchanged_in_station_mode():
+    plain = "Battery -> 50 %  ( 7.5 V )\nControl -> 10.0.0.5:8080"
+    assert battery_screen(7.5, "10.0.0.5", InfoConfig(), STATION) == plain
+    assert battery_screen(7.5, "10.0.0.5", InfoConfig(), None) == plain
+
+
+def test_the_hotspot_result_screen_names_the_network_and_where_to_point():
+    assert network_screen(HOTSPOT, "192.168.4.1", InfoConfig(), 3.0) == (
+        "Hotspot -> hexapod\n"
+        "Password -> hexahexa\n"
+        "Control -> 192.168.4.1:8080"
+    )
+
+
+def test_the_station_result_screen_says_the_hotspot_is_off():
+    assert network_screen(STATION, "10.0.0.5", InfoConfig(), 3.0) == (
+        "Hotspot off\nControl -> 10.0.0.5:8080"
+    )
+
+
+def test_a_result_screen_with_no_address_says_so():
+    assert network_screen(STATION, "", InfoConfig(), 3.0).endswith("no network")
+
+
+def test_a_failure_says_what_went_wrong_and_how_to_retry():
+    failed = NetworkState(mode=MODE_STATION, result=RESULT_ERROR, reason="ap-failed")
+    assert network_screen(failed, "10.0.0.5", InfoConfig(), 3.0) == (
+        "Network switch failed\n"
+        "Could not start the hotspot\n"
+        "Hold 3 seconds to retry"
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "no-helper",
+        "timeout",
+        "nmcli-missing",
+        "no-wifi",
+        "unmanaged",
+        "no-country",
+        "ap-failed",
+        "station-failed",
+    ],
+)
+def test_every_host_error_token_reads_as_english(reason):
+    text = network_error_reason(reason)
+    assert text != reason
+    assert len(text) <= LINE_BUDGET
+
+
+def test_an_unknown_error_token_still_says_something():
+    """A host script that grows a failure mode must not render a blank line
+    just because this table has not caught up."""
+    assert network_error_reason("wpa-supplicant-exploded") == "wpa-supplicant-exploded"
+    assert network_error_reason("") == "The switch did not finish"
+
+
+def test_screen_text_dispatches_the_result_screen():
+    assert screen_text(
+        Screen.NETWORK_INFO,
+        voltage=7.5,
+        ip="192.168.4.1",
+        controller="",
+        config=InfoConfig(),
+        hold_s=3.0,
+        network=HOTSPOT,
+    ).startswith("Hotspot -> hexapod")
+
+
+# --- panel budget ---------------------------------------------------------
+
+
+def _every_screen():
+    """Every string this module can put on the panel, worst case each."""
+    config = InfoConfig()
+    long_ip = "192.168.172.42"
+    failures = [
+        NetworkState(mode=MODE_STATION, result=RESULT_ERROR, reason=reason)
+        for reason in (
+            "no-helper",
+            "timeout",
+            "nmcli-missing",
+            "no-wifi",
+            "unmanaged",
+            "no-country",
+            "ap-failed",
+            "station-failed",
+            "",
+        )
+    ]
+    yield battery_screen(None, long_ip, config, HOTSPOT)
+    yield battery_screen(7.55, long_ip, config, HOTSPOT)
+    yield battery_screen(8.4, "", config, STATION)
+    yield bluetooth_screen("", 3.0)
+    yield bluetooth_screen("8 Bit Do Pro 2", 3.0)
+    yield network_screen(HOTSPOT, long_ip, config, 3.0)
+    yield network_screen(STATION, long_ip, config, 3.0)
+    yield network_screen(STATION, "", config, 3.0)
+    for state in failures:
+        yield network_screen(state, long_ip, config, 3.0)
+
+
+@pytest.mark.parametrize("text", list(_every_screen()))
+def test_every_screen_fits_the_panel(text):
+    """The panel drops the fifth line silently, and overflow *wraps* rather
+    than truncating — so a line over budget does not look wrong, it makes an
+    unrelated line disappear. Hence a hard guard rather than eyeballing."""
+    lines = text.split("\n")
+    assert len(lines) <= 4
+    for line in lines:
+        assert len(line) <= LINE_BUDGET, line
+
+
+@pytest.mark.parametrize("text", list(_every_screen()))
+def test_every_screen_is_ascii(text):
+    """The bundled PixelOperator font covers ASCII + Latin-1 only; anything
+    outside it renders blank. See gen_font.py's codepoints()."""
+    assert text.isascii()

@@ -2,18 +2,24 @@
 
 Two momentary switches on the Raspberry Pi's GPIO header — the robot's only
 input that does not need a gamepad, a phone, or an SSH session. They put
-diagnostic screens on the face's OLED and request a Bluetooth pairing scan.
+diagnostic screens on the face's OLED, request a Bluetooth pairing scan, and
+switch the Pi between joining Wi-Fi and hosting its own.
 
 - **info button** (GPIO5) — press: pack percentage and voltage, plus the address
-  a phone points at the web teleop UI.
+  a phone points at the web teleop UI. Hold 3 s: switch network mode, between
+  joining Wi-Fi and hosting the `hexapod` hotspot that serves that same UI.
 - **bluetooth button** (GPIO6) — press: which controller is connected. Hold 3 s:
   start a pairing scan; the face wears its `scanning` spinners while it runs.
 
 A *producer into* the display, not part of it. `hexa_display` stays a pure sink
 of robot state, and everything here reaches it over topics that node already
-subscribes to — `/display/text` for the screens, `/bluetooth/scanning` for the
-spinners. Nothing here imports `hexa_display`, and with no face fitted the
-topics simply go unread.
+subscribes to — `/display/text` for the screens, `/bluetooth/scanning` and
+`/display/busy` for the spinners. Nothing here imports `hexa_display`, and with
+no face fitted the topics simply go unread.
+
+The two spinner topics are separate because they mean different things — a
+pairing scan, and a network switch — and land on one expression because the
+face's answer to both is "wait, I am working". `hexa_display` ORs them.
 
 ## Wiring
 
@@ -61,8 +67,34 @@ other button swaps screens and that one times out, or after
     8 Bit Do Pro 2
     Hold 3 seconds to pair
 
+In hotspot mode the battery screen grows a third line, so the network a phone
+has to join is always one press away rather than only visible in the seconds
+after a switch:
+
+    Battery -> 50 %  ( 7.4 V )
+    Control -> 192.168.4.1:8080
+    WiFi -> hexapod / hexahexa
+
+and finishing a switch puts up the result — the credentials, or what went wrong:
+
+    Hotspot -> hexapod
+    Password -> hexahexa
+    Control -> 192.168.4.1:8080
+
+    Network switch failed
+    Could not start the hotspot
+    Hold 3 seconds to retry
+
 No pack reading yet renders as `-- %  ( --.- V )` rather than a fabricated 0 %,
 which would read as a dead battery. No address renders as `no network`.
+
+**Lines are budgeted at 30 characters** (`LINE_BUDGET` in `info_text.py`). The
+panel is four lines of a proportional 16 px font wrapping at 252 px, and
+overflow does not truncate — it *wraps*, and the extra line pushes the last one
+off the panel, so a line over budget makes an unrelated line vanish. 30 holds
+for ordinary mixed text; 28 is the floor for the widest glyphs. Both numbers are
+measured against the real font in `hexa_display`'s `test_text_screen.cpp`, and
+guarded on this side by a test over every string this package can emit.
 
 The separator is ASCII on purpose. The display's bundled Pixel Operator font
 covers ASCII + Latin-1 only, so a U+2192 `→` renders blank; to use one, add the
@@ -89,10 +121,55 @@ Until the utility exists, `/bluetooth/status` has no publisher, the bluetooth
 screen reads "No connected controllers", and a scan simply runs out its timeout.
 
 Note that pairing has to happen outside the container: BlueZ is reached over the
-host's system D-Bus, which the robot container does not mount. The established
-pattern for that in this repo is the buzzer spool — a file on the bind-mounted
-log volume watched by a host systemd `.path` unit (see `systemd/buzzer.sh` and
-`docs/robot-environment.md`).
+host's system D-Bus, which the robot container does not mount. The pattern to
+copy is the network seam below — a request file on the bind-mounted log volume
+watched by a host systemd `.path` unit, answered in a second file. That is the
+same shape the buzzer uses (`systemd/buzzer.sh`), and the network switch is a
+worked example of it with a reply channel.
+
+## Network seam
+
+Holding the info button flips the Pi between joining Wi-Fi and hosting the
+`hexapod` hotspot (password `hexahexa`, robot at `192.168.4.1`) that serves the
+web teleop. The face wears its spinners while the switch runs.
+
+The switch cannot happen in this process. The container is unprivileged with
+host networking, no D-Bus socket and no `NET_ADMIN`, so it cannot reach
+NetworkManager at all — the same wall the buzzer hits with the PWM sysfs, and
+the same way around it. Two files on the bind-mounted log volume:
+
+- **`log/network`** (`network_spool` in this package) — container to host. One
+  line: an action and a token. Written in place, truncate + one write + close,
+  and deliberately **not** renamed into position: systemd's `PathModified`
+  watches that inode, and swapping a new one underneath would break the watch.
+- **`log/network.state`** — host to container. `key=value` lines naming the
+  mode, the credentials, and how the last request went. The host writes this one
+  tmp + rename, so the tick's poll can never read half a line.
+
+The host runs `systemd/network-mode.sh` and is the **authority on the current
+mode** — the AP profile being active is the whole definition of it — so the
+button sends `toggle` rather than naming a target, and this node only ever
+renders what it was told. The SSID and password live in that script and come
+back in the state file; they are deliberately not duplicated in `buttons.yaml`.
+
+The **token** separates "the host answered me" from "this file still holds the
+answer to a switch from ten minutes ago". It carries a per-process nonce, so a
+node that restarts mid-switch cannot mistake the reply to its previous life's
+request for an ack. `mode` is trusted whatever the token says — it is a standing
+report, and a node that just started needs it to render a correct screen.
+
+Three ways a switch ends, in order of how quickly the operator finds out:
+
+- The host answers `result=ok` or `result=error`, and the panel shows why.
+- Nothing acknowledges within `network_ack_timeout_s` (5 s) — nothing is
+  watching the spool, so the units were never installed. Says so at once rather
+  than spinning for the full timeout.
+- The host acknowledged and then went quiet: `network_timeout_s` (60 s) ends it
+  on the result screen, not the face, because a silent return to the eyes is
+  exactly the case where something needs saying.
+
+The whole feature is **inert** until `./hexa robot install-network` has been run
+on the Pi. See `docs/robot-environment.md` §6b.
 
 ## Layout
 
@@ -102,8 +179,11 @@ the device- and ROS-touching code thin and separate.
 - `hexa_buttons/screen_logic.py` — the screen state machine and the wiring →
   gpiozero-argument translation. Pure: no rclpy, no gpiozero, no clocks. It is
   handed one `(event, t)` per real button event plus a periodic `TICK`.
-- `hexa_buttons/info_text.py` — the screen strings and the voltage →
-  percentage map.
+- `hexa_buttons/info_text.py` — the screen strings, the voltage → percentage
+  map, and the panel's line budget.
+- `hexa_buttons/network_state.py` — the container/host spool wire format:
+  request lines, the `key=value` state file, and the tolerant parser for it.
+  Pure, so both sides of a bind mount have one definition to agree on.
 - `hexa_buttons/local_ip.py` — the address to advertise (`SIOCGIFADDR`,
   preferring `wlan0` then `eth0`). The container runs `network_mode: host`, so
   these are the Pi's own interfaces. The ranking half is pure and tested; the
@@ -112,6 +192,9 @@ the device- and ROS-touching code thin and separate.
   it does so **lazily inside the function**. That keeps the pure modules
   importable in the sim container, which has no gpiozero, and makes a missing
   library land on the inert path rather than crashing at import.
+- `hexa_buttons/network_spool.py` — the two file touches that carry a switch
+  across the container boundary. Impure and decision-free, so it is not
+  re-exported and not unit-tested, same policy as `gpio_buttons`.
 - `hexa_buttons/button_node.py` — the only rclpy component.
 
 ### Threading
@@ -145,8 +228,13 @@ expire a live screen or hang one for the size of the step.
 
 All knobs in `config/buttons.yaml`: line numbers and wiring polarity, the
 housekeeping tick rate, debounce/hold/timeout clocks, the battery topic and the
-voltage span, the address interface preference, and the label separator.
-`enabled: false` makes `robot.launch.py` skip the node.
+voltage span, the address interface preference, the network spool paths and
+their timeouts, and the label separator. `enabled: false` makes
+`robot.launch.py` skip the node; `network_toggle_enabled: false` keeps the
+screens but drops the info button's hold.
+
+`hold_s` is passed to **both** buttons and to the screens that advertise it, so
+the panel can never promise a hold the buttons do not honour.
 
 `active_low` and `bias_pull_up` collapse onto gpiozero's `pull_up` /
 `active_state` pair, which are mutually constrained. The combination
@@ -169,20 +257,29 @@ this build — measure against a meter before trusting the percentage.
 
 ## Tests
 
-`./hexa sim python3 -m pytest src/hexa_buttons/test -q` — 44 cases, all
+`./hexa sim python3 -m pytest src/hexa_buttons/test -q` — 128 cases, all
 headless, and deliberately runnable in a container **without** gpiozero (which
 is also the check that the lazy import holds):
 
-- `test_screen_logic` — screen toggling and swapping, timeouts, the pairing
-  hold and its swallowed release, scan cancellation and success, the
-  already-held-at-startup guard, the hold/release thread race in both orders,
-  and the wiring translation.
+- `test_screen_logic` — screen toggling and swapping, timeouts, both holds and
+  their swallowed releases, scan cancellation and success, the
+  already-held-at-startup guard (which is what stops a jammed button taking the
+  robot off the network), the hold/release thread race in both orders, that
+  nothing can cancel a switch in flight, and the wiring translation.
 - `test_info_text` — the percentage map, its clamping, its degenerate case and
-  its half-away-from-zero rounding, plus every screen string including the
-  no-reading and no-network paths.
+  its half-away-from-zero rounding, every screen string including the
+  no-reading, no-network, hotspot and failure paths, and a guard asserting every
+  string this package can emit is inside the line budget and pure ASCII.
+- `test_network_state` — the spool wire format: request round-trips, token
+  uniqueness across requests and across restarts, and a parser that reads junk,
+  partial writes and unknown keys as "no news" rather than raising.
 - `test_local_ip` — interface preference order and both fallbacks.
 
 Not unit-tested on purpose (same policy as `hexa_teleop`'s
-`test_joy_publisher.py`): `open_buttons`, the ioctl enumeration, and the rclpy
-wiring. Those hinge on kernel and driver behaviour and are verified on the
-robot.
+`test_joy_publisher.py`): `open_buttons`, the ioctl enumeration, `network_spool`,
+and the rclpy wiring. Those hinge on kernel, filesystem and driver behaviour and
+are verified on the robot.
+
+The panel's line budget is pinned from the other side too — `hexa_display`'s
+`test_text_screen.cpp` measures it against the real font, so the number this
+package designs against cannot drift from what the panel can actually show.

@@ -5,11 +5,11 @@
 // the renderer.
 //
 // Precedence (highest first):
-//   1. bluetooth scanning -> SCANNING, gaze CENTER. Top of the ladder because
-//      it is the one state the operator asked for by hand (the pairing hold on
-//      the Bluetooth button): while they wait on the spinners, nothing else may
-//      take the panel — not even a flat pack, which they can read off the info
-//      screen anyway.
+//   1. busy -> SCANNING, gaze CENTER. Top of the ladder because it is the one
+//      state the operator asked for by hand — a hold on a front-panel button,
+//      either the Bluetooth pairing scan or the network-mode switch. While they
+//      wait on the spinners, nothing else may take the panel — not even a flat
+//      pack, which they can read off the info screen anyway.
 //   2. battery critical -> DEAD, gaze CENTER, unconditional.
 //   3. battery warning -> SLEEPY, but only when idle (cmd_vel ~ 0, gait state in
 //      the idle set, no animation mode) — a warning must not mask the face
@@ -62,9 +62,12 @@ struct PolicyInputs {
     double yaw = 0.0;
     bool battery_low = false;
     bool battery_critical = false;
-    // The robot is hunting for a Bluetooth controller (hexa_buttons' pairing
-    // hold, relayed on /bluetooth/scanning).
-    bool bluetooth_scanning = false;
+    // hexa_buttons is working on something the operator asked for by holding a
+    // front-panel button and should wait out: a Bluetooth pairing scan
+    // (/bluetooth/scanning) or a network-mode switch (/display/busy). One flag
+    // rather than two because the face's answer to both is the same spinners —
+    // the node ORs the topics before it gets here.
+    bool busy = false;
 };
 
 struct PolicyConfig {

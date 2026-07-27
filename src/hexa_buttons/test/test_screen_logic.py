@@ -7,7 +7,14 @@ over the polled version this replaced.
 """
 import pytest
 
-from hexa_buttons import Event, Screen, ScreenConfig, ScreenSequencer, pull_kwargs
+from hexa_buttons import (
+    Event,
+    Screen,
+    ScreenConfig,
+    ScreenSequencer,
+    pull_kwargs,
+    wants_spinners,
+)
 
 
 def sequencer(**overrides):
@@ -33,6 +40,13 @@ def bt_hold(seq, t, hold_s=3.0):
     seq.apply(Event.BT_PRESS, t)
     seq.apply(Event.BT_HOLD, t + hold_s)
     return seq.apply(Event.BT_RELEASE, t + hold_s + 0.1)
+
+
+def info_hold(seq, t, hold_s=3.0):
+    """Same, on the button that switches network mode."""
+    seq.apply(Event.INFO_PRESS, t)
+    seq.apply(Event.INFO_HOLD, t + hold_s)
+    return seq.apply(Event.INFO_RELEASE, t + hold_s + 0.1)
 
 
 # --- toggling ---------------------------------------------------------------
@@ -206,6 +220,125 @@ def test_changed_is_true_only_on_the_transition():
     assert seq.changed
     seq.apply(Event.TICK, 1.2)
     assert not seq.changed
+
+
+# --- network mode switch ----------------------------------------------------
+
+
+def test_info_hold_starts_a_network_switch():
+    seq = sequencer()
+    assert info_hold(seq, 1.0) is Screen.NETWORK_SWITCHING
+
+
+def test_the_release_ending_an_info_hold_does_not_open_the_battery_screen():
+    seq = sequencer()
+    info_hold(seq, 1.0)
+    assert seq.screen is Screen.NETWORK_SWITCHING
+
+
+def test_a_release_arriving_before_the_hold_still_ends_in_switching():
+    """gpiozero fires when_held from the hold thread and when_released from the
+    pin thread, so within a hair of hold_time either can land first."""
+    seq = sequencer()
+    seq.apply(Event.INFO_PRESS, 1.0)
+    seq.apply(Event.INFO_RELEASE, 4.0)  # toggles the battery screen open
+    assert seq.apply(Event.INFO_HOLD, 4.0) is Screen.NETWORK_SWITCHING
+
+
+def test_the_leftover_suppress_flag_does_not_eat_the_next_info_tap():
+    seq = sequencer()
+    info_hold(seq, 1.0)
+    seq.apply(Event.INFO_PRESS, 5.0)  # a fresh press clears the stale flag
+    seq.on_network_result(5.0)
+    assert seq.apply(Event.INFO_RELEASE, 5.1) is not Screen.NETWORK_SWITCHING
+
+
+def test_a_hold_with_no_press_behind_it_is_ignored():
+    """A button jammed down when the node starts produces no press — gpiozero
+    does not replay initial state — but its hold thread is already running. This
+    guard is what stops a phantom hold taking the robot off the network."""
+    seq = sequencer()
+    assert seq.apply(Event.INFO_HOLD, 3.0) is Screen.NONE
+    assert not seq.changed
+
+
+def test_leaning_on_the_button_does_not_restart_the_switch_clock():
+    seq = sequencer(network_timeout_s=10.0)
+    info_hold(seq, 1.0)  # the hold itself lands at 4.0
+    seq.apply(Event.INFO_HOLD, 5.0)
+    assert not seq.changed
+    # 14.5 is past 4.0 + 10 but short of 5.0 + 10, so this fails if the second
+    # hold restarted the clock.
+    seq.apply(Event.TICK, 14.5)
+    assert seq.screen is Screen.NETWORK_INFO
+
+
+def test_neither_button_can_cancel_a_switch():
+    """The host is already committed to an nmcli call — there is nothing to
+    call off, and a panel handed back early would name a mode the radio left."""
+    seq = sequencer()
+    info_hold(seq, 1.0)
+    assert info_tap(seq, 5.0) is Screen.NETWORK_SWITCHING
+    assert bt_tap(seq, 6.0) is Screen.NETWORK_SWITCHING
+
+
+def test_no_pairing_scan_starts_on_top_of_a_switch():
+    seq = sequencer()
+    info_hold(seq, 1.0)
+    assert bt_hold(seq, 5.0) is Screen.NETWORK_SWITCHING
+
+
+def test_an_info_press_still_cancels_a_pairing_scan():
+    seq = sequencer()
+    bt_hold(seq, 1.0)
+    assert seq.apply(Event.INFO_PRESS, 5.0) is Screen.NONE
+
+
+def test_the_result_moves_the_panel_off_the_spinners():
+    seq = sequencer()
+    info_hold(seq, 1.0)
+    assert seq.on_network_result(6.0) is Screen.NETWORK_INFO
+    assert seq.changed
+
+
+def test_a_late_result_does_not_seize_an_unrelated_screen():
+    seq = sequencer()
+    info_tap(seq, 1.0)
+    assert seq.on_network_result(2.0) is Screen.BATTERY
+    assert not seq.changed
+
+
+def test_a_switch_ignores_the_ordinary_screen_timeout():
+    seq = sequencer(screen_timeout_s=6.0, network_timeout_s=60.0)
+    info_hold(seq, 1.0)
+    seq.apply(Event.TICK, 30.0)
+    assert seq.screen is Screen.NETWORK_SWITCHING
+
+
+def test_a_switch_that_is_never_reported_ends_on_the_result_screen():
+    """NETWORK_INFO, not NONE: a silent return to the face is exactly the case
+    where the operator most needs to be told something went wrong."""
+    seq = sequencer(network_timeout_s=60.0)
+    info_hold(seq, 1.0)  # the hold itself lands at 4.0
+    seq.apply(Event.TICK, 64.5)
+    assert seq.screen is Screen.NETWORK_INFO
+
+
+def test_the_result_screen_eventually_hands_the_panel_back():
+    seq = sequencer(network_info_timeout_s=20.0)
+    info_hold(seq, 1.0)
+    seq.on_network_result(5.0)
+    seq.apply(Event.TICK, 24.0)
+    assert seq.screen is Screen.NETWORK_INFO  # still readable
+    seq.apply(Event.TICK, 25.5)
+    assert seq.screen is Screen.NONE
+
+
+def test_exactly_the_two_busy_screens_want_spinners():
+    assert wants_spinners(Screen.SCANNING)
+    assert wants_spinners(Screen.NETWORK_SWITCHING)
+    for screen in (Screen.NONE, Screen.BATTERY, Screen.BLUETOOTH, Screen.NETWORK_INFO):
+        assert not wants_spinners(screen)
 
 
 # --- wiring translation -----------------------------------------------------

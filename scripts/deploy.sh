@@ -162,6 +162,15 @@ cmd_push() {
         "systemd/hexa-tune-spool.path" \
         "systemd/hexa-tune-spool.service" \
         "${host}:~/hexa-robot/systemd/"
+    # Network-mode switcher, same deal again: shipped, never installed, and
+    # `./hexa robot install-network` is the opt-in. It has to be on the host
+    # because the container is unprivileged with no D-Bus socket, so it cannot
+    # reach NetworkManager; the spool pair is how the info button's hold gets out.
+    scp "systemd/network-mode.sh" \
+        "systemd/hexa-network-spool.path" \
+        "systemd/hexa-network-spool.service" \
+        "systemd/hexa-network-report.service" \
+        "${host}:~/hexa-robot/systemd/"
     # Runtime-tuning overlay. The compose bind-mounts ~/hexa-robot/tuning.yaml
     # over the image's copy so an on-Pi edit applies on a bare `hexa robot
     # restart` (no image rebuild). The repo stays the source of truth, so a
@@ -188,7 +197,7 @@ if [ -f tuning.yaml ] && ! cmp -s tuning.yaml tuning.yaml.default; then
     echo ">> on-Pi tuning.yaml differed from the repo — saved as tuning.yaml.bak"
 fi
 cp tuning.yaml.default tuning.yaml
-chmod +x systemd/buzzer.sh
+chmod +x systemd/buzzer.sh systemd/network-mode.sh
 docker compose -f "${COMPOSE_FILE}" up -d --no-build
 EOF
 
@@ -197,6 +206,7 @@ EOF
     echo "   Stand it:       gamepad Start (or publish /gait/initialize)."
     echo "   Status:         hexa robot -H ${host} status"
     echo "   Start on boot:  ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-service'"
+    echo "   Hotspot toggle: ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-network'"
 }
 
 if [[ $# -lt 1 ]]; then

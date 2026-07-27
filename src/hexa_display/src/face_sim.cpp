@@ -280,6 +280,10 @@ public:
         _sub_scanning = create_subscription<std_msgs::msg::Bool>(
             "/bluetooth/scanning", scanning_qos,
             [this](const std_msgs::msg::Bool& m) { _bluetooth_scanning = m.data; });
+        // Network-mode switch, same spinners; see display_node.cpp.
+        _sub_busy = create_subscription<std_msgs::msg::Bool>(
+            "/display/busy", scanning_qos,
+            [this](const std_msgs::msg::Bool& m) { _display_busy = m.data; });
 
         _policy_timer = create_wall_timer(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -330,7 +334,7 @@ private:
         inputs.yaw = _body_pose.yaw;
         inputs.battery_low = battery.low;
         inputs.battery_critical = battery.critical;
-        inputs.bluetooth_scanning = _bluetooth_scanning;
+        inputs.busy = _bluetooth_scanning || _display_busy;
 
         _last_target = decide(inputs, _config, _last_target);
         const FaceAnimation* animation = _runner.update(
@@ -365,6 +369,7 @@ private:
     std::optional<double> _battery_voltage;
     std::string _display_text;
     bool _bluetooth_scanning = false;
+    bool _display_busy = false;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gait;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr _sub_vel;
@@ -373,6 +378,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr _sub_battery;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_text;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr _sub_scanning;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr _sub_busy;
     rclcpp::TimerBase::SharedPtr _policy_timer;
 };
 

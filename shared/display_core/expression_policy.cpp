@@ -132,7 +132,7 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
                      const DisplayTarget& prev) {
     // Gaze CENTER: the spinners turn about the eye centers, and a gaze offset
     // would slide the whole ring off-axis mid-rotation.
-    if (in.bluetooth_scanning) {
+    if (in.busy) {
         return {config.scanning_expression, GazeDirection::CENTER};
     }
     if (in.battery_critical) {
@@ -162,7 +162,7 @@ std::optional<std::string> selectFaceAnimation(const PolicyInputs& in,
                                                const PolicyConfig& config) {
     // The spinners own the gaze while scanning; a drift animation would fight
     // them for it.
-    if (in.bluetooth_scanning) {
+    if (in.busy) {
         return std::nullopt;
     }
     if (in.battery_critical || in.battery_low) {

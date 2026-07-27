@@ -155,3 +155,38 @@ TEST(TextScreen, PixelReadbackBoundsChecked) {
     EXPECT_FALSE(textScreenPixel(g, 256, 0));
     EXPECT_FALSE(textScreenPixel(g, 0, 64));
 }
+
+// The budget hexa_buttons writes its screens against (info_text.LINE_BUDGET).
+// Pinned here, on the side that actually owns the font metrics, because the
+// failure mode is silent: an over-budget line does not truncate, it *wraps*,
+// and the extra line pushes the last one off a four-line panel.
+TEST(TextScreen, ThirtyCharactersOfRealTextFitOneLine) {
+    face::Sh1122Panel panel;
+    ASSERT_TRUE(panel.begin(headlessCfg()));
+    TextScreenConfig cfg;
+    // The widest content hexa_buttons actually emits: the address line at a
+    // full-length IPv4, and a hotspot password line. Both exactly at budget.
+    for (const std::string& line : {std::string("Control -> 192.168.172.42:8080"),
+                                    std::string("Password -> hexahexatwelve1234")}) {
+        ASSERT_EQ(line.size(), 30u) << line;
+        const auto lines = layoutTextScreen(panel.u8g2(), line, cfg);
+        EXPECT_EQ(lines.size(), 1u) << line << " wrapped, budget is too generous";
+        EXPECT_LE(lineWidthPx(panel.u8g2(), line), 256 - 2 * cfg.margin_px) << line;
+    }
+}
+
+// The budget is characters of *mixed* text, not a pixel guarantee: this font is
+// proportional, and its widest glyphs advance 9 px against an average nearer 8.
+// 28 is therefore the floor that holds whatever the characters are — worth
+// knowing before anyone puts a configurable SSID on a line already near 30.
+TEST(TextScreen, TwentyEightWideGlyphsAreTheGuaranteedFloor) {
+    face::Sh1122Panel panel;
+    ASSERT_TRUE(panel.begin(headlessCfg()));
+    TextScreenConfig cfg;
+    // layoutTextScreen is what installs the font on the u8g2 handle; measuring
+    // before it has run reads a null font.
+    layoutTextScreen(panel.u8g2(), "x", cfg);
+    const int max_w = 256 - 2 * cfg.margin_px;
+    EXPECT_LE(lineWidthPx(panel.u8g2(), std::string(28, 'M')), max_w);
+    EXPECT_GT(lineWidthPx(panel.u8g2(), std::string(30, 'M')), max_w);
+}

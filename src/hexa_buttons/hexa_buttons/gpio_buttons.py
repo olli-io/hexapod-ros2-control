@@ -10,7 +10,9 @@ imports gpiozero — lazily, inside ``open_buttons``, so that:
 
 gpiozero is doing real work here: edge delivery, debounce (``bounce_time``) and
 the hold clock (``hold_time`` + ``when_held``) all come from it, which is why
-this package has no polling loop and no debounce code of its own.
+this package has no polling loop and no debounce code of its own. Both buttons
+carry a hold: the info button's switches network mode, the bluetooth button's
+starts a pairing scan.
 """
 from __future__ import annotations
 
@@ -125,6 +127,7 @@ def open_buttons(
     # already running, though — ScreenSequencer's press-seen guard covers that.
     info.when_pressed = lambda: on_event(Event.INFO_PRESS)
     info.when_released = lambda: on_event(Event.INFO_RELEASE)
+    info.when_held = lambda: on_event(Event.INFO_HOLD)
     bluetooth.when_pressed = lambda: on_event(Event.BT_PRESS)
     bluetooth.when_released = lambda: on_event(Event.BT_RELEASE)
     bluetooth.when_held = lambda: on_event(Event.BT_HOLD)
