@@ -72,7 +72,10 @@ class LocomotionNode : public rclcpp::Node {
     pub_cmd_ = create_publisher<Float64MultiArray>(command_topic_, 10);
     // /gait/state is the only locomotion-chain topic the face sink consumes; the
     // rest of its inputs (/cmd_vel, /body/pose, /animation/mode) come from teleop.
-    pub_state_ = create_publisher<StringMsg>("/gait/state", 10);
+    // Latched: it publishes on change only, and the boot "folded" goes out on the
+    // first tick — a face sink that subscribes later must still receive it.
+    pub_state_ = create_publisher<StringMsg>("/gait/state",
+                                             rclcpp::QoS(1).transient_local());
     // Relay-arm intent for hexa_hardware: the supervisor's per-tick decision
     // (energize only once stood, drop on fold / fault / critical battery). The
     // hardware node drives SET RELAY off this, honouring the board's staged-pose

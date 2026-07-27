@@ -15,6 +15,10 @@ constexpr float    kLidShut    = 0.92f; // lid travels 1 → 1-kLidShut → 1
 
 float easeOutCubic(float t) { return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
 
+// Starts and ends at rest: back-to-back drift steps chain into one continuous
+// oscillation instead of darting and holding.
+float easeInOutSine(float t) { return 0.5f - 0.5f * cosf(t * 3.14159265f); }
+
 // GazeDirection → unit offsets, indexed by enum value.
 struct Dir {
     int8_t dx, dy;
@@ -82,12 +86,13 @@ void EyeAnim::updateGaze(const RenderState& state, uint32_t nowMs) {
         const Dir d  = kGazeDir[static_cast<size_t>(state.gaze)];
         _gazeFromX   = _gx;
         _gazeFromY   = _gy;
-        _gazeToX     = static_cast<float>(d.dx * kGazeMaxX);
-        _gazeToY     = static_cast<float>(d.dy * kGazeMaxY);
+        _gazeToX     = static_cast<float>(d.dx * kGazeMaxX) * state.gazeScale;
+        _gazeToY     = static_cast<float>(d.dy * kGazeMaxY) * state.gazeScale;
         _gazeStartMs = nowMs;
     }
-    const float t = fminf(1.0f, static_cast<float>(nowMs - _gazeStartMs) / kLookMs);
-    const float e = easeOutCubic(t);
+    const uint32_t lookMs = state.gazeEaseMs ? state.gazeEaseMs : kLookMs;
+    const float t = fminf(1.0f, static_cast<float>(nowMs - _gazeStartMs) / lookMs);
+    const float e = state.gazeEaseMs ? easeInOutSine(t) : easeOutCubic(t);
     _gx = _gazeFromX + (_gazeToX - _gazeFromX) * e;
     _gy = _gazeFromY + (_gazeToY - _gazeFromY) * e;
 }

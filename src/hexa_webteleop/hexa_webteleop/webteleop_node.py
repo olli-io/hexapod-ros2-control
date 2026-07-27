@@ -168,8 +168,11 @@ class WebTeleopNode(Node):
             String, "/animation/mode", latched_qos
         )
         self._pub_owner = self.create_publisher(String, "/teleop/owner", latched_qos)
+        # TRANSIENT_LOCAL to match hexa_locomotion's latched publisher:
+        # /gait/state publishes on change only, so a late-joining node
+        # would otherwise wait for the next state change to learn the state.
         self._sub_gait_state = self.create_subscription(
-            String, "/gait/state", self._on_gait_state, 10
+            String, "/gait/state", self._on_gait_state, latched_qos
         )
 
         # Publish "gamepad" on startup so a dormant gamepad from a

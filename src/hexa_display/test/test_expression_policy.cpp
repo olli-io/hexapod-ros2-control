@@ -39,14 +39,15 @@ TEST(ExpressionPolicy, GaitStateMapDefaults) {
     }
 }
 
-TEST(ExpressionPolicy, UnknownAndUnseenStateAreNeutral) {
+TEST(ExpressionPolicy, UnknownStateIsNeutralUnseenStateIsSleepy) {
     auto warp = makeInputs();
     warp.gait_state = "warp";
     EXPECT_EQ(decide(warp, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
 
+    // The robot boots folded: until /gait/state is heard the eyes stay asleep.
     auto none = makeInputs();
     none.gait_state = std::nullopt;
-    EXPECT_EQ(decide(none, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
+    EXPECT_EQ(decide(none, CONFIG, kIdleTarget).expression, Expression::SLEEPY);
 }
 
 TEST(ExpressionPolicy, AnimationModeWinsOverGaitState) {
@@ -180,12 +181,19 @@ TEST(ExpressionPolicy, PoseModeGazeFollowsTilt) {
     EXPECT_EQ(decide(makeInputs(), CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
 }
 
-TEST(ExpressionPolicy, BreathingSelectedWhileWaitingForStack) {
-    auto in = makeInputs();
-    in.gait_state = std::nullopt;
-    auto sel = selectFaceAnimation(in, CONFIG);
-    ASSERT_TRUE(sel.has_value());
-    EXPECT_EQ(*sel, "breathing");
+TEST(ExpressionPolicy, BreathingSelectedWhileSleeping) {
+    // The sleeping face breathes: both before the stack is up and once folded.
+    auto waiting = makeInputs();
+    waiting.gait_state = std::nullopt;
+
+    auto folded = makeInputs();
+    folded.gait_state = "folded";
+
+    for (const auto& in : {waiting, folded}) {
+        auto sel = selectFaceAnimation(in, CONFIG);
+        ASSERT_TRUE(sel.has_value());
+        EXPECT_EQ(*sel, "breathing");
+    }
 }
 
 TEST(ExpressionPolicy, IdlingSelectedWhenStandingIdleAndLevel) {
@@ -208,8 +216,8 @@ TEST(ExpressionPolicy, NoFaceAnimationWhenBusyOrWarning) {
     auto pose_yaw = makeInputs();
     pose_yaw.yaw = 0.2;
 
-    auto folded = makeInputs();
-    folded.gait_state = "folded";
+    auto folding = makeInputs();
+    folding.gait_state = "folding";
 
     auto settling = makeInputs();
     settling.gait_state = "settling";
@@ -224,7 +232,7 @@ TEST(ExpressionPolicy, NoFaceAnimationWhenBusyOrWarning) {
     critical.gait_state = std::nullopt;
     critical.battery_critical = true;
 
-    for (const auto& in : {walking, turning, pose_tilt, pose_yaw, folded,
+    for (const auto& in : {walking, turning, pose_tilt, pose_yaw, folding,
                            settling, animating, low, critical}) {
         EXPECT_FALSE(selectFaceAnimation(in, CONFIG).has_value());
     }

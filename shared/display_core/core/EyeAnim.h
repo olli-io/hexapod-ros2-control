@@ -15,7 +15,8 @@ struct AnimFrame {
 
 // Platform-free animation state machine on top of the target RenderState:
 //   - expression changes pass through a 260 ms blink, swapping at midpoint
-//   - gaze eases to its target over 220 ms (easeOutCubic)
+//   - gaze eases to its target over 220 ms (easeOutCubic), or drifts over
+//     RenderState::gazeEaseMs (easeInOutSine) when that is non-zero
 //   - idle blinks fire autonomously every 2.2–5.2 s
 // Randomness is injected so the same code runs on-device (esp_random) and
 // in the host simulator/tests (rand).

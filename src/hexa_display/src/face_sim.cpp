@@ -245,8 +245,12 @@ public:
             get_parameter("battery_hysteresis_v").as_double(),
             get_parameter("battery_hold_s").as_double());
 
+        // transient_local to match hexa_locomotion's latched publisher: the boot
+        // "folded" goes out before this node subscribes.
+        rclcpp::QoS gait_qos(1);
+        gait_qos.transient_local();
         _sub_gait = create_subscription<std_msgs::msg::String>(
-            "/gait/state", 10,
+            "/gait/state", gait_qos,
             [this](const std_msgs::msg::String& m) { _gait_state = m.data; });
         _sub_vel = create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10,
@@ -325,8 +329,13 @@ private:
         _target.expr = _last_target.expression;
         if (animation == nullptr) {
             _target.gaze = _last_target.gaze;
+            _target.gazeEaseMs = 0;
+            _target.gazeScale = 1.0f;
         } else {
             _runner.run(*animation, now);
+            _target.gazeEaseMs =
+                static_cast<uint32_t>(animation->gaze_ease_s() * 1000.0);
+            _target.gazeScale = static_cast<float>(animation->gaze_scale());
         }
     }
 

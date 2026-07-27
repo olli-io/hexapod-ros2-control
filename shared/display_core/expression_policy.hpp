@@ -10,7 +10,8 @@
 //      the idle set, no animation mode) — a warning must not mask the face
 //      mid-walk.
 //   3. animation mode non-empty -> the configured animation expression (WOOZY).
-//   4. gait-state map from YAML; unknown or unseen state -> NEUTRAL.
+//   4. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
+//      heard yet -> SLEEPY (the robot boots folded and asleep).
 //
 // Gaze: the vertical axis always follows body pitch (nose up -> UP) — driving
 // forward or backward never moves the gaze. The horizontal axis tracks cmd_vel
@@ -39,7 +40,7 @@ constexpr double kCmdVelZeroTol = 1e-4;
 const std::set<std::string>& idleGaitStates();
 
 // Gait states in which the idling face animation may run. Narrower than the
-// idle set on purpose: folded and paused show SLEEPY and the eyes stay still.
+// idle set on purpose: folded shows SLEEPY with the breathing drift instead.
 const std::set<std::string>& idlingGaitStates();
 
 // Default gait-state -> expression map; overridable per state from YAML.
@@ -94,10 +95,10 @@ int quantizeAxis(double value, int prev_sign, double deadband, double exit_ratio
 DisplayTarget decide(const PolicyInputs& inputs, const PolicyConfig& config,
                      const DisplayTarget& prev);
 
-// Pick the face animation for this tick, or nullopt. Breathing runs while no
-// gait state has been heard yet; idling runs while the hexapod stands idle,
-// level, and command-free. Battery flags and an active posture animation mode
-// suppress both.
+// Pick the face animation for this tick, or nullopt. Breathing runs while the
+// face sleeps — no gait state heard yet, or folded; idling runs while the
+// hexapod stands idle, level, and command-free. Battery flags and an active
+// posture animation mode suppress both.
 std::optional<std::string> selectFaceAnimation(const PolicyInputs& inputs,
                                                const PolicyConfig& config);
 

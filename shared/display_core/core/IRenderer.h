@@ -11,6 +11,13 @@ class Display;
 struct RenderState {
     Expression    expr;
     GazeDirection gaze;
+    // 0 = the renderer's default 220 ms dart (easeOutCubic). Non-zero switches
+    // gaze changes to a slow easeInOutSine drift of this duration, for
+    // continuous motion (breathing) instead of a glance.
+    uint32_t      gazeEaseMs = 0;
+    // Scale on the gaze offset target (1 = full kGazeMax travel). Face
+    // animations use this to shrink their drift amplitude.
+    float         gazeScale = 1.0f;
 };
 
 class IRenderer {

@@ -22,10 +22,10 @@ TEST(FaceAnimation, RegistryNamesMatch) {
     EXPECT_EQ(names, (std::set<std::string>{"breathing", "idling"}));
 }
 
-TEST(FaceAnimation, BreathingIsASlowVerticalCycle) {
-    const std::vector<GazeDirection> expected = {
-        GazeDirection::UP, GazeDirection::CENTER, GazeDirection::DOWN,
-        GazeDirection::CENTER};
+TEST(FaceAnimation, BreathingIsASlowDownwardDip) {
+    // Down and back only — the tail to the period rests the eyes at center.
+    const std::vector<GazeDirection> expected = {GazeDirection::DOWN,
+                                                 GazeDirection::CENTER};
     std::vector<GazeDirection> gazes;
     for (const auto& step : breathing().steps()) {
         ASSERT_TRUE(step.gaze.has_value());
@@ -33,6 +33,7 @@ TEST(FaceAnimation, BreathingIsASlowVerticalCycle) {
         EXPECT_FALSE(step.blink);
     }
     EXPECT_EQ(gazes, expected);
+    EXPECT_DOUBLE_EQ(breathing().period_s(), 4.8);
 }
 
 TEST(FaceAnimation, IdlingMirrorsReferenceSequence) {
@@ -65,6 +66,16 @@ TEST(FaceAnimation, IdlingMirrorsReferenceSequence) {
 
 TEST(FaceAnimation, BreathingLoopsWithoutARestGap) {
     EXPECT_FALSE(breathing().repeat_range_s().has_value());
+}
+
+TEST(FaceAnimation, BreathingDriftsContinuously) {
+    // The drift duration matches the step spacing, so consecutive gaze targets
+    // chain into one continuous oscillation at half amplitude; idling keeps
+    // the default full-travel dart.
+    EXPECT_DOUBLE_EQ(breathing().gaze_ease_s(), 1.2);
+    EXPECT_DOUBLE_EQ(breathing().gaze_scale(), 0.5);
+    EXPECT_DOUBLE_EQ(idling().gaze_ease_s(), 0.0);
+    EXPECT_DOUBLE_EQ(idling().gaze_scale(), 1.0);
 }
 
 TEST(FaceAnimation, StepCountAtBoundaries) {
@@ -114,5 +125,17 @@ TEST(FaceAnimation, Validation) {
                  std::invalid_argument);
     EXPECT_THROW(FaceAnimation("short-range", 4.0, {{0.0, GazeDirection::UP, false}},
                                std::make_pair(2.0, 6.0)),
+                 std::invalid_argument);
+    EXPECT_THROW(FaceAnimation("negative-ease", 1.0,
+                               {{0.0, GazeDirection::UP, false}}, std::nullopt,
+                               -0.5),
+                 std::invalid_argument);
+    EXPECT_THROW(FaceAnimation("zero-scale", 1.0,
+                               {{0.0, GazeDirection::UP, false}}, std::nullopt,
+                               0.0, 0.0),
+                 std::invalid_argument);
+    EXPECT_THROW(FaceAnimation("over-scale", 1.0,
+                               {{0.0, GazeDirection::UP, false}}, std::nullopt,
+                               0.0, 1.5),
                  std::invalid_argument);
 }

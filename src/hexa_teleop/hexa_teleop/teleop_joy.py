@@ -252,8 +252,12 @@ class TeleopJoyNode(Node):
         self._last_buttons_for_log: tuple[int, ...] = ()
 
         self._sub_joy = self.create_subscription(Joy, "/joy", self._on_joy, 10)
+        # TRANSIENT_LOCAL to match hexa_locomotion's latched publisher:
+        # /gait/state publishes on change only, so a late-joining teleop
+        # would otherwise wait for the next state change to learn the state.
+        state_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._sub_gait_state = self.create_subscription(
-            String, "/gait/state", self._on_gait_state, 10
+            String, "/gait/state", self._on_gait_state, state_qos
         )
         # Arbitration: when web teleop is running, /teleop/owner carries
         # the current owner ("gamepad" default, "web" when the webapp has

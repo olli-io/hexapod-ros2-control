@@ -8,11 +8,20 @@ namespace hexa::display {
 
 FaceAnimation::FaceAnimation(std::string name, double period_s,
                              std::vector<FaceAnimationStep> steps,
-                             std::optional<std::pair<double, double>> repeat_range_s)
+                             std::optional<std::pair<double, double>> repeat_range_s,
+                             double gaze_ease_s, double gaze_scale)
     : name_(std::move(name)),
       period_s_(period_s),
       steps_(std::move(steps)),
-      repeat_range_s_(repeat_range_s) {
+      repeat_range_s_(repeat_range_s),
+      gaze_ease_s_(gaze_ease_s),
+      gaze_scale_(gaze_scale) {
+    if (gaze_ease_s_ < 0.0) {
+        throw std::invalid_argument(name_ + ": gaze_ease_s must be >= 0");
+    }
+    if (gaze_scale_ <= 0.0 || gaze_scale_ > 1.0) {
+        throw std::invalid_argument(name_ + ": gaze_scale must be in (0, 1]");
+    }
     if (steps_.empty()) {
         throw std::invalid_argument(name_ + ": animation needs at least one step");
     }
@@ -69,14 +78,17 @@ dueSteps(const FaceAnimation& animation, double elapsed_s, std::int64_t fired_co
 }
 
 const FaceAnimation& breathing() {
+    // gaze_ease_s matches the 1.2 s step spacing, so the dip and the return
+    // chain into one continuous motion; the tail to the 4.8 s period rests the
+    // eyes at center between breaths. Half-amplitude keeps the dip a breath,
+    // not a glance at the floor.
     static const FaceAnimation kBreathing(
         "breathing", 4.8,
         {
-            {0.0, GazeDirection::UP, false},
+            {0.0, GazeDirection::DOWN, false},
             {1.2, GazeDirection::CENTER, false},
-            {2.4, GazeDirection::DOWN, false},
-            {3.6, GazeDirection::CENTER, false},
-        });
+        },
+        std::nullopt, 1.2, 0.5);
     return kBreathing;
 }
 

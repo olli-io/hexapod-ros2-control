@@ -140,7 +140,10 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
     if (!in.animation_mode.empty()) {
         return {config.animation_expression, gaze};
     }
-    Expression expression = Expression::NEUTRAL;
+    // No /gait/state heard yet: the robot boots folded, so stay asleep until
+    // the controller reports otherwise. An unknown state string stays NEUTRAL.
+    Expression expression =
+        in.gait_state ? Expression::NEUTRAL : Expression::SLEEPY;
     if (in.gait_state) {
         const auto it = config.expression_map.find(*in.gait_state);
         if (it != config.expression_map.end()) {
@@ -158,7 +161,9 @@ std::optional<std::string> selectFaceAnimation(const PolicyInputs& in,
     if (!in.animation_mode.empty()) {
         return std::nullopt;
     }
-    if (!in.gait_state) {
+    // The sleeping face breathes: while the stack is not up yet (no /gait/state
+    // heard) or the robot is folded, run the slow breathing drift.
+    if (!in.gait_state || *in.gait_state == "folded") {
         return std::string("breathing");
     }
     if (gaitStateIn(in.gait_state, idlingGaitStates()) && cmdVelIsZero(in) &&
