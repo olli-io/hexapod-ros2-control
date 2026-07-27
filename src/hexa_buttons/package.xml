@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hexa_buttons</name>
+  <version>0.0.1</version>
+  <description>
+    Front-panel GPIO buttons on the Raspberry Pi: battery/address and Bluetooth
+    info screens on the face's OLED, and the pairing-scan request behind them.
+  </description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+
+  <!-- The GPIO layer. Documentation rather than machinery: nothing in this
+       repo runs `rosdep install` (deps are hand-listed in the Dockerfiles), and
+       these are not rosdep keys, so a future `rosdep install` would have to
+       skip them explicitly. Installed by robot.Dockerfile's runtime stage; the
+       sim image deliberately lacks them, which is what keeps the test suites
+       honest about importing only the pure modules. -->
+  <exec_depend>python3-gpiozero</exec_depend>
+  <exec_depend>python3-lgpio</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -11,7 +11,7 @@ display_node:
 
     # Gait-state → expression map. One dotted param per canonical gait
     # state (rclpy has no string-map parameter type). Valid values:
-    # neutral, happy, sleepy, dead, greedy, woozy, angry, love.
+    # neutral, happy, sleepy, dead, greedy, woozy, angry, love, scanning.
     expression_map.folded: sleepy
     expression_map.initialize: neutral
     expression_map.stand: neutral
@@ -23,6 +23,13 @@ display_node:
 
     # Expression while a posture animation mode is active.
     animation_expression: woozy
+
+    # Expression while hexa_buttons reports a Bluetooth pairing scan on
+    # /bluetooth/scanning (a 3 s hold on the Bluetooth button). `scanning` is
+    # the only animated expression — two spinners on the neutral eyes' ring —
+    # and it outranks every other rule in the policy, including a flat pack:
+    # the operator asked for it by hand and is watching the panel for it.
+    scanning_expression: scanning
 
     # Battery overrides: warning shows only when idle, critical always.
     battery_topic: /hexa_hardware_aux/battery_state

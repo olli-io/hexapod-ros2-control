@@ -23,10 +23,17 @@ constexpr int kGazeMaxY = 12;
 // Receives one pixel, already clipped to [0,kW)×[0,kH).
 using PixelSink = void (*)(void* ctx, int x, int y);
 
+// Arc of the NEUTRAL ring drawn by SCANNING, in radians. A shade under a
+// third of a turn — long enough to read as a spinner, short enough that the
+// gap is unmistakable.
+constexpr float kSpinSweepRad = 1.9f;
+
 // Draw one eye centered at cx. lid: 1 = open, ~0.08 = shut (blink squash
 // toward kCY). (gx,gy) is the gaze offset, applied at the pixel level so it
 // composes with the lid transform. rightEye only matters for ANGRY (mirrored).
+// phase is the spinner angle in [0,1) — SCANNING is the only expression that
+// reads it; every other one is a pure function of the arguments before it.
 void drawEye(Expression e, bool rightEye, int cx, float lid, int gx, int gy,
-             PixelSink sink, void* ctx);
+             float phase, PixelSink sink, void* ctx);
 
 }  // namespace eyes

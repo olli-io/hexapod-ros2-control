@@ -3,9 +3,10 @@
 // reusing the firmware's platform-free eye animation core (EyeAnim + EyeRaster).
 //
 // A pure sink of robot state: it subscribes to the gait engine state, the body
-// velocity command, the user body pose, the posture animation mode, and the
-// battery state, and drives the renderer target directly — the policy half and
-// the render half share one process, so there is no /display/* topic hop.
+// velocity command, the user body pose, the posture animation mode, the
+// battery state, and the Bluetooth pairing state, and drives the renderer
+// target directly — the policy half and the render half share one process, so
+// there is no /display/* topic hop.
 //
 // Text mode: a non-empty /display/text message replaces the eyes with the
 // message (Pixel Operator font, word-wrapped, centered); an empty message
@@ -25,6 +26,7 @@
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include "EyeAnim.h"
@@ -55,9 +57,12 @@ void pixelSink(void* ctx, int x, int y) {
 
 // Exact equality is intended: drawEye is a pure function of these fields, so
 // bit-identical frames rasterize to identical pixels. EyeAnim emits a constant
-// frame while idle (lid == 1.0f, settled integer gaze), so this reliably fires.
+// frame while idle (lid == 1.0f, settled integer gaze, phase 0), so this
+// reliably fires. SCANNING steps its phase in discrete jumps, so the spinner
+// redraws once per step rather than once per render tick.
 bool sameFrame(const eyes::AnimFrame& a, const eyes::AnimFrame& b) {
-    return a.expr == b.expr && a.lid == b.lid && a.gx == b.gx && a.gy == b.gy;
+    return a.expr == b.expr && a.lid == b.lid && a.gx == b.gx && a.gy == b.gy &&
+           a.phase == b.phase;
 }
 
 rcl_interfaces::msg::ParameterDescriptor readOnly(const std::string& desc) {
@@ -126,6 +131,7 @@ public:
             "battery_topic", "/hexa_hardware_aux/battery_state");
         declare_parameter<std::string>("battery_warning_expression", "sleepy");
         declare_parameter<std::string>("battery_critical_expression", "dead");
+        declare_parameter<std::string>("scanning_expression", "scanning");
         declare_parameter<double>("battery_warning_v", 0.0);
         declare_parameter<double>("battery_critical_v", 0.0);
         declare_parameter<double>("battery_hysteresis_v", 0.3);
@@ -147,6 +153,7 @@ public:
         _config.animation_expression = parseExpressionParam("animation_expression");
         _config.battery_warning_expression = parseExpressionParam("battery_warning_expression");
         _config.battery_critical_expression = parseExpressionParam("battery_critical_expression");
+        _config.scanning_expression = parseExpressionParam("scanning_expression");
         _config.gaze_deadband = get_parameter("gaze_deadband").as_double();
         _config.gaze_exit_ratio = get_parameter("gaze_exit_ratio").as_double();
         _config.gaze_wz_weight = get_parameter("gaze_wz_weight").as_double();
@@ -202,6 +209,13 @@ public:
         _sub_text = create_subscription<std_msgs::msg::String>(
             "/display/text", text_qos,
             [this](const std_msgs::msg::String& m) { _display_text = m.data; });
+        // Pairing state from hexa_buttons. transient_local so a display restart
+        // mid-scan comes back up wearing the spinners rather than the face.
+        rclcpp::QoS scanning_qos(1);
+        scanning_qos.transient_local();
+        _sub_scanning = create_subscription<std_msgs::msg::Bool>(
+            "/bluetooth/scanning", scanning_qos,
+            [this](const std_msgs::msg::Bool& m) { _bluetooth_scanning = m.data; });
 
         // Policy tick on the node clock (sim-time aware). The renderer eases gaze
         // and blinks autonomously, so a low rate suffices.
@@ -260,6 +274,7 @@ private:
         inputs.yaw = _body_pose.yaw;
         inputs.battery_low = battery.low;
         inputs.battery_critical = battery.critical;
+        inputs.bluetooth_scanning = _bluetooth_scanning;
 
         _last_target = decide(inputs, _config, _last_target);
         const FaceAnimation* animation = _runner.update(
@@ -306,8 +321,10 @@ private:
 
         _panel.clearBuffer();
         u8g2_t* g = _panel.u8g2();
-        eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, pixelSink, g);
-        eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, pixelSink, g);
+        eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, f.phase,
+                      pixelSink, g);
+        eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, f.phase,
+                      pixelSink, g);
         _panel.present();  // flushes over SPI only if the pixels changed
     }
 
@@ -335,6 +352,7 @@ private:
     std::string _animation_mode;
     std::optional<double> _battery_voltage;
     std::string _display_text;
+    bool _bluetooth_scanning = false;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gait;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr _sub_vel;
@@ -342,6 +360,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_animation;
     rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr _sub_battery;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_text;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr _sub_scanning;
     rclcpp::TimerBase::SharedPtr _policy_timer;
     rclcpp::TimerBase::SharedPtr _render_timer;
 };

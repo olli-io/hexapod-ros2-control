@@ -1,0 +1,92 @@
+button_node:
+  ros__parameters:
+    # Master switch, read by robot.launch.py: set to false to bring the stack
+    # up without the front-panel buttons (none fitted, or the header pins are
+    # wanted for something else).
+    enabled: true
+
+    # --- Wiring ---
+    #
+    # Two momentary switches, each between its BCM line and ground, held high by
+    # the SoC's internal pull-up (active_low + bias_pull_up below). No external
+    # resistor needed.
+    #
+    # GPIO5/GPIO6 (physical pins 29/31, ground on 30 and 34) are deliberately
+    # clear of everything else the robot claims on the header: SPI0 on 8-11
+    # (the SH1122 face), the header UART on 14/15 (the Servo2040 link), PWM0 on
+    # 18 (the buzzer), 24/25 (the panel's DC/RST), and — the reason they are not
+    # 2/3 — i2c1 on 2/3, so an I2C peripheral can still be added later.
+    #
+    # Same character device as hexa_display's control lines; the two nodes
+    # request different lines on it, which the kernel arbitrates per line.
+    # This is the CONTAINER-side path (docker-compose.robot.yaml maps whatever
+    # ${GPIO_CHIP} the host calls it onto this fixed node), and the trailing
+    # number is what gpiozero's lgpio pin factory is pinned to.
+    gpio_chip: "/dev/gpiochip0"
+    info_line: 5 # battery percentage + web teleop address
+    bluetooth_line: 6 # controller status; hold to pair
+    #
+    # These two collapse onto gpiozero's pull_up/active_state pair, which are
+    # mutually constrained (see pull_kwargs in screen_logic.py):
+    #   true  + true   -> pull_up: True    switch to ground, SoC pull-up
+    #   false + false  -> pull_up: False   switch to 3V3, SoC pull-down
+    #   true  + false  -> external pull-up, no SoC bias
+    #   false + true   -> rejected at startup: a pull-up holds the line high,
+    #                     so an active-high button would read as always pressed.
+    active_low: true # button shorts the line to ground
+    bias_pull_up: true # enable the SoC's internal pull-up
+
+    # --- Timing ---
+    #
+    # Nothing is polled: gpiozero delivers edges, so the buttons themselves
+    # cost nothing between presses. This is the housekeeping tick that runs the
+    # screen timeout, the scan timeout, and the ~1 Hz battery/address re-render
+    # — and it drains the event queue the GPIO threads write to, so it also
+    # bounds how long a press takes to reach the panel (one tick, 50 ms).
+    tick_rate_hz: 20.0
+    # Passed to gpiozero's Button(bounce_time=...): a level has to survive this
+    # long to count as a real edge. Applied below userspace.
+    debounce_s: 0.03
+    # Passed to Button(hold_time=...): the hold on the Bluetooth button that
+    # starts a pairing scan. The bluetooth screen advertises this same number,
+    # so the two can never disagree.
+    hold_s: 3.0
+    # An info screen hands the panel back to the face this long after it went
+    # up. Pressing the same button again dismisses it early; pressing the other
+    # one swaps screens (and restarts the clock).
+    screen_timeout_s: 6.0
+    # Backstop for a pairing scan that finds nothing. A successful scan ends
+    # earlier — a non-empty /bluetooth/status from the scanning utility means
+    # it paired. Either button cancels one at any time.
+    scan_timeout_s: 30.0
+
+    # --- Battery screen ---
+    #
+    # Same publisher hexa_display's face policy reads.
+    battery_topic: /hexa_hardware_aux/battery_state
+    # Linear voltage -> percentage map. 2S LiPo: 3.3 V/cell empty, 4.2 V/cell
+    # full. This drives the NUMBER ON THE SCREEN ONLY — it is not a safety
+    # threshold. The undervoltage ladder that beeps, folds and cuts the servo
+    # rail is `battery:` in hexa_description/config/hardware.yaml, and the
+    # expressions a weak pack puts on the face are battery_warning_v /
+    # battery_critical_v in hexa_display/config/display.yaml.
+    #
+    # Note the pack reading itself comes through the Servo2040's voltage
+    # divider, whose scale is uncalibrated on this build — measure against a
+    # meter before trusting the percentage.
+    battery_empty_v: 6.6
+    battery_full_v: 8.4
+
+    # Port shown after the address. robot.launch.py overrides this with
+    # `server.port` from hexa_webteleop's webteleop.yaml, which is the source of
+    # truth; the value here is only the fallback for a hand-launched node.
+    control_port: 8080
+    # Interfaces to prefer when picking the address to show, in order. Anything
+    # not listed is used only if none of these has an IPv4 address.
+    ip_interfaces: ["wlan0", "eth0"]
+
+    # Separator between a label and its value. ASCII on purpose: the display's
+    # bundled Pixel Operator font covers ASCII + Latin-1 only, so a U+2192
+    # arrow renders blank. To use one, add the codepoint to codepoints() in
+    # shared/display_core/tools/gen_font.py and regenerate hexa_text_font.c.
+    label_arrow: "->"

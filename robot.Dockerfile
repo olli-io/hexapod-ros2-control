@@ -23,6 +23,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Gazebo deps (ros-gz, gz-ros2-control) do not need to be installed here.
 # build-essential, cmake, git and colcon come baked into ros-base; only the
 # ROS/apt deps the base does *not* carry are listed explicitly.
+# Asymmetry to note: python3-gpiozero / python3-lgpio are installed in the
+# runtime stage only. Building an ament_python package never imports it, so the
+# builder has no use for them and they would only pad this layer.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-ament-cmake \
         ros-jazzy-ament-cmake-gtest \
@@ -78,6 +81,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # compilers, no headers, no Gazebo, no GUI. Each ros-jazzy-* below pulls its
 # own transitive runtime deps, so ros-core carries nothing it doesn't need.
 # yaml-cpp is the runtime .so the hexa_hardware plugin links against.
+# python3-gpiozero + python3-lgpio drive hexa_buttons' two front-panel GPIO
+# buttons. lgpio is the chardev-based backend; gpiozero >= 2.0 is what carries
+# Pi 5 board data (noble ships 2.0.1). Both live in universe.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libyaml-cpp0.8 \
         libusb-1.0-0 \
@@ -85,6 +91,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-serial \
         python3-yaml \
         python3-aiohttp \
+        python3-gpiozero \
+        python3-lgpio \
         ros-jazzy-ament-index-cpp \
         ros-jazzy-controller-manager \
         ros-jazzy-hardware-interface \
@@ -98,6 +106,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-sensor-msgs \
         ros-jazzy-xacro \
     && rm -rf /var/lib/apt/lists/*
+
+# Belt and braces. hexa_buttons already passes an explicit LGPIOFactory, so this
+# changes nothing today — but gpiozero's default factory search ends in
+# `native`, which maps BCM283x registers directly and on a Pi 5's RP1 reads
+# garbage rather than failing. Pinning it here means any future gpiozero use in
+# this image cannot land there silently.
+ENV GPIOZERO_PIN_FACTORY=lgpio
 
 WORKDIR /workspace
 

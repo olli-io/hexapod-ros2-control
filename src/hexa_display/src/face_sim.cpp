@@ -33,6 +33,7 @@
 #include <hexa_interfaces/msg/body_pose.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include "EyeAnim.h"
@@ -210,6 +211,7 @@ public:
             "battery_topic", "/hexa_hardware_aux/battery_state");
         declare_parameter<std::string>("battery_warning_expression", "sleepy");
         declare_parameter<std::string>("battery_critical_expression", "dead");
+        declare_parameter<std::string>("scanning_expression", "scanning");
         declare_parameter<double>("battery_warning_v", 0.0);
         declare_parameter<double>("battery_critical_v", 0.0);
         declare_parameter<double>("battery_hysteresis_v", 0.3);
@@ -230,6 +232,7 @@ public:
         _config.animation_expression = parseExpressionParam("animation_expression");
         _config.battery_warning_expression = parseExpressionParam("battery_warning_expression");
         _config.battery_critical_expression = parseExpressionParam("battery_critical_expression");
+        _config.scanning_expression = parseExpressionParam("scanning_expression");
         _config.gaze_deadband = get_parameter("gaze_deadband").as_double();
         _config.gaze_exit_ratio = get_parameter("gaze_exit_ratio").as_double();
         _config.gaze_wz_weight = get_parameter("gaze_wz_weight").as_double();
@@ -271,6 +274,12 @@ public:
         _sub_text = create_subscription<std_msgs::msg::String>(
             "/display/text", text_qos,
             [this](const std_msgs::msg::String& m) { _display_text = m.data; });
+        // Pairing state from hexa_buttons; transient_local, same as the panel node.
+        rclcpp::QoS scanning_qos(1);
+        scanning_qos.transient_local();
+        _sub_scanning = create_subscription<std_msgs::msg::Bool>(
+            "/bluetooth/scanning", scanning_qos,
+            [this](const std_msgs::msg::Bool& m) { _bluetooth_scanning = m.data; });
 
         _policy_timer = create_wall_timer(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -321,6 +330,7 @@ private:
         inputs.yaw = _body_pose.yaw;
         inputs.battery_low = battery.low;
         inputs.battery_critical = battery.critical;
+        inputs.bluetooth_scanning = _bluetooth_scanning;
 
         _last_target = decide(inputs, _config, _last_target);
         const FaceAnimation* animation = _runner.update(
@@ -354,6 +364,7 @@ private:
     std::string _animation_mode;
     std::optional<double> _battery_voltage;
     std::string _display_text;
+    bool _bluetooth_scanning = false;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gait;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr _sub_vel;
@@ -361,6 +372,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_animation;
     rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr _sub_battery;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_text;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr _sub_scanning;
     rclcpp::TimerBase::SharedPtr _policy_timer;
 };
 
@@ -416,8 +428,10 @@ int main(int argc, char** argv) {
                 drawnText.clear();
                 const eyes::AnimFrame f = node->frame(nowMs());
                 memset(g_fb, 0, sizeof(g_fb));
-                eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, sink, nullptr);
-                eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, sink, nullptr);
+                eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy,
+                              f.phase, sink, nullptr);
+                eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy,
+                              f.phase, sink, nullptr);
                 drawFrame(node->target());
             }
             if (!pollInput(*node)) break;

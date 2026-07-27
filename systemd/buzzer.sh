@@ -9,7 +9,9 @@
 # Tunes: boot, up, shutdown, fault, undervolt (see tune_melody below).
 #
 # Dependency-free by design: POSIX sh + the kernel's sysfs PWM interface, no
-# Python, no gpiozero, no packages to install. The boot tune runs long before
+# Python, no gpiozero, no packages to install on the host. (hexa_buttons does
+# use gpiozero, but that lives in the container, which this script never
+# touches.) The boot tune runs long before
 # Docker, the container, or the servo rail exist, so it is the earliest "the Pi
 # is alive" signal the robot has.
 #

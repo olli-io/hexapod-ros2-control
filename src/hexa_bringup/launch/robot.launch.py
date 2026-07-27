@@ -1,4 +1,4 @@
-"""Real-robot bringup: controller manager, consolidated locomotion node, display.
+"""Real-robot bringup: controller manager, locomotion node, display, buttons.
 
     ros2 launch hexa_bringup robot.launch.py
 
@@ -14,7 +14,10 @@ takes a gamepad Start or /gait/initialize. `hexa robot down` safe-stops
 import os
 
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -43,6 +46,36 @@ def _display_params() -> tuple[dict, bool]:
     )
     with open(path) as f:
         params = yaml.safe_load(f)["display_node"]["ros__parameters"]
+    return params, bool(params.pop("enabled", True))
+
+
+def _button_params() -> tuple[dict, bool]:
+    """hexa_buttons' params and the `enabled` gate.
+
+    `control_port` is overridden from hexa_webteleop's own config: the port the
+    battery screen advertises has to be the port the server actually binds, and
+    webteleop.yaml is the source of truth for that.
+    """
+    path = os.path.join(
+        get_package_share_directory("hexa_buttons"), "config", "buttons.yaml"
+    )
+    with open(path) as f:
+        params = yaml.safe_load(f)["button_node"]["ros__parameters"]
+
+    try:
+        webteleop = os.path.join(
+            get_package_share_directory("hexa_webteleop"), "config", "webteleop.yaml"
+        )
+        with open(webteleop) as f:
+            server = yaml.safe_load(f).get("server") or {}
+        if "port" in server:
+            params["control_port"] = int(server["port"])
+    except (PackageNotFoundError, OSError, KeyError, TypeError, ValueError):
+        # No web teleop installed, or its config moved: the screen falls back to
+        # buttons.yaml's port. A stale port on a diagnostic screen must not be
+        # able to stop the robot from coming up.
+        pass
+
     return params, bool(params.pop("enabled", True))
 
 
@@ -136,6 +169,20 @@ def _bringup(context, *args, **kwargs):
             executable="display_node",
             output="screen",
             parameters=[display_params],
+        ))
+
+    # Front-panel buttons: two GPIO switches that put the battery/address and
+    # Bluetooth screens on the face's panel, and request a pairing scan. It
+    # reaches the display over /display/text and /bluetooth/scanning, so it is
+    # independent of whether the face itself is enabled above (with no display
+    # fitted the topics simply go unread).
+    button_params, buttons_enabled = _button_params()
+    if buttons_enabled:
+        actions.append(Node(
+            package="hexa_buttons",
+            executable="button_node",
+            output="screen",
+            parameters=[button_params],
         ))
 
     return actions

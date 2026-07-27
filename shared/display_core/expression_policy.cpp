@@ -130,6 +130,11 @@ int quantizeAxis(double value, int prev_sign, double deadband, double exit_ratio
 
 DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
                      const DisplayTarget& prev) {
+    // Gaze CENTER: the spinners turn about the eye centers, and a gaze offset
+    // would slide the whole ring off-axis mid-rotation.
+    if (in.bluetooth_scanning) {
+        return {config.scanning_expression, GazeDirection::CENTER};
+    }
     if (in.battery_critical) {
         return {config.battery_critical_expression, GazeDirection::CENTER};
     }
@@ -155,6 +160,11 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
 
 std::optional<std::string> selectFaceAnimation(const PolicyInputs& in,
                                                const PolicyConfig& config) {
+    // The spinners own the gaze while scanning; a drift animation would fight
+    // them for it.
+    if (in.bluetooth_scanning) {
+        return std::nullopt;
+    }
     if (in.battery_critical || in.battery_low) {
         return std::nullopt;
     }

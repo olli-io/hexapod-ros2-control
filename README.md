@@ -65,6 +65,7 @@ nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 - [`hexa_description/config/hardware.yaml`](src/hexa_description/config/hardware.yaml) — Servo 2040 wiring, electrical clamps, ADC scales. Real-robot only.
 - [`hexa_description/config/servo_calibration.yaml`](src/hexa_description/config/servo_calibration.yaml) — per-servo endpoint pulse-width calibration (`calibration_values`, indexed by pin). Real-robot only.
 - [`hexa_display/config/display.yaml`](src/hexa_display/config/display.yaml) — face: enable switch, gait-state → expression map, gaze / battery knobs, and the SH1122 SPI/GPIO pins, render rate, headless switch.
+- [`hexa_buttons/config/buttons.yaml`](src/hexa_buttons/config/buttons.yaml) — front-panel GPIO buttons: enable switch, line numbers and wiring polarity, debounce / hold / timeout clocks, and the pack voltage → percentage span shown on the battery screen. Real-robot only.
 - [`hexa_simulation/config/ros2_controllers.yaml`](src/hexa_simulation/config/ros2_controllers.yaml) and [`hexa_bringup/config/ros2_controllers.yaml`](src/hexa_bringup/config/ros2_controllers.yaml) — controller-manager rate and joint ordering, for sim and real-robot respectively.
 
 ## Design principles
@@ -87,6 +88,7 @@ Colcon workspace; all packages live under `src/`. Build type in parentheses.
 - `hexa_teleop` (ament_python) — joystick/keyboard → `cmd_vel` and `/body/pose`.
 - `hexa_webteleop` (ament_python) — HTTP + WebSocket server for phone/tablet control; arbitrates with the gamepad over `/teleop/owner`.
 - `hexa_display` (ament_cmake) — face: maps robot state through an expression/gaze policy and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim), in one process. Pure sink; nothing imports it. Owns the Linux SH1122 panel/SPI/GPIO driver + the rclcpp nodes; the shared policy + eye core live in `shared/display_core`.
+- `hexa_buttons` (ament_python) — front-panel GPIO buttons: battery/address and Bluetooth screens on the face's panel, and the pairing-scan request behind them. Event-driven via gpiozero on a pinned lgpio pin factory (no polling). Reaches the face over `/display/text` and `/bluetooth/scanning` rather than importing it. Real-robot only.
 - `hexa_simulation` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
 - `hexa_bringup` (ament_cmake) — top-level launch files: `robot.launch.py`, `sim.launch.py`.
 
@@ -96,6 +98,7 @@ Each arrow is "depends on" — the higher-level package imports the lower one (o
 
 - Locomotion: `hexa_teleop` → `cmd_vel` (+ command topics) → `hexa_locomotion` → `/joint_group_position_controller/commands` → `hexa_hardware` → Servo 2040 / Gazebo. `hexa_locomotion` runs the whole velocity → gait → posture → compose/IK pipeline in-process (compiling `shared/motion_core`), so there is no separate gait/posture/kinematics node chain.
 - Web teleop: `hexa_webteleop` → `hexa_teleop` (shared mapping) → `cmd_vel` / `/body/pose`
-- `hexa_bringup` → `hexa_locomotion`, `hexa_display` (composes the launch)
+- `hexa_bringup` → `hexa_locomotion`, `hexa_display`, `hexa_buttons` (composes the launch)
 - Face: `hexa_display` subscribes to `hexa_locomotion`'s `/gait/state` (+ hardware topics) and rasterizes the eyes on the SH1122 OLED in one process. Nothing else depends on it.
+- Buttons: `hexa_buttons` → `/display/text` + `/bluetooth/scanning` → `hexa_display`. One-way and topic-only, so the face stays a pure sink; a future Bluetooth scanning utility plugs in at `/bluetooth/status`.
 - Leaves: `hexa_description`, `hexa_interfaces`, `hexa_simulation`.

@@ -2,8 +2,13 @@
 // panel runs headless (full buffer/dirty pipeline, no SPI/GPIO) and the eye
 // core is driven directly, mirroring face_node's renderTick.
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <iterator>
+#include <set>
 #include <string>
+#include <utility>
 
 #include <gtest/gtest.h>
 
@@ -25,6 +30,12 @@ face::PanelConfig headlessCfg() {
 void pixelSink(void* ctx, int x, int y) {
     u8g2_DrawPixel(static_cast<u8g2_t*>(ctx),
                    static_cast<u8g2_uint_t>(x), static_cast<u8g2_uint_t>(y));
+}
+
+// Collects lit pixels instead of drawing them — for asserting on shape rather
+// than on the framebuffer.
+void setSink(void* ctx, int x, int y) {
+    static_cast<std::set<std::pair<int, int>>*>(ctx)->insert({x, y});
 }
 
 uint32_t zeroRand() { return 0; }
@@ -68,17 +79,20 @@ TEST(Sh1122Panel, DirtyFlushSkipsUnchangedFrames) {
     u8g2_t* g = panel.u8g2();
 
     panel.clearBuffer();
-    eyes::drawEye(Expression::NEUTRAL, false, eyes::kEyeLX, 1.0f, 0, 0, pixelSink, g);
+    eyes::drawEye(Expression::NEUTRAL, false, eyes::kEyeLX, 1.0f, 0, 0, 0.0f,
+                  pixelSink, g);
     EXPECT_TRUE(panel.present());  // first draw flushes
     EXPECT_EQ(panel.flushCount(), 1u);
 
     panel.clearBuffer();
-    eyes::drawEye(Expression::NEUTRAL, false, eyes::kEyeLX, 1.0f, 0, 0, pixelSink, g);
+    eyes::drawEye(Expression::NEUTRAL, false, eyes::kEyeLX, 1.0f, 0, 0, 0.0f,
+                  pixelSink, g);
     EXPECT_FALSE(panel.present());  // identical frame — no flush
     EXPECT_EQ(panel.flushCount(), 1u);
 
     panel.clearBuffer();
-    eyes::drawEye(Expression::HAPPY, false, eyes::kEyeLX, 1.0f, 0, 0, pixelSink, g);
+    eyes::drawEye(Expression::HAPPY, false, eyes::kEyeLX, 1.0f, 0, 0, 0.0f,
+                  pixelSink, g);
     EXPECT_TRUE(panel.present());  // changed frame flushes
     EXPECT_EQ(panel.flushCount(), 2u);
 }
@@ -95,8 +109,10 @@ TEST(FaceRender, FlushesOnChangeThenSettles) {
     auto tick = [&](const RenderState& target, uint32_t nowMs) {
         const eyes::AnimFrame f = anim.update(target, nowMs);
         panel.clearBuffer();
-        eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, pixelSink, g);
-        eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, pixelSink, g);
+        eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, f.phase,
+                      pixelSink, g);
+        eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, f.phase,
+                      pixelSink, g);
         panel.present();
     };
 
@@ -110,4 +126,64 @@ TEST(FaceRender, FlushesOnChangeThenSettles) {
     // (~2.2 s): the settled face must not flush again.
     for (uint32_t t = 1016; t <= 1500; t += 16) tick(happy, t);
     EXPECT_EQ(panel.flushCount(), settled);
+}
+
+// SCANNING is the one expression that never settles: the spinner phase keeps
+// stepping, so the panel keeps flushing for as long as it is on screen. This is
+// the counterpart of FlushesOnChangeThenSettles above.
+TEST(FaceRender, ScanningKeepsFlushing) {
+    face::Sh1122Panel panel;
+    ASSERT_TRUE(panel.begin(headlessCfg()));
+    u8g2_t* g = panel.u8g2();
+    eyes::EyeAnim anim(&zeroRand);
+
+    const RenderState scanning{Expression::SCANNING, GazeDirection::CENTER};
+    auto tick = [&](uint32_t nowMs) {
+        const eyes::AnimFrame f = anim.update(scanning, nowMs);
+        panel.clearBuffer();
+        eyes::drawEye(f.expr, false, eyes::kEyeLX, f.lid, f.gx, f.gy, f.phase,
+                      pixelSink, g);
+        eyes::drawEye(f.expr, true, eyes::kEyeRX, f.lid, f.gx, f.gy, f.phase,
+                      pixelSink, g);
+        panel.present();
+    };
+
+    for (uint32_t t = 0; t <= 500; t += 16) tick(t);
+    const uint64_t spun = panel.flushCount();
+    for (uint32_t t = 516; t <= 1000; t += 16) tick(t);
+    EXPECT_GT(panel.flushCount(), spun);
+}
+
+// The spinner is the NEUTRAL ring minus a gap: strictly fewer pixels, all of
+// them on the same circle, and the lit set sweeps round as the phase advances.
+TEST(EyeRaster, ScanningIsAnArcOfTheNeutralRing) {
+    auto pixels = [](Expression e, float phase) {
+        std::set<std::pair<int, int>> out;
+        eyes::drawEye(e, false, eyes::kEyeLX, 1.0f, 0, 0, phase, setSink, &out);
+        return out;
+    };
+    // Distance from the eye center, for "is this pixel on the ring's circle".
+    auto radius = [](const std::pair<int, int>& p) {
+        return std::hypot(p.first - eyes::kEyeLX, p.second - eyes::kCY);
+    };
+
+    const auto ring = pixels(Expression::NEUTRAL, 0.0f);
+    const auto arc0 = pixels(Expression::SCANNING, 0.0f);
+    const auto arc_half = pixels(Expression::SCANNING, 0.5f);
+
+    EXPECT_FALSE(arc0.empty());
+    EXPECT_LT(arc0.size(), ring.size());
+    // Same circle, same 3 px brush — the arc samples its own angle grid, so the
+    // tolerance is the brush width rather than pixel-exact set membership.
+    for (const auto& p : ring) EXPECT_NEAR(radius(p), 18.0, 2.0);
+    for (const auto& p : arc0) EXPECT_NEAR(radius(p), 18.0, 2.0);
+    for (const auto& p : arc_half) EXPECT_NEAR(radius(p), 18.0, 2.0);
+
+    // kSpinSweepRad is well under half a turn, so arcs half a turn apart share
+    // no pixel at all: the spinner really moves rather than pulsing in place.
+    ASSERT_LT(eyes::kSpinSweepRad, 3.14f);
+    std::set<std::pair<int, int>> both;
+    std::set_intersection(arc0.begin(), arc0.end(), arc_half.begin(), arc_half.end(),
+                          std::inserter(both, both.begin()));
+    EXPECT_TRUE(both.empty());
 }

@@ -11,6 +11,11 @@ struct AnimFrame {
     Expression expr;
     float      lid;
     int        gx, gy;
+    // Spinner angle in [0,1), advanced in discrete steps so that two frames of
+    // the same turn compare equal — that keeps the caller's "skip the raster
+    // when the frame is unchanged" check working. Always 0 unless the shown
+    // expression is SCANNING.
+    float      phase = 0.0f;
 };
 
 // Platform-free animation state machine on top of the target RenderState:
@@ -18,6 +23,7 @@ struct AnimFrame {
 //   - gaze eases to its target over 220 ms (easeOutCubic), or drifts over
 //     RenderState::gazeEaseMs (easeInOutSine) when that is non-zero
 //   - idle blinks fire autonomously every 2.2–5.2 s
+//   - SCANNING's spinner phase advances one step per frame slot
 // Randomness is injected so the same code runs on-device (esp_random) and
 // in the host simulator/tests (rand).
 class EyeAnim {
@@ -34,6 +40,7 @@ private:
     void  startBlink(uint32_t nowMs);
     float updateBlink(const RenderState& state, uint32_t nowMs);  // returns lid
     void  updateGaze(const RenderState& state, uint32_t nowMs);
+    float spinPhase(uint32_t nowMs) const;                        // SCANNING only
     uint32_t nextIdleDelay();
 
     RandFn _rand;

@@ -13,6 +13,13 @@ constexpr uint32_t kIdleMinMs  = 2200;  // idle blink: min interval...
 constexpr uint32_t kIdleRandMs = 3001;  // ...plus rand() % this
 constexpr float    kLidShut    = 0.92f; // lid travels 1 → 1-kLidShut → 1
 
+// SCANNING spinner. Quantized into kSpinSteps discrete angles so a settled
+// panel still skips redundant rasters/SPI flushes: at 30 steps per ~1 s turn
+// the arc moves ~12° a step, which reads as continuous rotation while costing
+// 30 frames a second rather than the render loop's 60.
+constexpr uint32_t kSpinSteps    = 30;
+constexpr uint32_t kSpinStepMs   = 33;  // ~0.99 s per full turn
+
 float easeOutCubic(float t) { return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
 
 // Starts and ends at rest: back-to-back drift steps chain into one continuous
@@ -97,11 +104,19 @@ void EyeAnim::updateGaze(const RenderState& state, uint32_t nowMs) {
     _gy = _gazeFromY + (_gazeToY - _gazeFromY) * e;
 }
 
+float EyeAnim::spinPhase(uint32_t nowMs) const {
+    return static_cast<float>((nowMs / kSpinStepMs) % kSpinSteps) / kSpinSteps;
+}
+
 AnimFrame EyeAnim::update(const RenderState& state, uint32_t nowMs) {
     const float lid = updateBlink(state, nowMs);
     updateGaze(state, nowMs);
+    // The spinner belongs to the expression actually on screen, not the target:
+    // the phase must stay 0 until the blink-through has swapped SCANNING in.
+    const float phase =
+        _shownExpr == Expression::SCANNING ? spinPhase(nowMs) : 0.0f;
     return {_shownExpr, lid,
-            static_cast<int>(lroundf(_gx)), static_cast<int>(lroundf(_gy))};
+            static_cast<int>(lroundf(_gx)), static_cast<int>(lroundf(_gy)), phase};
 }
 
 }  // namespace eyes

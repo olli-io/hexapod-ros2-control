@@ -21,6 +21,8 @@ image tarball, and run as a long-lived service.
   DC/RST/CS on GPIO), rendered directly by `hexa_display`.
 - Optional: passive buzzer on GPIO18 for the boot, shutdown, stack-up,
   over-current, and undervoltage tunes.
+- Optional: two momentary push buttons on GPIO5 / GPIO6 for the front-panel
+  info screens, read by `hexa_buttons`.
 
 Pi GPIO allocation, so nothing added later steals a line. All numbers are
 **BCM GPIO**, never header pin positions — the two differ on every Pi, and BCM
@@ -36,6 +38,10 @@ is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
 - **GPIO24, GPIO25** — the face's DC / RST control lines.
 - **GPIO18** — hardware PWM for the buzzer (RP1 PWM0 channel 2, alt function
   `a3`).
+- **GPIO5, GPIO6** — the front-panel buttons (`hexa_buttons`): info and
+  Bluetooth. Each switch goes between its line and ground; the SoC's internal
+  pull-up holds it high, so no external resistor is needed. Deliberately clear
+  of I²C1 below, so an IMU can still be added.
 - **GPIO2, GPIO3** — I²C1, free for an MPU6500 IMU.
 
 Watch out for **SPI1**, whose CE0 is GPIO18: putting a second SPI device on the
@@ -154,13 +160,42 @@ Without the display fitted, set `enabled: false` in
 node); otherwise `hexa_display` aborts at startup when it cannot open
 the panel.
 
+## 2d. Front-panel buttons (optional)
+
+Two momentary push buttons, each between its BCM line and ground:
+
+- **GPIO5** (physical pin 29, ground on 30) — battery percentage/voltage plus
+  the address for the web teleop UI.
+- **GPIO6** (physical pin 31, ground on 34) — connected-controller status; hold
+  3 s to request a Bluetooth pairing scan.
+
+No `config.txt` change and no extra compose entry: `hexa_buttons` reads the same
+`/dev/gpiochip0` the face already uses, so the device mapping and the `gpio`
+group from section 2c cover it. Wiring polarity, the line numbers and the
+timing are in `hexa_buttons`'s `config/buttons.yaml`.
+
+The node reads the lines with **gpiozero** on an explicitly pinned **lgpio** pin
+factory — edge-driven, so nothing is polled between presses. `python3-gpiozero`
+and `python3-lgpio` are installed by `robot.Dockerfile`'s runtime stage, which
+also bakes in `GPIOZERO_PIN_FACTORY=lgpio`: gpiozero's default factory search
+ends in `native`, which maps BCM283x registers directly and on a Pi 5's RP1
+reads garbage rather than failing, so it is never left to guess. gpiozero 2.0 or
+newer is required for Pi 5 board data — Ubuntu 24.04 ships 2.0.1.
+
+Both screens land on the face's panel, so they need the display fitted to be
+visible. Without the buttons fitted, set `enabled: false` in
+`hexa_buttons/config/buttons.yaml`; leaving it on with nothing wired is
+harmless — the node logs that it could not claim the lines and stays inert.
+
 ## 2d. Enable the buzzer PWM (optional)
 
 Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO18 (BCM)
 and **−** to GND; add a ~100 Ω resistor in series if it is too loud.
 
 Tunes are played by `systemd/buzzer.sh` — POSIX shell writing the kernel's
-sysfs PWM interface, with no Python, gpiozero, or any other package installed.
+sysfs PWM interface, with no Python, gpiozero, or any other package installed
+on the host. (The *container* does carry gpiozero, for `hexa_buttons`; that is
+a separate world, and the buzzer script deliberately depends on nothing.)
 It runs on the **Pi host**, never in the container, for two reasons: the boot
 tune has to chirp seconds after the kernel hands off, long before Docker and
 the ROS stack exist; and the container cannot reach the PWM at all — Docker

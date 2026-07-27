@@ -52,6 +52,19 @@ struct Raster {
         }
     }
 
+    // A slice of ring(), from a0 through a0+sweep. Same dot spacing as the
+    // full ring, so a spinner is visibly the NEUTRAL eye with a bite taken
+    // out of it rather than a differently-drawn shape.
+    void arc(float cx, float cy, float rx, float ry, float a0, float sweep) const {
+        ry = fmaxf(0.5f, ry);
+        const int n = static_cast<int>(
+            fmaxf(1.0f, ceilf((rx + ry) * 1.7f * sweep / (2.0f * kPi))));
+        for (int i = 0; i <= n; ++i) {
+            const float a = a0 + sweep * i / n;
+            dot(cx + rx * cosf(a), cy + ry * sinf(a));
+        }
+    }
+
     void fillEllipse(float cx, float cy, float rx, float ry) const {
         ry = fmaxf(0.5f, ry);
         for (int y = -static_cast<int>(ceilf(ry)); y <= ry; ++y)
@@ -98,7 +111,7 @@ Pt T(float x, float y, float lid) {
 namespace eyes {
 
 void drawEye(Expression e, bool rightEye, int cx, float lid, int gx, int gy,
-             PixelSink sink, void* ctx) {
+             float phase, PixelSink sink, void* ctx) {
     const Raster r{sink, ctx, gx, gy};
     const float  fcx = static_cast<float>(cx);
     Pt           pts[kQuadN + 1];
@@ -112,6 +125,9 @@ void drawEye(Expression e, bool rightEye, int cx, float lid, int gx, int gy,
         }
         case Expression::NEUTRAL:  // 0 0
             r.ring(fcx, kCY, 18, 18 * lid);
+            break;
+        case Expression::SCANNING:  // ( ) — NEUTRAL's ring, minus a gap, turning
+            r.arc(fcx, kCY, 18, 18 * lid, phase * 2.0f * kPi, kSpinSweepRad);
             break;
         case Expression::SLEEPY: {  // - -
             const Pt line[2] = {T(fcx - 22, 32, lid), T(fcx + 22, 32, lid)};

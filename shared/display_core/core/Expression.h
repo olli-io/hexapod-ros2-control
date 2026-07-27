@@ -3,14 +3,18 @@
 #include <stdint.h>
 
 enum class Expression : uint8_t {
-    NEUTRAL = 0,  // 0 0
-    HAPPY   = 1,  // ^ ^
-    SLEEPY  = 2,  // - -
-    DEAD    = 3,  // x x
-    GREEDY  = 4,  // $ $
-    WOOZY   = 5,  // ~ ~
-    ANGRY   = 6,  // > <
-    LOVE    = 7,  // ♥ ♥
+    NEUTRAL  = 0,  // 0 0
+    HAPPY    = 1,  // ^ ^
+    SLEEPY   = 2,  // - -
+    DEAD     = 3,  // x x
+    GREEDY   = 4,  // $ $
+    WOOZY    = 5,  // ~ ~
+    ANGRY    = 6,  // > <
+    LOVE     = 7,  // ♥ ♥
+    // The only animated expression: two spinners on the NEUTRAL ring, turning
+    // while the robot scans for a Bluetooth controller. Needs the per-frame
+    // phase that AnimFrame carries — every other expression is static.
+    SCANNING = 8,  // ( )
     _COUNT
 };
 

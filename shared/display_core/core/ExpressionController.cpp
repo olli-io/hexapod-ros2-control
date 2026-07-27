@@ -6,6 +6,7 @@
 namespace {
 constexpr const char* kExprNames[static_cast<size_t>(Expression::_COUNT)] = {
     "NEUTRAL", "HAPPY", "SLEEPY", "DEAD", "GREEDY", "WOOZY", "ANGRY", "LOVE",
+    "SCANNING",
 };
 constexpr const char* kGazeNames[static_cast<size_t>(GazeDirection::_COUNT)] = {
     "CENTER", "UP", "DOWN", "LEFT", "RIGHT",

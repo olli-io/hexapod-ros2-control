@@ -5,12 +5,17 @@
 // the renderer.
 //
 // Precedence (highest first):
-//   1. battery critical -> DEAD, gaze CENTER, unconditional.
-//   2. battery warning -> SLEEPY, but only when idle (cmd_vel ~ 0, gait state in
+//   1. bluetooth scanning -> SCANNING, gaze CENTER. Top of the ladder because
+//      it is the one state the operator asked for by hand (the pairing hold on
+//      the Bluetooth button): while they wait on the spinners, nothing else may
+//      take the panel — not even a flat pack, which they can read off the info
+//      screen anyway.
+//   2. battery critical -> DEAD, gaze CENTER, unconditional.
+//   3. battery warning -> SLEEPY, but only when idle (cmd_vel ~ 0, gait state in
 //      the idle set, no animation mode) — a warning must not mask the face
 //      mid-walk.
-//   3. animation mode non-empty -> the configured animation expression (WOOZY).
-//   4. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
+//   4. animation mode non-empty -> the configured animation expression (WOOZY).
+//   5. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
 //      heard yet -> SLEEPY (the robot boots folded and asleep).
 //
 // Gaze: the vertical axis always follows body pitch (nose up -> UP) — driving
@@ -57,6 +62,9 @@ struct PolicyInputs {
     double yaw = 0.0;
     bool battery_low = false;
     bool battery_critical = false;
+    // The robot is hunting for a Bluetooth controller (hexa_buttons' pairing
+    // hold, relayed on /bluetooth/scanning).
+    bool bluetooth_scanning = false;
 };
 
 struct PolicyConfig {
@@ -64,6 +72,7 @@ struct PolicyConfig {
     Expression animation_expression = Expression::WOOZY;
     Expression battery_warning_expression = Expression::SLEEPY;
     Expression battery_critical_expression = Expression::DEAD;
+    Expression scanning_expression = Expression::SCANNING;
     double gaze_deadband = 0.15;
     double gaze_exit_ratio = 0.6;
     double gaze_wz_weight = 1.0;
@@ -97,8 +106,8 @@ DisplayTarget decide(const PolicyInputs& inputs, const PolicyConfig& config,
 
 // Pick the face animation for this tick, or nullopt. Breathing runs while the
 // face sleeps — no gait state heard yet, or folded; idling runs while the
-// hexapod stands idle, level, and command-free. Battery flags and an active
-// posture animation mode suppress both.
+// hexapod stands idle, level, and command-free. Battery flags, an active
+// posture animation mode, and Bluetooth scanning suppress both.
 std::optional<std::string> selectFaceAnimation(const PolicyInputs& inputs,
                                                const PolicyConfig& config);
 

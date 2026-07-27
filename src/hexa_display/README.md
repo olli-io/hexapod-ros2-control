@@ -28,15 +28,23 @@ This package keeps only the ROS + Linux-panel code:
 
 ## Behavior
 
-- **Expression** — precedence: battery-critical (`dead`) > battery-warning
-  (`sleepy`, idle only) > animation mode (`woozy`) > per-gait-state map. Battery
-  thresholds ship disabled (0.0) until the ADC divider is calibrated.
+- **Expression** — precedence: Bluetooth scanning (`scanning`) >
+  battery-critical (`dead`) > battery-warning (`sleepy`, idle only) > animation
+  mode (`woozy`) > per-gait-state map. Battery thresholds ship disabled (0.0)
+  until the ADC divider is calibrated.
 - **Gaze** — vertical follows body pitch; horizontal follows `cmd_vel` when
-  walking or body tilt in pose mode, sign-quantized with hysteresis. `dead`
-  forces center.
+  walking or body tilt in pose mode, sign-quantized with hysteresis. `dead` and
+  `scanning` force center.
+- **`scanning`** — the one animated expression: the neutral eyes' ring with a
+  gap taken out of it, turning once a second. It runs while `hexa_buttons`
+  reports a pairing scan on `/bluetooth/scanning`, and it outranks everything
+  else because the operator asked for it by hand and is watching the panel for
+  it. `AnimFrame::phase` carries the angle; it is quantized into 30 steps a turn
+  so the dirty-flush skip still holds between steps.
 - **Face animations** — looping gaze/blink sequences: **breathing** until the
   first `/gait/state` arrives, **idling** look-around once idle/level/command-free.
-  Suppressed by battery warning, animation mode, `cmd_vel`, or a tilted pose.
+  Suppressed by battery warning, animation mode, Bluetooth scanning, `cmd_vel`,
+  or a tilted pose.
 - **Text mode** — a non-empty `/display/text` message replaces the eyes with the
   message text (vendored Pixel Operator 16 px font from `shared/display_core/fonts`,
   ASCII + Latin-1): hard-breaks on `\n`, word-wraps to the panel width, centers
@@ -55,9 +63,14 @@ This package keeps only the ROS + Linux-panel code:
 - `/gait/state` (`std_msgs/String`), `/cmd_vel` (`geometry_msgs/Twist`),
   `/body/pose` (`hexa_interfaces/BodyPose`), `/animation/mode` (`std_msgs/String`,
   transient_local depth 1), `/display/text` (`std_msgs/String`, transient_local
-  depth 1 — non-empty shows the text screen, empty returns the face), and a
-  battery topic (`sensor_msgs/BatteryState`, default
+  depth 1 — non-empty shows the text screen, empty returns the face),
+  `/bluetooth/scanning` (`std_msgs/Bool`, transient_local depth 1 — true wears
+  the spinners), and a battery topic (`sensor_msgs/BatteryState`, default
   `/hexa_hardware_aux/battery_state`, real robot only).
+
+`/display/text` and `/bluetooth/scanning` are both published by `hexa_buttons`
+(the front-panel GPIO buttons). That package depends on this one's topic names;
+nothing here depends on it, so the face stays a pure sink.
 
 ## Configuration
 
@@ -84,4 +97,5 @@ it, so the robot runtime is unaffected.
 
 `colcon test --packages-select hexa_display` (gtest, all headless):
 `test_expression_policy`, `test_face_animation`, `test_face_animation_runner`,
-`test_face` (name parity + panel dirty-flush + render settle).
+`test_face` (name parity + panel dirty-flush + render settle + the scanning
+spinner's geometry and its non-settling redraw).
