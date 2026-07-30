@@ -447,6 +447,12 @@ class ButtonNode(Node):
         self._published_scanning = scanning
         self._pub_scanning.publish(Bool(data=scanning))
 
+    def _publish_busy(self, busy: bool) -> None:
+        if self._published_busy == busy:
+            return
+        self._published_busy = busy
+        self._pub_busy.publish(Bool(data=busy))
+
 
 def main(args=None) -> None:
     rclpy.init(args=args)

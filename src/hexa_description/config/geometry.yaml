@@ -74,6 +74,6 @@ initial_pose:
     l_front_deg: 60 # 30° mount + 60° coxa → leg points at body-yaw 90°
     l_middle_deg: 0 # 90° mount + 0° coxa → leg points straight outward
   femur:
-    above_horizontal_deg: 95 # femur tucked steeply up
+    above_horizontal_deg: 90 # femur tucked up
   tibia:
-    interior_deg: 45 # knee folded tight
+    interior_deg: 70 # knee folded tight
