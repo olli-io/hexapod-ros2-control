@@ -50,6 +50,25 @@ directly — on a Pi 5's RP1 it does not fail, it reads garbage. Naming the
 factory turns a wrong environment into a startup error instead of a button that
 silently never responds.
 
+Pinning it takes more than `LGPIOFactory(chip=N)`, because gpiozero 2.0 — the
+`python3-gpiozero` Ubuntu 24.04 ships, and what the robot image installs —
+discards that argument on the next line:
+
+    def __init__(self, chip=None):
+        super().__init__()
+        chip = 4 if (self._get_revision() & 0xff0) >> 4 == 0x17 else 0
+        self._handle = lgpio.gpiochip_open(chip)
+
+`0x17` is a BCM2712, so on a Pi 5 it always opens `/dev/gpiochip4` whatever it
+was asked for. On Raspberry Pi OS that is harmless — udev leaves a
+`gpiochip4 -> gpiochip0` compatibility symlink from the 6.1 kernel, where the
+RP1 really was chip 4. In the container there is no symlink, only the one device
+node compose maps in, so the open fails with `can not open gpiochip` and the
+node runs on inert. `_lgpio_factory` therefore builds the factory the long way
+round — everything `LGPIOFactory.__init__` does, with the chip number it was
+actually given — and asserts the chip it ended up on, so a future gpiozero
+rearranging that constructor is a startup error rather than a silent relapse.
+
 If the lines cannot be claimed — no chip, wrong permissions, lines already
 taken, or gpiozero simply not installed — the node logs an error and stays alive
 but inert. Buttons are a convenience fitting and must never hold up bringup.

@@ -46,13 +46,56 @@ def _lgpio_factory(chip_path: str):
     it from the configured path keeps ``gpio_chip`` meaningful rather than
     decorative — and note it is the *container-side* path, which is fixed
     regardless of what the host calls its chip.
+
+    ``LGPIOFactory(chip=N)`` cannot be used to do that, because gpiozero 2.0
+    (Ubuntu 24.04's python3-gpiozero, what the robot image installs) throws its
+    own argument away::
+
+        def __init__(self, chip=None):
+            super().__init__()
+            chip = 4 if (self._get_revision() & 0xff0) >> 4 == 0x17 else 0
+            self._handle = lgpio.gpiochip_open(chip)
+
+    0x17 is a BCM2712, so on a Pi 5 it always opens /dev/gpiochip**4** whatever
+    it was asked for. On Raspberry Pi OS that happens to work — udev leaves a
+    gpiochip4 -> gpiochip0 compatibility symlink from the 6.1 kernel, where the
+    RP1 really was chip 4. Inside the container there is no such symlink, only
+    the one device node compose maps in, so the open fails with 'can not open
+    gpiochip' and every press is silently dropped (the node logs the error and
+    runs on inert).
+
+    Hence constructing the factory the long way round: everything
+    ``LGPIOFactory.__init__`` does, with the chip number we were actually given.
+    ``LocalPiFactory.__init__`` is called directly to skip the overriding line —
+    the base initialisation still runs, just not the part that ignores us.
     """
-    from gpiozero.pins.lgpio import LGPIOFactory
+    import lgpio
+    from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
+    from gpiozero.pins.local import LocalPiFactory
 
     match = re.fullmatch(r"/dev/gpiochip(\d+)", chip_path)
     if match is None:
         raise ButtonHardwareError(f"gpio_chip {chip_path!r} is not /dev/gpiochipN")
-    return LGPIOFactory(chip=int(match.group(1)))
+    chip = int(match.group(1))
+
+    class PinnedLGPIOFactory(LGPIOFactory):
+        """An LGPIOFactory that honours the chip it is handed."""
+
+        def __init__(self) -> None:
+            LocalPiFactory.__init__(self)
+            self._handle = lgpio.gpiochip_open(chip)
+            self._chip = chip
+            self.pin_class = LGPIOPin
+
+    factory = PinnedLGPIOFactory()
+    # Cheap insurance against a future gpiozero reshuffling __init__ under us:
+    # the whole point of this class is the chip number, so assert we got it.
+    if factory.chip != chip:
+        factory.close()
+        raise ButtonHardwareError(
+            f"pinned factory opened chip {factory.chip}, not {chip}"
+        )
+    return factory
 
 
 class Buttons:
