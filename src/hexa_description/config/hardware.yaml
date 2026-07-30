@@ -1,90 +1,52 @@
 # Servo2040 (Chica-protocol board) wiring + calibration.
 #
-# Servo pins 1..18 match the Servo2040 silkscreen; pin 0 is unused.
-# The relay and the battery voltage/current sensors are addressed by fixed
-# board-side indices in the firmware, not configured here.
-# Keep each leg's three joints on consecutive pins so `write()`
-# collapses to six SET frames per cycle.
+# Servo pins 1..18 match the Servo2040 silkscreen; pin 0 is unused. Keep each
+# leg's three joints on consecutive pins so `write()` collapses to six SET
+# frames per cycle. The relay GPIO and the battery telemetry units are owned by
+# the firmware, not configured here — see the servo2040 driver's protocol.md.
 #
-# Per-servo endpoint pulse widths (us_at_plus_45 / us_at_minus_45) live in the
-# sibling `servo_calibration.yaml`, indexed by pin (pin N → entry N-1). That
-# file is the machine-writable calibration output; this file carries the
-# hand-authored wiring and the fields a calibration routine never touches:
-#   pin — the Servo2040 output this joint drives; also the key into
-#               servo_calibration.yaml.
-#   reversed — set `true` for a mirror-mounted servo (turns the opposite way);
-#               omit for a normally-mounted one. Because the URDF keeps
-#               identical joint axes for left and right legs, a physically
-#               mirror-assembled servo needs `reversed: true` to realize a
-#               URDF-positive command. Set per servo empirically on the build.
-#   pulse_us — the hard electrical clamp `{min, max}`. Defaults to
-#               `servo_defaults.pulse_us` below; specify per servo only to
-#               override. Joint travel limits in radian space live in
-#               geometry.yaml.
-#
-# The leg segment (coxa/femur/tibia) is derived from each joint's name and
-# selects the matching entry in `deg_at_center`: the joint angle (degrees,
-# per-joint convention documented in geometry.yaml) when the servo is at
-# center. This file is the sole source for that angle — geometry.yaml stays
-# target-agnostic and carries only the travel window, against which codegen
-# cross-checks the values below.
+# Per-servo endpoint pulse widths live in the sibling `servo_calibration.yaml`,
+# indexed by pin (pin N -> entry N-1). That file is the machine-writable
+# calibration output; this one carries the hand-authored wiring.
 
 connection:
   type: uart # uart | i2c | usb — factory picks the concrete Transport.
-  # Host-specific OS device node: the Raspberry Pi header UART on GPIO14/15.
-  # The name of that UART is per-model — /dev/ttyAMA0 on a Pi 5 (RP1 uart0,
-  # needs dtparam=uart0=on), /dev/ttyS0 on a Pi 4 (mini-UART; its ttyAMA0
-  # belongs to Bluetooth, which the gamepad needs). Note /dev/serial0 is NOT
-  # portable between them — on a Pi 5 it is the debug connector, not the
-  # header. Other boards name it differently again (Radxa /dev/ttyS2, …), and
-  # a USB-CDC build would use /dev/serial/by-id/... rather than a bus-order
-  # /dev/ttyACM0. Host pin muxing belongs in the OS (device-tree overlay,
-  # /boot config), not here.
+  # Per-model UART name: /dev/ttyAMA0 on a Pi 5 (needs dtparam=uart0=on),
+  # /dev/ttyS0 on a Pi 4 (whose ttyAMA0 belongs to Bluetooth). /dev/serial0 is
+  # NOT portable — on a Pi 5 it is the debug connector, not the header. Host
+  # pin muxing belongs in the OS (device-tree overlay), not here.
   device: /dev/ttyAMA0
   baud: 460800 # honoured on true-UART links; ignored on a USB-CDC build.
 
 parser:
   type: servo2040 # selects the BoardProtocol (currently only servo2040).
-  # Aux poll period (battery + over-current STATUS), in milliseconds. 0 disables
-  # it. Wall-clock, and read only by hexa_hardware, which runs those GETs on its
-  # aux thread: they are blocking board round trips and have no business on the
-  # 200 Hz control cycle, whose whole budget is 5 ms.
+  # Aux poll (battery + over-current STATUS) in ms, 0 disables. Read only by
+  # hexa_hardware, which runs those blocking round trips on its aux thread.
   aux_period_ms: 100
-  # The same poll on the Pico, which paces it in control ticks because it
-  # deliberately keeps the round trip inside its own tick budget. Read only by
+  # The same poll on the Pico, paced in control ticks. Read only by
   # gen_config.py (-> kGetPeriodTicks); hexa_hardware ignores it.
   get_period_ticks: 10
 
-# Host buzzer requests. The buzzer is on the Pi's hardware PWM, which this
-# process cannot reach (Docker mounts /sys read-only and every pwmchip class
-# entry is a symlink into it), so beeps go out as a tune name written here and
-# the host's hexa-tune-spool.path unit plays it with systemd/buzzer.sh. Three
-# tunes are requested: `up` when the component activates, `fault` on an
-# over-current trip, and `undervolt` on rung 1 of the ladder below. Blank the
-# path to disable — a missing buzzer is silent either way, this just stops the
-# write.
+# Host buzzer requests. The Pi's hardware PWM is unreachable from this
+# container, so a tune name is written here and the host's hexa-tune-spool.path
+# unit plays it with systemd/buzzer.sh. Tunes: `up`, `fault`, `undervolt`.
+# Blank the path to disable.
 buzzer:
-  # Container-side path. Must be on the log volume, which compose bind-mounts
-  # from ~/hexa-robot/log — that shared inode is the whole mechanism.
+  # Must be on the log volume (bind-mounted from ~/hexa-robot/log) — that
+  # shared inode is the whole mechanism.
   spool: /workspace/log/buzzer
 
-# Undervoltage ladder — the source of truth for the motion_core supervisor (which
-# owns the policy), the baked firmware config, and hexa_hardware (buzzer + rail
-# latch). Three escalating responses to a draining pack, each armed after hold_s
-# below its threshold:
-#   warning_v — buzzer beep only; the robot stays drivable so it can be walked
-#               back to the bench.
-#   fold_v    — fold and safe-stop; the rail is cut once parked at FOLDED, so the
-#               robot goes down under control.
-#   cutoff_v  — cut the rail immediately, whatever the posture, and refuse to
-#               re-arm. Cleared by power-cycling the robot; nothing on disk.
-# The ladder only escalates: cutting the rail unloads the pack and the voltage
-# rebounds, so de-escalating would cut / re-arm / sag in a loop.
+# Undervoltage ladder — source of truth for the motion_core supervisor, the
+# baked firmware config, and hexa_hardware. Each rung arms after hold_s below
+# its threshold. The ladder only escalates: cutting the rail unloads the pack
+# and the voltage rebounds, so de-escalating would loop.
+#   warning_v — buzzer only; the robot stays drivable.
+#   fold_v    — fold and safe-stop; the rail is cut once parked at FOLDED.
+#   cutoff_v  — cut the rail immediately and refuse to re-arm until power-cycle.
 #
 # 0.0 disables a rung. SHIPPED DISABLED — the Servo2040's voltage-divider scale
-# is uncalibrated, so a threshold here would fire against a meaningless number.
-# Measure the pack against `~/battery_state` first, then set all three in
-# descending order (codegen rejects a mis-ordered ladder).
+# is uncalibrated. Measure the pack against `~/battery_state` first, then set
+# all three in descending order (codegen rejects a mis-ordered ladder).
 battery:
   warning_v: 0.0
   fold_v: 0.0
@@ -92,40 +54,28 @@ battery:
   hysteresis_v: 0.3 # rise above threshold+hysteresis to clear (pre-latch only)
   hold_s: 3.0 # seconds below a threshold before that rung arms
 
-# The relay pin and battery-telemetry units are NOT configured here: the relay
-# GPIO is owned by the Servo2040 firmware, and voltage/current arrive in fixed
-# protocol units (centi-volts/amps) that the host converts with a fixed factor.
-# See the servo2040 driver's protocol.md.
-
-# Joint angle at servo center:
+# Joint angle when the servo sits at center — a property of the assembled
+# build, not of a calibration sweep. A wrong value is a rigid offset on every
+# command for that segment. Selected per leg segment from the joint name; this
+# file is the sole source (geometry.yaml carries only the travel window, which
+# codegen cross-checks these against).
 #   coxa  — deg from radial (0 = leg straight out from hip)
 #   femur — above_horizontal_deg (positive raises the knee)
 #   tibia — interior_deg (180 = fully extended)
-#
-# These are properties of the assembled build, not of a calibration sweep: the
-# angle each joint actually sits at when its servo is centered. A wrong value
-# is a rigid offset on every command for that segment — joint_calibration.cpp
-# maps `us = center_us + direction * (theta - urdf_rad_at_center) * slope`.
-#
-# femur was 40.0 and measured ~14.9 deg high on this build: the folded pose
-# commands 85 deg above horizontal and the joint sits visibly past it, and the
-# standing pose puts the foot tip 155 mm out from the coxa axis instead of the
-# 135 mm tuning.yaml asks for (+1.57 mm of tip radius per degree of femur
-# offset). Re-measure against a known command after any femur horn re-index.
 deg_at_center:
   coxa: 0.0
-  femur: 55
+  femur: 30
   tibia: 69.7
 
 servo_defaults:
-  # Hard electrical clamp shared by every servo; override per servo below with
-  # a `pulse_us: { min, max }` entry if a particular servo needs a tighter one.
+  # Hard electrical clamp shared by every servo.
   pulse_us: { min: 500, max: 2500 }
 
 servos:
-  # key: URDF joint name · pin: Servo2040 silkscreen number.
-  # Endpoint pulse widths come from servo_calibration.yaml (by pin).
-  # !IMPORTANT - pin numbers correspond to what's printed on the servo2040.
+  # key: URDF joint name · pin: Servo2040 silkscreen number, also the key into
+  # servo_calibration.yaml. `reversed: true` for a mirror-mounted servo (the
+  # URDF keeps identical joint axes left and right); set empirically on the
+  # build. Optional `pulse_us: { min, max }` overrides servo_defaults.
   l_rear_coxa_joint: { pin: 1, reversed: true }
   l_rear_femur_joint: { pin: 2 }
   l_rear_tibia_joint: { pin: 3, reversed: true }
