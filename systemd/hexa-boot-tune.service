@@ -1,4 +1,4 @@
-# Boot jingle on the passive buzzer (GPIO18 hardware PWM).
+# Boot jingle on the passive buzzer (GPIO12 hardware PWM).
 #
 # Template — @HOME_DIR@ is substituted by `./hexa robot install-tune`, which
 # writes the rendered unit to /etc/systemd/system/hexa-boot-tune.service and

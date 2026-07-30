@@ -8,6 +8,7 @@
 # Workstation-only commands (Pi target):
 #   build              cross-build ARM64 image, save to .deploy/<sha>.tar.gz
 #   push <host>        scp image + compose + launcher, ssh-load + start (energizes on launch)
+#   sync-config <host> refresh the Pi's config from repo defaults — no image, no restart
 #
 # Pico target:
 #   --pico [args...]   cross-build pi-pico-firmware/ inside the hexa-sim
@@ -34,6 +35,11 @@ Usage: ./hexa deploy [--pico] <command> [args...]
 Raspberry Pi robot (ARM64 image):
   build                       Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
   push <host>                 scp + ssh-load the latest tarball to <host>, then start (energizes on launch).
+  sync-config <host> [--force]
+                              Refresh config from repo defaults — no image, no restart.
+                              Merges new keys into .env (existing values kept), overwrites
+                              tuning.yaml, re-ships the host-side systemd payload.
+                              --force overwrites .env outright. Backs up what it replaces.
 
 Pi Pico 2 W firmware (RP2350 .uf2):
   --pico [args...]            Cross-build pi-pico-firmware/ in the hexa-sim container
@@ -209,6 +215,149 @@ EOF
     echo "   Hotspot toggle: ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-network'"
 }
 
+# Refresh the Pi's config from repo defaults — no image, no restart. Closes the
+# gap seed-once .env leaves: a key added to .env.robot.sample after provisioning
+# never reaches an existing robot. Merges the missing keys, keeps every value
+# already set (those are host facts the repo cannot know); --force overwrites
+# outright. Also re-ships tuning.yaml and the host-side systemd payload, which
+# live outside the image. Units are shipped, never installed — systemd state
+# stays the operator's opt-in. Image/compose/launcher are push's business:
+# shipping them here would mean code with no matching image.
+cmd_sync_config() {
+    local host="" force=0 arg
+    for arg in "$@"; do
+        case "${arg}" in
+            --force) force=1 ;;
+            -*)      die "unknown flag '${arg}' (usage: hexa deploy sync-config <user@host> [--force])" ;;
+            *)
+                [[ -z "${host}" ]] || die "usage: hexa deploy sync-config <user@host> [--force]"
+                host="${arg}"
+                ;;
+        esac
+    done
+    [[ -n "${host}" ]] || die "usage: hexa deploy sync-config <user@host> [--force]"
+
+    require_cmd scp
+    require_cmd ssh
+
+    echo ">> Ensuring ~/hexa-robot/ exists on ${host}"
+    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts ~/hexa-robot/systemd'
+
+    echo ">> Shipping config defaults to ${host}:~/hexa-robot/"
+    scp ".env.robot.sample" "${host}:~/hexa-robot/"
+    scp "src/hexa_description/config/tuning.yaml" "${host}:~/hexa-robot/tuning.yaml.default"
+    scp "systemd/buzzer.sh" \
+        "systemd/network-mode.sh" \
+        "systemd/hexa-robot.service" \
+        "systemd/hexa-boot-tune.service" \
+        "systemd/hexa-shutdown-tune.service" \
+        "systemd/hexa-tune-spool.path" \
+        "systemd/hexa-tune-spool.service" \
+        "systemd/hexa-network-spool.path" \
+        "systemd/hexa-network-spool.service" \
+        "systemd/hexa-network-report.service" \
+        "${host}:~/hexa-robot/systemd/"
+
+    # Quoted heredoc — the merge awk's $0/$1 must reach the Pi unexpanded, so
+    # the one parameter goes in as a positional arg.
+    ssh "${host}" bash -s -- "${force}" <<'REMOTE'
+set -euo pipefail
+force="${1:-0}"
+cd ~/hexa-robot
+
+echo ">> .env"
+if [ ! -f .env ]; then
+    cp .env.robot.sample .env
+    echo "   did not exist — seeded from .env.robot.sample"
+elif [ "${force}" = "1" ]; then
+    cp .env .env.bak
+    cp .env.robot.sample .env
+    echo "   overwritten from .env.robot.sample (previous saved as .env.bak)"
+    echo "   host-specific values (INPUT_GID, SPI_GID, GPIO_GID, SERVO_DEVICE) are back"
+    echo "   at the sample's guesses — check them against this Pi before restarting."
+else
+    # Pass 1: keys .env already sets. Pass 2: emit the ones it missed, each
+    # under its comment block (once per block, so a group keeps its explanation).
+    missing="$(awk '
+        FNR == NR {
+            if ($0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) {
+                k = $0; sub(/[[:space:]]*=.*$/, "", k); gsub(/[[:space:]]/, "", k)
+                have[k] = 1
+            }
+            next
+        }
+        /^[[:space:]]*$/  { n = 0; shown = 0; next }
+        /^[[:space:]]*#/  { buf[++n] = $0; next }
+        $0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ {
+            k = $0; sub(/[[:space:]]*=.*$/, "", k); gsub(/[[:space:]]/, "", k)
+            if (!(k in have)) {
+                if (!shown) { for (i = 1; i <= n; i++) print buf[i]; shown = 1 }
+                print $0
+            }
+        }
+    ' .env .env.robot.sample)"
+
+    if [ -n "${missing}" ]; then
+        cp .env .env.bak
+        {
+            printf '\n# --- added by hexa deploy sync-config: new defaults from .env.robot.sample ---\n'
+            printf '%s\n' "${missing}"
+        } >> .env
+        echo "   added (previous saved as .env.bak):"
+        printf '%s\n' "${missing}" \
+            | awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ { print "     + " $0 }'
+    else
+        echo "   already has every key in .env.robot.sample — unchanged"
+    fi
+
+    # Keys only the Pi has: reported, never removed — a dropped key and a
+    # deliberate local override look identical from here.
+    stale="$(awk '
+        FNR == NR {
+            if ($0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) {
+                k = $0; sub(/[[:space:]]*=.*$/, "", k); gsub(/[[:space:]]/, "", k)
+                have[k] = 1
+            }
+            next
+        }
+        $0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ {
+            k = $0; sub(/[[:space:]]*=.*$/, "", k); gsub(/[[:space:]]/, "", k)
+            if (!(k in have)) print "     ? " k
+        }
+    ' .env.robot.sample .env)"
+    if [ -n "${stale}" ]; then
+        echo "   set here but absent from the sample (left alone):"
+        printf '%s\n' "${stale}"
+    fi
+fi
+
+echo ">> tuning.yaml"
+if [ -f tuning.yaml ] && ! cmp -s tuning.yaml tuning.yaml.default; then
+    cp tuning.yaml tuning.yaml.bak
+    echo "   on-Pi copy differed from the repo — saved as tuning.yaml.bak"
+fi
+cp tuning.yaml.default tuning.yaml
+echo "   refreshed from the repo"
+
+chmod +x systemd/buzzer.sh systemd/network-mode.sh
+echo ">> systemd/ payload refreshed (shipped only — nothing installed, nothing reloaded)"
+
+# The scripts are run by path, so a re-ship is live at once. Installed units are
+# *rendered* copies (@HOME_DIR@ substituted), so they keep their install-time text.
+for u in hexa-robot:install-service \
+         hexa-boot-tune:install-tune \
+         hexa-network-spool:install-network; do
+    if [ -f "/etc/systemd/system/${u%%:*}.service" ]; then
+        echo "   ${u%%:*}.service is installed — re-run './hexa robot ${u##*:}' to re-render it"
+    fi
+done
+REMOTE
+
+    echo ">> Config synced. Nothing was restarted."
+    echo "   .env changes need a container recreate:  hexa robot -H ${host} restart"
+    echo "   tuning.yaml is re-read on that same restart (no image rebuild)."
+}
+
 if [[ $# -lt 1 ]]; then
     usage
     exit 1
@@ -226,8 +375,9 @@ sub="$1"
 shift
 
 case "${sub}" in
-    build)      cmd_build "$@" ;;
-    push)       cmd_push "$@" ;;
+    build)        cmd_build "$@" ;;
+    push)         cmd_push "$@" ;;
+    sync-config)  cmd_sync_config "$@" ;;
     -h|--help)  usage ;;
     *)
         echo "hexa deploy: unknown command '${sub}'" >&2

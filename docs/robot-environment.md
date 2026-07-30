@@ -19,7 +19,7 @@ image tarball, and run as a long-lived service.
 - Wired Ethernet or Wi-Fi.
 - Optional: 256×64 SH1122 OLED face on the Pi SPI bus (spidev0.0 +
   DC/RST/CS on GPIO), rendered directly by `hexa_display`.
-- Optional: passive buzzer on GPIO18 for the boot, shutdown, stack-up,
+- Optional: passive buzzer on GPIO12 for the boot, shutdown, stack-up,
   over-current, and undervoltage tunes.
 - Optional: two momentary push buttons on GPIO5 / GPIO6 for the front-panel
   info screens, read by `hexa_buttons`.
@@ -36,18 +36,17 @@ is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
   `SPI_NO_CS` (`unsupported mode bits 40` in `dmesg`) — the two together rule
   out a manually driven CS on a Pi 5.
 - **GPIO24, GPIO25** — the face's DC / RST control lines.
-- **GPIO18** — hardware PWM for the buzzer (RP1 PWM0 channel 2, alt function
-  `a3`).
+- **GPIO12** — hardware PWM for the buzzer (RP1 PWM0 channel 0, alt function
+  `a0`).
 - **GPIO5, GPIO6** — the front-panel buttons (`hexa_buttons`): info and
   Bluetooth. Each switch goes between its line and ground; the SoC's internal
   pull-up holds it high, so no external resistor is needed. Deliberately clear
   of I²C1 below, so an IMU can still be added.
 - **GPIO2, GPIO3** — I²C1, free for an MPU6500 IMU.
 
-Watch out for **SPI1**, whose CE0 is GPIO18: putting a second SPI device on the
-aux bus with hardware chip-select collides with the buzzer. Use SPI0 CE1
-(GPIO7) or I²C for extra sensors instead. GPIO18 is also I²S PCM_CLK, so an
-I²S audio HAT and the buzzer are mutually exclusive.
+The buzzer is deliberately **not** on GPIO18, the pin most PWM examples reach
+for: that line is I²S PCM_CLK and SPI1 CE0, so it would rule out an audio HAT
+and collide with a second SPI device on the aux bus. GPIO12 costs nothing.
 
 ## 1. Flash the OS
 
@@ -189,7 +188,7 @@ harmless — the node logs that it could not claim the lines and stays inert.
 
 ## 2d. Enable the buzzer PWM (optional)
 
-Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO18 (BCM)
+Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO12 (BCM)
 and **−** to GND; add a ~100 Ω resistor in series if it is too loud.
 
 Tunes are played by `systemd/buzzer.sh` — POSIX shell writing the kernel's
@@ -231,11 +230,14 @@ Enable the PWM block:
 
 ```
 # /boot/firmware/config.txt
-dtoverlay=pwm-2chan
+dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4
 ```
 
-On the Pi 5 the PWM lives in the RP1 southbridge: GPIO18 is PWM0 **channel 2**,
-alt function `a3`. Reboot, then confirm the sysfs tree and hear it:
+Bare `dtoverlay=pwm-2chan` would map GPIO18/19 instead, so the pins are named
+explicitly; `func=4` is ALT0, which `pinctrl` calls `a0`.
+
+On the Pi 5 the PWM lives in the RP1 southbridge: GPIO12 is PWM0 **channel 0**,
+alt function `a0`. Reboot, then confirm the sysfs tree and hear it:
 
 ```
 ls /sys/class/pwm/                  # expect pwmchip0 (SoC, 2ch) + the RP1 chip (4ch)
@@ -316,7 +318,8 @@ differently:
 
 - **`~/hexa-robot/.env`** — seed-once from `.env.robot.sample`. It holds
   host-specific GIDs and device names the repo cannot know, so a redeploy never
-  touches it once it exists.
+  touches it once it exists. `hexa deploy sync-config` (below) is how a key
+  added to the sample later still reaches an already-provisioned Pi.
 - **`~/hexa-robot/tuning.yaml`** — refreshed from the repo on **every** deploy.
   The compose bind-mount puts this file over the image's baked copy, so a
   seed-once overlay would shadow every tuning change you ever deploy and pin
@@ -325,6 +328,33 @@ differently:
   Tune on the Pi freely between deploys (`hexa robot restart` re-reads it) —
   just fold anything worth keeping back into
   `src/hexa_description/config/tuning.yaml`.
+
+### 4a. Refreshing config without a deploy
+
+```
+./hexa deploy sync-config pi@<host>
+```
+
+Config-only: no image, nothing restarted. Use it when the repo's defaults moved
+but the image did not — a new key in `.env.robot.sample`, a tuning change, or an
+edit to a host-side script like `systemd/buzzer.sh`, which lives outside the
+image entirely.
+
+- **`.env`** — appends the keys the Pi is **missing**, with their comments;
+  values already set are kept (`INPUT_GID`, `SERVO_DEVICE` and friends are facts
+  about this Pi). Old file → `.env.bak`. Keys the Pi has and the sample lacks are
+  reported, not removed.
+- **`--force`** — overwrite `.env` from the sample instead, host-specific values
+  included. For re-provisioning. Still backs up.
+- **`tuning.yaml`** — refreshed from the repo, on-Pi edit → `tuning.yaml.bak`.
+- **`systemd/`** — re-ships `buzzer.sh`, `network-mode.sh` and the unit
+  templates. Shipped, never installed. The scripts go live at once; installed
+  units are rendered copies, so the command names the `hexa robot install-*` to
+  re-run.
+
+Image, compose file, and launcher stay `push`'s business — shipping them here
+would leave code with no matching image. `.env` changes need a container
+recreate (`hexa robot -H <host> restart`), which also re-reads `tuning.yaml`.
 
 ## 5. Edit `~/hexa-robot/.env` on the Pi
 

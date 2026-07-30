@@ -22,15 +22,16 @@
 # name into the bind-mounted log volume and hexa-tune-spool.path runs this
 # script on the host. See docs/robot-environment.md.
 #
-# Wiring (Raspberry Pi 5): buzzer + -> GPIO18 (BCM), buzzer - -> GND, ~100 ohm
-# in series if it is too loud. GPIO18 is RP1 PWM0 channel 2, alt function a3.
+# Wiring (Raspberry Pi 5): buzzer + -> GPIO12 (BCM), buzzer - -> GND, ~100 ohm
+# in series if it is too loud. GPIO12 is RP1 PWM0 channel 0, alt function a0.
+# Not GPIO18: that line is I2S PCM_CLK and SPI1 CE0, worth leaving free.
 # See docs/robot-environment.md for the config.txt overlay.
 #
 # Everything is overridable from the environment so a different buzzer pin or
 # tune needs no edit here:
-#   TUNE_GPIO       BCM pin the buzzer is on            (default 18)
-#   TUNE_CHANNEL    PWM channel that pin maps to        (default 2)
-#   TUNE_PIN_ALT    pinctrl alt function; "" to skip    (default a3)
+#   TUNE_GPIO       BCM pin the buzzer is on            (default 12)
+#   TUNE_CHANNEL    PWM channel that pin maps to        (default 0)
+#   TUNE_PIN_ALT    pinctrl alt function; "" to skip    (default a0)
 #   TUNE_PWMCHIP    force a /sys/class/pwm/pwmchipN     (default: discovered)
 #   TUNE_TEMPO      seconds per beat                    (default 0.150)
 #   TUNE_WAIT_S     seconds to wait for the PWM tree    (default 5)
@@ -40,9 +41,9 @@
 # all log a line and exit 0. A beep must not be able to hold up a boot, a
 # shutdown, or the fault path that asked for it.
 
-GPIO="${TUNE_GPIO:-18}"
-CHANNEL="${TUNE_CHANNEL:-2}"
-PIN_ALT="${TUNE_PIN_ALT-a3}"
+GPIO="${TUNE_GPIO:-12}"
+CHANNEL="${TUNE_CHANNEL:-0}"
+PIN_ALT="${TUNE_PIN_ALT-a0}"
 TEMPO="${TUNE_TEMPO:-0.150}"
 
 # How long to wait for the PWM sysfs tree to appear. The RP1 PWM driver probes
@@ -50,7 +51,7 @@ TEMPO="${TUNE_TEMPO:-0.150}"
 # playing after boot sets this to 0 — by then the tree is there or it never was.
 WAIT_S="${TUNE_WAIT_S:-5}"
 
-PWM=""          # exported channel dir, e.g. /sys/class/pwm/pwmchip2/pwm2
+PWM=""          # exported channel dir, e.g. /sys/class/pwm/pwmchip2/pwm0
 CHIP=""
 
 log() { echo "buzzer: $*" >&2; }
@@ -138,7 +139,9 @@ note_hz() {
 # numbering shifts with the kernel and the overlays in play, so discover it
 # rather than hardcoding. RP1 is the only chip with 4 channels, which is the
 # reliable discriminator; the sysfs device path is checked first when it names
-# rp1 outright.
+# rp1 outright. Channel 0 exists on every block, so those two checks are what
+# rule the SoC's out; the first-match fallback is the Pi 4 case, where pwmchip0
+# is the right answer.
 find_chip() {
     if [ -n "${TUNE_PWMCHIP:-}" ]; then
         echo "${TUNE_PWMCHIP}"

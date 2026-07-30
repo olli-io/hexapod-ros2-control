@@ -37,9 +37,10 @@ Commands:
   deploy [--pico] <subcommand> [args]
                               Cross-build + ship to a robot target. Default target is
                               the Raspberry Pi (ARM64 image): subcommands build, push
-                              <host>. --pico instead cross-builds the Pi Pico 2 W
-                              firmware (RP2350 .uf2) in the sim container. Run with no
-                              subcommand for the full list.
+                              <host>, sync-config <host> (refresh config from repo
+                              defaults, no image). --pico instead cross-builds the Pi
+                              Pico 2 W firmware (RP2350 .uf2) in the sim container. Run
+                              with no subcommand for the full list.
   robot [-H user@host] <subcommand> [args]
                               Operate the running robot container. Subcommands: up, down,
                               restart, boot, install-service, uninstall-service,

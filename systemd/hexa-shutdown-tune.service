@@ -1,4 +1,4 @@
-# Shutdown beep on the passive buzzer (GPIO18 hardware PWM) — the mirror of
+# Shutdown beep on the passive buzzer (GPIO12 hardware PWM) — the mirror of
 # hexa-boot-tune.service. When it stops sounding, the Pi is done writing and
 # the power switch is safe.
 #
