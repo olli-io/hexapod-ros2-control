@@ -90,7 +90,8 @@ class PostureController {
   explicit PostureController(const ::hexa::config::PostureConfig& posture);
 
   // Persistent user pose from map_joy (the /body/pose subscription). Survives
-  // across ticks until the next teleop update.
+  // across ticks until the next teleop update. This is the smoother's TARGET,
+  // not the pose that reaches IK — update() filters it (see pose_smoother_).
   void set_user_pose(const BodyPose& pose) { user_pose_ = pose; }
 
   // Select the ANIMATION-mode stack. Empty selects the default stack. Returns
@@ -124,6 +125,10 @@ class PostureController {
 
   BodyPose user_pose_ = IDENTITY;
   PoseLimits limits_;
+  // The smoother saturates against this, leaving compose_layered's own user
+  // clamp inert.
+  PoseLimits user_env_;
+  PoseSmoother pose_smoother_;
 
   // Gait-animation crossfade: activation slews 0<->1 toward the walking flag so
   // the gait animations ramp in/out instead of stepping. The stack is evaluated

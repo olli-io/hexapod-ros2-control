@@ -34,7 +34,11 @@ This package keeps only the ROS + Linux-panel code:
   until the ADC divider is calibrated.
 - **Gaze** — vertical follows body pitch; horizontal follows `cmd_vel` when
   walking or body tilt in pose mode, sign-quantized with hysteresis. `dead` and
-  `scanning` force center.
+  `scanning` force center. The policy and the animations name gaze in the
+  robot's frame (`LEFT` = the robot's left, REP-103 `+y`); the eye core names it
+  in panel coordinates (`LEFT` = toward `x = 0`). `toScreenGaze` converts at the
+  renderer seam, so the panel itself stays unmirrored (`U8G2_R0`) and text reads
+  the right way round.
 - **`scanning`** — the one animated expression: the neutral eyes' ring with a
   gap taken out of it, turning once a second. It runs while `hexa_buttons`
   reports itself busy with something the operator asked for by holding a

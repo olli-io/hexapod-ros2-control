@@ -37,7 +37,8 @@ is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
   out a manually driven CS on a Pi 5.
 - **GPIO24, GPIO25** — the face's DC / RST control lines.
 - **GPIO12** — hardware PWM for the buzzer (RP1 PWM0 channel 0, alt function
-  `a0`).
+  `a0`). Not the overlay's default pin, so `config.txt` has to name it — see
+  the buzzer section below.
 - **GPIO5, GPIO6** — the front-panel buttons (`hexa_buttons`): info and
   Bluetooth. Each switch goes between its line and ground; the SoC's internal
   pull-up holds it high, so no external resistor is needed. Deliberately clear
@@ -45,8 +46,9 @@ is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
 - **GPIO2, GPIO3** — I²C1, free for an MPU6500 IMU.
 
 The buzzer is deliberately **not** on GPIO18, the pin most PWM examples reach
-for: that line is I²S PCM_CLK and SPI1 CE0, so it would rule out an audio HAT
-and collide with a second SPI device on the aux bus. GPIO12 costs nothing.
+for and the one a bare `dtoverlay=pwm-2chan` takes: that line is I²S PCM_CLK
+and SPI1 CE0, so it would rule out an audio HAT and collide with a second SPI
+device on the aux bus. GPIO12 costs nothing but an overlay parameter.
 
 ## 1. Flash the OS
 
@@ -233,26 +235,35 @@ Enable the PWM block:
 dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4
 ```
 
-Bare `dtoverlay=pwm-2chan` would map GPIO18/19 instead, so the pins are named
-explicitly; `func=4` is ALT0, which `pinctrl` calls `a0`.
+The parameters are not optional. A bare `dtoverlay=pwm-2chan` maps GPIO18/19
+instead and leaves GPIO12 an input, which is the quietest possible failure:
+the PWM block still probes, the channel still exports, every write still
+succeeds, and the wire hears nothing. `func=4` is ALT0, which `pinctrl` calls
+`a0` — see the pin/function table in `/boot/firmware/overlays/README`.
 
-On the Pi 5 the PWM lives in the RP1 southbridge: GPIO12 is PWM0 **channel 0**,
-alt function `a0`. Reboot, then confirm the sysfs tree and hear it:
+On the Pi 5 the PWM lives in the RP1 southbridge, where GPIO12 is PWM0
+**channel 0**. Reboot, then confirm the mux and hear it:
 
 ```
-ls /sys/class/pwm/                  # expect pwmchip0 (SoC, 2ch) + the RP1 chip (4ch)
-cat /sys/class/pwm/pwmchip*/npwm    # the 4-channel one is RP1's
+pinctrl get 12                      # expect a0 / PWM0_CHAN0, not "none"
 cd ~/hexa-robot && ./hexa robot play-tune
 ```
 
 `play-tune` takes a tune name, so each one can be heard without provoking it —
 `./hexa robot play-tune fault` is the only sane way to audition that one.
 
-The chip number moves with the kernel and the overlays in play, so
-`buzzer.sh` discovers it (4 channels = RP1) rather than hardcoding
-`pwmchip2`, and re-asserts the pin's alt mode with `pinctrl` in case the
-overlay in `config.txt` did not. If discovery picks wrong, pin it with
-`TUNE_PWMCHIP=/sys/class/pwm/pwmchipN`.
+`config.txt` is the only thing that muxes the pin — `buzzer.sh` never calls
+`pinctrl`, so the `pinctrl get 12` check above is the one that catches a
+missing parameter. `config.txt` fixes the pin mux but not the sysfs chip number: `pwmchipN` is
+kernel probe order and has moved between releases, so it cannot be hardcoded —
+and a stale number fails the same silent way, because exporting a channel on
+the *other* PWM block (RP1 has two, both 4-channel) succeeds and simply makes
+no sound. The platform address is fixed, so `buzzer.sh` reaches PWM0 through
+`/sys/bus/platform/devices/1f00098000.pwm/pwm/` and globs the one chip under
+it.
+
+That address is Pi 5 only. On a Pi 4, set
+`TUNE_PWMCHIP=/sys/class/pwm/pwmchip0`; channel 0 is GPIO12 there too.
 
 Tune it without editing the script — the same `NOTE:beats` melody format the
 gpiozero recipes use, `REST` for silence. `TUNE_MELODY` overrides whichever
@@ -263,8 +274,8 @@ TUNE_MELODY="C5:1 E5:1 G5:1 C6:1 REST:1 G5:1 C6:3" TUNE_TEMPO=0.11 \
     ./hexa robot play-tune
 ```
 
-`TUNE_GPIO`, `TUNE_CHANNEL`, and `TUNE_PIN_ALT` cover a different buzzer pin.
-Every hardware failure — no buzzer, no overlay, busy channel — logs a line and
+`TUNE_CHANNEL` (plus the matching overlay parameters) covers a different buzzer
+pin. Every hardware failure — no buzzer, no overlay, busy channel — logs a line and
 exits 0, so a tune can never hold up a boot, a shutdown, or the fault path that
 asked for it.
 

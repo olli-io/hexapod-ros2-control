@@ -201,6 +201,13 @@ PostureController::PostureController(const config::PostureConfig& p)
                     p.animation_reserve_yaw},
       centroid_tau_(p.support_centroid_tau),
       swing_lift_tau_(p.swing_lift_tau) {
+  // Assigned in the body, not the init list: both derive from anim_reserve_,
+  // which is declared after them.
+  user_env_ = user_envelope(limits_, anim_reserve_);
+  pose_smoother_ = PoseSmoother(PoseSmootherConfig{
+      p.pose_filter_tau_translation, p.pose_filter_tau_rotation,
+      p.pose_filter_damping_ratio});
+
   std::vector<std::string_view> enabled(config::kEnabledAnimations.begin(),
                                         config::kEnabledAnimations.end());
   default_stack_ = build_stack(enabled, p);
@@ -267,6 +274,9 @@ BodyPose PostureController::update(
     // the wrong foot configuration. Hold IDENTITY and reset the crossfade so
     // the gait animations start faded-out next time posture re-activates.
     activation_ = 0.0f;
+    // Same reason: the filter's state has to agree with the IDENTITY being
+    // emitted, or the body springs from a stale offset on the way back.
+    pose_smoother_.reset();
     return IDENTITY;
   }
 
@@ -302,8 +312,13 @@ BodyPose PostureController::update(
   const BodyPose idle_out = stack.eval(ctx);
   const BodyPose animated = lerp(idle_out, gait_out, activation_);
 
+  // Clamped to the envelope going in as well as out, so the filter never
+  // integrates toward — or winds up against — an unreachable value.
+  const BodyPose user_smoothed =
+      pose_smoother_.step(clamp(user_pose_, user_env_), user_env_, dt);
+
   // Layered clamp: the user pose and the animation each get their own budget.
-  return compose_layered(user_pose_, animated, limits_, anim_reserve_);
+  return compose_layered(user_smoothed, animated, limits_, anim_reserve_);
 }
 
 }  // namespace hexa::posture

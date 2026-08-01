@@ -13,7 +13,7 @@ switch gating.
   machine (modes, init two-press, record, yaw easing, height, cycling).
   Unit-testable.
 - **`webteleop_node.py`** — ROS glue. `aiohttp` server in a daemon thread
-  + 50 Hz rclpy timer that maps input and publishes; shared state behind a
+  + 60 Hz rclpy timer that maps input and publishes; shared state behind a
   `threading.Lock`. Single-connection policy: a second device gets `busy`
   and is closed, retrying until the slot frees.
 - **`web/`** — static webapp (`index.html` + `main.js`, `logs.html` +
@@ -44,7 +44,7 @@ goes quiet:
 - **WebSocket heartbeat** — server pings every `server.ws_heartbeat_s` and
   force-closes on a missed pong, turning a half-open TCP connection into a
   real disconnect (which zeroes inputs and releases control).
-- **Input watchdog** — the 50 Hz timer feeds neutral input whenever no
+- **Input watchdog** — the 60 Hz timer feeds neutral input whenever no
   message arrived within `safety.input_timeout_s`, so `/cmd_vel` falls to
   zero instead of latching. Backstop for any stall. Pure and unit-tested.
 - **Client visibility stop** — the webapp re-centres both sticks on

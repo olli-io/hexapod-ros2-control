@@ -327,6 +327,14 @@ posture_node:
     # (higher = faster; 4.0 ≈ 0.25 s), so the body doesn't jump.
     gait_activation_slew_rate: 4.0
 
+    # Spring/inertia smoother on the commanded pose, so a stepped /body/pose
+    # ramps instead of snapping. tau is 1/omega_n in seconds (larger = heavier);
+    # damping_ratio below 1 overshoots. 0.135 / 0.32 gives ~35% overshoot
+    # settling in ~0.4 s. A tau of 0 bypasses that group.
+    pose_filter_tau_translation: 0.135
+    pose_filter_tau_rotation: 0.135
+    pose_filter_damping_ratio: 0.32
+
     # Movement range (m / rad) set aside for the animation layer so a
     # dialed-in body pose can't crowd it out and cause jitter. The trade-off
     # is a slightly smaller manual posing range. Size these to cover the

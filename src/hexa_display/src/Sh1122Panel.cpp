@@ -130,10 +130,9 @@ void Sh1122Panel::spiWrite(const uint8_t* data, size_t len) {
 bool Sh1122Panel::begin(const PanelConfig& cfg) {
     _headless = cfg.headless;
 
-    // U8G2_MIRROR: the panel is mounted so a straight (U8G2_R0) raster reads
-    // mirrored left-to-right; flip here in the Linux seam so the shared eye
-    // core stays bit-identical across targets.
-    u8g2_Setup_sh1122_256x64_f(&_u8g2, U8G2_MIRROR, &Sh1122Panel::byteCb,
+    // U8G2_R0, not U8G2_MIRROR: mirroring fixes the gaze but reverses text with
+    // it. The gaze flip lives in code (hexa::display::toScreenGaze).
+    u8g2_Setup_sh1122_256x64_f(&_u8g2, U8G2_R0, &Sh1122Panel::byteCb,
                                &Sh1122Panel::gpioCb);
     u8x8_SetUserPtr(u8g2_GetU8x8(&_u8g2), this);
 

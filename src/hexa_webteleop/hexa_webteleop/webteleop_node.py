@@ -16,16 +16,16 @@ disconnect. See ``hexa_teleop.teleop_arbitration`` for the protocol.
 Safety: two independent guards stop the robot if the link to the
 webapp dies — important because a dropped phone (TCP half-open, sleep,
 backgrounded tab) would otherwise leave the last stick value latched
-and republished at 50 Hz.
+and republished at 60 Hz.
 - WebSocket heartbeat: ``aiohttp`` pings each client and force-closes a
   socket that misses its pong, which triggers the disconnect cleanup.
-- Input watchdog: the 50 Hz timer feeds ``neutral_inputs`` to
+- Input watchdog: the 60 Hz timer feeds ``neutral_inputs`` to
   ``map_web`` whenever no stick/button message has arrived within
   ``safety.input_timeout_s``, so ``/cmd_vel`` falls to zero rather than
   latching. The disconnect path also zeroes the shared input state.
 
 Architecture:
-- Main thread: ``rclpy.spin`` with a 50 Hz timer that calls
+- Main thread: ``rclpy.spin`` with a 60 Hz timer that calls
   ``map_web`` and publishes (when web owns).
 - Server thread: ``asyncio`` event loop running the ``aiohttp`` app.
 - Shared state: ``threading.Lock``-protected stick/button values +
@@ -71,7 +71,9 @@ from .web_mapping import (
     neutral_inputs,
 )
 
-PUBLISH_RATE_HZ = 50.0
+# The webapp sends one stick message per ``touchmove``, which browsers
+# coalesce to the display refresh rate.
+PUBLISH_RATE_HZ = 60.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
 _GAIT_SWITCH_STATES: frozenset[str] = frozenset(

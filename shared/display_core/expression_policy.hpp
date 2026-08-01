@@ -98,6 +98,11 @@ struct DisplayTarget {
 
 inline constexpr DisplayTarget kIdleTarget{Expression::NEUTRAL, GazeDirection::CENTER};
 
+// Flip a gaze from the robot's frame (LEFT = the robot's left, REP-103 +y) into
+// the eye core's panel coordinates (LEFT = toward x = 0). The two disagree by
+// the horizontal sign; the panel itself stays unmirrored. Self-inverse.
+GazeDirection toScreenGaze(GazeDirection gaze);
+
 // Sign-quantize value to {-1, 0, +1} with hysteresis. Enters a direction at
 // |value| >= deadband; once entered, holds it until |value| drops below
 // deadband * exit_ratio. A sign flip past the full deadband switches directly

@@ -253,6 +253,18 @@ TEST(Posture, PoseEnvelope) {
   EXPECT_GT(cfg::kPosture.pose_limit_yaw, 0.0f);
 }
 
+TEST(Posture, PoseFilter) {
+  // tau <= 0 is a legal bypass, so the floor is not "positive" but "far enough
+  // above the tick period to integrate cleanly" — below ~4 ticks a tau runs
+  // into PoseSmoother's omega*dt stability cap instead of meaning what it says.
+  constexpr float kDt = 0.005f;  // hexa::pipeline::kDt
+  EXPECT_GT(cfg::kPosture.pose_filter_tau_translation, 4.0f * kDt);
+  EXPECT_GT(cfg::kPosture.pose_filter_tau_rotation, 4.0f * kDt);
+
+  // zeta = 0 is an undamped oscillator that never settles.
+  EXPECT_GT(cfg::kPosture.pose_filter_damping_ratio, 0.0f);
+}
+
 TEST(Hardware, ServoCalibration) {
   ASSERT_EQ(cfg::kJointCals.size(), 18u);
 

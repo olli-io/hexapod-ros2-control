@@ -152,11 +152,10 @@ void drawFrame(const RenderState& state) {
 }
 
 // Text-mode frame: the full 256x64 text panel as 128x16 Braille cells. Reads
-// the headless panel buffer through textScreenPixel; the panel setup is
-// U8G2_MIRROR (physical mount), so x is flipped back here.
+// the headless panel buffer through textScreenPixel.
 void drawTextFrame(const u8g2_t* g) {
     auto tpx = [g](int x, int y) {
-        return hexa::display::textScreenPixel(g, 255 - x, y) ? 1 : 0;
+        return hexa::display::textScreenPixel(g, x, y) ? 1 : 0;
     };
     static char out[32 * 1024];
     char* p = out;
@@ -292,7 +291,13 @@ public:
     }
 
     // Advance the renderer to nowMs and return the frame to draw.
-    eyes::AnimFrame frame(uint32_t now_ms) { return _anim.update(_target, now_ms); }
+    // The flip is local to the render call: target() stays robot-frame so the
+    // status line labels the gaze the way the rest of the stack names it.
+    eyes::AnimFrame frame(uint32_t now_ms) {
+        RenderState screen = _target;
+        screen.gaze = hexa::display::toScreenGaze(screen.gaze);
+        return _anim.update(screen, now_ms);
+    }
 
     // For manual testing (space key).
     void requestBlink() { _anim.requestBlink(); }

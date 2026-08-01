@@ -694,6 +694,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("swing_lift_tau", pn["swing_lift_tau"]),
         # Gait-animation crossfade + layered clamp (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
+        # Spring/inertia smoother on the commanded body pose. tau = 1/omega_n
+        # (s), damping_ratio = zeta; both frame-rate independent.
+        ("pose_filter_tau_translation", pn["pose_filter_tau_translation"]),
+        ("pose_filter_tau_rotation", pn["pose_filter_tau_rotation"]),
+        ("pose_filter_damping_ratio", pn["pose_filter_damping_ratio"]),
         ("animation_reserve_x", pn["animation_reserve_x"]),
         ("animation_reserve_y", pn["animation_reserve_y"]),
         ("animation_reserve_z", pn["animation_reserve_z"]),

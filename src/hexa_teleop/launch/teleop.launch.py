@@ -52,8 +52,8 @@ def generate_launch_description():
             "deadzone": 0.05,
             # Resend the last Joy at this rate so teleop_joy keeps
             # producing fresh /cmd_vel + /body/pose even when the
-            # sticks are idle.
-            "autorepeat_rate": 50.0,
+            # sticks are idle. Matches the gamepad's polling rate.
+            "autorepeat_rate": 250.0,
             # Poll /dev/input/jsN at this period while the controller
             # is unplugged. 1 s is the longest a user should wait
             # between replugging and the node picking the device up.

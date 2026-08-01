@@ -181,6 +181,21 @@ TEST(ExpressionPolicy, PoseModeGazeFollowsTilt) {
     EXPECT_EQ(decide(makeInputs(), CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
 }
 
+TEST(ExpressionPolicy, ToScreenGazeFlipsHorizontalOnly) {
+    EXPECT_EQ(toScreenGaze(GazeDirection::LEFT), GazeDirection::RIGHT);
+    EXPECT_EQ(toScreenGaze(GazeDirection::RIGHT), GazeDirection::LEFT);
+    EXPECT_EQ(toScreenGaze(GazeDirection::UP_LEFT), GazeDirection::UP_RIGHT);
+    EXPECT_EQ(toScreenGaze(GazeDirection::DOWN_RIGHT), GazeDirection::DOWN_LEFT);
+    EXPECT_EQ(toScreenGaze(GazeDirection::UP), GazeDirection::UP);
+    EXPECT_EQ(toScreenGaze(GazeDirection::DOWN), GazeDirection::DOWN);
+    EXPECT_EQ(toScreenGaze(GazeDirection::CENTER), GazeDirection::CENTER);
+
+    for (int i = 0; i < static_cast<int>(GazeDirection::_COUNT); ++i) {
+        const auto g = static_cast<GazeDirection>(i);
+        EXPECT_EQ(toScreenGaze(toScreenGaze(g)), g) << "gaze " << gazeName(g);
+    }
+}
+
 TEST(ExpressionPolicy, BreathingSelectedWhileSleeping) {
     // The sleeping face breathes: both before the stack is up and once folded.
     auto waiting = makeInputs();

@@ -317,7 +317,9 @@ private:
         }
         _drawn_text.clear();
 
-        const eyes::AnimFrame f = _anim.update(_target, nowMs());
+        RenderState screen = _target;
+        screen.gaze = hexa::display::toScreenGaze(screen.gaze);
+        const eyes::AnimFrame f = _anim.update(screen, nowMs());
         // Skip the float-heavy raster entirely when the animation frame is
         // unchanged — between blinks and once gaze has settled the face is
         // static, so there is nothing to redraw.

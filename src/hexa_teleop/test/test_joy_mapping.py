@@ -14,7 +14,9 @@ from hexa_teleop import (
 )
 
 
-DT = 0.02  # matches teleop_joy.PUBLISH_RATE_HZ = 50 Hz
+# Independent of teleop_joy.PUBLISH_RATE_HZ — map_joy is rate-correct. Tick
+# counts below are written against this value (range(50) == 1 s).
+DT = 0.02
 
 
 # Default test fixture bindings — mirror the YAML defaults so a bare

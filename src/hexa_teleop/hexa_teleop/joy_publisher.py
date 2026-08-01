@@ -128,7 +128,8 @@ class JoyPublisherNode(Node):
         # in exactly the use case this node was written for.
         self.declare_parameter("device_path", "")
         self.declare_parameter("deadzone", 0.05)
-        self.declare_parameter("autorepeat_rate", 50.0)
+        # Matches the gamepad's polling rate (8BitDo and most pads: 250 Hz).
+        self.declare_parameter("autorepeat_rate", 250.0)
         self.declare_parameter("scan_period_s", 1.0)
 
         self._device_path = str(self.get_parameter("device_path").value)

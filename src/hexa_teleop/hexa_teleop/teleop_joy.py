@@ -52,7 +52,8 @@ from .joy_mapping import (
 )
 from .teleop_arbitration import GAMEPAD, ArbitrationState, on_owner_msg, should_publish
 
-PUBLISH_RATE_HZ = 50.0
+# Matches the gamepad's polling rate (8BitDo and most modern pads: 250 Hz).
+PUBLISH_RATE_HZ = 250.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
 # Engine states in which a gait switch may be published. STAND swaps

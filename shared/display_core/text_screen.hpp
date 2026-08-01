@@ -43,8 +43,7 @@ int drawTextScreen(u8g2_t* g, std::string_view text, const TextScreenConfig& cfg
 
 // Read one pixel back out of a full-buffer SH1122 u8g2 framebuffer (horizontal
 // byte layout, MSB = leftmost pixel). u8g2 has no readback API; tests and the
-// terminal mirror need one. Coordinates are buffer coordinates — a U8G2_MIRROR
-// setup (the physical panel) stores x flipped.
+// terminal mirror need one.
 bool textScreenPixel(const u8g2_t* g, int x, int y);
 
 }  // namespace hexa::display

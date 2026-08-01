@@ -15,7 +15,9 @@ from hexa_webteleop import (
 from hexa_webteleop.web_mapping import GAIT, POSTURE, ANIMATION
 
 
-DT = 0.02  # 50 Hz
+# Independent of webteleop_node.PUBLISH_RATE_HZ — map_web is rate-correct.
+# Tick counts below are written against this value.
+DT = 0.02
 
 
 # ─── Config fixture ────────────────────────────────────────────────

@@ -1,86 +1,54 @@
 #!/bin/sh
-# Tune player for a passive buzzer on the Pi's hardware PWM. The robot's only
-# audible channel: it says "the Pi is alive", "the stack is up", "I tripped",
-# and "you can cut the power now".
+# Tune player for the passive buzzer on the Pi's hardware PWM. The robot's only
+# audible channel: "the Pi is alive", "the stack is up", "I tripped", and "you
+# can cut the power now".
 #
 #   buzzer.sh [tune]           play a named tune (default: boot)
 #   buzzer.sh --spool FILE     play the tune named in FILE's first word
 #
-# Tunes: boot, up, shutdown, fault, undervolt (see tune_melody below).
+# Wiring: buzzer + -> GPIO12 (BCM), buzzer - -> GND, ~100 ohm in series if it is
+# too loud. Not GPIO18, the pin a bare `dtoverlay=pwm-2chan` takes: that line is
+# I2S PCM_CLK and SPI1 CE0, worth leaving free. See docs/robot-environment.md
+# for the config.txt overlay that muxes GPIO12 to PWM.
 #
-# Dependency-free by design: POSIX sh + the kernel's sysfs PWM interface, no
-# Python, no gpiozero, no packages to install on the host. (hexa_buttons does
-# use gpiozero, but that lives in the container, which this script never
-# touches.) The boot tune runs long before
-# Docker, the container, or the servo rail exist, so it is the earliest "the Pi
-# is alive" signal the robot has.
+# POSIX sh + sysfs only, so it needs nothing installed on the host. It always
+# runs on the *host*, never in the container: Docker mounts /sys read-only, so
+# an export from inside fails with EROFS. Container-borne beeps (up, fault,
+# undervolt) arrive via --spool. See docs/robot-environment.md.
 #
-# It always runs on the *host*, never in the container: Docker mounts /sys
-# read-only, and /sys/class/pwm/pwmchipN is a symlink into /sys/devices, so an
-# export from inside the container fails with EROFS. Container-borne beeps
-# (up, fault, undervolt) come in through --spool — hexa_hardware writes a tune
-# name into the bind-mounted log volume and hexa-tune-spool.path runs this
-# script on the host. See docs/robot-environment.md.
+# Overridable: TUNE_GPIO, TUNE_PWMCHIP, TUNE_CHANNEL, TUNE_TEMPO, TUNE_WAIT_S,
+# TUNE_MELODY. TUNE_GPIO is only ever a label — config.txt owns the pin mux.
 #
-# Wiring (Raspberry Pi 5): buzzer + -> GPIO12 (BCM), buzzer - -> GND, ~100 ohm
-# in series if it is too loud. GPIO12 is RP1 PWM0 channel 0, alt function a0.
-# Not GPIO18: that line is I2S PCM_CLK and SPI1 CE0, worth leaving free.
-# See docs/robot-environment.md for the config.txt overlay.
-#
-# Everything is overridable from the environment so a different buzzer pin or
-# tune needs no edit here:
-#   TUNE_GPIO       BCM pin the buzzer is on            (default 12)
-#   TUNE_CHANNEL    PWM channel that pin maps to        (default 0)
-#   TUNE_PIN_ALT    pinctrl alt function; "" to skip    (default a0)
-#   TUNE_PWMCHIP    force a /sys/class/pwm/pwmchipN     (default: discovered)
-#   TUNE_TEMPO      seconds per beat                    (default 0.150)
-#   TUNE_WAIT_S     seconds to wait for the PWM tree    (default 5)
-#   TUNE_MELODY     "NOTE:beats ...", REST for silence — overrides the tune
-#
-# Failure is never fatal: no buzzer fitted, no PWM overlay, or a busy channel
-# all log a line and exit 0. A beep must not be able to hold up a boot, a
-# shutdown, or the fault path that asked for it.
+# Failure is never fatal: no buzzer fitted, no overlay, or a busy channel all
+# log a line and exit 0. A beep must not hold up a boot, a shutdown, or the
+# fault path that asked for it.
 
-GPIO="${TUNE_GPIO:-12}"
+# RP1's PWM0 block on a Pi 5; GPIO12 is its channel 0, alt function a0. On a Pi
+# 4 set TUNE_PWMCHIP=/sys/class/pwm/pwmchip0 (channel 0 is the same there).
+PWM_DEV="/sys/bus/platform/devices/1f00098000.pwm/pwm"
 CHANNEL="${TUNE_CHANNEL:-0}"
-PIN_ALT="${TUNE_PIN_ALT-a0}"
-TEMPO="${TUNE_TEMPO:-0.150}"
+GPIO="${TUNE_GPIO:-12}"     # log line only; the overlay does the muxing
 
-# How long to wait for the PWM sysfs tree to appear. The RP1 PWM driver probes
-# early, but the boot unit can still win the race on a cold boot. Anything
-# playing after boot sets this to 0 — by then the tree is there or it never was.
+TEMPO="${TUNE_TEMPO:-0.150}"
+# 0 for anything playing after boot; only a cold boot can outrun the PWM driver.
 WAIT_S="${TUNE_WAIT_S:-5}"
 
-PWM=""          # exported channel dir, e.g. /sys/class/pwm/pwmchip2/pwm0
+PWM=""          # exported channel dir, e.g. .../pwm/pwmchip0/pwm2
 CHIP=""
 
 log() { echo "buzzer: $*" >&2; }
 
-# The robot's vocabulary. Each tune has to be recognisable through a closing
-# door, so they differ in contour, not just in pitch: rising = good, falling =
-# done, alternating = something is wrong. Notes need real duration and a rest
-# between them, or a very short note runs straight into the next and the two
-# blur into one continuous beep.
+# Each tune has to be recognisable through a closing door, so they differ in
+# contour, not just pitch: rising = good, falling = done, alternating = wrong.
+# Notes need a rest between them or they blur into one continuous beep.
 tune_melody() {
     case "$1" in
-        # The Pi has power and the kernel is up. Deliberately the shortest one:
-        # it fires on every single power-on, buzzer fitted or not.
-        boot)     echo "B5:2 REST:1 E6:4" ;;
-        # The ROS stack is live and the servo link is open — the robot is on its
-        # feet in the software sense. Rising triad: strictly better news than boot.
-        up)       echo "E6:2 REST:1 G#6:2 REST:1 B6:4" ;;
-        # Last thing before the Pi cuts power: the mirror of boot, falling.
-        # When this stops, the power switch is safe.
-        shutdown) echo "E6:2 REST:1 B5:4" ;;
-        # Over-current trip. Two-tone klaxon, repeated — the only tune that
-        # alternates, and the only one that lasts over two seconds.
-        fault)    echo "C6:2 G5:2 C6:2 G5:2 C6:2 G5:4" ;;
-        # Undervoltage rung 1: pack low, robot still drivable. One flat tone, no
-        # alternation — it must not be mistaken for the fault klaxon, since the
-        # response is the opposite (drive it home, rather than stop touching it).
-        # 12 beats ≈ 1.8 s. Fires once per power cycle.
-        undervolt) echo "G5:12" ;;
-        *)        return 1 ;;
+        boot)      echo "B5:2 REST:1 E6:4" ;;              # kernel is up
+        up)        echo "E6:2 REST:1 G#6:2 REST:1 B6:4" ;; # stack is live
+        shutdown)  echo "E6:2 REST:1 B5:4" ;;              # safe to cut power
+        fault)     echo "C6:2 G5:2 C6:2 G5:2 C6:2 G5:4" ;; # over-current klaxon
+        undervolt) echo "G5:12" ;;                         # pack low, still drivable
+        *)         return 1 ;;
     esac
 }
 
@@ -91,33 +59,29 @@ case "${1:-}" in
     "") ;;
     --spool)
         [ -n "${2:-}" ] || { log "--spool needs a file argument"; exit 0; }
-        # First word of the file. hexa_hardware writes it from inside the
-        # container (truncate + one word); we only ever read it. Writing it back
-        # — clearing it after playing, say — would be another modification of the
-        # file the .path unit watches, and the trigger would loop forever.
+        # Read-only by design: writing back to the file the .path unit watches
+        # would retrigger it forever.
         _req="$(head -n 1 "$2" 2>/dev/null | tr -d '[:space:]')"
         [ -n "${_req}" ] || { log "spool $2 is empty or unreadable — staying silent."; exit 0; }
         TUNE="${_req}"
         ;;
     -h|--help)
-        echo "usage: buzzer.sh [boot|up|shutdown|fault] | buzzer.sh --spool FILE"
+        echo "usage: buzzer.sh [boot|up|shutdown|fault|undervolt] | buzzer.sh --spool FILE"
         exit 0
         ;;
     -*) log "unknown option '$1' — staying silent."; exit 0 ;;
     *)  TUNE="$1" ;;
 esac
 
-# TUNE_MELODY wins over the named tune, so any caller can sound something
-# one-off without a tune having to exist for it.
 if [ -n "${TUNE_MELODY:-}" ]; then
     MELODY="${TUNE_MELODY}"
+    TUNE="custom"
 elif ! MELODY="$(tune_melody "${TUNE}")"; then
     log "unknown tune '${TUNE}' — staying silent."
     exit 0
 fi
 
-# Equal temperament, A4 = 440 Hz, rounded to whole Hz. Passive buzzers are
-# happiest in the C5-C7 range; below C4 most of them are barely audible.
+# Equal temperament, A4 = 440 Hz. Passive buzzers are happiest in C5-C7.
 note_hz() {
     case "$1" in
         C4)  echo 262 ;; C#4|Db4) echo 277 ;; D4) echo 294 ;; D#4|Eb4) echo 311 ;;
@@ -134,44 +98,22 @@ note_hz() {
     esac
 }
 
-# Pick the pwmchip that owns the buzzer pin. On a Pi 5 the SoC's 2-channel block
-# probes first as pwmchip0 and RP1's 4-channel block lands on pwmchip2 — but the
-# numbering shifts with the kernel and the overlays in play, so discover it
-# rather than hardcoding. RP1 is the only chip with 4 channels, which is the
-# reliable discriminator; the sysfs device path is checked first when it names
-# rp1 outright. Channel 0 exists on every block, so those two checks are what
-# rule the SoC's out; the first-match fallback is the Pi 4 case, where pwmchip0
-# is the right answer.
+# config.txt fixes the pin mux but not the sysfs chip number, which is kernel
+# probe order and has moved between releases. The platform address is fixed, so
+# reach the block through it; the glob resolves the single chip underneath.
 find_chip() {
     if [ -n "${TUNE_PWMCHIP:-}" ]; then
         echo "${TUNE_PWMCHIP}"
         return 0
     fi
 
-    _best=""
-    for _c in /sys/class/pwm/pwmchip*; do
-        [ -r "${_c}/npwm" ] || continue
-        _n="$(cat "${_c}/npwm" 2>/dev/null)" || continue
-        # Must at least have the channel we want.
-        [ "${_n}" -gt "${CHANNEL}" ] 2>/dev/null || continue
-
-        case "$(readlink -f "${_c}/device" 2>/dev/null)" in
-            *rp1*|*RP1*) echo "${_c}"; return 0 ;;
-        esac
-        # 4 channels = RP1's block; prefer it over the SoC's 2-channel one.
-        if [ "${_n}" -ge 4 ]; then
-            echo "${_c}"
-            return 0
-        fi
-        [ -z "${_best}" ] && _best="${_c}"
+    for _c in "${PWM_DEV}"/pwmchip*; do
+        [ -d "${_c}" ] && { echo "${_c}"; return 0; }
     done
-
-    [ -n "${_best}" ] || return 1
-    echo "${_best}"
+    return 1
 }
 
-# Always leave the buzzer silent and the channel released, however we exit —
-# a killed script must not leave the thing screaming.
+# Always leave the buzzer silent and the channel released, however we exit.
 cleanup() {
     if [ -n "${PWM}" ] && [ -d "${PWM}" ]; then
         echo 0 > "${PWM}/enable" 2>/dev/null
@@ -188,8 +130,8 @@ tone() {
 
     if [ "${_hz}" -gt 0 ] 2>/dev/null; then
         _period=$(( 1000000000 / _hz ))
-        # Disable before re-periodising: the kernel rejects a duty_cycle that
-        # exceeds the period still in force, so order matters here.
+        # Disable first: the kernel rejects a duty_cycle exceeding the period
+        # still in force, so order matters here.
         echo 0 > "${PWM}/enable" 2>/dev/null
         echo "${_period}" > "${PWM}/period" 2>/dev/null || {
             log "cannot set period ${_period}ns (${_hz} Hz) — skipping note"
@@ -204,26 +146,18 @@ tone() {
     echo 0 > "${PWM}/enable" 2>/dev/null
 }
 
-# --- Wait for the PWM tree, then claim the channel -------------------------
+# --- Claim the channel -----------------------------------------------------
 
 _waited=0
-while [ ! -d /sys/class/pwm ] || ! CHIP="$(find_chip)"; do
+while ! CHIP="$(find_chip)"; do
     [ "${_waited}" -ge "${WAIT_S}" ] && break
     sleep 1
     _waited=$(( _waited + 1 ))
 done
 
 if [ -z "${CHIP}" ] || [ ! -d "${CHIP}" ]; then
-    log "no usable pwmchip with channel ${CHANNEL} — is the PWM overlay in /boot/firmware/config.txt? Staying silent."
+    log "no pwmchip at ${CHIP:-${PWM_DEV}} — is dtoverlay=pwm-2chan in /boot/firmware/config.txt? Staying silent."
     exit 0
-fi
-
-# The stock overlay puts GPIO12/13/18/19 into their PWM alt modes at boot, but
-# that depends on which overlay is in config.txt. Re-assert it; pinctrl ships
-# with Pi OS (raspi-utils), and its absence is not an error.
-if [ -n "${PIN_ALT}" ] && command -v pinctrl >/dev/null 2>&1; then
-    pinctrl set "${GPIO}" "${PIN_ALT}" 2>/dev/null \
-        || log "pinctrl could not set GPIO${GPIO} to ${PIN_ALT} (continuing)"
 fi
 
 trap cleanup EXIT INT TERM HUP
@@ -256,15 +190,14 @@ for token in ${MELODY}; do
     beats="${token##*:}"
     [ "${note}" = "${token}" ] && beats=1     # bare note = one beat
 
-    if [ "${note}" = "REST" ] || [ "${note}" = "-" ]; then
+    if [ "${note}" = "REST" ]; then
         hz=0
     elif ! hz="$(note_hz "${note}")"; then
         log "unknown note '${note}' — skipping"
         continue
     fi
 
-    # The only float arithmetic in the script. awk is POSIX-mandated and
-    # present on every Pi OS image, so this costs no installed dependency.
+    # awk is POSIX-mandated, so this float multiply costs no dependency.
     secs="$(awk -v b="${beats}" -v t="${TEMPO}" 'BEGIN { printf "%.4f", b * t }')"
     tone "${hz}" "${secs}"
 done

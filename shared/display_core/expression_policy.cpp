@@ -116,6 +116,11 @@ bool poseIsLevel(const PolicyInputs& in, const PolicyConfig& config) {
 
 }  // namespace
 
+GazeDirection toScreenGaze(GazeDirection gaze) {
+    const auto [v, h] = signsFromGaze(gaze);
+    return gazeFromSigns(v, -h);
+}
+
 int quantizeAxis(double value, int prev_sign, double deadband, double exit_ratio) {
     if (std::abs(value) >= deadband) {
         return value > 0.0 ? 1 : -1;
