@@ -4,7 +4,6 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/executors.hpp>
 #include <rclcpp/logging.hpp>
@@ -51,32 +50,12 @@ bool joint_interfaces_ok(const hardware_interface::ComponentInfo& j) {
 constexpr std::uint8_t kUndervoltWarn = 1;
 constexpr std::uint8_t kUndervoltCutoff = 3;
 
-// Ask the host to sound the buzzer.
-//
-// Not a beep — a request for one. The buzzer is on the Pi's hardware PWM, and
-// this process cannot drive it: Docker mounts /sys read-only, and every
-// /sys/class/pwm/pwmchipN is a symlink into /sys/devices, so an export from in
-// here fails with EROFS no matter how the class directory is bound. Reaching it
-// would take a privileged container, which is far too much to pay for a beep.
-// So the tune name goes into a file on the bind-mounted log volume and the
-// host's hexa-tune-spool.path unit plays it (systemd/buzzer.sh).
-//
-// Best-effort by construction: an empty spool path, a read-only volume, or no
-// watcher installed all mean silence and nothing else. The buzzer is optional
-// hardware and must never be able to fail a control-path call.
-void request_tune(const std::string& spool, const char* tune) {
-  if (spool.empty()) return;
-  // Truncate: the spool carries one pending tune, not a queue, and the write
-  // itself is the trigger the host watches for.
-  std::ofstream out(spool, std::ios::out | std::ios::trunc);
-  if (!out) {
-    RCLCPP_WARN(rclcpp::get_logger(kLogger),
-                "Cannot write buzzer spool '%s' — no '%s' tune.", spool.c_str(),
-                tune);
-    return;
-  }
-  out << tune << '\n';
-}
+// Events hexa_buzzer knows. Kept in step with the `events:` map in
+// hexa_buzzer/config/buzzer.yaml, which is pytest-covered against this list.
+// What each one sounds like is that file's business, not ours.
+constexpr const char* kTuneUp = "up";
+constexpr const char* kTuneFault = "fault";
+constexpr const char* kTuneUndervolt = "undervolt";
 
 }  // namespace
 
@@ -329,6 +308,13 @@ hardware_interface::CallbackReturn HexaHardware::on_configure(
     // engine (hexa_locomotion) latches FAULT off the first true it sees.
     fault_pub_ = aux_node_->create_publisher<std_msgs::msg::Bool>(
         "/hardware/fault", rclcpp::QoS(1).transient_local());
+    // Buzzer requests for hexa_buzzer, which owns the PWM. Latched, and that is
+    // load-bearing rather than symmetry: `up` goes out from on_activate(),
+    // which can beat the buzzer node's subscription matching, and a volatile
+    // reader would drop the one tune that says the robot is ready. The price is
+    // that restarting hexa_buzzer alone replays the last tune once.
+    buzzer_pub_ = aux_node_->create_publisher<std_msgs::msg::String>(
+        "/buzzer/play", rclcpp::QoS(1).transient_local());
     // Relay-arm intent from the locomotion supervisor. The callback only stores
     // the value (atomic); apply_relay() on the CM thread owns the transport.
     relay_sub_ = aux_node_->create_subscription<std_msgs::msg::Bool>(
@@ -408,7 +394,7 @@ hardware_interface::CallbackReturn HexaHardware::on_activate(
   // standing next to a folded, limp robot cannot otherwise see. Deliberately
   // here rather than on the relay closing: the rail is a separate, later
   // decision (a gamepad Start), and it has the legs moving to announce it.
-  request_tune(config_.buzzer.spool, "up");
+  request_tune(kTuneUp);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -432,6 +418,7 @@ hardware_interface::CallbackReturn HexaHardware::on_cleanup(
   aux_spin_run_ = false;
   if (aux_spin_thread_.joinable()) aux_spin_thread_.join();
   battery_pub_.reset();
+  buzzer_pub_.reset();
   aux_node_.reset();
   if (transport_) transport_->close();
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -496,7 +483,7 @@ void HexaHardware::poll_aux() {
     // A trip drops the whole robot on the spot and the log is the only
     // other place it shows up, so say it out loud. Once per trip edge —
     // the latch keeps this branch from re-firing until STATUS reads clean.
-    request_tune(config_.buzzer.spool, "fault");
+    request_tune(kTuneFault);
   } else if (!tripped && faulted_.load()) {
     faulted_.store(false);
     if (fault_pub_) {
@@ -545,6 +532,15 @@ void HexaHardware::apply_relay() {
   }
 }
 
+void HexaHardware::request_tune(const char* tune) {
+  // Null before on_activate builds the aux node, and on every deactivated
+  // cycle after it. Silence is the correct answer either way.
+  if (!buzzer_pub_) return;
+  std_msgs::msg::String msg;
+  msg.data = tune;
+  buzzer_pub_->publish(msg);
+}
+
 void HexaHardware::on_undervoltage(std::uint8_t stage) {
   undervolt_stage_.store(stage);
   if (stage >= kUndervoltCutoff) {
@@ -562,7 +558,7 @@ void HexaHardware::on_undervoltage(std::uint8_t stage) {
     RCLCPP_WARN(rclcpp::get_logger(kLogger),
                 "Undervoltage rung 1/3: pack low. Sounding the buzzer; the "
                 "robot is still drivable — walk it back and charge it.");
-    request_tune(config_.buzzer.spool, "undervolt");
+    request_tune(kTuneUndervolt);
     return;
   }
 
@@ -570,7 +566,7 @@ void HexaHardware::on_undervoltage(std::uint8_t stage) {
   // rung 1 never got the chance — a pack falling off a cliff, or warning_v
   // disabled — so a collapse is never silent.
   if (previous < kUndervoltWarn) {
-    request_tune(config_.buzzer.spool, "undervolt");
+    request_tune(kTuneUndervolt);
   }
   RCLCPP_ERROR(rclcpp::get_logger(kLogger),
                "Undervoltage rung %u/3: servo rail cut%s.",

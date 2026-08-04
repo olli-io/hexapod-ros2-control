@@ -11,7 +11,7 @@ Note the deliberate asymmetry in how the two files are written:
 - the **state** file (host -> container) is written by the host with
   tmp + ``rename(2)``, so the node can never read a half-written line.
 - the **request** file (container -> host) is written in place, truncate + one
-  write + close, exactly like the buzzer spool. It must NOT be renamed into
+  write + close. It must NOT be renamed into
   place: systemd's ``PathModified`` watches that path's inode once it exists,
   and swapping a new inode underneath delivers ``IN_MOVE_SELF`` instead of a
   modify, so the unit would stop firing. One short line written in one call is

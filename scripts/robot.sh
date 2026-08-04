@@ -16,32 +16,49 @@ cd "${REPO_ROOT}"
 CONTAINER_NAME="hexa-robot"
 COMPOSE_FILE="docker-compose.robot.yaml"
 
+# Hardware PWM for the buzzer, overlaid onto the compose file when the host
+# actually has the tree. Optional hardware, and a bind mount whose source is
+# missing stops the container from starting at all — so this is a real check,
+# not a formality. Keep BUZZER_PWM in step with docker-compose.buzzer.yaml's
+# default; .env may override it (a Pi 4's PWM block sits elsewhere).
+BUZZER_COMPOSE_FILE="docker-compose.buzzer.yaml"
+BUZZER_PWM_DEFAULT="/sys/bus/platform/devices/1f00098000.pwm/pwm"
+
 # Boot-time systemd unit: the shipped template and where the rendered copy goes.
 SERVICE_NAME="hexa-robot.service"
 SERVICE_TEMPLATE="systemd/${SERVICE_NAME}"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 
-# Buzzer player + its units. A separate opt-in from the stack's unit above: the
-# buzzer is optional hardware. It always runs on the host, never in the
-# container — the boot tune has to chirp long before Docker exists, and the
-# container cannot reach the PWM sysfs anyway (see systemd/buzzer.sh).
-TUNE_SCRIPT="systemd/buzzer.sh"
-# All four go in together; splitting them would leave the robot half-audible.
+# Buzzer units. A separate opt-in from the stack's unit above: the buzzer is
+# optional hardware, and installing the ROS stack should not silently start
+# making noise.
+#
+# Only the two tunes that no container can play: the boot chirp lands long
+# before Docker exists, and the shutdown chirp after the container is gone.
+# Everything in between (up, fault, undervolt) is hexa_buzzer's, played in the
+# container straight onto the PWM tree docker-compose.buzzer.yaml mounts. Both
+# sides run the same Python — deploy ships it as ~/hexa-robot/hexa_buzzer/.
+TUNE_MODULE="hexa_buzzer.player"
+# Where `hexa_buzzer/` sits, deployed layout first, repo checkout second — so a
+# dev machine can still audition a melody without a deploy. `python3 -m` finds
+# it through PYTHONPATH; the units use WorkingDirectory instead, which is the
+# same trick with fewer moving parts on a host that only ever has the first.
+TUNE_PKG_DIRS=("." "src/hexa_buzzer")
 #   hexa-boot-tune.service      the Pi is alive (boot)
 #   hexa-shutdown-tune.service  power can be cut (shutdown)
-#   hexa-tune-spool.path/.service  relays the container's own beeps (up, fault)
 TUNE_UNITS=(
     hexa-boot-tune.service
     hexa-shutdown-tune.service
+)
+# Both carry an [Install] section, unlike the network units' spool service.
+TUNE_ENABLE_UNITS=("${TUNE_UNITS[@]}")
+# Units from before hexa_buzzer, when the container asked for its beeps by
+# writing log/buzzer and these relayed the request to a shell script. Removed on
+# install and uninstall alike: a robot upgraded in place still has them enabled,
+# watching a spool nothing writes, pointing at a buzzer.sh that is gone.
+TUNE_LEGACY_UNITS=(
     hexa-tune-spool.path
     hexa-tune-spool.service
-)
-# The subset with an [Install] section. hexa-tune-spool.service is started by
-# its .path and is deliberately not enablable on its own.
-TUNE_ENABLE_UNITS=(
-    hexa-boot-tune.service
-    hexa-shutdown-tune.service
-    hexa-tune-spool.path
 )
 
 # Network-mode switcher + its units. Another separate opt-in: it rewrites
@@ -87,14 +104,19 @@ Commands:
   install-service             Install + enable the hexa-robot systemd unit (needs
                               sudo), so 'boot' runs on power-on.
   uninstall-service           Disable + remove the systemd unit.
-  install-tune                Install + enable the buzzer units (needs sudo): boot
-                              and shutdown tunes, plus the spool watcher that relays
-                              the container's own beeps (stack up, over-current
-                              trip). Optional hardware, so it is a separate opt-in
-                              from install-service.
-  uninstall-tune              Disable + remove the buzzer units.
-  play-tune [tune]            Play a tune now, no reboot and no trip needed
-                              (boot | up | shutdown | fault; default boot).
+  install-tune                Install + enable the two buzzer units (needs sudo):
+                              the boot and shutdown tunes, which no container is
+                              running early or late enough to play. The stack's own
+                              beeps (up, fault, undervolt) are hexa_buzzer's, in the
+                              container, and need no unit. Optional hardware, so it
+                              is a separate opt-in from install-service.
+  uninstall-tune              Disable + remove the two buzzer units.
+  play-tune [name]            Play a tune now, no reboot and no trip needed. Runs
+                              the same player hexa_buzzer does, from the host, so it
+                              works with the stack down. Takes an event from
+                              buzzer.yaml (boot | up | shutdown | fault |
+                              undervolt; the default is boot) or a tune from
+                              tunes.yaml.
   install-network             Install + enable the network-mode units (needs
                               sudo), so holding the info button 3 s switches the
                               Pi between joining wifi and hosting the 'hexapod'
@@ -144,11 +166,41 @@ require_container_running() {
     [[ "${state}" == "running" ]] || die "container ${CONTAINER_NAME} is not running (state: ${state:-absent}). Run 'hexa robot up' first."
 }
 
+# Where the host keeps the buzzer's PWM block, from the same .env compose
+# interpolates, with the same default.
+# The directory to put on PYTHONPATH so `python3 -m hexa_buzzer.player` resolves.
+tune_pkg_dir() {
+    local dir
+    for dir in "${TUNE_PKG_DIRS[@]}"; do
+        [[ -f "${dir}/hexa_buzzer/player.py" ]] && { echo "${dir}"; return 0; }
+    done
+    return 1
+}
+
+buzzer_pwm() {
+    local dev="${BUZZER_PWM_DEFAULT}"
+    if [[ -f .env ]]; then
+        # shellcheck disable=SC1091  # runtime file, not in the repo
+        source <(grep -E '^BUZZER_PWM=' .env || true)
+        dev="${BUZZER_PWM:-${dev}}"
+    fi
+    echo "${dev}"
+}
+
 # `docker compose` invocation with the robot env / file pinned.
+#
+# The buzzer overlay is added only when the host has the PWM tree: its bind
+# mount would otherwise stop the whole stack from starting on a robot with no
+# buzzer fitted. Silent on the happy path — `up` says the noisy version once,
+# where somebody is reading.
 compose() {
+    local files=(-f "${COMPOSE_FILE}")
+    if [[ -d "$(buzzer_pwm)" ]]; then
+        files+=(-f "${BUZZER_COMPOSE_FILE}")
+    fi
     env \
         INPUT_GID="$(input_gid)" \
-        docker compose -f "${COMPOSE_FILE}" "$@"
+        docker compose "${files[@]}" "$@"
 }
 
 # Block until controller_manager answers, so `up` reports ready only once the
@@ -168,6 +220,15 @@ wait_for_controller_manager() {
 
 cmd_up() {
     [[ $# -eq 0 ]] || die "up: unexpected argument '$1'"
+    local pwm_dev
+    pwm_dev="$(buzzer_pwm)"
+    if [[ -d "${pwm_dev}" ]]; then
+        echo ">> Buzzer PWM at ${pwm_dev} -> /pwm"
+    else
+        echo ">> No PWM block at ${pwm_dev} — the buzzer stays silent."
+        echo "   Fit one? Add dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4"
+        echo "   to /boot/firmware/config.txt and reboot (docs/robot-environment.md §15)."
+    fi
     compose up -d || die "compose up failed"
     # The container energizes itself on launch (robot.launch.py brings HexaSystem
     # active and spawns both controllers), so `up` just brings it up and waits for
@@ -268,36 +329,53 @@ cmd_uninstall_service() {
 # separate opt-in because the buzzer is optional hardware.
 cmd_install_tune() {
     [[ $# -eq 0 ]] || die "install-tune: unexpected argument '$1'"
-    [[ -f "${TUNE_SCRIPT}" ]] || die "missing ${TUNE_SCRIPT} — re-run 'hexa deploy push' to ship it"
+    tune_pkg_dir >/dev/null || die "missing hexa_buzzer/player.py — re-run 'hexa deploy push' to ship it"
     command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this host does not run systemd"
+    command -v python3 >/dev/null 2>&1 || die "python3 not found — the player needs it"
 
     local unit
     for unit in "${TUNE_UNITS[@]}"; do
         [[ -f "systemd/${unit}" ]] || die "missing systemd/${unit} — re-run 'hexa deploy push' to ship it"
     done
 
-    chmod +x "${TUNE_SCRIPT}"
+    remove_legacy_tune_units
 
     local rendered
     rendered="$(mktemp)"
     # shellcheck disable=SC2064  # expand ${rendered} now, at trap-set time
     trap "rm -f '${rendered}'" EXIT
     for unit in "${TUNE_UNITS[@]}"; do
-        sed -e "s|@HOME_DIR@|${REPO_ROOT}|g" "systemd/${unit}" > "${rendered}"
+        sed -e "s|@HOME_DIR@|${REPO_ROOT}|g" \
+            -e "s|@PWM_DEV@|$(buzzer_pwm)|g" "systemd/${unit}" > "${rendered}"
         echo ">> Installing /etc/systemd/system/${unit} (sudo)"
         sudo install -m 644 "${rendered}" "/etc/systemd/system/${unit}" || die "install failed"
     done
 
     sudo systemctl daemon-reload
     sudo systemctl enable "${TUNE_ENABLE_UNITS[@]}"
-    # The spool watcher is the only one that does anything between boots, so
-    # start it now rather than leaving the robot mute until the next reboot.
-    sudo systemctl start hexa-tune-spool.path
 
-    echo ">> Enabled. The buzzer now sounds on boot, on shutdown, when the stack"
-    echo "   comes up, and on an over-current trip."
-    echo "   Hear one now:  ./hexa robot play-tune [boot|up|shutdown|fault]"
-    echo "   Watch them:    journalctl -u hexa-boot-tune -u hexa-shutdown-tune -u hexa-tune-spool -b"
+    echo ">> Enabled. The buzzer now sounds on boot and on shutdown."
+    echo "   The stack's own beeps (up, fault, undervolt) come from hexa_buzzer"
+    echo "   in the container and need no unit — only the PWM mount, which"
+    echo "   'hexa robot up' reports."
+    echo "   Hear one now:  ./hexa robot play-tune [boot|up|shutdown|fault|undervolt]"
+    echo "   Watch them:    journalctl -u hexa-boot-tune -u hexa-shutdown-tune -b"
+}
+
+# Clear out the pre-hexa_buzzer spool relay, wherever we find it. Quiet when
+# there is nothing to do, which is every robot installed after the change.
+remove_legacy_tune_units() {
+    local unit found=0
+    for unit in "${TUNE_LEGACY_UNITS[@]}"; do
+        [[ -f "/etc/systemd/system/${unit}" ]] && found=1
+    done
+    [[ "${found}" -eq 1 ]] || return 0
+
+    echo ">> Removing the old spool units, superseded by hexa_buzzer (sudo)"
+    sudo systemctl disable --now "${TUNE_LEGACY_UNITS[@]}" 2>/dev/null || true
+    for unit in "${TUNE_LEGACY_UNITS[@]}"; do
+        sudo rm -f "/etc/systemd/system/${unit}"
+    done
 }
 
 cmd_uninstall_tune() {
@@ -310,8 +388,11 @@ cmd_uninstall_tune() {
     for unit in "${TUNE_UNITS[@]}"; do
         sudo rm -f "/etc/systemd/system/${unit}"
     done
+    remove_legacy_tune_units
     sudo systemctl daemon-reload
-    echo ">> Removed. The robot is silent again."
+    echo ">> Removed. No more boot or shutdown chirp."
+    echo "   The stack's own beeps are hexa_buzzer's and are unaffected — set"
+    echo "   enabled: false in hexa_buzzer/config/buzzer.yaml to stop those."
 }
 
 # Same render-and-enable dance again, for the network-mode units. Kept separate
@@ -402,18 +483,24 @@ cmd_network_mode() {
 }
 
 # Play a tune on demand — buzzer bring-up without a reboot, and the only way to
-# hear `up` / `fault` without provoking one. Needs root for the sysfs PWM
-# export, same as the units.
+# hear `up` / `fault` without provoking one. Runs the same player hexa_buzzer
+# does, from the host, so it works with the stack down and needs no ROS
+# environment. Needs root for the sysfs PWM export, same as the units.
+#
+# Safe to run while the stack is up: hexa_buzzer holds the channel only for the
+# length of a tune, so the two never contend for longer than that.
 cmd_play_tune() {
     local tune="${1:-boot}"
     [[ $# -le 1 ]] || die "play-tune: unexpected argument '$2'"
-    [[ -f "${TUNE_SCRIPT}" ]] || die "missing ${TUNE_SCRIPT} — re-run 'hexa deploy push' to ship it"
-    chmod +x "${TUNE_SCRIPT}" 2>/dev/null || true
+    command -v python3 >/dev/null 2>&1 || die "python3 not found — the player needs it"
+    local args=(-m "${TUNE_MODULE}" "${tune}" --pwm-dev "$(buzzer_pwm)")
+    local pkg
+    pkg="$(tune_pkg_dir)" || die "missing hexa_buzzer/player.py — re-run 'hexa deploy push' to ship it"
     if [[ "$(id -u)" -eq 0 ]]; then
-        "${TUNE_SCRIPT}" "${tune}"
+        PYTHONPATH="${pkg}" python3 "${args[@]}"
     else
-        # -E so a one-off `TUNE_MELODY=... ./hexa robot play-tune` survives sudo.
-        sudo -E "${TUNE_SCRIPT}" "${tune}"
+        # sudo scrubs PYTHONPATH, so hand it over on the command line instead.
+        sudo PYTHONPATH="${pkg}" python3 "${args[@]}"
     fi
 }
 

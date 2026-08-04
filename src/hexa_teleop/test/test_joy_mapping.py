@@ -1,5 +1,8 @@
 import math
 
+import pytest
+from hexa_common import scale_to_envelope
+
 from hexa_teleop import (
     ANIMATION,
     GAIT,
@@ -10,6 +13,7 @@ from hexa_teleop import (
     ModeConfig,
     PostureConfig,
     apply_deadband,
+    fit_drive_to_envelope,
     map_joy,
 )
 
@@ -63,7 +67,7 @@ _DEFAULT_GAIT_BINDINGS = {
     "dpad_left": "gait_prev",
     "dpad_right": "gait_next",
     "left_stick_x": "drive_yaw",
-    "left_stick_y": "",
+    "left_stick_y": "drive_x_aux",
     "right_stick_x": "drive_y",
     "right_stick_y": "drive_x",
 }
@@ -91,10 +95,24 @@ _DEFAULT_ANIMATION_BINDINGS = {
     "dpad_left": "",
     "dpad_right": "",
     "left_stick_x": "drive_yaw",
-    "left_stick_y": "",
+    "left_stick_y": "drive_x_aux",
     "right_stick_x": "drive_y",
     "right_stick_y": "drive_x",
 }
+
+
+# The real robot's standing stance over its outermost foot's radius, as
+# hexa_common.unit_stance_xy derives it from geometry.yaml + tuning.yaml. The
+# corner feet are the outer ones (radius 1 by construction); the middles sit
+# slightly inboard. Hard-coded rather than loaded so these stay pure unit tests.
+_DEFAULT_STANCE_UNIT = (
+    (0.8482823283232138, 0.5295442299322574),    # l_front
+    (0.0, 0.9220299532938129),                   # l_middle
+    (-0.8482823283232138, 0.5295442299322574),   # l_rear
+    (0.8482823283232138, -0.5295442299322574),   # r_front
+    (0.0, -0.9220299532938129),                  # r_middle
+    (-0.8482823283232138, -0.5295442299322574),  # r_rear
+)
 
 
 # Legacy flat overrides accepted by ``_cfg`` get folded into the nested
@@ -152,6 +170,7 @@ def _cfg(**overrides) -> JoyConfig:
         "gait_cycle": ("ripple", "crawl", "tripod"),
         "gait_linear_max": 0.4,
         "gait_angular_z_max": 1.0,
+        "stance_unit": _DEFAULT_STANCE_UNIT,
         "animation_list": (
             "vertical_body_roll",
             "horizontal_body_roll",
@@ -233,9 +252,25 @@ def test_deadband_zeros_small_inputs():
     assert apply_deadband(0.0, 0.1) == 0.0
 
 
-def test_deadband_passes_through_above_threshold():
-    assert math.isclose(apply_deadband(0.5, 0.1), 0.5)
-    assert math.isclose(apply_deadband(-0.5, 0.1), -0.5)
+def test_deadband_rescales_the_surviving_range():
+    # Scaled radial: what clears the deadband is stretched back over the full
+    # range, so the output leaves centre continuously instead of jumping to
+    # a tenth of the cap.
+    assert math.isclose(apply_deadband(0.5, 0.1), 0.4 / 0.9)
+    assert math.isclose(apply_deadband(-0.5, 0.1), -0.4 / 0.9)
+
+
+def test_deadband_is_continuous_at_the_threshold():
+    assert apply_deadband(0.0999, 0.1) == 0.0
+    assert apply_deadband(0.1, 0.1) == pytest.approx(0.0, abs=1e-9)
+    assert apply_deadband(0.101, 0.1) == pytest.approx(0.001 / 0.9)
+
+
+def test_deadband_preserves_the_endpoint():
+    # Full deflection still means "the cap" — that is what lets the deadband
+    # compose with the envelope fit downstream of it.
+    assert math.isclose(apply_deadband(1.0, 0.1), 1.0)
+    assert math.isclose(apply_deadband(-1.0, 0.35), -1.0)
 
 
 def test_posture_right_stick_maps_to_body_xy_scaled():
@@ -315,9 +350,13 @@ def test_gait_right_stick_drives_linear_xy():
     cfg = _cfg()
     state = JoyState(mode=GAIT)
     out = map_joy(_axes(right_x=0.5, right_y=1.0), _buttons(), cfg, state, DT)
-    # Linear cap is isotropic — same scale for x and y.
-    assert math.isclose(out.linear_x, cfg.gait_linear_max)
-    assert math.isclose(out.linear_y, 0.5 * cfg.gait_linear_max)
+    # Linear cap is isotropic — same scale for x and y. The pair is fitted to
+    # the envelope, so the stick's direction survives but its magnitude comes
+    # back to 1. The strafe axis is deadband-rescaled on the way in.
+    strafe = apply_deadband(0.5, cfg.base.deadband)
+    scale = 1.0 / math.hypot(1.0, strafe)
+    assert math.isclose(out.linear_x, scale * cfg.gait_linear_max)
+    assert math.isclose(out.linear_y, strafe * scale * cfg.gait_linear_max)
     assert out.angular_z == 0.0
 
 
@@ -327,6 +366,133 @@ def test_deadband_applied_before_scaling():
     # 0.15 magnitude is inside the deadband -> zero output
     out = map_joy(_axes(right_y=0.15), _buttons(), cfg, state, DT)
     assert out.linear_x == 0.0
+
+
+def test_single_axis_full_deflection_is_untouched_by_the_envelope_fit():
+    # The fit must only ever bite on combinations. Each axis alone commands
+    # exactly its cap, exactly as it did before the fit existed.
+    cfg = _cfg()
+    for axis, field, cap in (
+        ("right_y", "linear_x", cfg.gait_linear_max),
+        ("left_y", "linear_x", cfg.gait_linear_max),
+        ("right_x", "linear_y", cfg.gait_linear_max),
+        ("left_x", "angular_z", cfg.gait_angular_z_max),
+    ):
+        for sign in (+1.0, -1.0):
+            out = map_joy(
+                _axes(**{axis: sign}), _buttons(), cfg, JoyState(mode=GAIT), DT
+            )
+            assert math.isclose(getattr(out, field), sign * cap), (axis, sign)
+
+
+def test_both_sticks_sum_into_forward_velocity():
+    cfg = _cfg()
+    half = 0.5 + cfg.base.deadband / 2.0  # deadband-rescaled back to 0.5
+    out = map_joy(
+        _axes(left_y=half, right_y=half), _buttons(), cfg, JoyState(mode=GAIT), DT
+    )
+    assert math.isclose(out.linear_x, cfg.gait_linear_max)
+
+
+def test_forward_sources_clip_rather_than_double_the_cap():
+    cfg = _cfg()
+    out = map_joy(
+        _axes(left_y=1.0, right_y=1.0), _buttons(), cfg, JoyState(mode=GAIT), DT
+    )
+    assert math.isclose(out.linear_x, cfg.gait_linear_max)
+
+
+def test_opposing_forward_sources_subtract():
+    cfg = _cfg()
+    out = map_joy(
+        _axes(left_y=1.0, right_y=-1.0), _buttons(), cfg, JoyState(mode=GAIT), DT
+    )
+    assert out.linear_x == pytest.approx(0.0, abs=1e-12)
+
+
+def test_full_translation_diagonal_lands_on_the_speed_circle():
+    cfg = _cfg()
+    out = map_joy(
+        _axes(right_x=1.0, right_y=1.0), _buttons(), cfg, JoyState(mode=GAIT), DT
+    )
+    assert math.isclose(math.hypot(out.linear_x, out.linear_y), cfg.gait_linear_max)
+
+
+def test_full_forward_plus_full_yaw_splits_the_envelope():
+    # On the legs where translation and yaw point the same way the demand very
+    # nearly doubles, so both come back at roughly half — the diamond the leg
+    # polytope actually is, rather than the square a per-axis cap would give.
+    # The worst leg here is a middle one, whose tangential direction is purely
+    # fore/aft, so the split is not exactly even.
+    cfg = _cfg()
+    out = map_joy(
+        _axes(right_y=1.0, left_x=1.0), _buttons(), cfg, JoyState(mode=GAIT), DT
+    )
+    peak = max(math.hypot(1.0 - y, x) for x, y in _DEFAULT_STANCE_UNIT)
+    assert math.isclose(out.linear_x, cfg.gait_linear_max / peak)
+    assert math.isclose(out.angular_z, cfg.gait_angular_z_max / peak)
+    assert 0.5 < 1.0 / peak < 0.55
+
+
+def test_envelope_fit_preserves_the_commanded_direction():
+    # One scale factor for all three, unlike the engine's yaw_bias split: the
+    # robot goes where the sticks pointed, only slower.
+    raw = (0.9, -0.4, 0.7)
+    fitted = fit_drive_to_envelope(*raw, _DEFAULT_STANCE_UNIT)
+    ratio = fitted[0] / raw[0]
+    assert ratio < 1.0
+    for got, want in zip(fitted, raw):
+        assert math.isclose(got, want * ratio)
+
+
+def test_envelope_fit_is_linear_along_a_stick_ray():
+    # Half the deflection means half the velocity in the same direction, so
+    # the stick stays a proportional control all the way to the boundary.
+    full = fit_drive_to_envelope(0.8, 0.5, -0.6, _DEFAULT_STANCE_UNIT)
+    half = fit_drive_to_envelope(0.4, 0.25, -0.3, _DEFAULT_STANCE_UNIT)
+    for a, b in zip(half, full):
+        assert math.isclose(a, b / 2.0)
+
+
+def test_gait_velocity_never_exceeds_the_engine_envelope():
+    # The oracle: whatever the sticks ask for, the engine's own clamp finds
+    # nothing left to cut. Teleop and the engine agree by construction, so no
+    # stick travel is dead and no saturation quietly rotates the command.
+    cfg = _cfg()
+    linear_max = cfg.gait_linear_max
+    r_outer = linear_max / cfg.gait_angular_z_max
+    stance = {
+        f"leg{i}": (x * r_outer, y * r_outer)
+        for i, (x, y) in enumerate(_DEFAULT_STANCE_UNIT)
+    }
+    grid = (-1.0, -0.6, -0.2, 0.0, 0.35, 0.7, 1.0)
+    for left_y in grid:
+        for right_y in grid:
+            for right_x in grid:
+                for left_x in grid:
+                    out = map_joy(
+                        _axes(
+                            left_x=left_x,
+                            left_y=left_y,
+                            right_x=right_x,
+                            right_y=right_y,
+                        ),
+                        _buttons(),
+                        cfg,
+                        JoyState(mode=GAIT),
+                        DT,
+                    )
+                    cut = scale_to_envelope(
+                        out.linear_x,
+                        out.linear_y,
+                        out.angular_z,
+                        stance,
+                        linear_max,
+                        yaw_bias=0.6,
+                    )
+                    assert cut == pytest.approx(
+                        (out.linear_x, out.linear_y, out.angular_z), abs=1e-9
+                    )
 
 
 def test_gait_button_selects_gait_mode_on_rising_edge():
@@ -960,8 +1126,11 @@ def test_recorded_pose_bleeds_through_to_gait_mode():
     assert math.isclose(out.pose_y, cfg.posture.y_max)
     assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
     assert math.isclose(out.pose_pitch, cfg.posture.pitch_max)
-    assert math.isclose(out.linear_x, cfg.gait_linear_max)
-    assert math.isclose(out.linear_y, cfg.gait_linear_max)
+    # A full diagonal is a full deflection, so it lands on the envelope
+    # boundary rather than at the cap on both axes at once.
+    diagonal = cfg.gait_linear_max / math.sqrt(2.0)
+    assert math.isclose(out.linear_x, diagonal)
+    assert math.isclose(out.linear_y, diagonal)
 
 
 def test_start_with_recorded_pose_arms_revert_and_suppresses_init():

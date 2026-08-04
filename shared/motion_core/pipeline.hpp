@@ -86,7 +86,7 @@ struct TickResult {
   // Failsafe / telemetry / LED decision. force_zero was already applied to the
   // command inside tick(); the caller drives the relay + LED off this, and
   // decision.undervolt_stage off whatever alarm channel it has (hexa_hardware's
-  // buzzer spool on the Pi, the status LED on the Pico).
+  // /buzzer/play publisher on the Pi, the status LED on the Pico).
   hexa::supervisor::Decision decision{};
   bool relay_energized = false;          // == decision.relay_energized
 

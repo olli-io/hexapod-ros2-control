@@ -1,0 +1,28 @@
+# Hardware PWM for the buzzer, overlaid on docker-compose.robot.yaml.
+#
+# A separate file because the buzzer is optional hardware and this mount cannot
+# be made conditional inside a compose file. A bind whose source does not exist
+# makes Docker try to create it, which fails under /sys, and the whole stack
+# would refuse to start on a robot that simply has no buzzer fitted. So
+# scripts/robot.sh adds `-f docker-compose.buzzer.yaml` only when the host
+# actually has the PWM tree, and says so when it does not.
+#
+# The target is a plain /pwm, not a path under /sys. Docker mounts the
+# container's own /sys read-only and every /sys/class/pwm/pwmchipN is a symlink
+# into /sys/devices, so bind-mounting *there* is fiddly and buys nothing —
+# hexa_buzzer only needs a directory with a pwmchipN in it, and takes the path
+# as a parameter (config/buzzer.yaml). This is also why the container can drive
+# the buzzer at all now: the mount is its own rw mount, so exporting a channel
+# no longer fails with EROFS the way it did when the stack wrote a spool file
+# for a host script to play instead.
+#
+# The container runs as root, so no group_add or udev rule is needed to write
+# the exported channel.
+services:
+  robot:
+    volumes:
+      # BUZZER_PWM overrides the source for a Pi 4, whose PWM block is at a
+      # different platform address (see .env.robot.sample). Reached through the
+      # platform address rather than the pwmchipN number, which is kernel probe
+      # order and has moved between releases.
+      - "${BUZZER_PWM:-/sys/bus/platform/devices/1f00098000.pwm/pwm}:/pwm"

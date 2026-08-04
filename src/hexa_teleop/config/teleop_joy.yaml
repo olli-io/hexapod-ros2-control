@@ -50,6 +50,10 @@ base:
     start: init
     select: record
 
+# Right stick is full 2D translation; left stick is an arcade drive (turn on
+# X, forward on Y via drive_x_aux). The two forward sources sum and clip, then
+# the whole triple is fitted to the reachable velocity envelope — see the
+# package README for what that means for the feel.
 gait:
   bindings:
     l1: ""
@@ -61,7 +65,7 @@ gait:
     dpad_left: gait_prev
     dpad_right: gait_next
     left_stick_x: drive_yaw
-    left_stick_y: ""
+    left_stick_y: drive_x_aux
     right_stick_x: drive_y
     right_stick_y: drive_x
 
@@ -106,7 +110,7 @@ animation:
     dpad_left: animation_prev
     dpad_right: animation_next
     left_stick_x: drive_yaw
-    left_stick_y: ""
+    left_stick_y: drive_x_aux
     right_stick_x: drive_y
     right_stick_y: drive_x
 

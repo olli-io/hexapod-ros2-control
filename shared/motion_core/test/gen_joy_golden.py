@@ -62,6 +62,16 @@ def build_trace():
     f.append(frame(ry=-32767, rx=16000))               # + strafe
     f.append(frame(lx=-20000))                         # drive yaw
     f.append(frame())                                  # release
+    # ── the two forward sources and the envelope fit ──
+    f.append(frame(ly=-32767))                         # forward on the yaw stick
+    f.append(frame(ly=-20000, ry=-20000))              # both sources, summing
+    f.append(frame(ly=-32767, ry=-32767))              # both full, sum clipped
+    f.append(frame(ly=-32767, ry=16000))               # opposing, subtracting
+    f.append(frame(ry=-32767, rx=-32767))              # full diagonal
+    f.append(frame(ly=-32767, lx=-32767))              # full forward + full yaw
+    f.append(frame(ry=-32767, rx=-32767, lx=32767))    # all three saturated
+    f.append(frame(ry=-3600))                          # just past the deadband
+    f.append(frame())                                  # release
     f.append(frame(dx=-32767))                         # gait_next (rising)
     f.append(frame())                                  # release
     f.append(frame(dx=32767))                          # gait_prev (rising)
@@ -184,7 +194,10 @@ def main() -> int:
     # Reuse the shared caps helper rather than re-deriving the stance geometry
     # here; it is the same module hexa_teleop loads at runtime.
     sys.path.insert(0, os.path.join(src, "hexa_common"))
-    from hexa_common.limits import outer_stance_radius  # noqa: E402
+    from hexa_common.limits import (  # noqa: E402
+        outer_stance_radius,
+        unit_stance_xy,
+    )
 
     teleop = yaml.safe_load(open(f"{src}/hexa_teleop/config/teleop_joy.yaml"))
     # gait + posture knobs come from hexa_description's tuning.yaml (single
@@ -262,6 +275,7 @@ def main() -> int:
         gait_cycle=gait_cycle,
         gait_linear_max=gait_linear_max,
         gait_angular_z_max=gait_angular_z_max,
+        stance_unit=unit_stance_xy(geometry_path, tuning_path),
         animation_list=animation_list,
     )
 

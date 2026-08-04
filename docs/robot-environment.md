@@ -1,60 +1,48 @@
 # Robot environment
 
-Steps to take a fresh Raspberry Pi 4 or 5 from a blank SD card to a host ready
-to receive `./hexa deploy push`, plus the `./hexa deploy` / `./hexa robot`
-workflow that builds, ships, and drives it. See
-[`sim-environment.md`](sim-environment.md) for the sim/workstation side.
+Taking a fresh Raspberry Pi 4 or 5 from a blank SD card to a host ready to
+receive `./hexa deploy push`, plus the `./hexa deploy` / `./hexa robot`
+workflow. See [`sim-environment.md`](sim-environment.md) for the
+sim/workstation side.
 
-The sim container is x86_64, Gazebo-heavy, and built around a live source
-bind-mount — none of that fits the Pi. The robot path is a separate
-`robot.Dockerfile` cross-built for `linux/arm64`, shipped to the Pi as a saved
-image tarball, and run as a long-lived service.
+The robot image is a separate `robot.Dockerfile`, cross-built for `linux/arm64`
+on the workstation, shipped to the Pi as an image tarball, and run as a
+long-lived service.
+
+Sections 1–8 are the required path, in the order you do them. Everything from
+§9 on is optional or occasional; if you are fitting the display, the buttons or
+the buzzer, read §12–§15 before §5 so their `config.txt` lines and `.env` keys
+land in the first deploy.
 
 ## Hardware
 
 - Raspberry Pi 4 or 5 with a 16 GB+ microSD card.
-- Pimoroni Servo 2040 on the Pi header UART, GPIO14/15 (`/dev/ttyAMA0` on a
-  Pi 5, `/dev/ttyS0` on a Pi 4).
+- Pimoroni Servo 2040 on the Pi header UART, GPIO14/15.
 - Servo rail PSU behind the Servo 2040's relay.
 - Wired Ethernet or Wi-Fi.
-- Optional: 256×64 SH1122 OLED face on the Pi SPI bus (spidev0.0 +
-  DC/RST/CS on GPIO), rendered directly by `hexa_display`.
-- Optional: passive buzzer on GPIO12 for the boot, shutdown, stack-up,
-  over-current, and undervoltage tunes.
-- Optional: two momentary push buttons on GPIO5 / GPIO6 for the front-panel
-  info screens, read by `hexa_buttons`.
+- Optional: 256×64 SH1122 OLED face on SPI0 (§12).
+- Optional: two momentary push buttons on GPIO5 / GPIO6 (§13).
+- Optional: passive buzzer on GPIO12 (§15).
 
 Pi GPIO allocation, so nothing added later steals a line. All numbers are
-**BCM GPIO**, never header pin positions — the two differ on every Pi, and BCM
-is what `pinctrl`, the `gpiochip` character device, and `config.txt` use:
+**BCM GPIO**, never header pin positions — BCM is what `pinctrl`, the
+`gpiochip` character device, and `config.txt` use:
 
 - **GPIO14, GPIO15** — UART0 TXD / RXD, the Servo 2040 link.
-- **GPIO8, GPIO9, GPIO10, GPIO11** — SPI0 (CE0, MISO, MOSI, SCLK) for the
-  SH1122 face. CE0 is driven by the SPI controller, not by `hexa_display`
-  (`cs_line: -1`): the Pi 5's spi0 node claims GPIO8 as `spi0 CS0`, so
-  userspace cannot request the line, and its RP1 controller rejects
-  `SPI_NO_CS` (`unsupported mode bits 40` in `dmesg`) — the two together rule
-  out a manually driven CS on a Pi 5.
+- **GPIO8, GPIO9, GPIO10, GPIO11** — SPI0 (CE0, MISO, MOSI, SCLK) for the face.
+  CE0 is driven by the SPI controller, not by `hexa_display` (`cs_line: -1`).
 - **GPIO24, GPIO25** — the face's DC / RST control lines.
-- **GPIO12** — hardware PWM for the buzzer (RP1 PWM0 channel 0, alt function
-  `a0`). Not the overlay's default pin, so `config.txt` has to name it — see
-  the buzzer section below.
-- **GPIO5, GPIO6** — the front-panel buttons (`hexa_buttons`): info and
-  Bluetooth. Each switch goes between its line and ground; the SoC's internal
-  pull-up holds it high, so no external resistor is needed. Deliberately clear
-  of I²C1 below, so an IMU can still be added.
-- **GPIO2, GPIO3** — I²C1, free for an MPU6500 IMU.
-
-The buzzer is deliberately **not** on GPIO18, the pin most PWM examples reach
-for and the one a bare `dtoverlay=pwm-2chan` takes: that line is I²S PCM_CLK
-and SPI1 CE0, so it would rule out an audio HAT and collide with a second SPI
-device on the aux bus. GPIO12 costs nothing but an overlay parameter.
+- **GPIO12** — hardware PWM for the buzzer.
+- **GPIO5, GPIO6** — the front-panel buttons: info and Bluetooth. Each switch
+  goes between its line and ground; the internal pull-up holds it high, so no
+  external resistor is needed.
+- **GPIO2, GPIO3** — I²C1, left free for an MPU6500 IMU.
 
 ## 1. Flash the OS
 
-Use **Raspberry Pi OS Lite (64-bit)** via `rpi-imager`. In advanced options
-set hostname, username, enable SSH with your public key, and configure Wi-Fi
-if needed.
+Use **Raspberry Pi OS Lite (64-bit)** via `rpi-imager`. In advanced options set
+hostname, username, enable SSH with your public key, and configure Wi-Fi if
+needed.
 
 ## 2. Install Docker
 
@@ -65,42 +53,33 @@ curl -fsSL https://get.docker.com | sh
 sudo apt install -y docker-compose-plugin git
 sudo usermod -aG docker $USER
 ```
-Exit and re-enter the ssh session, then verify that docker runs:
+
+Exit and re-enter the ssh session, then verify:
 
 ```
 docker run --rm hello-world
 ```
 
-## 2b. Enable the servo UART (required)
+## 3. Enable the servo UART
 
-The Servo 2040 hangs off the Pi's header UART, not USB. Wire it crossed, with a
-common ground:
+Wire the Servo 2040 to the header UART, crossed, with a common ground:
 
 - **Pi GPIO14 (UART0 TXD)** — Servo 2040 **RX**.
 - **Pi GPIO15 (UART0 RXD)** — Servo 2040 **TX**.
-- **Pi GND** — Servo 2040 **GND**. Both boards keep their own supply; only the
-  ground is shared.
+- **Pi GND** — Servo 2040 **GND**. Both boards keep their own supply.
 
-GPIO numbers here are BCM, not header positions — `pinctrl` and the
-`gpiochip` interface both speak BCM, and the physical pin a GPIO lands on
-differs from its number.
-
-Which kernel device those two lines become depends on the model, so the
-enabling step and `SERVO_DEVICE` differ. **Pi 5** — the GPIO14/15 UART is RP1's
-`uart0`, off by default; turn it on:
+**Pi 5** — the GPIO14/15 UART is off by default:
 
 ```
 # /boot/firmware/config.txt
 dtparam=uart0=on
 ```
 
-After a reboot it appears as **`/dev/ttyAMA0`**. Nothing else contends for it:
-the Pi 5's serial console lives on the separate 3-pin debug connector
-(`uart10` → `/dev/ttyAMA10`, which is also what `/dev/serial0` points at), so
-leave `cmdline.txt` alone.
+After a reboot it is **`/dev/ttyAMA0`**. Leave `cmdline.txt` alone; the serial
+console is on the separate debug connector.
 
-**Pi 4** — GPIO14/15 is the mini-UART, and the console *does* sit on it. Enable
-the port and evict the getty:
+**Pi 4** — GPIO14/15 is the mini-UART and the console sits on it. Enable the
+port and evict the getty:
 
 ```
 sudo raspi-config nonint do_serial_hw 0     # enable the hardware UART
@@ -108,196 +87,32 @@ sudo raspi-config nonint do_serial_cons 1   # disable the serial login console
 sudo reboot
 ```
 
-By hand that is `enable_uart=1` in `config.txt` plus dropping the
-`console=serial0,115200` token from `/boot/firmware/cmdline.txt`. The device is
-**`/dev/ttyS0`**; `enable_uart=1` also pins the core clock so the mini-UART's
-baud stays stable, and 115200 is well within its range.
-
-Verify after the reboot that the node exists and the pins carry the UART
-function:
+The device is **`/dev/ttyS0`**. Verify after the reboot:
 
 ```
 ls -l /dev/ttyAMA0            # Pi 5   (Pi 4: /dev/ttyS0)
 pinctrl get 14,15             # expect a1/uart function, not "none"
 ```
 
-Then set `SERVO_DEVICE` in `~/hexa-robot/.env` to match — `/dev/ttyAMA0` is the
-shipped default, so a Pi 4 is the case that needs the edit. Two traps worth
-naming:
+Two traps:
 
-- **Do not add `dtoverlay=disable-bt`.** The gamepad pairs over the Pi's
-  onboard Bluetooth, and that overlay steals the radio's UART to move the PL011
-  onto the header.
-- **`/dev/serial0` is not model-portable here.** On a Pi 4 it tracks the
-  header UART, but on a Pi 5 it is the debug connector — wiring the servos to
-  GPIO14/15 and naming `serial0` would silently talk to the wrong port.
+- **Do not add `dtoverlay=disable-bt`.** The gamepad pairs over the onboard
+  Bluetooth, and that overlay steals the radio's UART.
+- **Do not use `/dev/serial0`.** On a Pi 5 it is the debug connector, not the
+  header UART.
 
-## 2c. Enable the display SPI (optional)
-
-Only needed if the SH1122 OLED face is fitted. `hexa_display` drives the
-panel directly over spidev + the kernel GPIO character device. Enable
-the SPI bus:
+## 4. Note hardware IDs
 
 ```
-# /boot/firmware/config.txt
-dtparam=spi=on
+ls -l /dev/ttyAMA0                          # servo UART from §3 (Pi 4: ttyS0)
+getent group input | cut -d: -f3            # INPUT_GID (example: 994)
 ```
 
-Reboot, then verify the device nodes exist and note the group IDs:
-
-```
-ls -l /dev/spidev0.0 /dev/gpiochip0
-getent group spi  | cut -d: -f3            # note for SPI_GID
-getent group gpio | cut -d: -f3            # note for GPIO_GID
-```
-
-The robot compose maps both device nodes into the container and
-forwards the Pi's `spi` / `gpio` group GIDs (`SPI_GID` / `GPIO_GID` in
-`.env`) so the node can open them. Wiring (SPI0 + control pins) and
-the render rate are configured in `hexa_display`'s `config/display.yaml`.
-
-Without the display fitted, set `enabled: false` in
-`hexa_display/config/display.yaml` (the bringup gate skips the face
-node); otherwise `hexa_display` aborts at startup when it cannot open
-the panel.
-
-## 2d. Front-panel buttons (optional)
-
-Two momentary push buttons, each between its BCM line and ground:
-
-- **GPIO5** (physical pin 29, ground on 30) — battery percentage/voltage plus
-  the address for the web teleop UI.
-- **GPIO6** (physical pin 31, ground on 34) — connected-controller status; hold
-  3 s to request a Bluetooth pairing scan.
-
-No `config.txt` change and no extra compose entry: `hexa_buttons` reads the same
-`/dev/gpiochip0` the face already uses, so the device mapping and the `gpio`
-group from section 2c cover it. Wiring polarity, the line numbers and the
-timing are in `hexa_buttons`'s `config/buttons.yaml`.
-
-The node reads the lines with **gpiozero** on an explicitly pinned **lgpio** pin
-factory — edge-driven, so nothing is polled between presses. `python3-gpiozero`
-and `python3-lgpio` are installed by `robot.Dockerfile`'s runtime stage, which
-also bakes in `GPIOZERO_PIN_FACTORY=lgpio`: gpiozero's default factory search
-ends in `native`, which maps BCM283x registers directly and on a Pi 5's RP1
-reads garbage rather than failing, so it is never left to guess. gpiozero 2.0 or
-newer is required for Pi 5 board data — Ubuntu 24.04 ships 2.0.1.
-
-Both screens land on the face's panel, so they need the display fitted to be
-visible. Without the buttons fitted, set `enabled: false` in
-`hexa_buttons/config/buttons.yaml`; leaving it on with nothing wired is
-harmless — the node logs that it could not claim the lines and stays inert.
-
-## 2d. Enable the buzzer PWM (optional)
-
-Only needed if the passive buzzer is fitted. Wire buzzer **+** to GPIO12 (BCM)
-and **−** to GND; add a ~100 Ω resistor in series if it is too loud.
-
-Tunes are played by `systemd/buzzer.sh` — POSIX shell writing the kernel's
-sysfs PWM interface, with no Python, gpiozero, or any other package installed
-on the host. (The *container* does carry gpiozero, for `hexa_buttons`; that is
-a separate world, and the buzzer script deliberately depends on nothing.)
-It runs on the **Pi host**, never in the container, for two reasons: the boot
-tune has to chirp seconds after the kernel hands off, long before Docker and
-the ROS stack exist; and the container cannot reach the PWM at all — Docker
-mounts `/sys` read-only, and every `/sys/class/pwm/pwmchipN` is a symlink into
-`/sys/devices`, so an export from inside fails with `EROFS` however the class
-directory is bound.
-
-The robot has five tunes, differing in contour so they are told apart through a
-closing door:
-
-- **`boot`** — rising two notes. The Pi has power and the kernel is up. Played
-  by `hexa-boot-tune.service`.
-- **`up`** — rising triad. The ROS stack is live and the servo link is open
-  (`hexa_hardware` activated). Requested by the container.
-- **`shutdown`** — falling, the mirror of `boot`. The last thing before power
-  is cut: when it stops, the switch is safe. Played by
-  `hexa-shutdown-tune.service`.
-- **`fault`** — two-tone klaxon, repeated, ~2 s. The Servo 2040 latched an
-  over-current trip and dropped the rail. Requested by the container.
-- **`undervolt`** — one flat sustained tone, ~1.8 s. Rung 1 of the undervoltage
-  ladder: the pack is low but the robot is **still drivable**, so walk it back
-  and charge it. The opposite contour to `fault` because it calls for the
-  opposite response. Requested by the container, once per power cycle.
-
-The three container-borne tunes take a detour, since the container cannot drive
-the buzzer itself: `hexa_hardware` writes the tune name into
-`/workspace/log/buzzer` (the `buzzer.spool` path in `hardware.yaml`), which
-compose bind-mounts from `~/hexa-robot/log`, and the host's
-`hexa-tune-spool.path` unit sees the write and runs `buzzer.sh --spool` with
-it. Blank `buzzer.spool` to stop the requests at the source.
-
-Enable the PWM block:
-
-```
-# /boot/firmware/config.txt
-dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4
-```
-
-The parameters are not optional. A bare `dtoverlay=pwm-2chan` maps GPIO18/19
-instead and leaves GPIO12 an input, which is the quietest possible failure:
-the PWM block still probes, the channel still exports, every write still
-succeeds, and the wire hears nothing. `func=4` is ALT0, which `pinctrl` calls
-`a0` — see the pin/function table in `/boot/firmware/overlays/README`.
-
-On the Pi 5 the PWM lives in the RP1 southbridge, where GPIO12 is PWM0
-**channel 0**. Reboot, then confirm the mux and hear it:
-
-```
-pinctrl get 12                      # expect a0 / PWM0_CHAN0, not "none"
-cd ~/hexa-robot && ./hexa robot play-tune
-```
-
-`play-tune` takes a tune name, so each one can be heard without provoking it —
-`./hexa robot play-tune fault` is the only sane way to audition that one.
-
-`config.txt` is the only thing that muxes the pin — `buzzer.sh` never calls
-`pinctrl`, so the `pinctrl get 12` check above is the one that catches a
-missing parameter. `config.txt` fixes the pin mux but not the sysfs chip number: `pwmchipN` is
-kernel probe order and has moved between releases, so it cannot be hardcoded —
-and a stale number fails the same silent way, because exporting a channel on
-the *other* PWM block (RP1 has two, both 4-channel) succeeds and simply makes
-no sound. The platform address is fixed, so `buzzer.sh` reaches PWM0 through
-`/sys/bus/platform/devices/1f00098000.pwm/pwm/` and globs the one chip under
-it.
-
-That address is Pi 5 only. On a Pi 4, set
-`TUNE_PWMCHIP=/sys/class/pwm/pwmchip0`; channel 0 is GPIO12 there too.
-
-Tune it without editing the script — the same `NOTE:beats` melody format the
-gpiozero recipes use, `REST` for silence. `TUNE_MELODY` overrides whichever
-tune was named:
-
-```
-TUNE_MELODY="C5:1 E5:1 G5:1 C6:1 REST:1 G5:1 C6:3" TUNE_TEMPO=0.11 \
-    ./hexa robot play-tune
-```
-
-`TUNE_CHANNEL` (plus the matching overlay parameters) covers a different buzzer
-pin. Every hardware failure — no buzzer, no overlay, busy channel — logs a line and
-exits 0, so a tune can never hold up a boot, a shutdown, or the fault path that
-asked for it.
-
-## 3. Note hardware IDs
-
-On the Pi:
-
-```
-ls -l /dev/ttyAMA0                          # the servo UART from step 2b (Pi 4: ttyS0)
-getent group input | cut -d: -f3            # note the input GID (example: 994)
-```
-
-## 4. First deploy from the workstation
+## 5. First deploy from the workstation
 
 `./hexa deploy build` cross-compiles `linux/arm64` under QEMU, so the
-workstation kernel needs an aarch64 binfmt_misc handler pointing at a
-**static** QEMU interpreter. On Arch this requires manual setup —
-installing `qemu-user-static` (extra) ships the static binary but no
-binfmt config, while the `qemu-user` package's config in
-`/usr/lib/binfmt.d/` points at the *dynamic* interpreter, which fails
-inside the build container with `exec /bin/sh: no such file or directory`.
-Override it once:
+workstation needs an aarch64 binfmt_misc handler pointing at a **static** QEMU
+interpreter. On Arch, set it up once:
 
 ```
 sudo install -m 644 /usr/lib/binfmt.d/qemu-aarch64.conf /etc/binfmt.d/qemu-aarch64.conf
@@ -306,145 +121,226 @@ echo -1 | sudo tee /proc/sys/fs/binfmt_misc/qemu-aarch64
 sudo systemctl restart systemd-binfmt
 ```
 
-Verify the `interpreter` line in `/proc/sys/fs/binfmt_misc/qemu-aarch64`
-ends in `-static`. Other distros may register the static handler
-automatically on `qemu-user-static` install — check
-`/proc/sys/fs/binfmt_misc/qemu-aarch64` before assuming it's broken.
-`scripts/deploy.sh` preflights this and refuses to build without a
-registered aarch64 handler.
+Verify the `interpreter` line in `/proc/sys/fs/binfmt_misc/qemu-aarch64` ends in
+`-static`. Other distros may register the static handler automatically —
+check before assuming it's broken. `scripts/deploy.sh` refuses to build without
+a registered aarch64 handler.
 
 ```
 ./hexa deploy build
 ./hexa deploy push pi@<host>
 ```
 
-This ships the image tarball, the compose file, and the launcher
-(`hexa` + `scripts/robot.sh`) to `~/hexa-robot/`, loads the image, seeds
+This ships the image tarball, the compose file, and the launcher (`hexa` +
+`scripts/robot.sh`) to `~/hexa-robot/`, loads the image, seeds
 `~/hexa-robot/.env` from `.env.robot.sample`, and starts the container **cold**
-(relay open, hardware inactive). The shipped launcher is what makes
-`./hexa robot <cmd>` work on the Pi.
+(relay open, hardware inactive).
 
-Two files on the Pi are config rather than image content, and they update
-differently:
+Two files on the Pi are config rather than image content:
 
-- **`~/hexa-robot/.env`** — seed-once from `.env.robot.sample`. It holds
-  host-specific GIDs and device names the repo cannot know, so a redeploy never
-  touches it once it exists. `hexa deploy sync-config` (below) is how a key
-  added to the sample later still reaches an already-provisioned Pi.
-- **`~/hexa-robot/tuning.yaml`** — refreshed from the repo on **every** deploy.
-  The compose bind-mount puts this file over the image's baked copy, so a
-  seed-once overlay would shadow every tuning change you ever deploy and pin
-  the schema the Pi was first provisioned with. If the on-Pi file differs from
-  the repo's, deploy saves it as `tuning.yaml.bak` and says so, then overwrites.
-  Tune on the Pi freely between deploys (`hexa robot restart` re-reads it) —
-  just fold anything worth keeping back into
-  `src/hexa_description/config/tuning.yaml`.
+- **`~/hexa-robot/.env`** — seeded once, never touched by a redeploy. It holds
+  host-specific GIDs and device names. Use `hexa deploy sync-config` (§9) to
+  pick up keys added to the sample later.
+- **`~/hexa-robot/tuning.yaml`** — refreshed from the repo on **every** deploy
+  (the bind-mount shadows the image's baked copy). If the on-Pi file differs,
+  deploy saves it as `tuning.yaml.bak` and says so, then overwrites. Tune on the
+  Pi freely between deploys (`hexa robot restart` re-reads it) — just fold
+  anything worth keeping back into `src/hexa_description/config/tuning.yaml`.
 
-### 4a. Refreshing config without a deploy
+## 6. Edit `~/hexa-robot/.env` on the Pi
 
-```
-./hexa deploy sync-config pi@<host>
-```
-
-Config-only: no image, nothing restarted. Use it when the repo's defaults moved
-but the image did not — a new key in `.env.robot.sample`, a tuning change, or an
-edit to a host-side script like `systemd/buzzer.sh`, which lives outside the
-image entirely.
-
-- **`.env`** — appends the keys the Pi is **missing**, with their comments;
-  values already set are kept (`INPUT_GID`, `SERVO_DEVICE` and friends are facts
-  about this Pi). Old file → `.env.bak`. Keys the Pi has and the sample lacks are
-  reported, not removed.
-- **`--force`** — overwrite `.env` from the sample instead, host-specific values
-  included. For re-provisioning. Still backs up.
-- **`tuning.yaml`** — refreshed from the repo, on-Pi edit → `tuning.yaml.bak`.
-- **`systemd/`** — re-ships `buzzer.sh`, `network-mode.sh` and the unit
-  templates. Shipped, never installed. The scripts go live at once; installed
-  units are rendered copies, so the command names the `hexa robot install-*` to
-  re-run.
-
-Image, compose file, and launcher stay `push`'s business — shipping them here
-would leave code with no matching image. `.env` changes need a container
-recreate (`hexa robot -H <host> restart`), which also re-reads `tuning.yaml`.
-
-## 5. Edit `~/hexa-robot/.env` on the Pi
-
-- **`INPUT_GID`** — value from step 3 (typically something like`996`).
+- **`SERVO_DEVICE`** — the servo UART from §3. Default `/dev/ttyAMA0` is right
+  on a Pi 5; a Pi 4 needs `/dev/ttyS0`.
+- **`INPUT_GID`** — value from §4 (typically something like `996`).
 - **`ROS_DOMAIN_ID`** — DDS domain, default `42`.
-- **`SERVO_DEVICE`** — the servo UART from step 2b. The default `/dev/ttyAMA0`
-  is right on a Pi 5; a Pi 4 needs `/dev/ttyS0`.
+- **`SPI_GID`**, **`GPIO_GID`** — from §12, if the display or buttons are fitted.
 
+## 7. Bring up and drive
 
-## 6. Bring up and drive
-
-Run the robot ops on the Pi (the launcher was shipped in step 4). The container
-energizes itself on launch — `robot.launch.py` brings `HexaSystem` active and
-spawns both controllers — so `up` just does `compose up -d` and waits for
-`controller_manager` to report ready; `down` is the safe-stop (relay off + unload,
-then compose down). The servo rail closes a moment later and the robot settles
-into its folded pose leg by leg (see the energize-sweep note in §6c). The gamepad
-and web teleop are part of the container's launch, so the robot is drivable as
-soon as `up` finishes — no separate teleop step:
+The container energizes itself on launch, and the gamepad and web teleop are
+part of that launch, so the robot is drivable as soon as `up` finishes:
 
 ```
 ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot up'
 ssh pi@<host> 'cd ~/hexa-robot && ./hexa robot down'
 ```
 
-Or drive them from the workstation with `-H/--host` — `hexa robot` re-dispatches
-the command over ssh in `~/hexa-robot`:
+Or drive it from the workstation with `-H/--host`, which re-dispatches over ssh:
 
 ```
 ./hexa robot -H pi@<host> up
 ./hexa robot -H pi@<host> down
 ```
 
-`./hexa robot {restart|status|logs|shell}` are the routine container ops against
-the local `hexa-robot` service (also `-H`-dispatchable from the workstation).
+`./hexa robot {restart|status|logs|shell}` are the routine container ops, also
+`-H`-dispatchable.
 
-Energizing spawns the controllers and activates `HexaSystem`. Activating the
-component does not itself touch the relay: it closes when `hexa_locomotion`
-publishes `true` on `/hardware/relay_cmd`, which the supervisor asks for once
-teleop is publishing — normally within a second of launch, while the engine is
-still `folded`. The robot then takes up its **folded pose under power** and stops
-there; standing takes a gamepad **Start** (or `/gait/initialize`). So a
-`restart: unless-stopped` auto-restart (crash / power blip) brings the stack back
-**energized but stationary**: the servos never flail unattended.
-Energize-on-launch is implemented by passing
-`hardware_components_initial_state: {active: [HexaSystem]}` to `controller_manager`
-from `robot.launch.py`, which also spawns both controllers (see the energize-sweep
-note below).
+**What `up` leaves you with:** the servo rail closes a moment later and the
+robot takes up its **folded pose under power**, one leg at a time (rear → front,
+`init.sweep_leg_interval_ms` apart — 150 ms by default — to keep inrush off the
+board's over-current trip; set it to `0` in `hardware.yaml` to energize all at
+once). It goes no further: pressing **Start** on the gamepad (or publishing
+`/gait/initialize`) is what stands it up. Nothing walks unattended, and an
+auto-restart after a crash comes back energized but stationary.
 
-## 6b. Wi-Fi hotspot for web teleop (optional)
+Folding again (Start from a stand) parks the feet and drops the rail, leaving
+the robot limp — the same state `hexa robot down` leaves it in. An over-current
+trip also drops the rail and holds it open until Start recovers.
 
-**Teleop already works by connecting to the Pi's local ip.** The web teleop
-(`hexa_webteleop`) hosts an HTTP + WebSocket server on port 8080 inside the
-container, and with `network_mode: host` that server is reachable on every one
-of the Pi's interfaces. Nothing below is needed on a network you already have.
+## 8. Re-deploy
+
+```
+./hexa deploy build
+./hexa deploy push pi@<host>
+```
+
+The container restarts cold after each redeploy — re-run `hexa robot up`.
+
+## 9. Refreshing config without a deploy
+
+```
+./hexa deploy sync-config pi@<host>
+```
+
+Config-only: no image, nothing restarted. Use it when the repo's defaults moved
+but the image did not.
+
+- **`.env`** — appends only the keys the Pi is **missing**, with their comments;
+  existing values are kept. Old file → `.env.bak`. Keys the Pi has and the
+  sample lacks are reported, not removed.
+- **`--force`** — overwrite `.env` from the sample instead, host-specific values
+  included. For re-provisioning. Still backs up.
+- **`tuning.yaml`** — refreshed from the repo, on-Pi edit → `tuning.yaml.bak`.
+- **`systemd/`** — re-ships `network-mode.sh` and the unit templates, plus
+  `hexa_buzzer/` (the tune player the boot and shutdown units run). Scripts go
+  live at once; installed units are rendered copies, so re-run the matching
+  `hexa robot install-*`.
+
+`.env` changes need a container recreate (`hexa robot -H <host> restart`), which
+also re-reads `tuning.yaml`.
+
+## 10. Undervoltage ladder
+
+A draining pack is handled in three escalating rungs, off `~/battery_state`:
+
+- **rung 1 — warn.** The `undervolt` tune sounds once and the status LED goes to
+  the fault cadence. The robot stays **drivable**, so it can be walked back to
+  the bench.
+- **rung 2 — fold.** The gait command is zeroed and a fold is queued; the rail
+  is cut once the legs are parked.
+- **rung 3 — cutoff.** The rail is cut immediately, whatever the posture, and
+  latched open.
+
+Two properties to know before tuning it:
+
+- **The ladder only escalates.** Cutting the rail unloads the pack and the
+  voltage rebounds, so it never de-escalates on its own.
+- **A cutoff is cleared by power-cycling the robot**, and nothing else — it
+  survives a locomotion restart, and `~/reload_config` is refused from rung 2 up.
+
+Thresholds live in `battery:` in `hexa_description/config/hardware.yaml`. They
+ship **disabled** (`0.0` on all three rungs) because the Servo 2040's voltage
+divider is uncalibrated. Measure the pack against `~/battery_state` first, then
+set all three in descending order (codegen rejects a mis-ordered ladder). Until
+then the robot beeps, folds and cuts for over-current only.
+
+## 11. Start on boot (optional)
+
+Docker's `restart: unless-stopped` alone races the device nodes compose maps at
+power-on, so a fresh boot can fail container-create outright. Install the
+systemd unit, which pre-flights the Docker daemon and those nodes before
+bringing the stack up, and safe-stops on shutdown:
+
+```
+cd ~/hexa-robot && ./hexa robot install-service
+sudo systemctl start hexa-robot     # or just reboot
+```
+
+It needs `sudo`, so run it on a TTY (`ssh -t` if remote).
+
+- **`ExecStart`** — `hexa robot boot`: wait for Docker, wait for `SERVO_DEVICE`
+  (plus `SPI_DEVICE` / `GPIO_CHIP` when `.env` names them), then the same `up`
+  an operator would run.
+- **`ExecStop`** — `hexa robot down`: relay off and controllers unloaded before
+  the container is removed.
+
+Inspecting and undoing:
+
+- **`systemctl status hexa-robot`** — expect `active (exited)`; the unit is
+  `Type=oneshot` with `RemainAfterExit=yes`.
+- **`journalctl -u hexa-robot -b`** — the boot run's pre-flight and bring-up log.
+- **`sudo systemctl disable hexa-robot`** — stop starting on boot. While the
+  unit is enabled a `hexa robot down` does not survive a reboot.
+- **`./hexa robot uninstall-service`** — disable and delete the unit.
+
+## 12. Display SPI (optional hardware)
+
+Only needed if the SH1122 OLED face is fitted.
+
+```
+# /boot/firmware/config.txt
+dtparam=spi=on
+```
+
+Reboot, then note the group IDs for `.env` (§6):
+
+```
+ls -l /dev/spidev0.0 /dev/gpiochip0
+getent group spi  | cut -d: -f3            # SPI_GID
+getent group gpio | cut -d: -f3            # GPIO_GID
+```
+
+Compose maps both device nodes into the container and forwards `SPI_GID` /
+`GPIO_GID` from `.env`. Wiring and render rate live in `hexa_display`'s
+`config/display.yaml`.
+
+Without the display fitted, set `enabled: false` in that file; otherwise
+`hexa_display` aborts at startup when it cannot open the panel.
+
+## 13. Front-panel buttons (optional hardware)
+
+Two momentary push buttons, each between its BCM line and ground:
+
+- **GPIO5** (physical pin 29, ground on 30) — battery percentage/voltage plus
+  the web teleop address; hold 3 s to toggle Wi-Fi hotspot mode (§14).
+- **GPIO6** (physical pin 31, ground on 34) — connected-controller status; hold
+  3 s to request a Bluetooth pairing scan.
+
+No `config.txt` change and no extra compose entry: `hexa_buttons` uses the same
+`/dev/gpiochip0` and `gpio` group as §12. Line numbers, polarity and timing are
+in `hexa_buttons`'s `config/buttons.yaml`.
+
+Both screens land on the face's panel, so the display must be fitted to see
+them. Without the buttons fitted, set `enabled: false` in `buttons.yaml`;
+leaving it on with nothing wired is harmless — the node logs that it could not
+claim the lines and stays inert.
+
+## 14. Wi-Fi hotspot for web teleop (optional)
+
+**Teleop already works by connecting to the Pi's local IP** — `hexa_webteleop`
+serves port 8080 on every interface. Nothing here is needed on a network you
+already have.
 
 What this adds is a way to reach the robot where there is no such network:
 **hold the info button (GPIO5) for three seconds** and the Pi stops joining
-Wi-Fi and starts hosting its own. Hold it again to go back. The face wears its
-scanning spinners while the switch runs, and the info screen then carries the
-credentials.
+Wi-Fi and starts hosting its own. Hold it again to go back. The info screen
+carries the credentials.
 
 - **network** — `hexapod`
 - **password** — `hexahexa`
-- **the robot** — `http://192.168.4.1/`, or any address at all (see the portal below)
+- **the robot** — `http://192.168.4.1/`, or any address at all (the hotspot
+  resolves every hostname to the robot and redirects port 80 to 8080)
 
 ### Install
 
-Shipped by every deploy, installed only when you ask — the same opt-in shape as
-the buzzer units, and for a stronger reason: this can take the Pi off the
-network you are ssh'd in over.
+Shipped by every deploy, installed only when you ask — this can take the Pi off
+the network you are ssh'd in over.
 
 ```
 ssh -t <host> 'cd ~/hexa-robot && ./hexa robot install-network'
 ```
 
-That renders the three unit templates into `/etc/systemd/system`, enables them,
-writes the captive-DNS drop-in, and seeds the state file. `uninstall-network`
-reverses all of it. To switch without a button fitted:
+`uninstall-network` reverses all of it. To switch without a button fitted:
 
 ```
 ./hexa robot network-mode status      # which mode is the radio in
@@ -455,217 +351,137 @@ reverses all of it. To switch without a button fitted:
 
 ### Requirements
 
-- **NetworkManager managing wlan0** — Pi OS Bookworm or newer. `nmcli` does all
-  the work, so there is no `hostapd` and no `dnsmasq` package to install: an AP
-  profile with `ipv4.method=shared` makes NetworkManager run its own dnsmasq for
-  DHCP and DNS on that interface.
+- **NetworkManager managing wlan0** — Pi OS Bookworm or newer. No `hostapd` or
+  `dnsmasq` package to install.
 - **A Wi-Fi country set** — `raspi-config`, Localisation Options, WLAN Country.
-  An access point will not start without a regulatory domain; the script checks
-  for this and reports `No wifi country is set` on the panel rather than failing
-  opaquely.
-
-### How the button reaches the host
-
-The ROS stack runs in an unprivileged container — host networking, non-root
-user, no D-Bus socket, no `NET_ADMIN` — so it cannot talk to NetworkManager at
-all. It uses the same escape hatch as the buzzer: `hexa_buttons` writes a
-request into the bind-mounted log volume, and a host `systemd .path` unit runs
-`systemd/network-mode.sh` out here.
-
-- **`log/network`** — container to host. One line: an action and a token.
-  Watched by `hexa-network-spool.path`, which runs `hexa-network-spool.service`.
-- **`log/network.state`** — host to container. `key=value` lines naming the
-  mode, the credentials, and how the last request went. Written tmp + rename so
-  a 20 Hz poll can never read half a line.
-- **`hexa-network-report.service`** — writes that state file at boot, so the
-  container knows which mode the Pi came up in without having to ask.
-
-The host is the authority on which mode the radio is in — the AP profile being
-active is the whole definition — which is why the button sends `toggle` rather
-than naming a target. Failures come back as short tokens the panel turns into
-sentences: `Could not start the hotspot`, `No network helper installed`,
-`wlan0 is not managed by NM`, and so on.
-
-### The captive portal
-
-Two pieces, no reverse proxy. `hexa_webteleop` already binds `0.0.0.0:8080`, so
-nginx or traefik in front of it would be a hop and a daemon for nothing.
-
-- **Wildcard DNS** — `/etc/NetworkManager/dnsmasq-shared.d/hexa-captive.conf`
-  holds `address=/#/192.168.4.1`, so every hostname resolves to the robot.
-  NetworkManager only starts the dnsmasq that reads it for a `shared`
-  connection, so the file is inert in station mode; it is written once at
-  install rather than toggled.
-- **A port 80 redirect** — an nftables rule in its own `hexa_portal` table sends
-  port 80 on the AP interface to 8080, so the address needs no `:8080` on the
-  end. This also catches clients that ignore DHCP's DNS and hard-code a
-  resolver, which the wildcard alone cannot reach. Added when the hotspot comes
-  up, torn down with one `nft delete table` when it goes.
-
-The OS probe URLs are deliberately **not** hijacked, so phones show their usual
-"no internet" notice instead of auto-opening a sign-in window. That is the
-better trade for this app: iOS's Captive Network Assistant is a cut-down
-browser, and the teleop UI is a WebSocket gamepad surface that wants a real one.
-Open `http://hexapod/` — or anything else — in Safari or Chrome.
+  An AP will not start without a regulatory domain; the panel reports
+  `No wifi country is set` if it is missing.
 
 ### Consequences worth knowing
 
-- **One radio.** `wlan0` cannot be an access point and a client at the same
-  time, so entering hotspot mode drops any ssh session over Wi-Fi, and the
-  hotspot has no route to the internet. That islanding is the point, but it also
-  means the switch is one-way from a Wi-Fi shell — use ethernet, a console, or
-  the button.
-- **A reboot always comes back in station mode.** The AP profile is created with
-  `autoconnect no` on purpose: a robot that crashed and came back hosting an AP
-  would be unreachable from the workstation.
-- **A hotspot that fails to start rolls back.** The script records the station
-  profile that was up before it touches anything, and puts it back if the AP
-  will not activate, rather than leaving the robot with no network at all.
-- **Ethernet, if plugged in, is a route.** `ipv4.method=shared` NATs AP clients
-  to whatever uplink exists. With `wlan0` as the AP and nothing on `eth0` there
-  is no uplink and the hotspot is islanded; plug ethernet in and clients get out
-  through it.
+- **One radio.** `wlan0` cannot be an AP and a client at once, so entering
+  hotspot mode drops any ssh session over Wi-Fi. Switch from ethernet, a
+  console, or the button.
+- **A reboot always comes back in station mode**, on purpose.
+- **A hotspot that fails to start rolls back** to the station profile that was
+  up before.
+- **Ethernet, if plugged in, is a route.** AP clients are NATed to whatever
+  uplink exists; with nothing on `eth0` the hotspot is islanded.
+- **The OS probe URLs are not hijacked**, so phones show their usual "no
+  internet" notice instead of opening a cut-down sign-in browser. Open
+  `http://hexapod/` in a real browser.
 
 The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by default,
 and the webapp prompts to claim control when it connects. See
-`src/hexa_webteleop/README.md` for the arbitration protocol.
+`src/hexa_webteleop/README.md`.
 
-## 6c. Start on boot (optional)
+## 15. Buzzer (optional)
 
-Out of the box, Docker's `restart: unless-stopped` restarts the container after a
-crash or reboot, and the container energizes itself on launch — but that races the
-device nodes compose maps (`/dev/ttyAMA0` and friends can lag the daemon at
-power-on), so a fresh boot can fail container-create outright. Install the systemd
-unit to pre-flight the daemon and those nodes before bringing the stack up, and to
-safe-stop cleanly on shutdown:
+Wire buzzer **+** to GPIO12 (BCM) and **−** to GND; add a ~100 Ω resistor in
+series if it is too loud. Then:
 
 ```
-cd ~/hexa-robot && ./hexa robot install-service
-sudo systemctl start hexa-robot     # or just reboot
+# /boot/firmware/config.txt
+dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4
 ```
 
-`install-service` renders `~/hexa-robot/systemd/hexa-robot.service` (shipped by
-`hexa deploy push`) for the current user and install directory, writes it to
-`/etc/systemd/system/`, and enables it. It needs `sudo`, so run it on a TTY
-(`ssh -t` if driving it remotely).
+The parameters are not optional. A bare `dtoverlay=pwm-2chan` maps GPIO18/19
+and leaves GPIO12 an input — every write still succeeds and the wire hears
+nothing.
 
-What the unit does on boot:
+Reboot, then confirm the mux and hear it:
 
-- **`ExecStart`** — `hexa robot boot`: waits for the Docker daemon, waits for
-  the device nodes compose maps (`SERVO_DEVICE`, plus `SPI_DEVICE` / `GPIO_CHIP`
-  when `.env` names them — a node can lag the unit at boot), then runs the
-  same `up` an operator would: `compose up -d` and wait for `controller_manager`.
-  The container energizes itself on launch (activates `HexaSystem`, spawns both
-  controllers).
-- **`ExecStop`** — `hexa robot down`: the safe-stop (relay off + controllers
-  unloaded) before the container is removed, so a `systemctl stop`, reboot, or
-  shutdown de-energizes cleanly instead of yanking power.
+```
+pinctrl get 12                      # expect a0 / PWM0_CHAN0, not "none"
+cd ~/hexa-robot && ./hexa robot play-tune
+```
 
-**The robot boots into the folded pose, one leg at a time.** Activating the
-hardware component does not close the servo relay — `hexa_hardware` drives
-`SET RELAY` off `/hardware/relay_cmd`, which the supervisor raises once teleop is
-publishing (any engine state but `fault`). The board closes the relay with every
-servo **limp** and drives a servo only once the host has commanded it, so
-`hexa_hardware` staggers that: the legs come up one at a time in pin order —
-`l_rear, r_rear, l_middle, r_middle, l_front, r_front`, i.e. rear → front —
-`init.sweep_leg_interval_ms` apart (150 ms by default, so ~0.75 s for the whole
-sweep). That keeps the combined inrush as six small steps instead of one spike
-big enough to trip the board's over-current protection. Set the interval to `0`
-in `hardware.yaml` to energize every leg at once.
+`play-tune` takes an event name, so each can be auditioned without provoking it
+(`./hexa robot play-tune fault`). The events, and the tune each one plays:
 
-After the sweep the hexapod sits folded and powered, and goes no further:
-pressing **Start** on the gamepad (or publishing `/gait/initialize`) is what
-stands it up. Nothing walks unattended. Folding again (Start from a stand) parks
-the feet and drops the rail, so the robot ends up limp — the same state a
-`hexa robot down` leaves it in. An over-current trip also drops the rail and
-holds it open until Start recovers; the sweep re-runs on that edge too.
+- **`boot`** — `chirp`, rising two notes. Kernel is up.
+- **`up`** — `ready`, a rising triad. ROS stack live, servo link open.
+- **`shutdown`** — `sigh`, falling. Last thing before power is cut; when it
+  stops, the switch is safe.
+- **`fault`** — `klaxon`, two-tone, ~2 s. Servo 2040 over-current trip.
+- **`undervolt`** — `groan`, one flat sustained tone, ~1.8 s. Pack low, still
+  drivable.
 
-Inspecting and undoing:
+### Who plays what
 
-- **`systemctl status hexa-robot`** — expect `active (exited)`, the unit being
-  `Type=oneshot` with `RemainAfterExit=yes`.
-- **`journalctl -u hexa-robot -b`** — the boot run's pre-flight and bring-up log.
-- **`sudo systemctl disable hexa-robot`** — stop starting on boot. Note that
-  while the unit is enabled, a `hexa robot down` no longer survives a reboot by
-  design; disable the unit if you want the robot to stay down.
-- **`./hexa robot uninstall-service`** — disable and delete the unit entirely.
+Three of the five tunes are played by **`hexa_buzzer`, in the container**, off
+`/buzzer/play`. It needs no unit — only the PWM mount below.
 
-## 6c-2. Undervoltage ladder
-
-A draining pack is handled in three escalating rungs, decided by the locomotion
-supervisor (`shared/motion_core/supervisor.hpp`) off `~/battery_state` and
-published on `/hardware/undervoltage`:
-
-- **rung 1 — warn.** The `undervolt` tune sounds once and the status LED goes to
-  the fault cadence. Nothing else changes: the robot stays **drivable**, so it
-  can be walked back to the bench.
-- **rung 2 — fold.** The gait command is zeroed and a fold is queued, as a
-  **Start** from a stand would. The rail is cut on the `FOLDING → FOLDED` park
-  edge, so the legs go down under power instead of collapsing mid-stance.
-- **rung 3 — cutoff.** The rail is cut immediately, whatever the posture, and
-  latched open — the pack is too far gone to finish a fold.
-
-Two properties to know before tuning it:
-
-- **The ladder only escalates.** Cutting the rail unloads the pack and the
-  voltage rebounds past the threshold that just fired, so a ladder that followed
-  it back up would cut, re-arm, sag and cut again.
-- **A cutoff is cleared by power-cycling the robot**, and nothing else. Nothing
-  is written to disk; the latch lives in the supervisor and in `hexa_hardware`,
-  so the cut survives a locomotion restart. `~/reload_config` is refused from
-  rung 2 up, since a rebuilt pipeline would start clean and re-arm.
-
-Thresholds live in `battery:` in `hexa_description/config/hardware.yaml` — one
-source for the supervisor, the baked firmware config, and `hexa_hardware`. They
-ship **disabled** (`0.0` on all three rungs) because the Servo 2040's
-voltage-divider scale is uncalibrated. Measure the pack against `~/battery_state`
-first, then set all three in descending order (codegen rejects a mis-ordered
-ladder). Until then the robot beeps, folds and cuts for over-current only.
-
-## 6d. Buzzer units (optional)
-
-With the buzzer wired and the PWM overlay in place (step 2c), enable the four
-buzzer units in one go:
+The other two cannot be: `boot` lands long before Docker exists, and `shutdown`
+at `final.target`, after the container is gone. Those two are host systemd
+units, running the **same Python player** (`hexa deploy` ships it, and the two
+config files, to `~/hexa-robot/hexa_buzzer/`), so both sides resolve an event
+through the same tables:
 
 ```
 cd ~/hexa-robot && ./hexa robot install-tune
 ```
 
-Each runs `systemd/buzzer.sh` as root — exporting a sysfs PWM channel needs it
-— and nothing `Requires=` any of them, so they are pure side effects:
+- **`hexa-boot-tune.service`** — plays `boot` at multi-user.target.
+- **`hexa-shutdown-tune.service`** — plays `shutdown` at final.target, after the
+  container is gone and the relay is open.
 
-- **`hexa-boot-tune.service`** — `Type=oneshot`, `WantedBy=multi-user.target`.
-  Plays `boot`.
-- **`hexa-shutdown-tune.service`** — `Type=oneshot`, `DefaultDependencies=no`,
-  `WantedBy=final.target`. Plays `shutdown` in the last stage of the shutdown
-  transaction, after every normal unit (`hexa-robot.service` included) has
-  stopped, so the relay is already open and the container already gone.
-- **`hexa-tune-spool.path`** — watches `~/hexa-robot/log/buzzer` with
-  `PathModified=` and triggers the service below on each write.
-  `PathExists=` would stay satisfied and restart it in a loop.
-- **`hexa-tune-spool.service`** — plays whatever tune the container last wrote
-  (`up`, `fault`, `undervolt`). Triggered only by the `.path`, never enabled on
-  its own. It
-  only reads the spool: writing it back would be another modification of the
-  watched file, and the trigger would loop.
+Separate from `install-service` on purpose: enabling the ROS stack's boot unit
+should not silently start making noise. `./hexa robot uninstall-tune` disables
+and deletes both; `journalctl -u hexa-boot-tune -u hexa-shutdown-tune -b` says
+why one stayed quiet. `hexa robot up` / `down` work unchanged with the units
+installed. To silence the container's three instead, set `enabled: false` in
+`hexa_buzzer/config/buzzer.yaml` — `uninstall-tune` does not touch them.
 
-Notes:
+### The PWM mount
 
-- **Separate from `install-service`** on purpose — the buzzer is optional
-  hardware, and enabling the ROS stack's boot unit should not silently start
-  making noise.
-- **`./hexa robot uninstall-tune`** — disable and delete all four; the robot is
-  silent again.
-- **`journalctl -u hexa-boot-tune -u hexa-shutdown-tune -u hexa-tune-spool -b`**
-  — why one stayed quiet, if it did.
-
-`hexa robot up` / `down` keep working unchanged with the units installed.
-
-## 7. Re-deploy
+The container reaches the PWM block through a bind mount at `/pwm`, declared in
+`docker-compose.buzzer.yaml`. `hexa robot up` adds that overlay **only when the
+host has the tree**, and says which it did:
 
 ```
-./hexa deploy build
-./hexa deploy push pi@<host>
+>> Buzzer PWM at /sys/bus/platform/devices/1f00098000.pwm/pwm -> /pwm
 ```
 
-The container restarts cold after each redeploy — re-run `hexa robot up`.
+The check is not a formality: a bind mount whose source does not exist stops the
+container from starting at all, and plenty of builds have no buzzer fitted. If
+you see the "no PWM block" line instead, the overlay is missing from
+`config.txt` — `pinctrl get 12` will say so too.
+
+`BUZZER_PWM` in `.env` overrides the source directory. The default is the Pi 5's
+RP1 PWM0; on a Pi 4 the block sits at a different platform address, so run
+`ls -d /sys/bus/platform/devices/*.pwm/pwm` and set it. Channel 0 is GPIO12 on
+both. It is reached by platform address rather than by `pwmchipN` number because
+that number is kernel probe order and has moved between releases.
+
+A writable bind of that one directory is all it takes — the container already
+runs as root, so there is no udev rule or supplementary group involved. Before
+this, the container could not make a sound at all: `/sys` is mounted read-only,
+so an export from inside failed with `EROFS`, and a tune had to be requested by
+writing a name into a file on the log volume for a host `.path` unit to relay to
+a shell script. That spool and its two units are gone.
+
+### Tunes
+
+`hexa_buzzer/config/tunes.yaml` holds the tunes, in RTTTL — the Nokia ringtone
+format, `name:defaults:notes`. `b` is beats per minute, `d` and `o` the note
+value and octave a note gets when it gives none, and a duration is a fraction of
+a whole note (`16b5` is a sixteenth-note B5, `8p` an eighth rest). Which tune an
+event plays is the `events:` map in `hexa_buzzer/config/buzzer.yaml`, so giving
+`fault` a different voice is one word there, and a new tune needs no code at
+all. Audition one without editing anything:
+
+```
+cd ~/hexa-robot
+sudo PYTHONPATH=. python3 -m hexa_buzzer.player \
+    --rtttl "coin:d=4,o=6,b=200:16b5,2e"
+```
+
+Any ringtone in the format plays as-is, which is most of why it was chosen.
+There is no tempo setting outside the string: each tune carries its own `b=`,
+so a pasted one keeps the tempo it was written at. `--pwm-dev` and `--channel`
+take a different block or a different buzzer pin (plus matching overlay
+parameters).
+
+Every hardware failure logs a line and exits 0, so a tune can never hold up a
+boot, a shutdown, or the fault path that asked for it.

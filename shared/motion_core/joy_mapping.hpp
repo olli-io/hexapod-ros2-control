@@ -13,6 +13,7 @@
 // the sole gamepad, so it always publishes (overview part 00, plan part 07).
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string_view>
 
@@ -84,8 +85,17 @@ struct JoyOutput {
   std::string_view animation_name = "";
 };
 
-// Deadband helper — |v| < deadband collapses to 0.
+// Deadband helper — |v| < deadband collapses to 0, and what survives is
+// rescaled back onto [0, 1] so the output leaves centre continuously.
 float apply_deadband(float value, float deadband);
+
+// Fit a (drive_x, drive_y, drive_yaw) stick triple to the reachable velocity
+// envelope: hold the commanded direction and map deflection linearly onto
+// 0 -> boundary, so full deflection always lands exactly on it and no stick
+// travel is dead. Port of joy_mapping.fit_drive_to_envelope; the unitless
+// stance it needs is baked as config::kStanceUnit.
+std::array<float, 3> fit_drive_to_envelope(float drive_x, float drive_y,
+                                           float drive_yaw);
 
 // Map one gamepad snapshot to a high-level command, advancing `state`.
 //   axes    — kNumAxes raw int16 values (Linux-joystick convention, scaled by

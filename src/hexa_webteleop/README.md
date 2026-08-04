@@ -31,7 +31,11 @@ switch gating.
   sticks are disabled.
 
 Default stick mapping (config): left = forward/strafe (gait) or x/y
-translation (posture); right = turn (gait) or roll/pitch (posture).
+translation (posture); right = turn, plus forward on its Y axis so either
+pad alone is a complete drive control (gait), or roll/pitch (posture). The
+two forward sources sum, and the resulting velocity triple is fitted to the
+reachable envelope by the shared `hexa_teleop` mapping — see that package's
+README for what that does to the feel.
 Default bottom-6 buttons: init, record, then per mode — gait prev/next
 (gait) / yaw left/right (posture) / animation prev/next (animation) — and
 height up/down.

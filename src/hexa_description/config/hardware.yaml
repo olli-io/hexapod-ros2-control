@@ -27,15 +27,6 @@ parser:
   # gen_config.py (-> kGetPeriodTicks); hexa_hardware ignores it.
   get_period_ticks: 10
 
-# Host buzzer requests. The Pi's hardware PWM is unreachable from this
-# container, so a tune name is written here and the host's hexa-tune-spool.path
-# unit plays it with systemd/buzzer.sh. Tunes: `up`, `fault`, `undervolt`.
-# Blank the path to disable.
-buzzer:
-  # Must be on the log volume (bind-mounted from ~/hexa-robot/log) — that
-  # shared inode is the whole mechanism.
-  spool: /workspace/log/buzzer
-
 # Undervoltage ladder — source of truth for the motion_core supervisor, the
 # baked firmware config, and hexa_hardware. Each rung arms after hold_s below
 # its threshold. The ladder only escalates: cutting the rail unloads the pack

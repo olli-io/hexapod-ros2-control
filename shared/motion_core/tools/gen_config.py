@@ -79,6 +79,7 @@ JOY_FUNCTIONS = [
     ("kAnimationPrev", "animation_prev"),
     ("kAnimationNext", "animation_next"),
     ("kDriveX", "drive_x"),
+    ("kDriveXAux", "drive_x_aux"),
     ("kDriveY", "drive_y"),
     ("kDriveYaw", "drive_yaw"),
     ("kPoseX", "pose_x"),
@@ -264,6 +265,53 @@ def initial_pose(geometry: dict):
     return out
 
 
+def unit_stance_xy(gait: dict, geometry: dict):
+    """Standing feet in the body plane, over the outermost foot's radius.
+
+    Port of hexa_common/limits.py's standing_stance_xy + unit_stance_xy: the
+    mount symmetry expansion, then the tip laid tip_radius out from the coxa
+    axis at the leg's splay. Teleop's fit_drive_to_envelope bounds the implied
+    per-leg foot speed in stick units rather than m/s, and normalising by
+    r_outer is what cancels the caps out of that bound — every gait's angular
+    cap is its linear cap over exactly this radius, so one table covers them
+    all. Keep in step with the Python original or the golden trace diverges.
+    """
+    sp = gait["standing_pose"]
+    tip_radius = sp["tip_radius"]
+    corner_splay = math.radians(sp["corner_leg_coxa_deg"])
+    mounts = geometry["mounts"]
+
+    stance = []
+    for side in ("l", "r"):
+        for name in ("front", "middle", "rear"):
+            ref = mounts["l_middle" if name == "middle" else "l_front"]
+            ref_yaw = math.radians(ref["yaw_deg"])
+            x = -ref["x"] if name == "rear" else ref["x"]
+            yaw = (math.pi - ref_yaw) if name == "rear" else ref_yaw
+            y = -ref["y"] if side == "r" else ref["y"]
+            if side == "r":
+                yaw = -yaw
+
+            if name == "middle":
+                splay = 0.0
+            elif (side, name) in (("l", "rear"), ("r", "front")):
+                splay = -corner_splay
+            else:
+                splay = corner_splay
+
+            stance.append((f"{side}_{name}",
+                           x + tip_radius * math.cos(yaw + splay),
+                           y + tip_radius * math.sin(yaw + splay)))
+
+    r_outer = max(math.hypot(x, y) for _, x, y in stance)
+    if r_outer <= 0.0:
+        raise ValueError(
+            "outer stance radius is zero — every foot sits on the body axis, "
+            "so the standing pose has no yaw authority; check tuning.yaml "
+            "standing_pose")
+    return [(name, x / r_outer, y / r_outer) for name, x, y in stance]
+
+
 def velocity_caps(gait: dict):
     """Per-gait linear_max + yaw_bias — port of load_velocity_caps()."""
     stride = gait["stride_length"]
@@ -386,6 +434,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     stand = standing_pose(gait, geometry)
     initial = initial_pose(geometry)
     caps = velocity_caps(gait)
+    stance_unit = unit_stance_xy(gait, geometry)
     joints = hardware_joints(hardware, calibration, limits)
 
     L = []
@@ -536,6 +585,18 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         w(f"    {{{name_arr(c['name'])}, {fl(c['duty'])}, "
           f"{'true' if c['unstable'] else 'false'}, {fl(c['linear_max'])}, "
           f"{fl(c['yaw_bias'])}}},  // {c['name']}")
+    w("}};")
+    w("")
+
+    w("// Standing feet over the outermost foot's radius — the unitless lever")
+    w("// arms teleop's fit_drive_to_envelope bounds stick input against. Not")
+    w("// per-gait: normalising by r_outer cancels the caps out of the per-leg")
+    w("// foot-speed constraint, since every gait's angular cap is its linear")
+    w("// cap over exactly that radius.")
+    w("inline constexpr std::array<std::array<float, 2>, "
+      f"{len(stance_unit)}> kStanceUnit = {{{{")
+    for name, x, y in stance_unit:
+        w(f"    {{{fl(x)}, {fl(y)}}},  // {name}")
     w("}};")
     w("")
 

@@ -39,6 +39,11 @@ BUTTON_CLASS_FUNCTIONS: frozenset[str] = frozenset({
 })
 AXIS_CLASS_FUNCTIONS: frozenset[str] = frozenset({
     "drive_x",
+    # Second source for the same quantity, summed with ``drive_x``. Binding it
+    # to the yaw stick's free axis turns that stick into an arcade drive
+    # (throttle + steer under one thumb) without taking anything away from the
+    # translation stick.
+    "drive_x_aux",
     "drive_y",
     "drive_yaw",
     "pose_x",
@@ -125,6 +130,11 @@ class JoyConfig:
     # ``dataclasses.replace`` whenever the active gait changes.
     gait_linear_max: float
     gait_angular_z_max: float
+    # Nominal standing stance, normalised by the outermost foot's radius —
+    # the unitless lever arms ``fit_drive_to_envelope`` needs. Gait-agnostic:
+    # every gait's angular cap is its linear cap over that same radius, so the
+    # units cancel and one table serves them all.
+    stance_unit: tuple[tuple[float, float], ...]
     # Ordered list of animation names the ANIMATION-mode cycler walks
     # through. Entry into ANIMATION snaps to index 0; subsequent
     # ``animation_prev`` / ``animation_next`` presses step the index.
@@ -202,9 +212,76 @@ class JoyOutput:
 
 
 def apply_deadband(value: float, deadband: float) -> float:
-    if abs(value) < deadband:
+    """Zero the deadband, then rescale the survivors back onto [0, 1].
+
+    Scaled-radial rather than a hard cut: without the rescale the output
+    jumps to ``deadband`` (a tenth of the cap on the gamepad) the instant
+    the stick clears centre. The endpoint is preserved — full deflection
+    still maps to exactly 1.0 — so this composes with any downstream
+    shaping.
+    """
+    magnitude = abs(value)
+    if magnitude < deadband:
         return 0.0
-    return value
+    span = 1.0 - deadband
+    if span <= 0.0:
+        return value
+    return math.copysign((magnitude - deadband) / span, value)
+
+
+def fit_drive_to_envelope(
+    drive_x: float,
+    drive_y: float,
+    drive_yaw: float,
+    stance_unit: Sequence[Sequence[float]],
+) -> tuple[float, float, float]:
+    """Map stick deflection onto the reachable velocity envelope.
+
+    The three drive axes come in as unitless stick values in ``[-1, 1]``,
+    where 1 means "this axis' cap". Commanding several at once asks for
+    more than the legs can lay down: a full diagonal wants sqrt(2) times
+    the linear cap, and full translation plus full yaw wants twice it. The
+    engine already refuses such a triple (``hexa_common.scale_to_envelope``),
+    but silently — the operator just finds the top of the stick's travel
+    dead, and the direction they asked for quietly rotated.
+
+    So shape it here instead. The commanded direction is held fixed and the
+    deflection along it is mapped linearly onto ``0 -> envelope boundary``:
+
+    * ``M`` — deflection, as the inf-norm of the triple. The inf-norm (not
+      the 2-norm) is what makes the *corners* of the physical stick gate
+      reachable, so no travel is wasted.
+    * ``peak`` — the fastest foot the triple implies, in units of the linear
+      cap. Same per-leg planar speed the engine bounds,
+      ``|(v_x - w*r_y, v_y + w*r_x)|``, but unitless: dividing the stance by
+      the outer radius cancels the cap ratio, since every gait's angular cap
+      is its linear cap over exactly that radius.
+    * ``s = M / peak`` — puts full deflection exactly on the boundary.
+
+    Single-axis commands come out untouched (``peak == M``), so this only
+    ever bites on combinations. Scaling all three by one factor keeps the
+    commanded direction exact, unlike the engine's ``yaw_bias`` split — the
+    bias only shapes autonomous ``/cmd_vel`` sources now, since the triple
+    this returns is inside the envelope by construction and passes through.
+
+    The ``min(1, ...)`` is a guard, not a normal path: it costs nothing and
+    saves the caller from having to prove ``peak >= M`` for an arbitrary
+    stance.
+    """
+    deflection = max(abs(drive_x), abs(drive_y), abs(drive_yaw))
+    if deflection <= 0.0:
+        return 0.0, 0.0, 0.0
+
+    peak = 0.0
+    for r_x, r_y in (r[:2] for r in stance_unit):
+        foot = math.hypot(drive_x - drive_yaw * r_y, drive_y + drive_yaw * r_x)
+        if foot > peak:
+            peak = foot
+    if peak <= 0.0:
+        return 0.0, 0.0, 0.0
+
+    scale = min(1.0, deflection / peak)
+    return drive_x * scale, drive_y * scale, drive_yaw * scale
 
 
 def _mode_cfg(cfg: JoyConfig, mode: str) -> ModeConfig | PostureConfig:
@@ -785,9 +862,24 @@ def map_joy(
     # GAIT or ANIMATION mode: sticks drive linear/angular velocity;
     # recorded posture baseline bleeds through on every posture axis
     # so the robot walks at the recorded posture.
-    drive_x = axis_value_for("drive_x", base, mode_cfg, axes)
-    drive_y = axis_value_for("drive_y", base, mode_cfg, axes)
-    drive_yaw = axis_value_for("drive_yaw", base, mode_cfg, axes)
+    # Forward has two sources so the yaw stick can drive arcade-style. They
+    # add; the clip keeps the sum a deflection, which is what the envelope fit
+    # below is defined on. The other two are clipped for the same reason —
+    # joy_publisher scales raw int16 without clamping, so a fully-pressed axis
+    # reads a hair past -1.
+    drive_x = _clip(
+        axis_value_for("drive_x", base, mode_cfg, axes)
+        + axis_value_for("drive_x_aux", base, mode_cfg, axes),
+        -1.0,
+        1.0,
+    )
+    drive_y = _clip(axis_value_for("drive_y", base, mode_cfg, axes), -1.0, 1.0)
+    drive_yaw = _clip(
+        axis_value_for("drive_yaw", base, mode_cfg, axes), -1.0, 1.0
+    )
+    drive_x, drive_y, drive_yaw = fit_drive_to_envelope(
+        drive_x, drive_y, drive_yaw, cfg.stance_unit
+    )
     return JoyOutput(
         linear_x=drive_x * cfg.gait_linear_max,
         linear_y=drive_y * cfg.gait_linear_max,

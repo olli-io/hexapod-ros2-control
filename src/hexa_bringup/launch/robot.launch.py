@@ -49,6 +49,19 @@ def _display_params() -> tuple[dict, bool]:
     return params, bool(params.pop("enabled", True))
 
 
+def _buzzer_params() -> tuple[dict, bool]:
+    """hexa_buzzer's params and the `enabled` gate."""
+    path = os.path.join(
+        get_package_share_directory("hexa_buzzer"), "config", "buzzer.yaml"
+    )
+    with open(path) as f:
+        params = yaml.safe_load(f)["buzzer_node"]["ros__parameters"]
+    # The event -> tune map is not a ROS parameter: the node reads it from this
+    # same file, as the host's boot and shutdown player does.
+    params.pop("events", None)
+    return params, bool(params.pop("enabled", True))
+
+
 def _button_params() -> tuple[dict, bool]:
     """hexa_buttons' params and the `enabled` gate.
 
@@ -183,6 +196,21 @@ def _bringup(context, *args, **kwargs):
             executable="button_node",
             output="screen",
             parameters=[button_params],
+        ))
+
+    # Buzzer: the robot's only audible channel. A pure sink of /buzzer/play,
+    # which hexa_hardware publishes on activation, on an over-current trip and
+    # on the undervoltage warning rung. Real robot only — there is no PWM block
+    # in sim, and the node runs inert without one anyway. The boot and shutdown
+    # chirps are not its: no container exists that early or that late, so those
+    # two stay host systemd units running the same player (see its README).
+    buzzer_params, buzzer_enabled = _buzzer_params()
+    if buzzer_enabled:
+        actions.append(Node(
+            package="hexa_buzzer",
+            executable="buzzer_node",
+            output="screen",
+            parameters=[buzzer_params],
         ))
 
     return actions

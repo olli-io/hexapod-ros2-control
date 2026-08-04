@@ -1,19 +1,13 @@
 # Boot jingle on the passive buzzer (GPIO12 hardware PWM).
 #
-# Template — @HOME_DIR@ is substituted by `./hexa robot install-tune`, which
-# writes the rendered unit to /etc/systemd/system/hexa-boot-tune.service and
-# enables it. Do not install this file by hand; the placeholder is not a valid
-# systemd value.
+# Template: @HOME_DIR@ and @PWM_DEV@ are substituted by `./hexa robot
+# install-tune`. Do not install this file by hand.
 #
-# Deliberately separate from hexa-robot.service: not every build has a buzzer
-# fitted, and installing the ROS stack's boot unit should not silently start
-# making noise. Nothing depends on this unit — it is a pure side effect, and a
-# missing or broken buzzer can never hold up the boot (buzzer.sh exits 0 on
-# every hardware failure).
-#
-# One of the four buzzer units `install-tune` puts in place; the others are
-# hexa-shutdown-tune.service and the hexa-tune-spool .path/.service pair that
-# relays the container's beeps.
+# Separate from hexa-robot.service because not every build has a buzzer fitted.
+# Nothing depends on it, and the player exits 0 on every hardware failure, so a
+# broken buzzer can never hold up a boot. This tune and hexa-shutdown-tune are
+# host units only because no container is running that early or that late; the
+# rest are hexa_buzzer's. See src/hexa_buzzer/README.md.
 
 [Unit]
 Description=Hexapod boot jingle (passive buzzer)
@@ -22,12 +16,13 @@ ConditionPathIsDirectory=/sys/class/pwm
 
 [Service]
 Type=oneshot
-# Root: exporting a sysfs PWM channel needs it, and this avoids depending on a
-# udev rule to chown the tree.
+# Root: exporting a sysfs PWM channel needs it.
 User=root
-ExecStart=@HOME_DIR@/systemd/buzzer.sh boot
-# Generous relative to a ~1 s jingle; covers the script's wait for the RP1 PWM
-# driver to probe on a cold boot.
+# `python3 -m` puts the working directory on sys.path, which is how it finds
+# the hexa_buzzer package deploy ships to @HOME_DIR@/hexa_buzzer/.
+WorkingDirectory=@HOME_DIR@
+# --wait 5: the only tune that can outrun the RP1 PWM driver's probe.
+ExecStart=/usr/bin/python3 -m hexa_buzzer.player boot --pwm-dev @PWM_DEV@ --wait 5
 TimeoutStartSec=30
 
 [Install]

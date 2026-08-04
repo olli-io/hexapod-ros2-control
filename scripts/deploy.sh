@@ -25,6 +25,10 @@ cd "${REPO_ROOT}"
 
 IMAGE_REPO="hexa-robot"
 COMPOSE_FILE="docker-compose.robot.yaml"
+# Buzzer PWM overlay. Added only when the Pi has the tree — see robot.sh, which
+# makes the same check for every other compose invocation.
+BUZZER_COMPOSE_FILE="docker-compose.buzzer.yaml"
+BUZZER_PWM_DEFAULT="/sys/bus/platform/devices/1f00098000.pwm/pwm"
 SIM_COMPOSE_FILE="docker-compose.sim.yaml"
 DEPLOY_DIR=".deploy"
 
@@ -141,7 +145,7 @@ cmd_push() {
     basename_tar="$(basename "${resolved}")"
 
     echo ">> Ensuring ~/hexa-robot/ exists on ${host}"
-    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts ~/hexa-robot/systemd'
+    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts ~/hexa-robot/systemd ~/hexa-robot/hexa_buzzer ~/hexa-robot/hexa_buzzer/config'
 
     # Ship the image + compose + env sample, plus the launcher (hexa +
     # scripts/robot.sh) so `hexa robot <cmd>` works on the Pi.
@@ -149,24 +153,36 @@ cmd_push() {
     scp \
         "${resolved}" \
         "${COMPOSE_FILE}" \
+        "${BUZZER_COMPOSE_FILE}" \
         ".env.robot.sample" \
         "hexa" \
         "${host}:~/hexa-robot/"
     scp "scripts/robot.sh" "${host}:~/hexa-robot/scripts/"
+    # The buzzer player, run on the host by the boot and shutdown units. The
+    # same files the container's hexa_buzzer node imports — shipped rather than
+    # forked, so the note and tune tables cannot drift apart. Stdlib-only by
+    # design (a pytest suite enforces it), so the host needs no ROS environment.
+    scp "src/hexa_buzzer/hexa_buzzer/__init__.py" \
+        "src/hexa_buzzer/hexa_buzzer/tunes.py" \
+        "src/hexa_buzzer/hexa_buzzer/catalog.py" \
+        "src/hexa_buzzer/hexa_buzzer/pwm.py" \
+        "src/hexa_buzzer/hexa_buzzer/player.py" \
+        "${host}:~/hexa-robot/hexa_buzzer/"
+    # The tunes and the event -> tune map the player reads, beside it.
+    scp "src/hexa_buzzer/config/tunes.yaml" \
+        "src/hexa_buzzer/config/buzzer.yaml" \
+        "${host}:~/hexa-robot/hexa_buzzer/config/"
     # Boot-time systemd unit template. Shipped, never installed — the operator
     # opts in once with `./hexa robot install-service`, so a redeploy can't
     # silently change the Pi's systemd state.
     scp "systemd/hexa-robot.service" "${host}:~/hexa-robot/systemd/"
-    # Buzzer: the player plus its four unit templates. Same deal — shipped, never
-    # installed; `./hexa robot install-tune` is the operator's opt-in. Runs on
-    # the Pi host rather than in the container, both so it chirps before Docker
-    # is up and because the container cannot reach the PWM sysfs at all; the
-    # spool pair is how the container's own beeps get out.
-    scp "systemd/buzzer.sh" \
-        "systemd/hexa-boot-tune.service" \
+    # Buzzer: the two unit templates for the tunes no container can play — the
+    # boot chirp comes before Docker, the shutdown chirp after the container is
+    # gone. Same deal as above: shipped, never installed, and `./hexa robot
+    # install-tune` is the operator's opt-in. Everything in between is
+    # hexa_buzzer's, played in the container, and needs no unit at all.
+    scp "systemd/hexa-boot-tune.service" \
         "systemd/hexa-shutdown-tune.service" \
-        "systemd/hexa-tune-spool.path" \
-        "systemd/hexa-tune-spool.service" \
         "${host}:~/hexa-robot/systemd/"
     # Network-mode switcher, same deal again: shipped, never installed, and
     # `./hexa robot install-network` is the opt-in. It has to be on the host
@@ -203,8 +219,20 @@ if [ -f tuning.yaml ] && ! cmp -s tuning.yaml tuning.yaml.default; then
     echo ">> on-Pi tuning.yaml differed from the repo — saved as tuning.yaml.bak"
 fi
 cp tuning.yaml.default tuning.yaml
-chmod +x systemd/buzzer.sh systemd/network-mode.sh
-docker compose -f "${COMPOSE_FILE}" up -d --no-build
+chmod +x systemd/network-mode.sh
+# Superseded by hexa_buzzer — see the same line in sync-config.
+rm -f systemd/buzzer.sh systemd/hexa-tune-spool.path systemd/hexa-tune-spool.service
+# The buzzer's PWM mount, only when the Pi has the tree: a bind whose source is
+# missing stops the container from starting at all. Same check robot.sh makes.
+compose_args="-f ${COMPOSE_FILE}"
+buzzer_pwm="\$(grep -E '^BUZZER_PWM=' .env 2>/dev/null | cut -d= -f2- || true)"
+# An if, not a && short-circuit: under 'set -e' a false test would end the
+# deploy on every robot that has no buzzer fitted.
+if [ -d "\${buzzer_pwm:-${BUZZER_PWM_DEFAULT}}" ]; then
+    compose_args="\${compose_args} -f ${BUZZER_COMPOSE_FILE}"
+fi
+# shellcheck disable=SC2086  # word splitting is the point
+docker compose \${compose_args} up -d --no-build
 EOF
 
     echo ">> Deployed and energized. The servo rail closes once teleop publishes; the"
@@ -241,22 +269,30 @@ cmd_sync_config() {
     require_cmd ssh
 
     echo ">> Ensuring ~/hexa-robot/ exists on ${host}"
-    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts ~/hexa-robot/systemd'
+    ssh "${host}" 'mkdir -p ~/hexa-robot ~/hexa-robot/log ~/hexa-robot/scripts ~/hexa-robot/systemd ~/hexa-robot/hexa_buzzer ~/hexa-robot/hexa_buzzer/config'
 
     echo ">> Shipping config defaults to ${host}:~/hexa-robot/"
     scp ".env.robot.sample" "${host}:~/hexa-robot/"
     scp "src/hexa_description/config/tuning.yaml" "${host}:~/hexa-robot/tuning.yaml.default"
-    scp "systemd/buzzer.sh" \
-        "systemd/network-mode.sh" \
+    scp "systemd/network-mode.sh" \
         "systemd/hexa-robot.service" \
         "systemd/hexa-boot-tune.service" \
         "systemd/hexa-shutdown-tune.service" \
-        "systemd/hexa-tune-spool.path" \
-        "systemd/hexa-tune-spool.service" \
         "systemd/hexa-network-spool.path" \
         "systemd/hexa-network-spool.service" \
         "systemd/hexa-network-report.service" \
         "${host}:~/hexa-robot/systemd/"
+    # The host half of the buzzer, kept in step with the container's copy. See
+    # the same block in cmd_push for why it is shipped rather than forked.
+    scp "src/hexa_buzzer/hexa_buzzer/__init__.py" \
+        "src/hexa_buzzer/hexa_buzzer/tunes.py" \
+        "src/hexa_buzzer/hexa_buzzer/catalog.py" \
+        "src/hexa_buzzer/hexa_buzzer/pwm.py" \
+        "src/hexa_buzzer/hexa_buzzer/player.py" \
+        "${host}:~/hexa-robot/hexa_buzzer/"
+    scp "src/hexa_buzzer/config/tunes.yaml" \
+        "src/hexa_buzzer/config/buzzer.yaml" \
+        "${host}:~/hexa-robot/hexa_buzzer/config/"
 
     # Quoted heredoc — the merge awk's $0/$1 must reach the Pi unexpanded, so
     # the one parameter goes in as a positional arg.
@@ -339,8 +375,15 @@ fi
 cp tuning.yaml.default tuning.yaml
 echo "   refreshed from the repo"
 
-chmod +x systemd/buzzer.sh systemd/network-mode.sh
+chmod +x systemd/network-mode.sh
 echo ">> systemd/ payload refreshed (shipped only — nothing installed, nothing reloaded)"
+echo ">> hexa_buzzer/ player refreshed (run by the boot and shutdown units)"
+
+# Superseded by hexa_buzzer, which plays the container's own beeps directly.
+# Left-over copies would be a shell script nothing runs and a .path unit
+# watching a spool nothing writes; './hexa robot install-tune' unhooks the
+# units, this just clears the files a previous deploy left in place.
+rm -f systemd/buzzer.sh systemd/hexa-tune-spool.path systemd/hexa-tune-spool.service
 
 # The scripts are run by path, so a re-ship is live at once. Installed units are
 # *rendered* copies (@HOME_DIR@ substituted), so they keep their install-time text.

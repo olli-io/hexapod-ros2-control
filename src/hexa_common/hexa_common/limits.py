@@ -179,6 +179,27 @@ def outer_stance_radius(
     return r_outer
 
 
+def unit_stance_xy(
+    geometry_yaml: str | Path, envelope_yaml: str | Path
+) -> tuple[tuple[float, float], ...]:
+    """Standing stance divided by the outermost foot's radius.
+
+    The lever arms of :func:`standing_stance_xy`, made unitless. Teleop
+    shapes stick input against the same per-leg foot-speed constraint the
+    engine enforces, but in stick units rather than m/s; normalising the
+    stance by ``r_outer`` is exactly what cancels the caps out of that
+    constraint, because every gait's angular cap is its linear cap over
+    that radius. One table therefore serves every gait.
+
+    Returned as a tuple of pairs, not a name-keyed mapping: the consumer
+    only ever takes a max across the legs, so which leg is which never
+    comes up.
+    """
+    stance = standing_stance_xy(geometry_yaml, envelope_yaml)
+    r_outer = outer_stance_radius(geometry_yaml, envelope_yaml)
+    return tuple((x / r_outer, y / r_outer) for x, y in stance.values())
+
+
 def load_velocity_caps(
     envelope_yaml: str | Path, geometry_yaml: str | Path
 ) -> VelocityCaps:

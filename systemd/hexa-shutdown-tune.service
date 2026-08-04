@@ -1,18 +1,14 @@
-# Shutdown beep on the passive buzzer (GPIO12 hardware PWM) — the mirror of
-# hexa-boot-tune.service. When it stops sounding, the Pi is done writing and
-# the power switch is safe.
+# Shutdown beep on the passive buzzer (GPIO12 hardware PWM), the mirror of
+# hexa-boot-tune.service. When it stops sounding, the power switch is safe.
 #
-# Template — @HOME_DIR@ is substituted by `./hexa robot install-tune`, which
-# writes the rendered unit to /etc/systemd/system/hexa-shutdown-tune.service
-# and enables it. Do not install this file by hand; the placeholder is not a
-# valid systemd value.
+# Template: @HOME_DIR@ and @PWM_DEV@ are substituted by `./hexa robot
+# install-tune`. Do not install this file by hand.
 #
-# The late-shutdown recipe: DefaultDependencies=no keeps systemd from ordering
-# this before the shutdown transaction, WantedBy/After=final.target puts it in
-# the last stage — after every normal unit has stopped, hexa-robot.service
-# included, so the relay is already open and the container already gone. The
-# root filesystem is read-only by then, which costs nothing: the script only
-# reads itself and writes sysfs.
+# DefaultDependencies=no keeps systemd from ordering this before the shutdown
+# transaction; WantedBy/After=final.target puts it after every normal unit has
+# stopped, hexa-robot.service included. That is why it cannot be hexa_buzzer's:
+# there is no container left. The root filesystem is read-only by then, which
+# costs nothing — the player only reads itself and writes sysfs.
 
 [Unit]
 Description=Hexapod shutdown beep (passive buzzer)
@@ -22,15 +18,14 @@ ConditionPathIsDirectory=/sys/class/pwm
 
 [Service]
 Type=oneshot
-# Root: exporting a sysfs PWM channel needs it. Also true by default this late
-# in shutdown, but say it, same as the boot unit.
 User=root
-# TUNE_WAIT_S=0: the PWM tree has been up for the whole session by now. Waiting
-# for it here would only ever add dead time to a shutdown.
-Environment=TUNE_WAIT_S=0
-ExecStart=@HOME_DIR@/systemd/buzzer.sh shutdown
-# Hard ceiling on how long a buzzer can delay a power-off. The tune is ~1 s;
-# anything near this bound means the script is stuck, and it gets killed.
+# `python3 -m` puts the working directory on sys.path, which is how it finds
+# the hexa_buzzer package deploy ships to @HOME_DIR@/hexa_buzzer/.
+WorkingDirectory=@HOME_DIR@
+# No --wait: the PWM tree has been up all session, and waiting here would only
+# add dead time to a shutdown.
+ExecStart=/usr/bin/python3 -m hexa_buzzer.player shutdown --pwm-dev @PWM_DEV@
+# Hard ceiling on how long a buzzer can delay a power-off.
 TimeoutStartSec=10
 
 [Install]

@@ -236,25 +236,6 @@ servos:
                std::runtime_error);
 }
 
-TEST(LoadHardwareConfig, ParsesBuzzerSpool) {
-  const std::string hw = R"(buzzer:
-  spool: /workspace/log/buzzer
-servos:
-  l_front_coxa_joint: { pin: 1 }
-)";
-  const auto cfg = load("buzzer", hw, cal_yaml({{2000, 1000}}));
-  EXPECT_EQ(cfg.buzzer.spool, "/workspace/log/buzzer");
-}
-
-TEST(LoadHardwareConfig, BuzzerSpoolDefaultsToDisabled) {
-  // No `buzzer` block → no path → HexaHardware writes no tune requests at all.
-  const std::string hw = R"(servos:
-  l_front_coxa_joint: { pin: 1 }
-)";
-  const auto cfg = load("buzzer_default", hw, cal_yaml({{2000, 1000}}));
-  EXPECT_TRUE(cfg.buzzer.spool.empty());
-}
-
 TEST(LoadHardwareConfig, DegAtCenterOptional) {
   // Missing `deg_at_center` block means all positions default to 0 →
   // urdf_rad_at_center is 0 for coxa/femur and π for tibia.

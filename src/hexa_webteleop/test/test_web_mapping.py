@@ -12,6 +12,7 @@ from hexa_webteleop import (
     map_web,
     neutral_inputs,
 )
+from hexa_teleop.joy_mapping import apply_deadband
 from hexa_webteleop.web_mapping import GAIT, POSTURE, ANIMATION
 
 
@@ -66,6 +67,7 @@ gait:
     left_stick_y: drive_x
     left_stick_x: drive_y
     right_stick_x: drive_yaw
+    right_stick_y: drive_x_aux
 
 posture:
   bindings:
@@ -101,6 +103,7 @@ animation:
     left_stick_y: drive_x
     left_stick_x: drive_y
     right_stick_x: drive_yaw
+    right_stick_y: drive_x_aux
 
 arbitration:
   enabled: true
@@ -167,6 +170,15 @@ def _sticks(
     lx=0.0, ly=0.0, rx=0.0, ry=0.0
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     return (lx, ly), (rx, ry)
+
+
+def _stick(value: float, cfg) -> float:
+    """What a stick reading is worth after the deadband rescales it.
+
+    The routing tests below care which stick reaches which output, not what
+    the input curve is, so they take the shaping from the mapping itself.
+    """
+    return apply_deadband(value, cfg.base.deadband)
 
 
 # ─── Config loading ─────────────────────────────────────────────────
@@ -249,7 +261,7 @@ def test_gait_left_stick_y_maps_to_drive_x(cfg):
     state = JoyState(mode=GAIT)
     left, right = _sticks(ly=0.5)
     out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
-    assert math.isclose(out.linear_x, 0.5 * loaded_cfg.gait_linear_max, rel_tol=1e-6)
+    assert math.isclose(out.linear_x, _stick(0.5, loaded_cfg) * loaded_cfg.gait_linear_max, rel_tol=1e-6)
     assert out.linear_y == 0.0
 
 
@@ -259,7 +271,7 @@ def test_gait_left_stick_x_maps_to_drive_y(cfg):
     state = JoyState(mode=GAIT)
     left, right = _sticks(lx=0.5)
     out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
-    assert math.isclose(out.linear_y, 0.5 * loaded_cfg.gait_linear_max, rel_tol=1e-6)
+    assert math.isclose(out.linear_y, _stick(0.5, loaded_cfg) * loaded_cfg.gait_linear_max, rel_tol=1e-6)
     assert out.linear_x == 0.0
 
 
@@ -269,7 +281,33 @@ def test_gait_right_stick_x_maps_to_drive_yaw(cfg):
     state = JoyState(mode=GAIT)
     left, right = _sticks(rx=0.5)
     out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
-    assert math.isclose(out.angular_z, 0.5 * loaded_cfg.gait_angular_z_max, rel_tol=1e-6)
+    assert math.isclose(out.angular_z, _stick(0.5, loaded_cfg) * loaded_cfg.gait_angular_z_max, rel_tol=1e-6)
+
+
+def test_gait_right_stick_y_also_drives_forward(cfg):
+    # drive_x_aux: the turning pad drives forward too, so either pad alone is
+    # a complete drive control.
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT)
+    left, right = _sticks(ry=0.5)
+    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    assert math.isclose(
+        out.linear_x, _stick(0.5, loaded_cfg) * loaded_cfg.gait_linear_max,
+        rel_tol=1e-6,
+    )
+    assert out.linear_y == 0.0
+    assert out.angular_z == 0.0
+
+
+def test_gait_both_pads_sum_into_forward(cfg):
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT)
+    left, right = _sticks(ly=1.0, ry=1.0)
+    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    # Clipped at the cap rather than doubling it.
+    assert math.isclose(out.linear_x, loaded_cfg.gait_linear_max, rel_tol=1e-6)
 
 
 def test_gait_deadband_zeros_small_inputs(cfg):
@@ -290,8 +328,8 @@ def test_posture_left_stick_maps_to_pose_xy(cfg):
     left, right = _sticks(lx=0.5, ly=0.5)
     out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
     # left_stick_y → pose_x, left_stick_x → pose_y
-    assert math.isclose(out.pose_x, 0.5 * loaded_cfg.posture.x_max, rel_tol=1e-6)
-    assert math.isclose(out.pose_y, 0.5 * loaded_cfg.posture.y_max, rel_tol=1e-6)
+    assert math.isclose(out.pose_x, _stick(0.5, loaded_cfg) * loaded_cfg.posture.x_max, rel_tol=1e-6)
+    assert math.isclose(out.pose_y, _stick(0.5, loaded_cfg) * loaded_cfg.posture.y_max, rel_tol=1e-6)
     # cmd_vel is zero in posture mode
     assert out.linear_x == 0.0
     assert out.linear_y == 0.0

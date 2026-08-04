@@ -53,9 +53,10 @@ Commands:
                               the unattended 'up' the systemd unit runs; 'install-service'
                               enables that unit so the stack comes up on power-on.
                               'install-tune' separately enables the optional buzzer's
-                              units — boot / shutdown tunes plus the spool watcher that
-                              relays the container's stack-up and over-current beeps
-                              ('play-tune [tune]' sounds one without a reboot).
+                              two host units, for the boot and shutdown tunes that no
+                              container is running early or late enough to play; the
+                              stack-up and over-current beeps are hexa_buzzer's, in the
+                              container ('play-tune [tune]' sounds one without a reboot).
                               'install-network' enables the network-mode units, so
                               holding the info button 3 s flips the Pi between joining
                               wifi and hosting the 'hexapod' hotspot that serves the

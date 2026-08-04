@@ -152,25 +152,26 @@ live so far:
 
 ## Buzzer requests
 
-Two moments are worth hearing rather than reading out of a log: the stack
-coming up, and an over-current trip. Both write a tune name to
-`buzzer.spool` (`hardware.yaml`, default `/workspace/log/buzzer`):
+Three moments are worth hearing rather than reading out of a log. Each publishes
+a tune name on `/buzzer/play` (`std_msgs/String`, transient_local):
 
 - **`up`** — from `on_activate`, once everything else there has succeeded. The
   servo link is open and the stack is live.
 - **`fault`** — from the trip edge in `read()`, once per trip; the latch keeps
   the branch from re-firing until `STATUS` reads clean again.
+- **`undervolt`** — on the rung-1 edge of the undervoltage ladder. Pack low,
+  robot still drivable.
 
-The write is a *request*, not a beep. The buzzer is on the Pi's hardware PWM,
-which this process cannot drive: Docker mounts `/sys` read-only, and every
-`/sys/class/pwm/pwmchipN` is a symlink into `/sys/devices`, so an export from
-inside the container fails with `EROFS` however the class directory is bound —
-reaching it would take a privileged container, far too much to pay for a beep.
-So the name lands in the bind-mounted log volume and the host's
-`hexa-tune-spool.path` unit plays it with `systemd/buzzer.sh`. Blank
-`buzzer.spool` to stop the writes; a missing spool, a read-only volume, or an
-uninstalled watcher all mean silence and nothing else. See
-`docs/robot-environment.md`.
+The publish is a *request*, not a beep: the buzzer hangs off the Pi's hardware
+PWM and `hexa_buzzer` is the node that owns it. Best-effort by construction —
+no buzzer node running, none fitted, or no PWM mounted all mean silence and
+nothing else, and none of them is visible from here. The buzzer is optional
+hardware and must never be able to fail a control-path call.
+
+The topic is latched because `up` goes out from `on_activate()`, which can beat
+the buzzer node's subscription matching; a volatile reader would drop the one
+tune that says the robot is ready. See `src/hexa_buzzer/README.md` and
+`docs/robot-environment.md` §15.
 
 ## State feedback
 

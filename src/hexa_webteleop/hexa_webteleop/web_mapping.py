@@ -36,6 +36,7 @@ from hexa_common import (
     load_animation_mode_animations,
     load_body_height_offsets,
     load_velocity_caps,
+    unit_stance_xy,
 )
 from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 
@@ -166,6 +167,7 @@ def load_web_config(
         gait_cycle=gait_cycle,
         gait_linear_max=caps.linear_max(default_gait),
         gait_angular_z_max=caps.angular_max(default_gait),
+        stance_unit=unit_stance_xy(geometry_yaml, gait_yaml),
         animation_list=animation_list,
     )
 

@@ -30,6 +30,7 @@ from hexa_common import (
     load_animation_mode_animations,
     load_body_height_offsets,
     load_velocity_caps,
+    unit_stance_xy,
 )
 from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 
@@ -173,6 +174,7 @@ def _load_config(
         # per-gait — the angular cap is the linear one over the stance radius.
         gait_linear_max=caps.linear_max(default_gait),
         gait_angular_z_max=caps.angular_max(default_gait),
+        stance_unit=unit_stance_xy(geometry_yaml, gait_yaml),
         animation_list=animation_list,
     )
 

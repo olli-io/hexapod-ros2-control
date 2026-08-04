@@ -142,9 +142,10 @@ screen reads "No connected controllers", and a scan simply runs out its timeout.
 Note that pairing has to happen outside the container: BlueZ is reached over the
 host's system D-Bus, which the robot container does not mount. The pattern to
 copy is the network seam below — a request file on the bind-mounted log volume
-watched by a host systemd `.path` unit, answered in a second file. That is the
-same shape the buzzer uses (`systemd/buzzer.sh`), and the network switch is a
-worked example of it with a reply channel.
+watched by a host systemd `.path` unit, answered in a second file. The network
+switch is the worked example, and the only one left: the buzzer used the same
+shape until it got a writable bind of the PWM tree and became `hexa_buzzer`, an
+ordinary node.
 
 ## Network seam
 
@@ -188,7 +189,7 @@ Three ways a switch ends, in order of how quickly the operator finds out:
   exactly the case where something needs saying.
 
 The whole feature is **inert** until `./hexa robot install-network` has been run
-on the Pi. See `docs/robot-environment.md` §6b.
+on the Pi. See `docs/robot-environment.md` §14.
 
 ## Layout
 

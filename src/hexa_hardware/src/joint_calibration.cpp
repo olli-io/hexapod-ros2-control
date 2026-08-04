@@ -234,9 +234,6 @@ HardwareConfig load_hardware_config(const std::string& hardware_path,
     }
   }
 
-  if (const auto buzzer = root["buzzer"]) {
-    if (buzzer["spool"]) cfg.buzzer.spool = buzzer["spool"].as<std::string>();
-  }
 
   DegAtCenter deg_at_center;
   if (const auto dac = root["deg_at_center"]) {

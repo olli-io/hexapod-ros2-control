@@ -93,9 +93,11 @@ button_node:
     #
     # It has to be the host that does it. The stack runs in an unprivileged
     # container with host networking, no D-Bus socket and no NET_ADMIN, so it
-    # cannot run nmcli — the same wall the buzzer hits with the PWM sysfs, and
-    # the same way around it: write a request into the bind-mounted log volume
-    # and let a host systemd .path unit relay it out to systemd/network-mode.sh.
+    # cannot run nmcli. The way around it: write a request into the
+    # bind-mounted log volume and let a host systemd .path unit relay it out to
+    # systemd/network-mode.sh. The buzzer used to hit the same wall with the PWM
+    # sysfs; it got a writable bind mount instead. NetworkManager has no
+    # equivalent, so this seam stays.
     #
     # So this whole block is INERT until `./hexa robot install-network` has been
     # run on the Pi. Without it a hold spins the face for network_ack_timeout_s

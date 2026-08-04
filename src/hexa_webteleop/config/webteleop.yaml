@@ -80,7 +80,8 @@ base:
 
 gait:
   # Bottom 6 + 2 sticks. drive_x = forward/back, drive_y = strafe,
-  # drive_yaw = turn. Left stick drives x/y, right stick X drives yaw.
+  # drive_yaw = turn. Left stick drives x/y, right stick turns and adds
+  # forward via drive_x_aux, so either stick can drive on its own.
   bindings:
     btn_3: init
     btn_4: record
@@ -91,6 +92,7 @@ gait:
     left_stick_y: drive_x
     left_stick_x: drive_y
     right_stick_x: drive_yaw
+    right_stick_y: drive_x_aux
 
 posture:
   # Left stick = body x/y translation, right stick = roll/pitch tilt.
@@ -133,6 +135,7 @@ animation:
     left_stick_y: drive_x
     left_stick_x: drive_y
     right_stick_x: drive_yaw
+    right_stick_y: drive_x_aux
 
 # Gait-mode stick scaling comes from hexa_description/config/tuning.yaml; the
 # web teleop node loads it at startup and swaps in the active gait's

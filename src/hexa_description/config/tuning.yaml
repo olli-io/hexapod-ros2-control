@@ -49,7 +49,7 @@ gait_node:
     #                         always point straight out.
     standing_pose:
       tip_radius: 0.140
-      body_height: 0.04
+      body_height: 0.06
       corner_leg_coxa_deg: 0
 
     # ─── Stride geometry ────────────────────────────────────────────
@@ -80,7 +80,7 @@ gait_node:
     # The foot is never allowed to scrub either way: it leaves and meets the
     # ground travelling at exactly ground speed whatever this is set to.
     # That comes from the shape of the swing curve, not from a tuning value.
-    swing_apex_fraction: 0.35
+    swing_apex_fraction: 0.25
 
     # How fast the foot is still descending as it meets the ground (m/s),
     # and the speed of the probe below.
@@ -128,7 +128,7 @@ gait_node:
     # As with touchdown_velocity, worth keeping above one servo step per
     # 200 Hz tick so the break from the ground is a move rather than a
     # rounding error.
-    liftoff_velocity: 0.08
+    liftoff_velocity: 0.12
 
     # ─── Cycle timing ───────────────────────────────────────────────
 

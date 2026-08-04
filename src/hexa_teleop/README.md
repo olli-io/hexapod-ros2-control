@@ -36,6 +36,41 @@ override via `joy_config_file:=...`). The node starts in **gait** mode. The
 loader validates every binding at startup — unknown names/keys,
 button-vs-axis class mismatches, and cross-section conflicts all raise.
 
+## Drive sticks (gait / animation mode)
+
+Both sticks can drive; neither is a strict subset of the other.
+
+- **right stick** — full 2D translation: `drive_x` (forward/back) on Y,
+  `drive_y` (strafe) on X.
+- **left stick** — arcade drive: `drive_yaw` (turn) on X, `drive_x_aux` on
+  Y. The two forward sources are summed and clipped, so either stick alone
+  reaches full speed, holding both does not double it, and opposing them
+  cancels.
+
+The summed triple is then fitted to the reachable velocity envelope
+(`fit_drive_to_envelope`). Deflection maps linearly onto `0 → boundary`
+along whatever direction the sticks point, so:
+
+- **no dead travel** — full deflection lands exactly on the boundary in
+  every direction, including the corners of the stick gate. A full
+  translation diagonal comes out at the linear cap's *magnitude*, not
+  1.41× it; full forward plus full yaw comes out at roughly half of each.
+- **the commanded direction is exact** — one scale factor for all three
+  axes, so the robot goes where the sticks pointed, only slower. This is
+  what publishing a pre-fitted `/cmd_vel` buys: the engine's own clamp
+  (`hexa_common.scale_to_envelope`) finds nothing left to cut, and its
+  `yaw_bias` split — which does rotate the command — now only shapes
+  autonomous `/cmd_vel` sources.
+- **the trade** — mild cross-axis coupling below saturation: adding yaw
+  trims forward speed a little at any deflection, not just at the
+  extremes. For a walker that reads as physical.
+
+The single-axis case is untouched by all of this: each axis alone still
+commands exactly its cap. The deadband is scaled-radial — what clears it
+is stretched back over the full range, so output leaves centre
+continuously rather than stepping to a tenth of the cap, and full
+deflection still means the cap.
+
 ## Values owned elsewhere (SSoT in `hexa_description/config/tuning.yaml`)
 
 - **Velocity caps** — via `hexa_common.load_velocity_caps`. Both are

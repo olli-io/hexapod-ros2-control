@@ -87,30 +87,16 @@ struct InitConfig {
   int sweep_leg_interval_ms = 150;
 };
 
-// Host buzzer, if one is fitted. The buzzer hangs off the Pi's hardware PWM,
-// which this process cannot reach — Docker mounts /sys read-only and the
-// pwmchip class entries are symlinks into it — so a beep is a request, not an
-// action: HexaHardware writes a tune name into `spool` and the host's
-// hexa-tune-spool.path unit runs systemd/buzzer.sh with it. The path must land
-// on a volume the host shares (the bind-mounted log directory).
-struct BuzzerConfig {
-  // Empty (the default) disables the requests entirely — no buzzer fitted, no
-  // spool watcher installed, or simply not wanted.
-  std::string spool;
-};
-
 struct HardwareConfig {
   ConnectionConfig connection;
   ParserConfig parser;
   InitConfig init;
-  BuzzerConfig buzzer;
 
   std::unordered_map<std::string, JointCalibration> joints;
 };
 
 // Load + validate hardware config. `hardware_path` is the YAML with wiring,
-// connection/parser, an optional `init` block (energize-sweep stagger), an
-// optional `buzzer` block (host beep spool),
+// connection/parser, an optional `init` block (energize-sweep stagger),
 // `deg_at_center`, a shared `servo_defaults.pulse_us`
 // clamp, and a per-servo `{pin, reversed?, pulse_us?}` map under `servos`. The
 // relay pin and battery-telemetry units are board-owned (fixed protocol

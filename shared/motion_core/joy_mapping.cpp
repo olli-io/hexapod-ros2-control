@@ -1,5 +1,6 @@
 #include "joy_mapping.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -53,7 +54,11 @@ constexpr PostureLimits posture_limits() {
   };
 }
 
-const std::array<JoyKeyRef, 22>& table_for(Mode mode) {
+// Sized off the generated enum so adding a JoyFn does not need an edit here.
+using BindTable =
+    std::array<JoyKeyRef, static_cast<std::size_t>(JoyFn::kCount)>;
+
+const BindTable& table_for(Mode mode) {
   switch (mode) {
     case Mode::Posture:
       return cfgns::kBindPosture;
@@ -65,7 +70,7 @@ const std::array<JoyKeyRef, 22>& table_for(Mode mode) {
   }
 }
 
-const JoyKeyRef& binding(const std::array<JoyKeyRef, 22>& tbl, JoyFn fn) {
+const JoyKeyRef& binding(const BindTable& tbl, JoyFn fn) {
   return tbl[static_cast<std::size_t>(fn)];
 }
 
@@ -107,10 +112,39 @@ float clipf(float v, float lo, float hi) {
 }  // namespace
 
 float apply_deadband(float value, float deadband) {
-  if (std::fabs(value) < deadband) {
+  const float magnitude = std::fabs(value);
+  if (magnitude < deadband) {
     return 0.0f;
   }
-  return value;
+  const float span = 1.0f - deadband;
+  if (span <= 0.0f) {
+    return value;
+  }
+  return std::copysign((magnitude - deadband) / span, value);
+}
+
+std::array<float, 3> fit_drive_to_envelope(float drive_x, float drive_y,
+                                           float drive_yaw) {
+  const float deflection = std::max({std::fabs(drive_x), std::fabs(drive_y),
+                                     std::fabs(drive_yaw)});
+  if (deflection <= 0.0f) {
+    return {0.0f, 0.0f, 0.0f};
+  }
+
+  float peak = 0.0f;
+  for (const auto& r : ::hexa::config::kStanceUnit) {
+    const float foot =
+        std::hypot(drive_x - drive_yaw * r[1], drive_y + drive_yaw * r[0]);
+    if (foot > peak) {
+      peak = foot;
+    }
+  }
+  if (peak <= 0.0f) {
+    return {0.0f, 0.0f, 0.0f};
+  }
+
+  const float scale = std::min(1.0f, deflection / peak);
+  return {drive_x * scale, drive_y * scale, drive_yaw * scale};
 }
 
 Mode mode_from_string(std::string_view name) {
@@ -370,12 +404,19 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   }
 
   // GAIT / ANIMATION: sticks drive velocity; recorded posture bleeds through.
-  const float drive_x = axis_value(binding(*tbl, JoyFn::kDriveX), axes);
-  const float drive_y = axis_value(binding(*tbl, JoyFn::kDriveY), axes);
-  const float drive_yaw = axis_value(binding(*tbl, JoyFn::kDriveYaw), axes);
-  out.linear_x = drive_x * cfg.gait_linear_max;
-  out.linear_y = drive_y * cfg.gait_linear_max;
-  out.angular_z = drive_yaw * cfg.gait_angular_z_max;
+  const float drive_x_raw =
+      clipf(axis_value(binding(*tbl, JoyFn::kDriveX), axes) +
+                axis_value(binding(*tbl, JoyFn::kDriveXAux), axes),
+            -1.0f, 1.0f);
+  const float drive_y_raw =
+      clipf(axis_value(binding(*tbl, JoyFn::kDriveY), axes), -1.0f, 1.0f);
+  const float drive_yaw_raw =
+      clipf(axis_value(binding(*tbl, JoyFn::kDriveYaw), axes), -1.0f, 1.0f);
+  const auto drive =
+      fit_drive_to_envelope(drive_x_raw, drive_y_raw, drive_yaw_raw);
+  out.linear_x = drive[0] * cfg.gait_linear_max;
+  out.linear_y = drive[1] * cfg.gait_linear_max;
+  out.angular_z = drive[2] * cfg.gait_angular_z_max;
   out.pose_x = state.recorded_x;
   out.pose_y = state.recorded_y;
   out.pose_z =

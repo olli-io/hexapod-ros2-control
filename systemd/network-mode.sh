@@ -10,9 +10,9 @@
 #
 # Options: --state FILE names where to report to (default: none, print only).
 #
-# It always runs on the *host*, never in the container, for the same reason
-# buzzer.sh does. The ROS stack runs unprivileged with host networking, no
-# D-Bus socket and no NET_ADMIN, so it cannot talk to NetworkManager at all.
+# It always runs on the *host*, never in the container. The ROS stack runs
+# unprivileged with host networking, no D-Bus socket and no NET_ADMIN, so it
+# cannot talk to NetworkManager at all.
 # hexa_buttons writes a request into the bind-mounted log volume and
 # hexa-network-spool.path runs this script out here. See
 # docs/robot-environment.md and src/hexa_buttons/hexa_buttons/network_state.py.

@@ -17,6 +17,7 @@
 #include <rclcpp_lifecycle/state.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
 #include "energize_sweep.hpp"  // shared/motion_core (build-interface include)
@@ -76,6 +77,15 @@ class HexaHardware : public hardware_interface::SystemInterface {
   // on the rung-1 edge, set the sticky cutoff latch at rung 3. Never touches the
   // transport — apply_relay() on the CM thread reads the latch.
   void on_undervoltage(std::uint8_t stage);
+
+  // Ask hexa_buzzer to sound a tune. Not a beep — a request for one: the buzzer
+  // hangs off the Pi's hardware PWM and hexa_buzzer is the node that owns it.
+  //
+  // Best-effort by construction. No buzzer node running, none fitted, or no PWM
+  // mounted all mean silence and nothing else, and none of them is visible from
+  // here. The buzzer is optional hardware and must never be able to fail a
+  // control-path call.
+  void request_tune(const char* tune);
   // Emit one SET frame per run, each carrying the calibrated pulse widths of the
   // joints it covers. Throws whatever the transport throws.
   void send_runs(const std::vector<PinRun>& runs);
@@ -133,6 +143,10 @@ class HexaHardware : public hardware_interface::SystemInterface {
   // by the aux thread and read on the CM thread, hence atomic; all transport
   // access (SET RELAY) stays on the CM thread in apply_relay().
   std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> fault_pub_;
+  // Tune requests to hexa_buzzer (/buzzer/play). Published from both the aux
+  // thread (trip, undervoltage) and the CM thread (on_activate); rclcpp
+  // publishers are thread-safe, so neither needs a lock.
+  std::shared_ptr<rclcpp::Publisher<std_msgs::msg::String>> buzzer_pub_;
   std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> relay_sub_;
   std::atomic<bool> relay_cmd_{false};   // desired arm state from locomotion
   bool relay_on_ = false;                // physical relay currently energised (CM thread)
@@ -147,7 +161,7 @@ class HexaHardware : public hardware_interface::SystemInterface {
 
   // Undervoltage rung from the locomotion supervisor (/hardware/undervoltage;
   // 0 none, 1 warn, 2 fold, 3 cutoff). This node owns the two rungs that need
-  // it specifically: rung 1 requests the buzzer tune (we hold the spool), and
+  // it specifically: rung 1 requests the buzzer tune, and
   // rung 3 sets a local rail latch, so the cut survives a locomotion restart
   // republishing a stale relay_cmd_. In-memory — restarting this process (a
   // power cycle, in practice) is the reset.
