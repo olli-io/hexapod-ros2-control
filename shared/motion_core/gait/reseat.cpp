@@ -37,32 +37,38 @@ ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
 }
 
 std::map<std::string, Vec3> reseat_nominal_stance(
-    float target_height_m, const ReseatGeometry& geometry,
+    float target_height_m, const ReseatGeometryByLeg& geometry,
     const std::map<std::string, kin::LegSpec>& leg_specs,
     const std::map<std::string, Vec3>& current_stance) {
   require_all_legs(current_stance, "current_stance");
-  const float d_new = geometry.default_foot_depth + target_height_m;
-  // arcsin argument: positive when the tibia's vertical projection exceeds the
-  // foot depth (femur tilts up).
-  const float arg =
-      (geometry.tibia_len * std::cos(geometry.tibia_from_vertical) - d_new) /
-      geometry.femur_len;
-  if (arg < -1.0f || arg > 1.0f) {
-    throw std::invalid_argument(
-        "target_height_m is outside the geometrically feasible reseat range "
-        "(arcsin arg not in [-1, 1])");
-  }
-  const float alpha = std::asin(arg);
-  const float r_new =
-      geometry.coxa_len + geometry.femur_len * std::cos(alpha) +
-      geometry.tibia_len * std::sin(geometry.tibia_from_vertical);
 
   std::map<std::string, Vec3> out;
-  for (const auto& name : LEG_NAMES) {
+  for (std::size_t i = 0; i < static_cast<std::size_t>(kNumLegs); ++i) {
+    const std::string& name = LEG_NAMES[i];
     auto it = leg_specs.find(name);
     if (it == leg_specs.end()) {
       throw std::invalid_argument("leg_specs missing " + name);
     }
+
+    // Solved per leg: two legs reaching out different distances lean their
+    // tibias differently, so they land on different radii at the same height.
+    // One shared solve would drag the whole stance onto one group's radius.
+    const ReseatGeometry& g = geometry[i];
+    const float d_new = g.default_foot_depth + target_height_m;
+    // arcsin argument: positive when the tibia's vertical projection exceeds the
+    // foot depth (femur tilts up).
+    const float arg =
+        (g.tibia_len * std::cos(g.tibia_from_vertical) - d_new) / g.femur_len;
+    if (arg < -1.0f || arg > 1.0f) {
+      throw std::invalid_argument(
+          "target_height_m is outside the geometrically feasible reseat range "
+          "for " +
+          name + " (arcsin arg not in [-1, 1])");
+    }
+    const float alpha = std::asin(arg);
+    const float r_new = g.coxa_len + g.femur_len * std::cos(alpha) +
+                        g.tibia_len * std::sin(g.tibia_from_vertical);
+
     // Keep the leg pointing where it already points: the standing splay (and
     // anything else that swivelled the foot) is preserved, and only the radius
     // and depth follow the new height. The azimuth does not depend on z, so the

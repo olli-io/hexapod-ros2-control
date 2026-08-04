@@ -29,6 +29,17 @@ enum class Leg {
 
 inline constexpr int kNumLegs = 6;
 
+// Legs pair up left/right into three groups. The standing pose is configured per
+// group (tuning.yaml default_standing_pose), so this is the index into that
+// table; the left/right half of the pair is the mirroring in leg_is_right.
+enum class LegGroup {
+  FRONT,
+  MIDDLE,
+  REAR,
+};
+
+inline constexpr int kNumLegGroups = 3;
+
 // Ordered by the Leg enum. Same strings and order as the ROS2 libs' LEG_NAMES.
 inline constexpr std::array<std::string_view, kNumLegs> LEG_NAMES = {
     "l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear",
@@ -42,6 +53,35 @@ constexpr Leg leg_from_index(int i) { return static_cast<Leg>(i); }
 
 constexpr std::string_view leg_name(Leg leg) {
   return LEG_NAMES[static_cast<std::size_t>(leg)];
+}
+
+constexpr LegGroup leg_group(Leg leg) {
+  switch (leg) {
+    case Leg::L_FRONT:
+    case Leg::R_FRONT:
+      return LegGroup::FRONT;
+    case Leg::L_MIDDLE:
+    case Leg::R_MIDDLE:
+      return LegGroup::MIDDLE;
+    default:
+      return LegGroup::REAR;
+  }
+}
+
+constexpr bool leg_is_right(Leg leg) {
+  return leg == Leg::R_FRONT || leg == Leg::R_MIDDLE || leg == Leg::R_REAR;
+}
+
+// LegGroup -> dense index [0, 3), matching the group table's order.
+constexpr int group_index(LegGroup group) { return static_cast<int>(group); }
+
+// Names in LegGroup order, matching the tuning.yaml sub-block keys.
+inline constexpr std::array<std::string_view, kNumLegGroups> LEG_GROUP_NAMES = {
+    "front", "middle", "rear",
+};
+
+constexpr std::string_view leg_group_name(LegGroup group) {
+  return LEG_GROUP_NAMES[static_cast<std::size_t>(group)];
 }
 
 // name -> Leg. Returns Leg::L_FRONT with found=false on an unknown name so the

@@ -27,11 +27,22 @@ def _write_geometry(tmp_path: Path, **standing_overrides) -> Path:
     return path
 
 
+def _standing_pose(tip_reach=0.135, body_height=0.04, coxa_deg=0) -> dict:
+    """A default_standing_pose block with all three groups alike."""
+    return dict(
+        body_height=body_height,
+        **{
+            group: dict(tip_reach=tip_reach, coxa_deg=coxa_deg)
+            for group in ("front", "middle", "rear")
+        },
+    )
+
+
 def _write_yaml(tmp_path: Path, **overrides) -> Path:
     # Duty factors are sourced from the gait descriptors in
     # ``hexa_common.gait_catalog``, not YAML. The YAML only carries the
-    # gait-agnostic knobs. standing_pose is here because the angular cap is
-    # derived from the stance it describes, not from a knob.
+    # gait-agnostic knobs. default_standing_pose is here because the angular cap
+    # is derived from the stance it describes, not from a knob.
     base = dict(
         stride_length=0.12,
         min_swing_time=0.30,
@@ -41,9 +52,7 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
         yaw_bias=0.75,
-        standing_pose=dict(
-            tip_radius=0.135, body_height=0.04, corner_leg_coxa_deg=0
-        ),
+        default_standing_pose=_standing_pose(),
         # No margin by default, so these cases pin the plain duty-factor
         # arithmetic; test_linear_max_drops_with_swing_phase_margin covers the
         # margined form.
@@ -129,9 +138,9 @@ def test_linear_max_scales_inversely_with_min_swing_time(tmp_path):
 # ── stance geometry the angular cap is derived from ──────────────────────────
 
 
-def test_standing_stance_places_each_foot_tip_radius_out_from_its_mount(tmp_path):
-    # Closed-form mirror of standing_pose_from + leg_to_body: the tip sits
-    # tip_radius out along the leg's own direction, offset by the mount.
+def test_standing_stance_places_each_foot_tip_reach_out_from_its_mount(tmp_path):
+    # Closed-form mirror of standing_pose_from + leg_to_body: the tip sits its
+    # group's tip_reach out along the leg's own direction, offset by the mount.
     stance = standing_stance_xy(_write_geometry(tmp_path), _write_yaml(tmp_path))
     assert set(stance) == {
         "l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear",
@@ -150,6 +159,49 @@ def test_standing_stance_places_each_foot_tip_radius_out_from_its_mount(tmp_path
     assert math.isclose(stance["l_rear"][1], stance["l_front"][1])
 
 
+def test_each_group_reaches_out_its_own_distance(tmp_path):
+    # The three pairs are configured separately; left/right still mirror.
+    pose = _standing_pose()
+    pose["front"]["tip_reach"] = 0.120
+    pose["middle"]["tip_reach"] = 0.140
+    pose["rear"]["tip_reach"] = 0.160
+    stance = standing_stance_xy(
+        _write_geometry(tmp_path),
+        _write_yaml(tmp_path, default_standing_pose=pose),
+    )
+    assert math.isclose(stance["l_middle"][1], 0.082 + 0.140)
+    assert math.isclose(
+        stance["l_front"][0], 0.083 + 0.120 * math.cos(math.radians(30))
+    )
+    assert math.isclose(
+        stance["l_rear"][0], -(0.083 + 0.160 * math.cos(math.radians(30)))
+    )
+    for group in ("front", "middle", "rear"):
+        assert math.isclose(stance[f"r_{group}"][0], stance[f"l_{group}"][0])
+        assert math.isclose(stance[f"r_{group}"][1], -stance[f"l_{group}"][1])
+
+
+def test_positive_coxa_deg_splays_outward_on_every_leg(tmp_path):
+    # The sign rule: a positive value is the left leg's, negated for rear legs
+    # and again for right ones, so the same number widens front and rear alike.
+    pose = _standing_pose(coxa_deg=15)
+    splayed = standing_stance_xy(
+        _write_geometry(tmp_path),
+        _write_yaml(tmp_path, default_standing_pose=pose),
+    )
+    straight = standing_stance_xy(
+        _write_geometry(tmp_path), _write_yaml(tmp_path)
+    )
+    # Corner feet move further from the fore/aft centreline, not across it.
+    for leg in ("l_front", "l_rear"):
+        assert splayed[leg][1] > straight[leg][1] > 0.0
+    for leg in ("r_front", "r_rear"):
+        assert splayed[leg][1] < straight[leg][1] < 0.0
+    # ...and the footprint stays mirror-symmetric front-to-back.
+    assert math.isclose(splayed["l_rear"][0], -splayed["l_front"][0])
+    assert math.isclose(splayed["l_rear"][1], splayed["l_front"][1])
+
+
 def test_outer_stance_radius_is_the_corner_legs(tmp_path):
     # With this geometry the corner feet (0.2358) reach further than the middle
     # ones (0.217), so they set the lever arm.
@@ -158,11 +210,10 @@ def test_outer_stance_radius_is_the_corner_legs(tmp_path):
     assert r > 0.082 + 0.135  # beats the middle legs
 
 
-def test_outer_stance_radius_grows_with_tip_radius(tmp_path):
+def test_outer_stance_radius_grows_with_tip_reach(tmp_path):
     wide = outer_stance_radius(
         _write_geometry(tmp_path),
-        _write_yaml(tmp_path, standing_pose=dict(
-            tip_radius=0.20, body_height=0.04, corner_leg_coxa_deg=0)),
+        _write_yaml(tmp_path, default_standing_pose=_standing_pose(tip_reach=0.20)),
     )
     assert wide > _R_OUTER
 
@@ -184,7 +235,7 @@ def test_angular_max_falls_when_the_stance_widens(tmp_path):
     narrow = _caps(tmp_path)
     wide = _caps(
         tmp_path,
-        standing_pose=dict(tip_radius=0.20, body_height=0.04, corner_leg_coxa_deg=0),
+        default_standing_pose=_standing_pose(tip_reach=0.20),
     )
     assert wide.angular_max("tripod") < narrow.angular_max("tripod")
     # Widening the stance must not touch the linear cap.
@@ -206,7 +257,7 @@ def test_angular_max_unknown_gait_raises(tmp_path):
         caps.angular_max("gallop")
 
 
-def test_missing_standing_pose_raises(tmp_path):
+def test_missing_default_standing_pose_raises(tmp_path):
     # The angular cap has no fallback: without a stance there is no lever arm.
     raw = {
         "stride_length": 0.12,

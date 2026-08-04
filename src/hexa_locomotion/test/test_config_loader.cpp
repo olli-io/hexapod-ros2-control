@@ -56,12 +56,17 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     }
   }
   EXPECT_NEAR(loaded.coxa_to_bottom, baked.coxa_to_bottom, kTol);
-  EXPECT_NEAR(loaded.standing_pose.tip_radius, baked.standing_pose.tip_radius,
-              kTol);
   EXPECT_NEAR(loaded.standing_pose.body_height, baked.standing_pose.body_height,
               kTol);
-  EXPECT_NEAR(loaded.standing_pose.corner_leg_coxa,
-              baked.standing_pose.corner_leg_coxa, kTol);
+  for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
+    const auto group = hexa::LEG_GROUP_NAMES[gi];
+    EXPECT_NEAR(loaded.standing_pose.groups[gi].tip_reach,
+                baked.standing_pose.groups[gi].tip_reach, kTol)
+        << group << ".tip_reach";
+    EXPECT_NEAR(loaded.standing_pose.groups[gi].coxa,
+                baked.standing_pose.groups[gi].coxa, kTol)
+        << group << ".coxa";
+  }
 
   // ── gait engine ──
   const auto& le = loaded.engine;

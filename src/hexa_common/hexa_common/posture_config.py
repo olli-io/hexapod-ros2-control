@@ -37,7 +37,7 @@ def load_body_height_offsets(
 
     ``posture_node.body_height_{min,max}_m`` are absolute belly clearance off
     the ground; ``/body/pose`` z is an offset from the resting stance. This
-    converts between the two by subtracting ``gait_node.standing_pose
+    converts between the two by subtracting ``gait_node.default_standing_pose
     .body_height`` — the same subtraction ``PostureController``'s constructor
     does on the C++ side, so teleop saturates its height integrator at exactly
     the point the posture stack starts clamping.
@@ -49,16 +49,15 @@ def load_body_height_offsets(
     with Path(posture_yaml).open() as f:
         posture_raw = yaml.safe_load(f)
 
-    nominal = float(
-        gait_raw["gait_node"]["ros__parameters"]["standing_pose"]["body_height"]
-    )
+    gait_params = gait_raw["gait_node"]["ros__parameters"]
+    nominal = float(gait_params["default_standing_pose"]["body_height"])
     pn = posture_raw["posture_node"]["ros__parameters"]
     height_max = float(pn["body_height_max_m"])
     height_min = float(pn["body_height_min_m"])
     if not height_min < nominal < height_max:
         raise ValueError(
             f"body_height_min_m = {height_min} m / body_height_max_m = "
-            f"{height_max} m must bracket standing_pose.body_height = "
+            f"{height_max} m must bracket default_standing_pose.body_height = "
             f"{nominal} m"
         )
     return height_min - nominal, height_max - nominal

@@ -84,14 +84,19 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     }
   }
 
-  // ── standing pose (tuning.yaml gait_node.standing_pose, port of standing_pose) ──
+  // ── standing pose (tuning.yaml gait_node.default_standing_pose) ──
   // Scalars only; gait::standing_pose_from turns them into the per-leg joint
-  // triples (and validates them against the joint limits).
-  const YAML::Node sp = g["standing_pose"];
-  cfg.standing_pose = {
-      f(sp["tip_radius"]), f(sp["body_height"]),
-      static_cast<float>(
-          to_urdf_rad("coxa", sp["corner_leg_coxa_deg"].as<double>()))};
+  // triples (and validates them against the joint limits). The splay stays as
+  // configured — the left leg's, positive outward — and standing_pose_from owns
+  // the rear/right negation, so the sign rule lives in exactly one place.
+  const YAML::Node sp = g["default_standing_pose"];
+  cfg.standing_pose.body_height = f(sp["body_height"]);
+  for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
+    const YAML::Node grp = sp[std::string(hexa::LEG_GROUP_NAMES[gi])];
+    cfg.standing_pose.groups[gi] = {
+        f(grp["tip_reach"]),
+        static_cast<float>(to_urdf_rad("coxa", grp["coxa_deg"].as<double>()))};
+  }
 
   // ── initial pose (geometry.yaml initial_pose, port of initial_pose) ──
   // femur/tibia uniform; coxa front/rear/middle by symmetry in degrees, then
@@ -245,7 +250,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
         ps.nominal_body_height < ps.body_height_max)) {
     throw std::runtime_error(
         "posture_node body_height_min_m/body_height_max_m must bracket "
-        "gait_node standing_pose.body_height");
+        "gait_node default_standing_pose.body_height");
   }
 
   return cfg;

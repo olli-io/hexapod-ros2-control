@@ -35,7 +35,7 @@ limited anything; all it did was skew the two things that scale off it
 (joystick full-scale deflection and the yaw acceleration ramp). A
 derived value cannot drift like that. To change turn rate, change what
 actually governs it: ``stride_length``, ``min_swing_time``, the gait's
-duty factor, or the stance width (``standing_pose.tip_radius``).
+duty factor, or the stance width (``default_standing_pose.<group>.tip_reach``).
 
 ``scale_to_envelope`` cuts ``(v_x, v_y, omega_z)`` so the implied
 per-leg planar speed never exceeds ``linear_max``. This is the right
@@ -79,6 +79,24 @@ import yaml
 
 from .gait_catalog import GAIT_DESCRIPTORS
 
+# Standing-pose leg groups, in the order the C++ LegGroup enum uses.
+LEG_GROUPS = ("front", "middle", "rear")
+
+
+def group_splay(group: str, side: str, coxa_deg: float) -> float:
+    """Left-leg ``coxa_deg`` -> this leg's own splay, in radians.
+
+    The YAML value is the *left* leg's, and positive means outward — away
+    from the body's fore/aft centreline. Turning that into a joint angle is
+    two negations: rear legs face the other way down the body, and right
+    legs mirror left ones. Same rule as ``standing_pose_from`` in
+    ``shared/motion_core/gait/engine.cpp``.
+    """
+    sign = -1.0 if group == "rear" else 1.0
+    if side == "r":
+        sign = -sign
+    return sign * math.radians(coxa_deg)
+
 
 @dataclass(frozen=True)
 class VelocityCaps:
@@ -113,21 +131,19 @@ def standing_stance_xy(
     The lever arms a yaw command acts through. Mirrors two things the C++
     side does with IK: ``load_leg_specs``' symmetry expansion of the two
     reference mounts in ``geometry.yaml``, and ``standing_pose_from``'s
-    placement of the tip ``tip_radius`` out from the coxa axis at the
-    leg's splay angle. Solved in closed form here — the round trip through
-    IK and FK lands on the same point, and this keeps the helper free of a
-    kinematics dependency.
+    placement of the tip its group's ``tip_reach`` out from the coxa axis
+    at the leg's splay angle. Solved in closed form here — the round trip
+    through IK and FK lands on the same point, and this keeps the helper
+    free of a kinematics dependency.
     """
     geo = yaml.safe_load(Path(geometry_yaml).read_text())
     tuning = yaml.safe_load(Path(envelope_yaml).read_text())
-    standing = tuning["gait_node"]["ros__parameters"]["standing_pose"]
-    tip_radius = float(standing["tip_radius"])
-    corner_splay = math.radians(float(standing["corner_leg_coxa_deg"]))
+    standing = tuning["gait_node"]["ros__parameters"]["default_standing_pose"]
 
     mounts = geo["mounts"]
     out: dict[str, tuple[float, float]] = {}
     for side in ("l", "r"):
-        for name in ("front", "middle", "rear"):
+        for name in LEG_GROUPS:
             ref = mounts["l_middle" if name == "middle" else "l_front"]
             ref_yaw = math.radians(float(ref["yaw_deg"]))
             ref_x, ref_y = float(ref["x"]), float(ref["y"])
@@ -139,19 +155,12 @@ def standing_stance_xy(
             if side == "r":
                 yaw = -yaw
 
-            # Splay: middle legs point straight out; the corner legs mirror the
-            # front-left leg's swivel, negated on the two diagonally opposite
-            # ones (same rule as standing_pose_from / kInitialPose).
-            if name == "middle":
-                splay = 0.0
-            elif (side, name) in (("l", "rear"), ("r", "front")):
-                splay = -corner_splay
-            else:
-                splay = corner_splay
+            tip_reach = float(standing[name]["tip_reach"])
+            splay = group_splay(name, side, float(standing[name]["coxa_deg"]))
 
             out[f"{side}_{name}"] = (
-                x + tip_radius * math.cos(yaw + splay),
-                y + tip_radius * math.sin(yaw + splay),
+                x + tip_reach * math.cos(yaw + splay),
+                y + tip_reach * math.sin(yaw + splay),
             )
     return out
 
@@ -174,7 +183,7 @@ def outer_stance_radius(
         raise ValueError(
             "outer stance radius is zero — every foot sits on the body axis, "
             "so the standing pose has no yaw authority; check tuning.yaml "
-            "standing_pose"
+            "default_standing_pose"
         )
     return r_outer
 

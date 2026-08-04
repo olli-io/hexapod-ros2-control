@@ -117,10 +117,17 @@ gait_node:
     max_swing_time: 0.4
     yaw_bias: 0.6
     default_gait: tripod
-    standing_pose:
-      tip_radius: 0.135
+    default_standing_pose:
       body_height: 0.04
-      corner_leg_coxa_deg: 0
+      front:
+        tip_reach: 0.135
+        coxa_deg: 0
+      middle:
+        tip_reach: 0.135
+        coxa_deg: 0
+      rear:
+        tip_reach: 0.135
+        coxa_deg: 0
 """
 
 # The angular stick cap is derived from the standing stance, so the caps loader

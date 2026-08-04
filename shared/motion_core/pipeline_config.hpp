@@ -29,9 +29,10 @@ struct PipelineConfig {
   // ── geometry.yaml ──
   std::array<hexa::config::LegSpec, hexa::kNumLegs> leg_specs;
   float coxa_to_bottom = 0.0f;
-  // ── tuning.yaml gait_node.standing_pose ──
-  // Scalars, not joint angles: gait::standing_pose_from solves the per-leg
-  // triple from these plus the leg specs.
+  // ── tuning.yaml gait_node.default_standing_pose ──
+  // A body height plus a per-group reach and splay, not joint angles:
+  // gait::standing_pose_from solves the per-leg triple from these plus the leg
+  // specs.
   hexa::config::StandingPose standing_pose{};
   std::array<hexa::JointAngles, hexa::kNumLegs> initial_pose{};
 

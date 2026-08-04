@@ -33,11 +33,15 @@ int main() {
                 (double)s.coxa_len, (double)s.femur_len, (double)s.tibia_len);
   }
 
-  std::printf("\nStanding pose: tip_radius=%.4f m  body_height=%.4f m  "
-              "corner_leg_coxa=%.3f deg\n",
-              (double)cfg::kStandingPose.tip_radius,
-              (double)cfg::kStandingPose.body_height,
-              (double)(cfg::kStandingPose.corner_leg_coxa * rad2deg));
+  std::printf("\nStanding pose: body_height=%.4f m\n",
+              (double)cfg::kStandingPose.body_height);
+  for (int gi = 0; gi < hexa::kNumLegGroups; ++gi) {
+    const auto& grp = cfg::kStandingPose.groups[static_cast<std::size_t>(gi)];
+    const auto name = hexa::LEG_GROUP_NAMES[static_cast<std::size_t>(gi)];
+    std::printf("  %-6.*s  tip_reach=%.4f m  coxa=%.3f deg\n",
+                static_cast<int>(name.size()), name.data(),
+                (double)grp.tip_reach, (double)(grp.coxa * rad2deg));
+  }
   std::printf("Solved per-leg angles (deg: coxa / femur above horizontal / "
               "tibia interior):\n");
   const auto standing = hexa::gait::standing_pose_from_config();

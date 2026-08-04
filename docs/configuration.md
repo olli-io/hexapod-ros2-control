@@ -6,7 +6,7 @@ nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 ## Main config files
 
 - [`hexa_description/config/geometry.yaml`](../src/hexa_description/config/geometry.yaml) — single source of truth for the robot's shape: body dimensions, per-leg segment lengths / radii / masses, hip mounts, and per-joint-type servo center + travel / effort / velocity limits. Loaded into the URDF via xacro.
-- [`hexa_description/config/tuning.yaml`](../src/hexa_description/config/tuning.yaml) — consolidated node parameters (node-key source of truth): gait engine knobs, `cmd_vel` shaping, posture animation stack, and the standing pose (per-joint rest angles under `gait_node`).
+- [`hexa_description/config/tuning.yaml`](../src/hexa_description/config/tuning.yaml) — consolidated node parameters (node-key source of truth): gait engine knobs, `cmd_vel` shaping, posture animation stack, and the default standing pose (per-leg-group foot placement under `gait_node`).
 - [`hexa_description/config/hardware.yaml`](../src/hexa_description/config/hardware.yaml) — Servo 2040 wiring, electrical clamps, ADC scales. Real-robot only.
 - [`hexa_description/config/servo_calibration.yaml`](../src/hexa_description/config/servo_calibration.yaml) — per-servo endpoint pulse-width calibration (`calibration_values`, indexed by pin). Real-robot only.
 

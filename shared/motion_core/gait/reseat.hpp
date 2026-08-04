@@ -4,6 +4,7 @@
 // mirrors InitializeController.PLACE_FEET.
 #pragma once
 
+#include <array>
 #include <map>
 #include <string>
 
@@ -24,20 +25,27 @@ struct ReseatGeometry {
   float default_foot_depth = 0.0f;
 };
 
+// One ReseatGeometry per leg, indexed by Leg (leg_index.hpp order). Legs in
+// different standing-pose groups reach out different distances, so they lean
+// their tibias differently and cannot share a snapshot.
+using ReseatGeometryByLeg = std::array<ReseatGeometry, kNumLegs>;
+
 // Derive the reseat geometry from a standing-pose joint-angle triple
 // (theta_coxa, theta_femur, theta_tibia) and a leg's segment lengths (FK).
 // theta_coxa is deliberately unused: depth and tibia lean are both invariant
-// under the leg's swivel, so one leg's triple describes all six.
+// under the leg's swivel.
 ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
                                           const kin::LegSpec& leg_spec);
 
 // Body-frame nominal stance per leg at a target body height. Each leg keeps the
 // swivel it currently stands at — current_stance supplies the azimuth, and only
 // the radius and depth move — so the standing splay survives a height change.
+// The radius is re-solved per leg from that leg's own geometry, so a stance whose
+// groups reach out different distances keeps those distances distinct.
 // Throws std::invalid_argument if target_height_m is outside the geometrically
-// feasible range (arcsin argument leaves [-1, 1]).
+// feasible range for any leg (arcsin argument leaves [-1, 1]).
 std::map<std::string, Vec3> reseat_nominal_stance(
-    float target_height_m, const ReseatGeometry& geometry,
+    float target_height_m, const ReseatGeometryByLeg& geometry,
     const std::map<std::string, kin::LegSpec>& leg_specs,
     const std::map<std::string, Vec3>& current_stance);
 

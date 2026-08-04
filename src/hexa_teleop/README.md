@@ -79,7 +79,8 @@ deflection still means the cap.
   angular is that same cap divided by the outermost standing foot's planar
   radius, the lever arm a yaw rate acts through. There is no turn-rate knob
   — to change it, change `stride_length`, `min_swing_time`, the gait's duty
-  factor, or the stance width (`standing_pose.tip_radius`). Because the
+  factor, or the stance width (`default_standing_pose.<group>.tip_reach`).
+  Because the
   angular cap comes from the stance, the loader reads `geometry.yaml`
   alongside `tuning.yaml`. Edit those, not teleop config.
 - **Animation cycler list** — via

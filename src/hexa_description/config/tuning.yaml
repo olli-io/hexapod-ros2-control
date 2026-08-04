@@ -33,24 +33,41 @@ gait_node:
     # Gait used at startup. The teleop D-pad cycles through the rest.
     default_gait: tripod
 
-    # ─── Standing pose ──────────────────────────────────────────────
+    # ─── Default standing pose ──────────────────────────────────────
     #
-    # Where the feet sit at rest. The engine solves the femur and tibia
+    # Where the feet sit at rest — the pose the robot stands in and the one
+    # body posing moves away from. The engine solves the femur and tibia
     # angles from these and checks them against the joint limits when the
     # config loads, so a bad edit fails fast instead of straining a servo.
     #
-    #   tip_radius          — how far the foot tip sits out from its own leg
-    #                         pivot (m). Bigger = wider stance, more reach,
-    #                         more torque on the servos.
-    #   body_height         — belly clearance off the ground (m).
-    #   corner_leg_coxa_deg — leg splay. The front-left leg's swivel, in
-    #                         degrees, positive counter-clockwise; mirrored
-    #                         front-to-back and left-to-right. The middle legs
-    #                         always point straight out.
-    standing_pose:
-      tip_radius: 0.140
+    #   body_height — belly clearance off the ground (m). One value: the body
+    #                 has one height, and the posture stack's own limits are
+    #                 measured against it.
+    #
+    # The front, middle and rear pairs are configured separately; left and
+    # right always mirror each other. Each pair takes:
+    #
+    #   tip_reach — distance from the leg's coxa rotation axis (its body
+    #               attachment point) to the foot tip, measured in the ground
+    #               plane only (m). Because it starts at the coxa axis rather
+    #               than the body centre, changing coxa_deg swings the leg
+    #               without changing this. Bigger = wider stance, more reach,
+    #               more torque on the servos.
+    #   coxa_deg  — how far the legs rotates off-center, in degrees.
+    #               Positive splays the feet outward, away from the body's
+    #               fore/aft centreline and towards the middle legs. For the
+    #               middle legs, positive angle rotates the leg toward the rear.
+    default_standing_pose:
       body_height: 0.06
-      corner_leg_coxa_deg: 0
+      front:
+        tip_reach: 0.135
+        coxa_deg: 15
+      middle:
+        tip_reach: 0.135
+        coxa_deg: 0
+      rear:
+        tip_reach: 0.135
+        coxa_deg: 0
 
     # ─── Stride geometry ────────────────────────────────────────────
 
@@ -80,7 +97,7 @@ gait_node:
     # The foot is never allowed to scrub either way: it leaves and meets the
     # ground travelling at exactly ground speed whatever this is set to.
     # That comes from the shape of the swing curve, not from a tuning value.
-    swing_apex_fraction: 0.25
+    swing_apex_fraction: 0.3
 
     # How fast the foot is still descending as it meets the ground (m/s),
     # and the speed of the probe below.
@@ -128,7 +145,7 @@ gait_node:
     # As with touchdown_velocity, worth keeping above one servo step per
     # 200 Hz tick so the break from the ground is a move rather than a
     # rounding error.
-    liftoff_velocity: 0.12
+    liftoff_velocity: 0.3
 
     # ─── Cycle timing ───────────────────────────────────────────────
 

@@ -181,7 +181,7 @@ class Engine {
          std::map<std::string, LegContext> leg_contexts,
          std::optional<std::map<std::string, kin::LegSpec>> leg_specs =
              std::nullopt,
-         std::optional<ReseatGeometry> reseat_geometry = std::nullopt);
+         std::optional<ReseatGeometryByLeg> reseat_geometry = std::nullopt);
 
   EngineState state() const { return state_; }
   float master_phase() const;
@@ -263,7 +263,7 @@ class Engine {
   float coxa_to_bottom_;
   std::map<std::string, LegContext> legs_;
   std::optional<std::map<std::string, kin::LegSpec>> leg_specs_;
-  std::optional<ReseatGeometry> reseat_geometry_;
+  std::optional<ReseatGeometryByLeg> reseat_geometry_;
 
   std::optional<GaitClock> clock_;
   StanceIntegrator stance_;
@@ -312,7 +312,7 @@ std::array<JointAngles, kNumLegs> standing_pose_from_config();
 std::map<std::string, Vec3> nominal_stance_from_config();
 std::map<std::string, Vec3> initial_stance_from_config();
 std::map<std::string, kin::LegSpec> leg_specs_from_config();
-ReseatGeometry reseat_geometry_from_config();
+ReseatGeometryByLeg reseat_geometry_from_config();
 std::map<std::string, LegContext> build_leg_contexts_from_config();
 
 // Assemble a fully-wired engine (reseat enabled) from the baked config.
@@ -327,11 +327,13 @@ std::unique_ptr<Engine> make_default_engine(
 // ROS caller can supply runtime-loaded values. The no-arg versions above delegate
 // to these with the config_generated.hpp constants (so the Pico is unchanged).
 
-// Per-leg resting joint angles from the standing-pose scalars (tip radius out
-// from the leg's own coxa axis, belly clearance, corner-leg splay). femur/tibia
-// come out uniform — the radial reach is the same for every leg — and only the
-// coxa varies, mirrored front-to-back and left-to-right with the middle legs at
-// zero. Throws hexa::UnreachableTarget if the tip radius / body height pair is
+// Per-leg resting joint angles from the standing pose: one belly clearance for
+// the body, plus a tip reach out from the leg's own coxa axis and a splay for
+// each of the three leg groups. femur/tibia come out uniform within a group —
+// the radial reach is the same for both its legs — and differ between groups
+// only where their reaches do. The coxa carries the splay, negated for rear legs
+// and again for right ones, so a positive value splays outward on every leg.
+// Throws hexa::UnreachableTarget if a tip reach / body height pair is
 // geometrically impossible, std::invalid_argument if a resulting angle falls
 // outside config::kJointLimits.
 std::array<JointAngles, kNumLegs> standing_pose_from(
@@ -346,7 +348,7 @@ std::map<std::string, Vec3> initial_stance_from(
     const std::array<JointAngles, kNumLegs>& initial_pose);
 std::map<std::string, kin::LegSpec> leg_specs_from(
     const std::array<kin::LegSpec, kNumLegs>& specs);
-ReseatGeometry reseat_geometry_from(
+ReseatGeometryByLeg reseat_geometry_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& standing_pose);
 std::map<std::string, LegContext> build_leg_contexts_from(

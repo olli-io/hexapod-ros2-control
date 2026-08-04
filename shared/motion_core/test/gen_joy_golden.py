@@ -224,7 +224,7 @@ def main() -> int:
     # pose offsets pose_z carries. Mirrors joy_mapping.cpp's posture_limits()
     # and hexa_common.load_body_height_offsets — the golden would drift from the
     # C++ mapper if this were sourced anywhere else.
-    nominal_height = float(gait["standing_pose"]["body_height"])
+    nominal_height = float(gait["default_standing_pose"]["body_height"])
     pn = posture["posture_node"]["ros__parameters"]
     posture_cfg = jm.PostureConfig(
         bindings={str(k): str(v) for k, v in posture_raw["bindings"].items()},

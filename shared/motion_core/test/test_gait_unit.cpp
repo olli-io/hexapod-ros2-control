@@ -1689,46 +1689,93 @@ TEST(Engine, SetStrategyDefersWhileWalking) {
                   2.0f / 3.0f);
 }
 
-// ── Standing pose: tip radius + body height + corner splay ──
+// ── Standing pose: per-group tip reach + splay, plus one body height ──
 //
 // The stance is configured by where the feet sit, not by joint angles:
-// standing_pose_from solves the per-leg triple. These pin the splay mirroring,
-// the footprint the scalars describe, and — the reason the splay is safe to use
-// at all — that a reseat keeps each leg pointing where it already points.
+// standing_pose_from solves the per-leg triple. The front, middle and rear pairs
+// are configured separately and left/right mirror. These pin the splay
+// mirroring, the footprint the values describe, that the groups stay distinct,
+// and — the reason the splay is safe to use at all — that a reseat keeps each
+// leg pointing where it already points.
 
 namespace {
 
-// A standing pose with the given corner splay, everything else as configured.
-::hexa::config::StandingPose standing_with_splay(float corner_leg_coxa_deg) {
+// A standing pose with the given splay on every group, and every group reaching
+// out the same distance. The reach is pinned rather than inherited from the
+// shipped YAML so these cases stay about the splay alone — a tuning.yaml that
+// gives its groups different reaches must not change what they assert.
+constexpr float kUniformReach = 0.140f;
+
+::hexa::config::StandingPose standing_with_splay(float coxa_deg) {
   ::hexa::config::StandingPose sp = hexa::config::kStandingPose;
-  sp.corner_leg_coxa = corner_leg_coxa_deg * static_cast<float>(M_PI) / 180.0f;
+  for (auto& grp : sp.groups) {
+    grp.tip_reach = kUniformReach;
+    grp.coxa = coxa_deg * static_cast<float>(M_PI) / 180.0f;
+  }
+  return sp;
+}
+
+// A standing pose whose three groups reach out different distances. Kept close
+// together so every leg stays inside its joint limits.
+::hexa::config::StandingPose standing_with_group_reaches(float front,
+                                                         float middle,
+                                                         float rear) {
+  ::hexa::config::StandingPose sp = hexa::config::kStandingPose;
+  sp.groups[hexa::group_index(hexa::LegGroup::FRONT)].tip_reach = front;
+  sp.groups[hexa::group_index(hexa::LegGroup::MIDDLE)].tip_reach = middle;
+  sp.groups[hexa::group_index(hexa::LegGroup::REAR)].tip_reach = rear;
   return sp;
 }
 
 constexpr float kSplayDeg = 15.0f;
 constexpr float kSplayRad = kSplayDeg * static_cast<float>(M_PI) / 180.0f;
 
+// Planar distance from a leg's own coxa axis to its foot.
+float reach_in_leg_frame(const g::Vec3& foot, const g::kin::LegSpec& spec) {
+  const g::Vec3 in_leg = hexa::body_to_leg(foot, spec);
+  return std::hypot(in_leg[0], in_leg[1]);
+}
+
 }  // namespace
 
-TEST(StandingPose, SplayMirrorsAcrossTheCornerLegs) {
+TEST(StandingPose, SplaySignIsOutwardOnEveryLeg) {
   const auto pose = g::standing_pose_from(hexa::config::kLegSpecs,
                                           hexa::config::kCoxaToBottom,
                                           standing_with_splay(kSplayDeg));
 
-  // Front-left is the reference; the mirroring negates front-to-back and
-  // left-to-right, and the middle legs always point straight out.
-  const std::array<float, 6> expect_coxa = {kSplayRad,  0.0f, -kSplayRad,
-                                            -kSplayRad, 0.0f, kSplayRad};
+  // A positive coxa_deg splays outward, which is the left leg's value negated
+  // for rear legs and again for right ones. Order is l_front, l_middle, l_rear,
+  // r_front, r_middle, r_rear.
+  const std::array<float, 6> expect_coxa = {kSplayRad,  kSplayRad,  -kSplayRad,
+                                            -kSplayRad, -kSplayRad, kSplayRad};
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
     EXPECT_NEAR(pose[i][0], expect_coxa[i], 1e-6f) << g::LEG_NAMES[i];
-    // tip_radius is measured from each leg's own coxa axis, so the radial reach
-    // — and with it the femur/tibia pair — is identical for all six.
+    // Every group carries the same tip_reach here, and the reach is measured
+    // from each leg's own coxa axis — so the radial reach, and with it the
+    // femur/tibia pair, is identical for all six whatever the splay.
     EXPECT_NEAR(pose[i][1], pose[0][1], 1e-6f) << g::LEG_NAMES[i] << " femur";
     EXPECT_NEAR(pose[i][2], pose[0][2], 1e-6f) << g::LEG_NAMES[i] << " tibia";
   }
 }
 
-TEST(StandingPose, ScalarsSetTheFootprint) {
+TEST(StandingPose, MiddleSplaySweepsThePairTheSameWay) {
+  // A middle leg already points straight out, so there is no "outward" for it:
+  // positive sweeps the pair rearward, mirrored about the fore/aft axis. Both
+  // middle feet must therefore move to the same x, on opposite sides.
+  ::hexa::config::StandingPose sp = hexa::config::kStandingPose;
+  sp.groups[hexa::group_index(hexa::LegGroup::MIDDLE)].coxa = kSplayRad;
+  const auto pose = g::standing_pose_from(hexa::config::kLegSpecs,
+                                          hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+
+  const g::Vec3 l = nominal.at("l_middle");
+  const g::Vec3 r = nominal.at("r_middle");
+  EXPECT_NEAR(l[0], r[0], 1e-5f) << "middle feet swept to different x";
+  EXPECT_NEAR(l[1], -r[1], 1e-5f) << "middle feet not mirrored in y";
+  EXPECT_LT(l[0], 0.0f) << "positive middle coxa_deg should sweep rearward";
+}
+
+TEST(StandingPose, ValuesSetTheFootprint) {
   const auto sp = standing_with_splay(kSplayDeg);
   const auto pose = g::standing_pose_from(
       hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
@@ -1739,9 +1786,11 @@ TEST(StandingPose, ScalarsSetTheFootprint) {
     const auto& spec = hexa::config::kLegSpecs[i];
     const g::Vec3 foot = nominal.at(g::LEG_NAMES[i]);
     const g::Vec3 in_leg = hexa::body_to_leg(foot, spec);
+    const auto group = hexa::leg_group(hexa::leg_from_index(static_cast<int>(i)));
 
-    EXPECT_NEAR(std::hypot(in_leg[0], in_leg[1]), sp.tip_radius, 1e-5f)
-        << g::LEG_NAMES[i] << " tip radius from its own coxa axis";
+    EXPECT_NEAR(std::hypot(in_leg[0], in_leg[1]),
+                sp.groups[hexa::group_index(group)].tip_reach, 1e-5f)
+        << g::LEG_NAMES[i] << " tip reach from its own coxa axis";
     EXPECT_NEAR(foot[2], -depth, 1e-5f) << g::LEG_NAMES[i] << " foot depth";
     EXPECT_NEAR(std::atan2(in_leg[1], in_leg[0]), pose[i][0], 1e-5f)
         << g::LEG_NAMES[i] << " heading is mount_yaw + coxa";
@@ -1751,6 +1800,31 @@ TEST(StandingPose, ScalarsSetTheFootprint) {
     const bool left = g::LEG_NAMES[i][0] == 'l';
     EXPECT_EQ(foot[1] > 0.0f, left) << g::LEG_NAMES[i] << " crossed y = 0";
   }
+}
+
+TEST(StandingPose, GroupsReachOutIndependently) {
+  const auto sp = standing_with_group_reaches(0.130f, 0.145f, 0.155f);
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const auto group = hexa::leg_group(hexa::leg_from_index(static_cast<int>(i)));
+    EXPECT_NEAR(reach_in_leg_frame(nominal.at(g::LEG_NAMES[i]),
+                                   hexa::config::kLegSpecs[i]),
+                sp.groups[hexa::group_index(group)].tip_reach, 1e-5f)
+        << g::LEG_NAMES[i];
+  }
+
+  // Reaching further out means a flatter leg, so femur/tibia now differ between
+  // groups — the assumption that one leg's triple describes all six is gone.
+  const std::size_t l_front = 0, l_middle = 1, l_rear = 2;
+  EXPECT_NE(pose[l_front][1], pose[l_middle][1]);
+  EXPECT_NE(pose[l_middle][1], pose[l_rear][1]);
+  // ...but the two legs inside a group still match.
+  const std::size_t r_front = 3;
+  EXPECT_NEAR(pose[l_front][1], pose[r_front][1], 1e-6f);
+  EXPECT_NEAR(pose[l_front][2], pose[r_front][2], 1e-6f);
 }
 
 TEST(StandingPose, RejectsASplayOutsideTheCoxaLimit) {
@@ -1801,6 +1875,79 @@ TEST(Reseat, PreservesEachLegsSwivel) {
   EXPECT_TRUE(widened) << "raising the body should have moved the feet out";
 }
 
+TEST(Reseat, PreservesEachGroupsReach) {
+  // A height change re-solves the radius each foot stands at. That solve reads
+  // the leg's femur/tibia lean, which now differs between groups — so it has to
+  // run per leg. Sharing one leg's snapshot would drag all six onto a single
+  // radius and quietly flatten the configured stance.
+  const auto sp = standing_with_group_reaches(0.130f, 0.145f, 0.155f);
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+  const auto geometry = g::reseat_geometry_from(hexa::config::kLegSpecs, pose);
+  const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
+
+  const auto raised = g::reseat_nominal_stance(0.02f, geometry, specs, nominal);
+
+  const auto reach = [&](const char* name) {
+    for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+      if (g::LEG_NAMES[i] == name) {
+        return reach_in_leg_frame(raised.at(name), hexa::config::kLegSpecs[i]);
+      }
+    }
+    ADD_FAILURE() << "unknown leg " << name;
+    return 0.0f;
+  };
+
+  // The configured ordering front < middle < rear survives the reseat, and the
+  // groups stay apart by roughly what they started apart by.
+  EXPECT_LT(reach("l_front"), reach("l_middle"));
+  EXPECT_LT(reach("l_middle"), reach("l_rear"));
+  EXPECT_NEAR(reach("l_front"), reach("r_front"), 1e-5f);
+  EXPECT_NEAR(reach("l_rear"), reach("r_rear"), 1e-5f);
+  // The specific failure of a shared solve: every leg landing on one radius.
+  EXPECT_GT(reach("l_rear") - reach("l_front"), 0.015f);
+}
+
+TEST(Reseat, RejectsAHeightInfeasibleForAnyGroup) {
+  // One group out of range aborts the whole reseat rather than re-planting five
+  // legs and stranding the sixth. Push the rear legs out far enough that they
+  // run out of femur travel first, then ask for a height only they cannot make.
+  const auto sp = standing_with_group_reaches(0.130f, 0.130f, 0.150f);
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+  const auto geometry = g::reseat_geometry_from(hexa::config::kLegSpecs, pose);
+  const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
+
+  // Find a lift the front group can still reach but the rear group cannot.
+  bool found = false;
+  for (float lift = 0.01f; lift < 0.30f && !found; lift += 0.005f) {
+    const auto front_only = g::reseat_geometry_from(
+        hexa::config::kLegSpecs,
+        g::standing_pose_from(hexa::config::kLegSpecs,
+                              hexa::config::kCoxaToBottom,
+                              standing_with_group_reaches(0.130f, 0.130f,
+                                                          0.130f)));
+    bool front_ok = true;
+    try {
+      g::reseat_nominal_stance(lift, front_only, specs, nominal);
+    } catch (const std::invalid_argument&) {
+      front_ok = false;
+    }
+    if (!front_ok) {
+      continue;  // nothing can make this height; keep looking lower
+    }
+    try {
+      g::reseat_nominal_stance(lift, geometry, specs, nominal);
+    } catch (const std::invalid_argument&) {
+      found = true;  // the rear group is what failed
+    }
+  }
+  EXPECT_TRUE(found)
+      << "expected a height the front group can reach and the rear cannot";
+}
+
 TEST(Limits, ScaleToEnvelopeIsNoOpWhenInRange) {
   const auto nominal = g::nominal_stance_from_config();
   const auto caps =
@@ -1814,25 +1961,38 @@ TEST(Limits, ScaleToEnvelopeIsNoOpWhenInRange) {
 }
 
 // The IK/FK round trip must land on the closed form hexa_common/limits.py
-// implements (standing_stance_xy): the tip sits tip_radius out from the coxa
-// axis at the leg's splay, rotated into the body frame and offset by the mount.
-// Teleop derives its angular stick cap from that closed form while the pipeline
-// derives the envelope from this FK path, so a divergence here would silently
-// desynchronise the stick from the engine.
+// implements (standing_stance_xy): the tip sits its group's tip_reach out from
+// the coxa axis at the leg's splay, rotated into the body frame and offset by
+// the mount. Teleop derives its angular stick cap from that closed form while
+// the pipeline derives the envelope from this FK path, so a divergence here
+// would silently desynchronise the stick from the engine.
+//
+// Run on a stance whose groups differ in both reach and splay, so the check
+// covers the sign rule rather than passing on a symmetric special case.
 TEST(Limits, StanceMatchesTheClosedFormTeleopUses) {
-  const auto nominal = g::nominal_stance_from_config();
-  const float tip = hexa::config::kStandingPose.tip_radius;
-  const float splay = hexa::config::kStandingPose.corner_leg_coxa;
+  ::hexa::config::StandingPose sp =
+      standing_with_group_reaches(0.130f, 0.145f, 0.155f);
+  sp.groups[hexa::group_index(hexa::LegGroup::FRONT)].coxa = kSplayRad;
+  sp.groups[hexa::group_index(hexa::LegGroup::MIDDLE)].coxa = 0.0f;
+  sp.groups[hexa::group_index(hexa::LegGroup::REAR)].coxa = -kSplayRad;
+
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+  const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
+
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
-    const auto leg = static_cast<hexa::Leg>(i);
-    const bool middle = (leg == hexa::Leg::L_MIDDLE || leg == hexa::Leg::R_MIDDLE);
-    const bool flipped = (leg == hexa::Leg::L_REAR || leg == hexa::Leg::R_FRONT);
-    const float th_c = middle ? 0.0f : (flipped ? -splay : splay);
+    const auto leg = hexa::leg_from_index(static_cast<int>(i));
+    const auto group = hexa::leg_group(leg);
+    const auto& grp = sp.groups[hexa::group_index(group)];
+    // The closed form's sign rule, spelled out rather than shared with the code
+    // under test: rear negates, right negates.
+    const float sign = (group == hexa::LegGroup::REAR ? -1.0f : 1.0f) *
+                       (hexa::leg_is_right(leg) ? -1.0f : 1.0f);
 
     const auto& spec = hexa::config::kLegSpecs[i];
-    const float angle = spec.mount_yaw + th_c;
-    const float want_x = spec.mount_xyz[0] + tip * std::cos(angle);
-    const float want_y = spec.mount_xyz[1] + tip * std::sin(angle);
+    const float angle = spec.mount_yaw + sign * grp.coxa;
+    const float want_x = spec.mount_xyz[0] + grp.tip_reach * std::cos(angle);
+    const float want_y = spec.mount_xyz[1] + grp.tip_reach * std::sin(angle);
 
     const g::Vec3& got = nominal.at(g::LEG_NAMES[i]);
     EXPECT_NEAR(got[0], want_x, 1e-5f) << g::LEG_NAMES[i] << " x";

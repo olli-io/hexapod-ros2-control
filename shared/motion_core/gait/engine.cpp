@@ -234,7 +234,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
                std::map<std::string, Vec3> initial_stance, float coxa_to_bottom,
                std::map<std::string, LegContext> leg_contexts,
                std::optional<std::map<std::string, kin::LegSpec>> leg_specs,
-               std::optional<ReseatGeometry> reseat_geometry)
+               std::optional<ReseatGeometryByLeg> reseat_geometry)
     : config_(config),
       strategy_(std::move(strategy)),
       strategy_name_(std::move(strategy_name)),
@@ -505,7 +505,9 @@ std::map<std::string, LegOutput> Engine::update(
         target_stance = reseat_nominal_stance(target_height_, *reseat_geometry_,
                                               *leg_specs_, nominal_);
       } catch (const std::invalid_argument&) {
-        // Geometrically infeasible target — drop the reseat silently.
+        // Geometrically infeasible target — drop the reseat silently. One leg
+        // out of range aborts all six: a partial re-plant would leave the body
+        // resting on a stance it was never solved for.
         return emit_stand();
       }
       reseat_ = build_reseat(target_stance);
@@ -931,27 +933,33 @@ std::map<std::string, Vec3> stance_from(
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
     const ::hexa::config::StandingPose& standing) {
-  // The foot tip sits tip_radius out from the coxa axis, swivelled by the leg's
-  // splay, at a depth that puts the body bottom body_height off the ground.
+  // The foot tip sits its group's tip_reach out from the coxa axis, swivelled by
+  // the group's splay, at a depth that puts the body bottom body_height off the
+  // ground.
   const float depth = coxa_to_bottom + standing.body_height;
 
   std::array<JointAngles, kNumLegs> out{};
   for (std::size_t i = 0; i < kNumLegs; ++i) {
-    // Splay mirrors front-to-back and left-to-right off the front-left leg;
-    // the middle legs always point straight out. Same rule as kInitialPose.
     const Leg leg = static_cast<Leg>(i);
-    const bool middle = (leg == Leg::L_MIDDLE || leg == Leg::R_MIDDLE);
-    const bool flipped = (leg == Leg::L_REAR || leg == Leg::R_FRONT);
-    const float th_c =
-        middle ? 0.0f : (flipped ? -standing.corner_leg_coxa
-                                 : standing.corner_leg_coxa);
+    const LegGroup group = leg_group(leg);
+    const auto& grp = standing.groups[static_cast<std::size_t>(
+        group_index(group))];
+
+    // The configured splay is the left leg's and positive means outward, so
+    // turning it into a joint angle is two negations: rear legs face the other
+    // way down the body, and right legs mirror left ones. Keep in step with
+    // gen_config.py's group_splay, which the teleop closed form goes through.
+    const float sign = (group == LegGroup::REAR ? -1.0f : 1.0f) *
+                       (leg_is_right(leg) ? -1.0f : 1.0f);
+    const float th_c = sign * grp.coxa;
 
     // IK recovers th_c from atan2(y, x) and solves femur/tibia from the radial
-    // reach, which is tip_radius whatever the splay — so femur/tibia come out
-    // uniform across the six legs. Throws UnreachableTarget if it cannot.
+    // reach, which is the group's tip_reach whatever the splay — so femur/tibia
+    // come out uniform within a group, and differ between groups only where the
+    // reaches do. Throws UnreachableTarget if it cannot.
     out[i] = kin::inverse_kinematics(
-        Vec3(standing.tip_radius * std::cos(th_c),
-             standing.tip_radius * std::sin(th_c), -depth),
+        Vec3(grp.tip_reach * std::cos(th_c), grp.tip_reach * std::sin(th_c),
+             -depth),
         specs[i]);
 
     for (std::size_t j = 0; j < 3; ++j) {
@@ -964,7 +972,8 @@ std::array<JointAngles, kNumLegs> standing_pose_from(
             LEG_NAMES[i] + " is " + std::to_string(out[i][j]) +
             " rad, outside the joint limit window [" +
             std::to_string(lim.lower) + ", " + std::to_string(lim.upper) +
-            "] rad — check tuning.yaml standing_pose");
+            "] rad — check tuning.yaml default_standing_pose." +
+            std::string(leg_group_name(group)));
       }
     }
   }
@@ -992,14 +1001,19 @@ std::map<std::string, kin::LegSpec> leg_specs_from(
   return out;
 }
 
-ReseatGeometry reseat_geometry_from(
+ReseatGeometryByLeg reseat_geometry_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& standing_pose) {
-  // One leg describes all six: femur/tibia are uniform, and the coxa component
-  // is irrelevant here (the geometry captures depth and tibia lean, both
-  // invariant under the leg's swivel). Reseat re-applies each leg's own
-  // azimuth when it places the targets.
-  return default_geometry_from_pose(standing_pose[0], specs[0]);
+  // One snapshot per leg. The coxa component is irrelevant here (the geometry
+  // captures depth and tibia lean, both invariant under the leg's swivel, and
+  // reseat re-applies each leg's own azimuth when it places the targets), but
+  // the lean itself is not shared: legs in different groups reach out different
+  // distances and so stand with different femur/tibia pairs.
+  ReseatGeometryByLeg out{};
+  for (std::size_t i = 0; i < static_cast<std::size_t>(kNumLegs); ++i) {
+    out[i] = default_geometry_from_pose(standing_pose[i], specs[i]);
+  }
+  return out;
 }
 
 std::map<std::string, LegContext> build_leg_contexts_from(
@@ -1036,7 +1050,7 @@ std::map<std::string, kin::LegSpec> leg_specs_from_config() {
   return leg_specs_from(baked_leg_specs());
 }
 
-ReseatGeometry reseat_geometry_from_config() {
+ReseatGeometryByLeg reseat_geometry_from_config() {
   return reseat_geometry_from(baked_leg_specs(), standing_pose_from_config());
 }
 

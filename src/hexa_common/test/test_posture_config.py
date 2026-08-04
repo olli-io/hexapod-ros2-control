@@ -10,10 +10,17 @@ from hexa_common import load_body_height_offsets
 _GAIT_YAML = """
 gait_node:
   ros__parameters:
-    standing_pose:
-      tip_radius: 0.135
+    default_standing_pose:
       body_height: 0.05
-      corner_leg_coxa_deg: 0
+      front:
+        tip_reach: 0.135
+        coxa_deg: 0
+      middle:
+        tip_reach: 0.135
+        coxa_deg: 0
+      rear:
+        tip_reach: 0.135
+        coxa_deg: 0
 """
 
 _POSTURE_YAML = """

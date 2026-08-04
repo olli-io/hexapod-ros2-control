@@ -18,7 +18,8 @@ float outer_stance_radius(const std::map<std::string, Vec3>& nominal_stance) {
   if (max_r <= 0.0f) {
     throw std::invalid_argument(
         "outer stance radius is zero — every foot sits on the body axis, so the "
-        "standing pose has no yaw authority; check tuning.yaml standing_pose");
+        "standing pose has no yaw authority; check tuning.yaml "
+        "default_standing_pose");
   }
   return max_r;
 }
