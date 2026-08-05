@@ -22,7 +22,11 @@ Pi node and the microcontroller.
 - `IRenderer.h` — `components/expression/include/`
 - `Config.h` — `components/config/include/`
 
-Vendored at repo commit `803dce8`.
+Vendored at repo commit `803dce8`, with one local divergence: `EyeAnim`'s first
+frame adopts the target expression outright instead of blinking through to it.
+Upstream boots NEUTRAL and so never noticed; the Pi boots SLEEPY (no
+`/gait/state` heard yet) and would otherwise flash NEUTRAL through the opening
+blink. Port it upstream and re-sync to drop this note.
 
 ## `u8g2/` — u8g2 C core (from https://github.com/olikraus/u8g2)
 

@@ -20,7 +20,7 @@ const std::unordered_map<std::string, Expression>& defaultExpressionMap() {
         {"initialize", Expression::NEUTRAL},
         {"stand", Expression::NEUTRAL},
         {"engaging", Expression::NEUTRAL},
-        {"gait", Expression::HAPPY},
+        {"gait", Expression::NEUTRAL},
         {"settling", Expression::NEUTRAL},
         {"reseating", Expression::NEUTRAL},
         {"folding", Expression::SLEEPY},
@@ -79,6 +79,35 @@ bool isIdle(const PolicyInputs& in) {
            in.animation_mode.empty();
 }
 
+// Pose mode: feet planted, the sticks moving the body rather than the robot.
+bool poseModeActive(const PolicyInputs& in) {
+    return cmdVelIsZero(in) && gaitStateIn(in.gait_state, idlingGaitStates());
+}
+
+bool stickHeld(double magnitude, double threshold, bool prev_held, double exit_ratio) {
+    if (threshold <= 0.0) {  // 0 disables the stick, as with the battery rungs
+        return false;
+    }
+    return magnitude >= (prev_held ? threshold * exit_ratio : threshold);
+}
+
+// Recover last tick's PostureSticks from the expression it produced, so decide()
+// carries the enter/exit hysteresis across ticks without holding state.
+PostureSticks sticksFromExpression(Expression expression, const PolicyConfig& config) {
+    if (expression == config.posture_both_expression) return {true, true};
+    if (expression == config.posture_tilt_expression) return {true, false};
+    if (expression == config.posture_shift_expression) return {false, true};
+    return {};
+}
+
+std::optional<Expression> postureStickExpression(const PostureSticks& sticks,
+                                                 const PolicyConfig& config) {
+    if (sticks.tilt && sticks.shift) return config.posture_both_expression;
+    if (sticks.tilt) return config.posture_tilt_expression;
+    if (sticks.shift) return config.posture_shift_expression;
+    return std::nullopt;
+}
+
 double norm(double value, double scale) {
     return scale > 0.0 ? value / scale : 0.0;
 }
@@ -116,6 +145,14 @@ bool poseIsLevel(const PolicyInputs& in, const PolicyConfig& config) {
 
 }  // namespace
 
+PostureSticks postureSticks(const PolicyInputs& in, const PolicyConfig& config,
+                            PostureSticks prev) {
+    return {stickHeld(std::hypot(in.roll, in.pitch), config.posture_tilt_threshold_rad,
+                      prev.tilt, config.posture_exit_ratio),
+            stickHeld(std::hypot(in.x, in.y), config.posture_shift_threshold_m,
+                      prev.shift, config.posture_exit_ratio)};
+}
+
 GazeDirection toScreenGaze(GazeDirection gaze) {
     const auto [v, h] = signsFromGaze(gaze);
     return gazeFromSigns(v, -h);
@@ -150,6 +187,16 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
     if (!in.animation_mode.empty()) {
         return {config.animation_expression, gaze};
     }
+    // Pose mode: the gait state sits at "stand" for as long as the operator
+    // poses the body, so the face answers the sticks instead of the map — one
+    // expression per stick, a third for both at once.
+    if (poseModeActive(in)) {
+        const PostureSticks sticks = postureSticks(
+            in, config, sticksFromExpression(prev.expression, config));
+        if (const auto expression = postureStickExpression(sticks, config)) {
+            return {*expression, gaze};
+        }
+    }
     // No /gait/state heard yet: the robot boots folded, so stay asleep until
     // the controller reports otherwise. An unknown state string stays NEUTRAL.
     Expression expression =
@@ -181,8 +228,12 @@ std::optional<std::string> selectFaceAnimation(const PolicyInputs& in,
     if (!in.gait_state || *in.gait_state == "folded") {
         return std::string("breathing");
     }
+    // A posed body is not an idle one: a stick is held, and the idling drift
+    // would fight the pose-following gaze for the eyes. Enter thresholds only —
+    // unlike decide(), this has no previous tick to hold a stick across.
+    const PostureSticks sticks = postureSticks(in, config, PostureSticks{});
     if (gaitStateIn(in.gait_state, idlingGaitStates()) && cmdVelIsZero(in) &&
-        poseIsLevel(in, config)) {
+        poseIsLevel(in, config) && !sticks.tilt && !sticks.shift) {
         return std::string("idling");
     }
     return std::nullopt;

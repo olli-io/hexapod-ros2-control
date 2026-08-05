@@ -58,6 +58,11 @@ float EyeAnim::updateBlink(const RenderState& state, uint32_t nowMs) {
     if (!_started) {
         _started         = true;
         _nextIdleBlinkMs = nowMs + nextIdleDelay();
+        // Nothing has been on screen yet, so there is no expression to blink
+        // away from — adopt the first target outright. Without this, a face that
+        // boots into anything but NEUTRAL wears NEUTRAL through the opening
+        // blink's first half.
+        _shownExpr       = state.expr;
     }
 
     if (!_blinkActive) {

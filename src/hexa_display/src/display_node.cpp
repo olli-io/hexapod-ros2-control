@@ -132,6 +132,12 @@ public:
         declare_parameter<std::string>("battery_warning_expression", "sleepy");
         declare_parameter<std::string>("battery_critical_expression", "dead");
         declare_parameter<std::string>("scanning_expression", "scanning");
+        declare_parameter<std::string>("posture_tilt_expression", "happy");
+        declare_parameter<std::string>("posture_shift_expression", "love");
+        declare_parameter<std::string>("posture_both_expression", "angry");
+        declare_parameter<double>("posture_tilt_threshold_rad", 0.03);
+        declare_parameter<double>("posture_shift_threshold_m", 0.005);
+        declare_parameter<double>("posture_exit_ratio", 0.6);
         declare_parameter<double>("battery_warning_v", 0.0);
         declare_parameter<double>("battery_critical_v", 0.0);
         declare_parameter<double>("battery_hysteresis_v", 0.3);
@@ -154,6 +160,14 @@ public:
         _config.battery_warning_expression = parseExpressionParam("battery_warning_expression");
         _config.battery_critical_expression = parseExpressionParam("battery_critical_expression");
         _config.scanning_expression = parseExpressionParam("scanning_expression");
+        _config.posture_tilt_expression = parseExpressionParam("posture_tilt_expression");
+        _config.posture_shift_expression = parseExpressionParam("posture_shift_expression");
+        _config.posture_both_expression = parseExpressionParam("posture_both_expression");
+        _config.posture_tilt_threshold_rad =
+            get_parameter("posture_tilt_threshold_rad").as_double();
+        _config.posture_shift_threshold_m =
+            get_parameter("posture_shift_threshold_m").as_double();
+        _config.posture_exit_ratio = get_parameter("posture_exit_ratio").as_double();
         _config.gaze_deadband = get_parameter("gaze_deadband").as_double();
         _config.gaze_exit_ratio = get_parameter("gaze_exit_ratio").as_double();
         _config.gaze_wz_weight = get_parameter("gaze_wz_weight").as_double();
@@ -168,6 +182,15 @@ public:
             get_parameter("battery_critical_v").as_double(),
             get_parameter("battery_hysteresis_v").as_double(),
             get_parameter("battery_hold_s").as_double());
+
+        // The render loop outruns the policy tick, so the first frames reach the
+        // panel before policyTick() has had anything to say. Seed both targets
+        // with the policy's own boot answer (SLEEPY, no /gait/state heard yet)
+        // rather than a second copy of that constant, so the face never flashes
+        // the NEUTRAL default on the way up.
+        _last_target = decide(PolicyInputs{}, _config, _last_target);
+        _target.expr = _last_target.expression;
+        _target.gaze = _last_target.gaze;
 
         if (!_panel.begin(cfg)) {
             RCLCPP_FATAL(get_logger(),
@@ -275,6 +298,8 @@ private:
         inputs.vy = _cmd_vel.linear.y;
         inputs.wz = _cmd_vel.angular.z;
         inputs.animation_mode = _animation_mode;
+        inputs.x = _body_pose.x;
+        inputs.y = _body_pose.y;
         inputs.roll = _body_pose.roll;
         inputs.pitch = _body_pose.pitch;
         inputs.yaw = _body_pose.yaw;

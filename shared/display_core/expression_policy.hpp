@@ -15,7 +15,10 @@
 //      the idle set, no animation mode) — a warning must not mask the face
 //      mid-walk.
 //   4. animation mode non-empty -> the configured animation expression (WOOZY).
-//   5. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
+//   5. pose mode with a posture stick held -> that stick's expression: tilt
+//      (left stick) HAPPY, shift (right stick) LOVE, both ANGRY. Sticks at
+//      rest fall through to the map below, which stands the face at NEUTRAL.
+//   6. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
 //      heard yet -> SLEEPY (the robot boots folded and asleep).
 //
 // Gaze: the vertical axis always follows body pitch (nose up -> UP) — driving
@@ -57,6 +60,11 @@ struct PolicyInputs {
     double vy = 0.0;
     double wz = 0.0;
     std::string animation_mode;
+    // Body-pose offset (/body/pose). x/y are the body shift, roll/pitch the
+    // body tilt — in pose mode the right stick drives the first pair and the
+    // left stick the second, which is all the policy needs to tell them apart.
+    double x = 0.0;
+    double y = 0.0;
     double roll = 0.0;
     double pitch = 0.0;
     double yaw = 0.0;
@@ -76,6 +84,13 @@ struct PolicyConfig {
     Expression battery_warning_expression = Expression::SLEEPY;
     Expression battery_critical_expression = Expression::DEAD;
     Expression scanning_expression = Expression::SCANNING;
+    // Pose mode, per posture stick (see PostureSticks).
+    Expression posture_tilt_expression = Expression::HAPPY;
+    Expression posture_shift_expression = Expression::LOVE;
+    Expression posture_both_expression = Expression::ANGRY;
+    double posture_tilt_threshold_rad = 0.03;
+    double posture_shift_threshold_m = 0.005;
+    double posture_exit_ratio = 0.6;
     double gaze_deadband = 0.15;
     double gaze_exit_ratio = 0.6;
     double gaze_wz_weight = 1.0;
@@ -102,6 +117,21 @@ inline constexpr DisplayTarget kIdleTarget{Expression::NEUTRAL, GazeDirection::C
 // the eye core's panel coordinates (LEFT = toward x = 0). The two disagree by
 // the horizontal sign; the panel itself stays unmirrored. Self-inverse.
 GazeDirection toScreenGaze(GazeDirection gaze);
+
+// Which posture stick the operator is holding, read off the body-pose offset it
+// produces: the left stick tilts the body (roll/pitch), the right stick shifts
+// it (x/y). Yaw and height are button-bound, not stick-bound, so they are not
+// part of either. A stick counts as held once its offset magnitude reaches the
+// threshold, and stays held until it falls below threshold * posture_exit_ratio
+// — the same enter/exit shape as the gaze axes, so a hand resting on the
+// threshold does not blink the face back and forth.
+struct PostureSticks {
+    bool tilt = false;   // left stick
+    bool shift = false;  // right stick
+};
+
+PostureSticks postureSticks(const PolicyInputs& inputs, const PolicyConfig& config,
+                            PostureSticks prev);
 
 // Sign-quantize value to {-1, 0, +1} with hysteresis. Enters a direction at
 // |value| >= deadband; once entered, holds it until |value| drops below

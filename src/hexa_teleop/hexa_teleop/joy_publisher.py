@@ -8,6 +8,11 @@ unplugged or replugged mid-session without restarting any ROS
 process. While the device is absent, ``Joy`` is still published at
 ``autorepeat_rate`` with empty axes / buttons — ``joy_mapping``
 bounds-checks every index, so the safe idle state falls out for free.
+
+Analog triggers are normalised to the rest=+1.0 / pressed=-1.0
+convention ``teleop_joy.yaml`` and the Pico firmware's ``scale_trigger``
+both assume — see ``trigger_axes``. This is the Linux half of the same
+per-target adaptation ``bt_teleop.cpp`` does for Bluepad32.
 """
 
 from __future__ import annotations
@@ -28,6 +33,21 @@ from sensor_msgs.msg import Joy
 # type='j' (0x6A), nr=0x11/0x12, size=1.
 _JSIOCGAXES = 0x80016A11
 _JSIOCGBUTTONS = 0x80016A12
+
+# evdev ioctls, for the per-axis ranges the js interface does not expose.
+# _IOR('E', 0x20 + EV_ABS, ABS_CNT/8) and _IOR('E', 0x40 + code, input_absinfo).
+_EV_ABS = 0x03
+_ABS_CNT = 0x40
+# ABS_Z / ABS_RZ — the analog triggers per Documentation/input/gamepad.rst.
+_ABS_TRIGGERS = frozenset({0x02, 0x05})
+_ABSINFO_FMT = "<iiiiii"  # value, minimum, maximum, fuzz, flat, resolution
+_EVIOCGBIT_ABS = 0x80000000 | ((_ABS_CNT // 8) << 16) | (0x45 << 8) | (0x20 + _EV_ABS)
+
+
+def _eviocgabs(code: int) -> int:
+    size = struct.calcsize(_ABSINFO_FMT)
+    return 0x80000000 | (size << 16) | (0x45 << 8) | (0x40 + code)
+
 
 # js_event layout from <linux/joystick.h>: u32 time_ms, s16 value,
 # u8 type, u8 number — 8 bytes.
@@ -60,14 +80,89 @@ def find_js_devices() -> list[str]:
     return sorted(paths, key=_num)
 
 
+def event_device_for(js_path: str) -> str | None:
+    """Sibling ``/dev/input/eventN`` of ``/dev/input/jsN``, via sysfs."""
+    matches = glob.glob(f"/sys/class/input/{os.path.basename(js_path)}/device/event*")
+    if not matches:
+        return None
+    return f"/dev/input/{os.path.basename(sorted(matches)[0])}"
+
+
+def trigger_axes(js_path: str) -> set[int]:
+    """js axis indices of analog triggers, which rest at -1.0.
+
+    joydev scales every absolute axis's ``[min, max]`` onto
+    ``[-32767, +32767]``. A trigger declares ``min == 0`` and physically
+    rests there, so it lands at -1.0 and travels to +1.0 — the opposite
+    of the convention ``teleop_joy.yaml`` and the Pico's
+    ``scale_trigger`` use (rest +1.0, pressed -1.0, so ``value <
+    trigger_threshold`` reads as pressed). ``drain`` negates these.
+
+    A unipolar range alone does NOT identify a trigger: pads exist whose
+    sticks declare 0..65535 and rest at the midpoint, which joydev maps
+    to ~0.0. What separates them is the axis code — the Linux gamepad
+    spec puts the analog triggers on ABS_Z / ABS_RZ and the sticks on
+    ABS_X/Y/RX/RY — so both conditions are required, and a bipolar
+    ABS_Z (a flight stick's twist, say) is left alone.
+
+    js axis order is joydev's own: ascending ABS code among the codes the
+    device declares, which is what makes the index returned here line up
+    with ``base.axes`` in the YAML.
+
+    An unreadable evdev node yields the empty set — no inversion is the
+    previous behaviour, and a controller that works imperfectly beats one
+    that does not enumerate at all.
+    """
+    path = event_device_for(js_path)
+    if path is None:
+        return set()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return set()
+    try:
+        bits = bytearray(_ABS_CNT // 8)
+        fcntl.ioctl(fd, _EVIOCGBIT_ABS, bits, True)
+        out: set[int] = set()
+        index = 0
+        for code in range(_ABS_CNT):
+            if not (bits[code // 8] >> (code % 8)) & 1:
+                continue
+            info = bytearray(struct.calcsize(_ABSINFO_FMT))
+            fcntl.ioctl(fd, _eviocgabs(code), info, True)
+            _, minimum, *_rest = struct.unpack(_ABSINFO_FMT, bytes(info))
+            if code in _ABS_TRIGGERS and minimum == 0:
+                out.add(index)
+            index += 1
+        return out
+    except OSError:
+        return set()
+    finally:
+        os.close(fd)
+
+
 class _JsHandle:
     """Open ``/dev/input/jsN`` fd plus the current axis / button state."""
 
-    def __init__(self, path: str, fd: int, n_axes: int, n_buttons: int) -> None:
+    def __init__(
+        self,
+        path: str,
+        fd: int,
+        n_axes: int,
+        n_buttons: int,
+        invert: set[int] | None = None,
+    ) -> None:
         self.path = path
         self.fd = fd
         self.axes = [0.0] * n_axes
         self.buttons = [0] * n_buttons
+        self.invert = invert or set()
+        # Seed the inverted axes at their released value: a 0.0 trigger
+        # reads as pressed (``value < trigger_threshold``), and the
+        # kernel's synthetic init events only land on the first drain.
+        for i in self.invert:
+            if i < n_axes:
+                self.axes[i] = 1.0
 
     @classmethod
     def open(cls, path: str) -> "_JsHandle":
@@ -81,7 +176,7 @@ class _JsHandle:
         except OSError:
             os.close(fd)
             raise
-        return cls(path, fd, n_axes, n_buttons)
+        return cls(path, fd, n_axes, n_buttons, trigger_axes(path))
 
     def close(self) -> None:
         try:
@@ -113,6 +208,8 @@ class _JsHandle:
             _, value, ev_type, number = parse_js_event(chunk)
             kind = ev_type & ~_JS_EVENT_INIT
             if kind == _JS_EVENT_AXIS and number < len(self.axes):
+                if number in self.invert:
+                    value = -value
                 self.axes[number] = value * _AXIS_SCALE
             elif kind == _JS_EVENT_BUTTON and number < len(self.buttons):
                 self.buttons[number] = 1 if value else 0
@@ -186,9 +283,11 @@ class JoyPublisherNode(Node):
                 continue
             self._handle = handle
             self._waiting_logged = False
+            inverted = sorted(handle.invert)
             self.get_logger().info(
                 f"opened {handle.path}: "
                 f"{len(handle.axes)} axes, {len(handle.buttons)} buttons"
+                + (f", triggers on axes {inverted}" if inverted else "")
             )
             return
         if last_err is not None and not self._waiting_logged:

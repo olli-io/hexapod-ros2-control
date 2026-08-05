@@ -24,7 +24,8 @@ base:
   axes:
     left_stick_x: 0
     left_stick_y: 1
-    l2: 2 # analog trigger (rest=+1.0, pressed=-1.0)
+    l2: 2 # analog trigger (rest=+1.0, pressed=-1.0; joy_publisher
+    #       normalises these — joydev itself rests them at -1.0)
     right_stick_x: 3
     right_stick_y: 4
     r2: 5
@@ -38,8 +39,8 @@ base:
     left_stick_y: -1.0
     right_stick_x: -1.0
     right_stick_y: -1.0
-    dpad_x: -1.0
-    dpad_y: -1.0
+    dpad_x: 1.0
+    dpad_y: 1.0
 
   # Mode-agnostic: gait_mode | posture_mode | animation_mode | init | record
   bindings:
@@ -56,10 +57,10 @@ base:
 # package README for what that means for the feel.
 gait:
   bindings:
-    l1: ""
-    r1: ""
-    l2: ""
-    r2: ""
+    l1: yaw_left
+    r1: yaw_right
+    l2: wiggle_left
+    r2: wiggle_right
     dpad_up: height_up
     dpad_down: height_down
     dpad_left: gait_prev
@@ -85,11 +86,11 @@ posture:
     right_stick_y: pose_x
 
   # Posture-mode scalar limits.
-  x_max: 0.035 # m
-  y_max: 0.035 # m
-  roll_max_deg: 12.0
-  pitch_max_deg: 12.0
-  yaw_max_deg: 20.0
+  x_max: 0.04 # m
+  y_max: 0.04 # m
+  roll_max_deg: 15.0
+  pitch_max_deg: 15.0
+  yaw_max_deg: 25.0
   yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle
   revert_tau_s: 0.25 # low-pass for Start-button revert
   wiggle_pivot_forward_m: 0.06
@@ -105,8 +106,8 @@ animation:
     r1: ""
     l2: ""
     r2: ""
-    dpad_up: ""
-    dpad_down: ""
+    dpad_up: height_up
+    dpad_down: height_down
     dpad_left: animation_prev
     dpad_right: animation_next
     left_stick_x: drive_yaw

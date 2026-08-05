@@ -128,6 +128,34 @@ TEST(FaceRender, FlushesOnChangeThenSettles) {
     EXPECT_EQ(panel.flushCount(), settled);
 }
 
+// Boot: nothing has been on screen yet, so there is no expression to blink away
+// from. The first frame must show the target outright — the face boots SLEEPY
+// (no /gait/state heard yet) and must not flash NEUTRAL on the way there.
+TEST(FaceRender, FirstFrameAdoptsTargetWithoutBlink) {
+    eyes::EyeAnim anim(&zeroRand);
+    const RenderState sleepy{Expression::SLEEPY, GazeDirection::CENTER};
+    for (uint32_t t = 0; t <= 500; t += 16) {
+        const eyes::AnimFrame f = anim.update(sleepy, t);
+        EXPECT_EQ(f.expr, Expression::SLEEPY) << "at t=" << t;
+        EXPECT_FLOAT_EQ(f.lid, 1.0f) << "at t=" << t;  // lids never moved
+    }
+}
+
+// ...but a change after that first frame still passes through the 260 ms blink,
+// swapping expression at the midpoint.
+TEST(FaceRender, LaterExpressionChangeStillBlinksThrough) {
+    eyes::EyeAnim anim(&zeroRand);
+    const RenderState sleepy{Expression::SLEEPY, GazeDirection::CENTER};
+    const RenderState happy{Expression::HAPPY, GazeDirection::CENTER};
+
+    anim.update(sleepy, 0);
+    EXPECT_EQ(anim.update(happy, 16).expr, Expression::SLEEPY);  // blink starts
+    const eyes::AnimFrame closing = anim.update(happy, 100);
+    EXPECT_EQ(closing.expr, Expression::SLEEPY);
+    EXPECT_LT(closing.lid, 1.0f);
+    EXPECT_EQ(anim.update(happy, 300).expr, Expression::HAPPY);  // swapped
+}
+
 // SCANNING is the one expression that never settles: the spinner phase keeps
 // stepping, so the panel keeps flushing for as long as it is on screen. This is
 // the counterpart of FlushesOnChangeThenSettles above.

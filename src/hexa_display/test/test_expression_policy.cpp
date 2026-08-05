@@ -67,7 +67,7 @@ TEST(ExpressionPolicy, BatteryWarningOnlyWhenIdle) {
     walking.gait_state = "gait";
     walking.vx = 0.05;
     walking.battery_low = true;
-    EXPECT_EQ(decide(walking, CONFIG, kIdleTarget).expression, Expression::HAPPY);
+    EXPECT_EQ(decide(walking, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
 
     auto animating = makeInputs();
     animating.battery_low = true;
@@ -179,6 +179,113 @@ TEST(ExpressionPolicy, PoseModeGazeFollowsTilt) {
     EXPECT_EQ(decide(right, CONFIG, kIdleTarget).gaze, GazeDirection::RIGHT);
 
     EXPECT_EQ(decide(makeInputs(), CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
+}
+
+// Pose mode is where the face answers the sticks: the gait state sits at
+// "stand" the whole time the operator poses the body, so the map alone would
+// leave the eyes NEUTRAL throughout.
+TEST(ExpressionPolicy, PostureSticksDriveExpressionInPoseMode) {
+    auto still = makeInputs();
+    EXPECT_EQ(decide(still, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
+
+    auto tilt = makeInputs();  // left stick: body tilt
+    tilt.pitch = 0.05;
+    EXPECT_EQ(decide(tilt, CONFIG, kIdleTarget).expression, Expression::HAPPY);
+
+    auto roll = makeInputs();
+    roll.roll = -0.05;
+    EXPECT_EQ(decide(roll, CONFIG, kIdleTarget).expression, Expression::HAPPY);
+
+    auto shift = makeInputs();  // right stick: body translation
+    shift.y = 0.02;
+    EXPECT_EQ(decide(shift, CONFIG, kIdleTarget).expression, Expression::LOVE);
+
+    auto both = makeInputs();
+    both.pitch = 0.05;
+    both.x = -0.02;
+    EXPECT_EQ(decide(both, CONFIG, kIdleTarget).expression, Expression::ANGRY);
+}
+
+// Yaw is L1/R1 and height is the D-pad — neither is a stick, so neither moves
+// the expression off the gait state's.
+TEST(ExpressionPolicy, YawAloneIsNotAPostureStick) {
+    auto in = makeInputs();
+    in.yaw = 0.2;
+    EXPECT_EQ(decide(in, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
+}
+
+// Walking with a posed body (a recorded posture baseline bleeds through into
+// gait mode) stays on the gait state's expression: this only applies in pose
+// mode, where the sticks are what moved the body in the first place.
+TEST(ExpressionPolicy, PostureExpressionOnlyInPoseMode) {
+    auto walking = makeInputs();
+    walking.gait_state = "gait";
+    walking.vx = 0.05;
+    walking.pitch = 0.05;
+    walking.y = 0.02;
+    EXPECT_EQ(decide(walking, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
+
+    auto folded = makeInputs();
+    folded.gait_state = "folded";
+    folded.pitch = 0.05;
+    folded.y = 0.02;
+    EXPECT_EQ(decide(folded, CONFIG, kIdleTarget).expression, Expression::SLEEPY);
+}
+
+TEST(ExpressionPolicy, PostureStickHysteresisHoldsExpressionInExitBand) {
+    auto held = makeInputs();
+    held.pitch = 0.02;  // under the 0.03 threshold, above the 0.018 exit level
+    const DisplayTarget prev{Expression::HAPPY, GazeDirection::CENTER};
+    EXPECT_EQ(decide(held, CONFIG, prev).expression, Expression::HAPPY);
+    EXPECT_EQ(decide(held, CONFIG, kIdleTarget).expression, Expression::NEUTRAL);
+
+    auto released = makeInputs();
+    released.pitch = 0.01;
+    EXPECT_EQ(decide(released, CONFIG, prev).expression, Expression::NEUTRAL);
+
+    // Each stick keeps its own band: the shift stick, still held, survives the
+    // tilt stick's release.
+    auto one_of_two = makeInputs();
+    one_of_two.pitch = 0.01;
+    one_of_two.x = 0.02;
+    const DisplayTarget both{Expression::ANGRY, GazeDirection::CENTER};
+    EXPECT_EQ(decide(one_of_two, CONFIG, both).expression, Expression::LOVE);
+}
+
+TEST(ExpressionPolicy, PostureStickThresholdOfZeroDisablesTheStick) {
+    PolicyConfig config = CONFIG;
+    config.posture_shift_threshold_m = 0.0;
+    auto shift = makeInputs();
+    shift.y = 0.035;  // full deflection
+    EXPECT_EQ(decide(shift, config, kIdleTarget).expression, Expression::NEUTRAL);
+}
+
+TEST(ExpressionPolicy, BatteryAndBusyOutrankPostureSticks) {
+    auto in = makeInputs();
+    in.pitch = 0.05;
+    in.x = -0.02;
+
+    auto low = in;
+    low.battery_low = true;
+    EXPECT_EQ(decide(low, CONFIG, kIdleTarget).expression, Expression::SLEEPY);
+
+    auto animating = in;
+    animating.animation_mode = "body_roll_3d";
+    EXPECT_EQ(decide(animating, CONFIG, kIdleTarget).expression, Expression::WOOZY);
+
+    auto busy = in;
+    busy.busy = true;
+    EXPECT_EQ(decide(busy, CONFIG, kIdleTarget).expression, Expression::SCANNING);
+}
+
+TEST(ExpressionPolicy, PostureSticksSuppressIdling) {
+    auto shift = makeInputs();
+    shift.y = 0.02;  // level, so only the shift stick keeps idling away
+    EXPECT_FALSE(selectFaceAnimation(shift, CONFIG).has_value());
+
+    auto tilt = makeInputs();
+    tilt.pitch = 0.05;  // under the gaze's 0.08 level threshold, still a stick
+    EXPECT_FALSE(selectFaceAnimation(tilt, CONFIG).has_value());
 }
 
 TEST(ExpressionPolicy, ToScreenGazeFlipsHorizontalOnly) {

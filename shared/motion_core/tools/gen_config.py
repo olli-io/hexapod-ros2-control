@@ -991,6 +991,26 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w(f"inline constexpr std::string_view kFaceBatteryCriticalExpression = "
       f"{cstr(face_expr('battery_critical_expression'))};")
     w("")
+    w("// Pose mode, per posture stick: tilt = left (roll/pitch), shift = right (x/y).")
+    w(f"inline constexpr std::string_view kFacePostureTiltExpression = "
+      f"{cstr(face_expr('posture_tilt_expression'))};")
+    w(f"inline constexpr std::string_view kFacePostureShiftExpression = "
+      f"{cstr(face_expr('posture_shift_expression'))};")
+    w(f"inline constexpr std::string_view kFacePostureBothExpression = "
+      f"{cstr(face_expr('posture_both_expression'))};")
+    w("")
+    w("struct FacePostureConfig {")
+    posture_fields = [
+        ("tilt_threshold_rad", dp["posture_tilt_threshold_rad"]),
+        ("shift_threshold_m", dp["posture_shift_threshold_m"]),
+        ("exit_ratio", dp["posture_exit_ratio"]),
+    ]
+    for fname, _ in posture_fields:
+        w(f"  float {fname};")
+    w("};")
+    w("inline constexpr FacePostureConfig kFacePosture = {"
+      + ", ".join(fl(v) for _, v in posture_fields) + "};")
+    w("")
     w("struct FaceGazeConfig {")
     gaze_fields = [
         ("gaze_deadband", dp["gaze_deadband"]),

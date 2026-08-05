@@ -30,8 +30,19 @@ This package keeps only the ROS + Linux-panel code:
 
 - **Expression** — precedence: Bluetooth scanning (`scanning`) >
   battery-critical (`dead`) > battery-warning (`sleepy`, idle only) > animation
-  mode (`woozy`) > per-gait-state map. Battery thresholds ship disabled (0.0)
-  until the ADC divider is calibrated.
+  mode (`woozy`) > posture sticks (pose mode only, below) > per-gait-state map.
+  Walking is `neutral`, like every other gait state but the folded pair.
+  Battery thresholds ship disabled (0.0) until the ADC divider is calibrated.
+- **Posture sticks** — in pose mode (feet planted, `cmd_vel` zero) the gait
+  state sits at `stand` throughout, so the face answers the sticks instead: the
+  left stick tilts the body (`/body/pose` roll/pitch) for `happy`, the right
+  stick shifts it (x/y) for `love`, both at once for `angry`, sticks at rest
+  back to `stand`'s `neutral`. Yaw (L1/R1) and height (D-pad) are not
+  stick-bound and count as neither. Each stick enters at its threshold and
+  holds until the offset drops below `threshold * posture_exit_ratio`, so a
+  hand resting on the threshold doesn't blink the face back and forth. The
+  policy sees the pose, not the stick, so a recorded posture baseline wears the
+  same expression as a live stick.
 - **Gaze** — vertical follows body pitch; horizontal follows `cmd_vel` when
   walking or body tilt in pose mode, sign-quantized with hysteresis. `dead` and
   `scanning` force center. The policy and the animations name gaze in the
@@ -53,7 +64,7 @@ This package keeps only the ROS + Linux-panel code:
 - **Face animations** — looping gaze/blink sequences: **breathing** until the
   first `/gait/state` arrives, **idling** look-around once idle/level/command-free.
   Suppressed by battery warning, animation mode, Bluetooth scanning, `cmd_vel`,
-  or a tilted pose.
+  or a posed body (tilted, or either posture stick held).
 - **Text mode** — a non-empty `/display/text` message replaces the eyes with the
   message text (vendored Pixel Operator 16 px font from `shared/display_core/fonts`,
   ASCII + Latin-1): hard-breaks on `\n`, word-wraps to the panel width, centers
@@ -90,7 +101,7 @@ one's topic names; nothing here depends on it, so the face stays a pure sink.
 ## Configuration
 
 All knobs in `config/display.yaml`: policy rate, per-gait-state expression map,
-animation/battery expressions and thresholds, gaze deadband/hysteresis/caps,
+animation/battery/posture-stick expressions and thresholds, gaze deadband/hysteresis/caps,
 idling delay, and the SH1122 SPI/GPIO pins + render rate + headless switch.
 Expression names are validated against the firmware enum at startup (a typo fails
 launch fast). `enabled: false` makes the bringup launch files skip the node.
