@@ -16,7 +16,7 @@ leg:
   # Segment lengths (m), hip outward to foot tip.
   coxa_length: 0.042
   femur_length: 0.08
-  tibia_length: 0.1284
+  tibia_length: 0.13284
   # Visual radii (m) — sim only.
   coxa_radius: 0.02
   femur_radius: 0.015
