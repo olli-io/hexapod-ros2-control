@@ -64,7 +64,6 @@ struct EngineConfig {
   float init_pair_swing_time = 0.0f;
   float init_lift_body_time = 0.0f;
   float init_swing_clearance = 0.0f;
-  float init_place_feet_clearance = 0.0f;
   float reseat_pose_settle_delay = 0.0f;
   float reseat_height_change_threshold = 0.0f;
   float reseat_pair_swing_time = 0.0f;
@@ -178,7 +177,7 @@ class Engine {
   Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
          std::string strategy_name, std::map<std::string, Vec3> nominal_stance,
          std::map<std::string, Vec3> initial_stance, float coxa_to_bottom,
-         std::map<std::string, LegContext> leg_contexts,
+         float foot_radius, std::map<std::string, LegContext> leg_contexts,
          std::optional<std::map<std::string, kin::LegSpec>> leg_specs =
              std::nullopt,
          std::optional<ReseatGeometryByLeg> reseat_geometry = std::nullopt);
@@ -261,6 +260,7 @@ class Engine {
   std::map<std::string, Vec3> nominal_;
   std::map<std::string, Vec3> initial_;
   float coxa_to_bottom_;
+  float foot_radius_;
   std::map<std::string, LegContext> legs_;
   std::optional<std::map<std::string, kin::LegSpec>> leg_specs_;
   std::optional<ReseatGeometryByLeg> reseat_geometry_;
@@ -338,7 +338,7 @@ std::unique_ptr<Engine> make_default_engine(
 // outside config::kJointLimits.
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
-    const ::hexa::config::StandingPose& standing);
+    float foot_radius, const ::hexa::config::StandingPose& standing);
 
 std::map<std::string, Vec3> nominal_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
@@ -360,7 +360,8 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const EngineConfig& engine_cfg,
     const std::array<JointAngles, kNumLegs>& standing_pose,
-    const std::array<JointAngles, kNumLegs>& initial_pose, float coxa_to_bottom);
+    const std::array<JointAngles, kNumLegs>& initial_pose, float coxa_to_bottom,
+    float foot_radius);
 
 // Wire string for /gait/state (folded, initialize, stand, ...).
 std::string state_value(EngineState s);

@@ -118,6 +118,11 @@ Vec3 live_aep(const Vec3& nominal, const Vec3& stride_vec);
 // +1 if the nominal foot sits at positive y, else -1.
 int identity_y_sign(const Vec3& nominal_stance);
 
+// Quintic smoothstep. 0 -> 1 with zero slope and zero curvature at both ends.
+inline float ease5(float u) {
+  return u * u * u * (10.0f + u * (-15.0f + 6.0f * u));
+}
+
 // Evaluate the swing trajectory at phase_in_swing in [0, 1).
 //
 // One curve, not a chain of segments. The horizontal track is a septic-eased

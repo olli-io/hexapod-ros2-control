@@ -16,7 +16,7 @@ leg:
   # Segment lengths (m), hip outward to foot tip.
   coxa_length: 0.042
   femur_length: 0.08
-  tibia_length: 0.134
+  tibia_length: 0.1284
   # Visual radii (m) — sim only.
   coxa_radius: 0.02
   femur_radius: 0.015
@@ -27,7 +27,7 @@ leg:
   tibia_mass: 0.06
 
 foot:
-  radius: 0.008 # ground-contact sphere radius (m)
+  radius: 0.0048 # ground-contact sphere radius (m)
   mass: 0.01 # foot tip mass (kg)
 
 mounts:

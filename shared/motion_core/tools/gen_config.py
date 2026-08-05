@@ -248,7 +248,10 @@ def standing_pose(gait: dict, geometry: dict) -> dict:
     leg = geometry["leg"]
     coxa_len, femur_len, tibia_len = (
         leg["coxa_length"], leg["femur_length"], leg["tibia_length"])
-    depth = geometry["body"]["coxa_to_bottom"] + body_height
+    # IK targets the foot sphere's centre, which sits one radius above the
+    # ground contact — same subtraction as gait::standing_pose_from.
+    depth = (geometry["body"]["coxa_to_bottom"] + body_height
+             - geometry["foot"]["radius"])
 
     groups = []
     for group in LEG_GROUPS:
@@ -501,6 +504,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w(f"inline constexpr float kCoxaToBottom = {fl(geometry['body']['coxa_to_bottom'])};"
       "  // m")
     w("")
+    w("// Radius of the spherical foot tip. IK targets the sphere's centre, so a")
+    w("// ground-contact height is this much below the target it is solved from.")
+    w(f"inline constexpr float kFootRadius = {fl(geometry['foot']['radius'])};"
+      "  // m")
+    w("")
 
     # ── joint limits ──
     w("// ── Per-joint-type travel limits, IK-convention radians ──")
@@ -573,7 +581,6 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("init_pair_swing_time", gait["initialize"]["pair_swing_time"]),
         ("init_lift_body_time", gait["initialize"]["lift_body_time"]),
         ("init_swing_clearance", gait["initialize"]["swing_clearance"]),
-        ("init_place_feet_clearance", gait["initialize"]["place_feet_clearance"]),
         ("reseat_pose_settle_delay", gait["reseat"]["pose_settle_delay"]),
         ("reseat_height_change_threshold", gait["reseat"]["height_change_threshold"]),
         ("reseat_pair_swing_time", gait["reseat"]["pair_swing_time"]),

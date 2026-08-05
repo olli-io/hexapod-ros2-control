@@ -2,25 +2,26 @@
 // (plan part 06). Ports initialize.py and fold.py.
 //
 // The two controllers are exact time-reverses and share the same pair-swing +
-// smoothstep machinery, so they live together:
+// eased-ramp machinery, so they live together:
 //
 //   InitializeController (cold start, initial_pose -> standing): PLACE_FEET
 //   swings three sequential mirroring pairs onto the standing footprint while
-//   the body rests on its belly; LIFT_BODY ramps the body-frame z via a
-//   smoothstep S-curve; DONE emits nominal_stance.
+//   the body rests on its belly; LIFT_BODY ramps the body-frame z via
+//   eased_ramp; DONE emits nominal_stance.
 //
 //   FoldController (warm shutdown, standing -> initial_pose): LOWER_BODY ramps
 //   the body-frame z up to the belly height, then LIFT_FEET swings the same
 //   three pairs in reverse back to the folded initial_pose; DONE emits
 //   initial_stance.
 //
-// PAIR_ORDER and smoothstep are also reused by reseat.cpp.
+// PAIR_ORDER is also reused by reseat.cpp.
 #pragma once
 
 #include <array>
 #include <map>
 #include <string>
 
+#include "gait/gaits/base.hpp"
 #include "gait/types.hpp"
 
 namespace hexa::gait {
@@ -33,16 +34,22 @@ inline const std::array<std::array<std::string, 2>, 3> PAIR_ORDER = {{
     {"r_front", "l_rear"},
 }};
 
-// Hermite smoothstep 3t^2 - 2t^3 on [0, 1]. Shared envelope across the
-// cold-start transients (initialize, fold) and the engagement controller.
-inline float smoothstep(float t) {
-  if (t <= 0.0f) {
+// Body-z ramp for the two ladders: a quintic across the whole travel.
+//
+// Both ends of this ramp are a ground contact — the feet already planted at the
+// start of a cold-start LIFT_BODY, the belly arriving at the end of a fold's
+// LOWER_BODY — which is what makes the ramp's own endpoints the right place to
+// be stationary. ease5 is stationary there in acceleration as well as velocity,
+// so the legs take up the body's weight without a jerk step. A cubic
+// smoothstep, which this replaced, only vanishes in velocity.
+inline float eased_ramp(float tau) {
+  if (tau <= 0.0f) {
     return 0.0f;
   }
-  if (t >= 1.0f) {
+  if (tau >= 1.0f) {
     return 1.0f;
   }
-  return t * t * (3.0f - 2.0f * t);
+  return ease5(tau);
 }
 
 enum class InitializeState { PLACE_FEET, LIFT_BODY, DONE };
@@ -51,9 +58,9 @@ class InitializeController {
  public:
   InitializeController(std::map<std::string, Vec3> initial_stance,
                        std::map<std::string, Vec3> nominal_stance,
-                       float coxa_to_bottom, float pair_swing_time,
-                       float lift_body_time, float swing_clearance,
-                       float place_feet_clearance, float swing_width,
+                       float coxa_to_bottom, float foot_radius,
+                       float pair_swing_time, float lift_body_time,
+                       float swing_clearance, float swing_width,
                        float controller_dt);
 
   InitializeState state() const { return state_; }
@@ -70,8 +77,6 @@ class InitializeController {
   std::map<std::string, Vec3> nominal_;
   float lift_start_z_;
   std::map<std::string, Vec3> ground_targets_;
-  float coxa_to_bottom_;
-  float place_feet_clearance_;
   float pair_swing_time_;
   float lift_body_time_;
   float swing_clearance_;
@@ -91,9 +96,9 @@ class FoldController {
  public:
   FoldController(std::map<std::string, Vec3> initial_stance,
                  std::map<std::string, Vec3> nominal_stance,
-                 float coxa_to_bottom, float pair_swing_time,
-                 float lift_body_time, float swing_clearance,
-                 float place_feet_clearance, float swing_width,
+                 float coxa_to_bottom, float foot_radius,
+                 float pair_swing_time, float lift_body_time,
+                 float swing_clearance, float swing_width,
                  float controller_dt);
 
   FoldState state() const { return state_; }

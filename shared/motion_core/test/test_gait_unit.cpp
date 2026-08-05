@@ -568,7 +568,8 @@ TEST(Engine, PeakTipSpeedStaysCloseToTheAnalyticalFloor) {
 
     auto e = g::make_default_engine(
         "tripod", hexa::config::kLegSpecs, cfg, g::standing_pose_from_config(),
-        hexa::config::kInitialPose, hexa::config::kCoxaToBottom);
+        hexa::config::kInitialPose, hexa::config::kCoxaToBottom,
+        hexa::config::kFootRadius);
     e->start_initialize();
     for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
       e->update(kTickDt, {0.0f, 0.0f}, 0.0f);
@@ -1741,6 +1742,7 @@ float reach_in_leg_frame(const g::Vec3& foot, const g::kin::LegSpec& spec) {
 TEST(StandingPose, SplaySignIsOutwardOnEveryLeg) {
   const auto pose = g::standing_pose_from(hexa::config::kLegSpecs,
                                           hexa::config::kCoxaToBottom,
+                                          hexa::config::kFootRadius,
                                           standing_with_splay(kSplayDeg));
 
   // A positive coxa_deg splays outward, which is the left leg's value negated
@@ -1765,7 +1767,8 @@ TEST(StandingPose, MiddleSplaySweepsThePairTheSameWay) {
   ::hexa::config::StandingPose sp = hexa::config::kStandingPose;
   sp.groups[hexa::group_index(hexa::LegGroup::MIDDLE)].coxa = kSplayRad;
   const auto pose = g::standing_pose_from(hexa::config::kLegSpecs,
-                                          hexa::config::kCoxaToBottom, sp);
+                                          hexa::config::kCoxaToBottom,
+                                          hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
 
   const g::Vec3 l = nominal.at("l_middle");
@@ -1775,13 +1778,36 @@ TEST(StandingPose, MiddleSplaySweepsThePairTheSameWay) {
   EXPECT_LT(l[0], 0.0f) << "positive middle coxa_deg should sweep rearward";
 }
 
+TEST(StandingPose, BodyHeightIsMeasuredToTheContactPoint) {
+  // The whole point of threading kFootRadius through: body_height is belly
+  // clearance off the *floor*, and the floor is where the tip sphere touches —
+  // one radius below the centre the IK was solved for. Without the offset every
+  // leg stands foot_radius too tall, uniformly and invisibly.
+  const auto pose = g::standing_pose_from(
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, hexa::config::kStandingPose);
+
+  const float want = -(hexa::config::kCoxaToBottom +
+                       hexa::config::kStandingPose.body_height);
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const g::Vec3 centre =
+        hexa::forward_kinematics(pose[i], hexa::config::kLegSpecs[i]);
+    EXPECT_NEAR(centre[2] - hexa::config::kFootRadius, want, 1e-6f)
+        << g::LEG_NAMES[i] << " contact point";
+  }
+}
+
 TEST(StandingPose, ValuesSetTheFootprint) {
   const auto sp = standing_with_splay(kSplayDeg);
   const auto pose = g::standing_pose_from(
-      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
 
-  const float depth = hexa::config::kCoxaToBottom + sp.body_height;
+  // The IK target is the foot sphere's centre, one radius above the contact
+  // point the body_height is measured to.
+  const float depth =
+      hexa::config::kCoxaToBottom + sp.body_height - hexa::config::kFootRadius;
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
     const auto& spec = hexa::config::kLegSpecs[i];
     const g::Vec3 foot = nominal.at(g::LEG_NAMES[i]);
@@ -1805,7 +1831,8 @@ TEST(StandingPose, ValuesSetTheFootprint) {
 TEST(StandingPose, GroupsReachOutIndependently) {
   const auto sp = standing_with_group_reaches(0.130f, 0.145f, 0.155f);
   const auto pose = g::standing_pose_from(
-      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
 
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
@@ -1836,6 +1863,7 @@ TEST(StandingPose, RejectsASplayOutsideTheCoxaLimit) {
       hexa::config::kJointLimits[0].upper * 180.0f / static_cast<float>(M_PI);
   EXPECT_THROW(g::standing_pose_from(hexa::config::kLegSpecs,
                                      hexa::config::kCoxaToBottom,
+                                     hexa::config::kFootRadius,
                                      standing_with_splay(coxa_limit_deg + 15.0f)),
                std::invalid_argument);
 }
@@ -1843,7 +1871,8 @@ TEST(StandingPose, RejectsASplayOutsideTheCoxaLimit) {
 TEST(Reseat, PreservesEachLegsSwivel) {
   const auto sp = standing_with_splay(kSplayDeg);
   const auto pose = g::standing_pose_from(
-      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
   const auto geometry = g::reseat_geometry_from(hexa::config::kLegSpecs, pose);
   const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
@@ -1882,7 +1911,8 @@ TEST(Reseat, PreservesEachGroupsReach) {
   // radius and quietly flatten the configured stance.
   const auto sp = standing_with_group_reaches(0.130f, 0.145f, 0.155f);
   const auto pose = g::standing_pose_from(
-      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
   const auto geometry = g::reseat_geometry_from(hexa::config::kLegSpecs, pose);
   const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
@@ -1915,7 +1945,8 @@ TEST(Reseat, RejectsAHeightInfeasibleForAnyGroup) {
   // run out of femur travel first, then ask for a height only they cannot make.
   const auto sp = standing_with_group_reaches(0.130f, 0.130f, 0.150f);
   const auto pose = g::standing_pose_from(
-      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
   const auto geometry = g::reseat_geometry_from(hexa::config::kLegSpecs, pose);
   const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
@@ -1927,6 +1958,7 @@ TEST(Reseat, RejectsAHeightInfeasibleForAnyGroup) {
         hexa::config::kLegSpecs,
         g::standing_pose_from(hexa::config::kLegSpecs,
                               hexa::config::kCoxaToBottom,
+                              hexa::config::kFootRadius,
                               standing_with_group_reaches(0.130f, 0.130f,
                                                           0.130f)));
     bool front_ok = true;
@@ -1977,7 +2009,8 @@ TEST(Limits, StanceMatchesTheClosedFormTeleopUses) {
   sp.groups[hexa::group_index(hexa::LegGroup::REAR)].coxa = -kSplayRad;
 
   const auto pose = g::standing_pose_from(
-      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom, sp);
+      hexa::config::kLegSpecs, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, sp);
   const auto nominal = g::nominal_stance_from(hexa::config::kLegSpecs, pose);
 
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {

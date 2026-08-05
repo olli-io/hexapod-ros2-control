@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "gait/gaits/base.hpp"
+#include "gait/kinematics.hpp"  // kin::ik_z_for_contact
 
 namespace hexa::gait {
 
@@ -12,11 +13,9 @@ namespace hexa::gait {
 InitializeController::InitializeController(
     std::map<std::string, Vec3> initial_stance,
     std::map<std::string, Vec3> nominal_stance, float coxa_to_bottom,
-    float pair_swing_time, float lift_body_time, float swing_clearance,
-    float place_feet_clearance, float swing_width, float controller_dt)
-    : coxa_to_bottom_(coxa_to_bottom),
-      place_feet_clearance_(place_feet_clearance),
-      pair_swing_time_(pair_swing_time),
+    float foot_radius, float pair_swing_time, float lift_body_time,
+    float swing_clearance, float swing_width, float controller_dt)
+    : pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
       swing_clearance_(swing_clearance),
       swing_width_(swing_width),
@@ -33,9 +32,12 @@ InitializeController::InitializeController(
     initial_[name] = initial_stance.at(name);
     nominal_[name] = nominal_stance.at(name);
   }
-  // Per-leg target at the end of PLACE_FEET: standing XY, IK target at
-  // body-frame z = -coxa_to_bottom + place_feet_clearance.
-  lift_start_z_ = -coxa_to_bottom + place_feet_clearance;
+  // Per-leg target at the end of PLACE_FEET: standing XY, feet on the floor the
+  // belly is already resting on — which is -coxa_to_bottom for the contact
+  // point, one foot_radius higher for the IK target that produces it. Placing
+  // the feet anywhere above it only moves the ground contact into the middle of
+  // the LIFT_BODY ramp, where nothing is slowing down for it.
+  lift_start_z_ = kin::ik_z_for_contact(-coxa_to_bottom, foot_radius);
   for (const auto& name : LEG_NAMES) {
     ground_targets_[name] =
         Vec3(nominal_[name][0], nominal_[name][1], lift_start_z_);
@@ -98,11 +100,11 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
 
 std::map<std::string, LegOutput> InitializeController::tick_lift_body(
     float dt) {
-  // All six feet stay at standing XY; body-frame z ramps via smoothstep from the
-  // PLACE_FEET endpoint down to nominal_stance.z.
+  // All six feet stay at standing XY; body-frame z ramps from the PLACE_FEET
+  // endpoint — the feet already on the floor — down to nominal_stance.z.
   t_in_lift_ += dt;
   const float tau = t_in_lift_ / lift_body_time_;
-  const float s = smoothstep(tau);
+  const float s = eased_ramp(tau);
   std::map<std::string, LegOutput> out;
   for (const auto& name : LEG_NAMES) {
     const Vec3& nom = nominal_[name];
@@ -147,9 +149,9 @@ const std::array<std::array<std::string, 2>, 3>& pair_order_reversed() {
 
 FoldController::FoldController(std::map<std::string, Vec3> initial_stance,
                                std::map<std::string, Vec3> nominal_stance,
-                               float coxa_to_bottom, float pair_swing_time,
-                               float lift_body_time, float swing_clearance,
-                               float place_feet_clearance, float swing_width,
+                               float coxa_to_bottom, float foot_radius,
+                               float pair_swing_time, float lift_body_time,
+                               float swing_clearance, float swing_width,
                                float controller_dt)
     : pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
@@ -169,8 +171,10 @@ FoldController::FoldController(std::map<std::string, Vec3> initial_stance,
     nominal_[name] = nominal_stance.at(name);
   }
   // LOWER_BODY endpoint == LIFT_FEET swing origin: standing XY, body-on-belly
-  // height. Same expression as InitializeController's lift_start_z.
-  lower_end_z_ = -coxa_to_bottom + place_feet_clearance;
+  // height. Same expression as InitializeController's lift_start_z — it is the
+  // same floor, reached from the other side, which is what keeps the two
+  // ladders exact time-reverses.
+  lower_end_z_ = kin::ik_z_for_contact(-coxa_to_bottom, foot_radius);
   for (const auto& name : LEG_NAMES) {
     ground_targets_[name] =
         Vec3(nominal_[name][0], nominal_[name][1], lower_end_z_);
@@ -189,11 +193,12 @@ std::map<std::string, LegOutput> FoldController::update(float dt) {
 }
 
 std::map<std::string, LegOutput> FoldController::tick_lower_body(float dt) {
-  // All six feet stay at standing XY; body-frame z ramps via smoothstep from
-  // nominal.z up to lower_end_z (foot closer to body; body lowers onto belly).
+  // All six feet stay at standing XY; body-frame z ramps from nominal.z up to
+  // lower_end_z (foot closer to body; body lowers onto belly), so the belly
+  // reaches the floor exactly as the ramp runs out of speed.
   t_in_lower_ += dt;
   const float tau = t_in_lower_ / lift_body_time_;
-  const float s = smoothstep(tau);
+  const float s = eased_ramp(tau);
   std::map<std::string, LegOutput> out;
   for (const auto& name : LEG_NAMES) {
     const Vec3& nom = nominal_[name];

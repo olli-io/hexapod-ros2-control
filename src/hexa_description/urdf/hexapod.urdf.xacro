@@ -355,31 +355,30 @@
                                radius="${tibia_radius}"/>
     </link>
 
-    <!-- Foot: a small sphere at the tip of the tibia.
-         Used as the IK target and as the ground-contact body in sim.
-         The foot link origin sits at the bottom of the sphere along the
-         tibia's +x axis, so the IK target coincides with the ground
-         contact point under the assumption that the tibia is vertical
-         at touchdown. The sphere geometry is therefore shifted back by
-         -foot_radius in the foot frame to keep its centre at the
-         physical tibia tip. -->
+    <!-- Foot: a small sphere at the tip of the tibia, the ground-contact
+         body in sim. The foot link origin is the sphere's centre, which
+         sits at the physical tibia tip — the same point motion_core's IK
+         solves for (its reach ends at tibia_length). The ground contact is
+         not this frame: a sphere on a flat floor touches foot_radius
+         directly below its centre, at any tibia angle. Callers placing a
+         foot on the floor apply that offset (kin::ik_z_for_contact). -->
     <joint name="${side}_${name}_foot_joint" type="fixed">
       <parent link="${side}_${name}_tibia"/>
       <child  link="${side}_${name}_foot"/>
-      <origin xyz="${tibia_length + foot_radius} 0 0" rpy="0 0 0"/>
+      <origin xyz="${tibia_length} 0 0" rpy="0 0 0"/>
     </joint>
     <link name="${side}_${name}_foot">
       <visual>
-        <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${foot_radius}"/></geometry>
         <material name="${leg_material}"/>
       </visual>
       <collision>
-        <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry><sphere radius="${foot_radius}"/></geometry>
       </collision>
       <inertial>
-        <origin xyz="${-foot_radius} 0 0" rpy="0 0 0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <mass value="${foot_mass}"/>
         <!-- Solid sphere: I = (2/5) m r^2, isotropic. -->
         <inertia ixx="${0.4 * foot_mass * foot_radius * foot_radius}"

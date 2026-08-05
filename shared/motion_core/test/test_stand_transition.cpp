@@ -22,6 +22,7 @@
 #include "config_generated.hpp"
 #include "gait/engine.hpp"
 #include "gait/stand_transition.hpp"
+#include "kinematics/leg_ik.hpp"
 #include "leg_index.hpp"
 
 namespace g = hexa::gait;
@@ -45,17 +46,16 @@ Ladder baked() {
 g::InitializeController make_initialize(const Ladder& l) {
   return g::InitializeController(
       l.initial, l.nominal, hexa::config::kCoxaToBottom,
-      l.cfg.init_pair_swing_time, l.cfg.init_lift_body_time,
-      l.cfg.init_swing_clearance, l.cfg.init_place_feet_clearance,
-      l.cfg.swing_width, l.cfg.controller_dt);
+      hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
+      l.cfg.init_lift_body_time, l.cfg.init_swing_clearance, l.cfg.swing_width,
+      l.cfg.controller_dt);
 }
 
 g::FoldController make_fold(const Ladder& l) {
   return g::FoldController(l.initial, l.nominal, hexa::config::kCoxaToBottom,
-                           l.cfg.init_pair_swing_time, l.cfg.init_lift_body_time,
-                           l.cfg.init_swing_clearance,
-                           l.cfg.init_place_feet_clearance, l.cfg.swing_width,
-                           l.cfg.controller_dt);
+                           hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
+                           l.cfg.init_lift_body_time, l.cfg.init_swing_clearance,
+                           l.cfg.swing_width, l.cfg.controller_dt);
 }
 
 void expect_near(const g::Vec3& got, const g::Vec3& want,
@@ -71,6 +71,51 @@ int max_ticks(const Ladder& l) {
              (3.0f * l.cfg.init_pair_swing_time + l.cfg.init_lift_body_time) /
              kDt) +
          50;
+}
+
+// One leg's z through a body ramp, sampled per tick. Every leg shares the same
+// ramp, so one is the whole story.
+constexpr const char* kProbeLeg = "l_middle";
+
+// Body-frame IK target z at which the robot meets the floor. The target is the
+// foot sphere's centre, so it sits one radius above the contact point at
+// -kCoxaToBottom — and both ladders are built so this is an *endpoint* of the
+// body ramp, never a point inside it.
+float contact_z() {
+  return hexa::ik_z_for_contact(-hexa::config::kCoxaToBottom,
+                                hexa::config::kFootRadius);
+}
+
+// One leg's z, sampled per tick, across a controller's body ramp. Every leg
+// shares the same ramp, so one is the whole story.
+std::vector<float> initialize_ramp(g::InitializeController& init, int limit) {
+  std::vector<float> z;
+  for (int i = 0; i < limit; ++i) {
+    const auto out = init.update(kDt);
+    if (init.state() == g::InitializeState::PLACE_FEET) continue;
+    z.push_back(out.at(kProbeLeg).foot_target[2]);
+    if (init.done()) break;
+  }
+  return z;
+}
+
+std::vector<float> fold_ramp(g::FoldController& fold, int limit) {
+  std::vector<float> z;
+  for (int i = 0; i < limit; ++i) {
+    const auto out = fold.update(kDt);
+    z.push_back(out.at(kProbeLeg).foot_target[2]);
+    if (fold.state() != g::FoldState::LOWER_BODY) break;
+  }
+  return z;
+}
+
+// Largest per-tick |dz| anywhere in a ramp.
+float peak_step(const std::vector<float>& z) {
+  float peak = 0.0f;
+  for (std::size_t i = 1; i < z.size(); ++i) {
+    peak = std::max(peak, std::fabs(z[i] - z[i - 1]));
+  }
+  return peak;
 }
 
 }  // namespace
@@ -164,14 +209,19 @@ TEST(InitializeLadder, PairsSwingOneAtATime) {
   EXPECT_TRUE(saw_swing) << "PLACE_FEET never lifted a foot";
 }
 
-TEST(InitializeLadder, PlaceFeetLandsFeetAtTheBellyHeight) {
+TEST(InitializeLadder, PlaceFeetLandsFeetOnTheFloor) {
   // Every foot must be planted at the same z before LIFT_BODY starts, or the
   // body ramp would drag one leg along the floor.
+  //
+  // That z is the floor itself. Placing the feet above it — the ladder used to
+  // hold them 12 mm up — does not avoid the ground contact, it only moves the
+  // contact into the middle of the LIFT_BODY ramp, where the curve is at speed
+  // and nothing is slowing down for it. Here the swing arc does the landing,
+  // and it already arrives with zero vertical velocity.
   const Ladder l = baked();
   auto init = make_initialize(l);
 
-  const float want_z =
-      -hexa::config::kCoxaToBottom + l.cfg.init_place_feet_clearance;
+  const float want_z = contact_z();
   std::map<std::string, g::LegOutput> last;
   for (int i = 0; i < max_ticks(l); ++i) {
     const auto out = init.update(kDt);
@@ -187,6 +237,45 @@ TEST(InitializeLadder, PlaceFeetLandsFeetAtTheBellyHeight) {
     EXPECT_NEAR(last.at(leg).foot_target[0], l.nominal.at(leg)[0], kTol) << leg;
     EXPECT_NEAR(last.at(leg).foot_target[1], l.nominal.at(leg)[1], kTol) << leg;
   }
+}
+
+TEST(InitializeLadder, BodyRampStartsOnTheFloorAndLeavesItStationary) {
+  // The regression this pins is the one that made the cold start slip: ground
+  // contact anywhere but an endpoint of the ramp. It belongs at tau = 0 here,
+  // where the ramp is not yet moving — the feet are already down when the legs
+  // start taking the body's weight, and they never come back up.
+  const Ladder l = baked();
+  auto init = make_initialize(l);
+
+  const std::vector<float> z = initialize_ramp(init, max_ticks(l));
+  ASSERT_TRUE(init.done());
+  ASSERT_GE(z.size(), 3u);
+
+  EXPECT_NEAR(z.front(), contact_z(), kTol) << "LIFT_BODY did not start on the floor";
+  const float peak = peak_step(z);
+  ASSERT_GT(peak, 0.0f);
+  EXPECT_LT(std::fabs(z[1] - z[0]), 0.05f * peak)
+      << "the ramp leaves the floor at " << 100.0f * std::fabs(z[1] - z[0]) / peak
+      << "% of its peak speed";
+  for (std::size_t i = 0; i < z.size(); ++i) {
+    EXPECT_LE(z[i], contact_z() + kTol) << "foot rose off the floor at sample " << i;
+  }
+}
+
+TEST(InitializeLadder, BodyRampIsMonotonicAndFinishesOnTime) {
+  // A quintic must not become a reversal, and must not lengthen the ladder —
+  // it is still three pair swings plus init_lift_body_time.
+  const Ladder l = baked();
+  auto init = make_initialize(l);
+
+  const std::vector<float> z = initialize_ramp(init, max_ticks(l));
+  ASSERT_TRUE(init.done());
+
+  for (std::size_t i = 1; i < z.size(); ++i) {
+    EXPECT_LE(z[i], z[i - 1] + kTol) << "ramp reversed at sample " << i;
+  }
+  const int want_ticks = static_cast<int>(l.cfg.init_lift_body_time / kDt);
+  EXPECT_NEAR(static_cast<int>(z.size()), want_ticks + 1, 2);
 }
 
 // ── FoldController: standing -> folded ──────────────────────────────────────
@@ -239,6 +328,29 @@ TEST(FoldLadder, ReversesTheInitializePairOrder) {
   }
 }
 
+TEST(FoldLadder, BodyRampMeetsTheFloorStationaryAtItsEnd) {
+  // The mirror: the belly arrives exactly as LOWER_BODY runs out, so the ramp
+  // is already stopped when it lands rather than still descending into it. The
+  // fold used to overshoot the contact and put the landing mid-ramp.
+  const Ladder l = baked();
+  auto fold = make_fold(l);
+
+  const std::vector<float> z = fold_ramp(fold, max_ticks(l));
+  ASSERT_NE(fold.state(), g::FoldState::LOWER_BODY) << "LOWER_BODY never ended";
+  ASSERT_GE(z.size(), 3u);
+
+  EXPECT_NEAR(z.back(), contact_z(), kTol) << "LOWER_BODY did not end on the floor";
+  const float peak = peak_step(z);
+  ASSERT_GT(peak, 0.0f);
+  const float last = std::fabs(z[z.size() - 1] - z[z.size() - 2]);
+  EXPECT_LT(last, 0.05f * peak)
+      << "the belly lands at " << 100.0f * last / peak << "% of the ramp's "
+      << "peak speed";
+  for (std::size_t i = 0; i < z.size(); ++i) {
+    EXPECT_LE(z[i], contact_z() + kTol) << "body dipped past the floor at " << i;
+  }
+}
+
 TEST(FoldLadder, IsTheTimeReverseOfInitialize) {
   // Both ladders visit the same belly-height footprint, from opposite ends.
   const Ladder l = baked();
@@ -267,4 +379,50 @@ TEST(FoldLadder, IsTheTimeReverseOfInitialize) {
     const std::string leg(name);
     expect_near(fold_mid.at(leg).foot_target, init_end.at(leg).foot_target, leg);
   }
+}
+
+// ── eased_ramp ──────────────────────────────────────────────────────────────
+
+TEST(RampCurve, PinsBothEndsAndIsMonotonic) {
+  EXPECT_NEAR(g::eased_ramp(-0.5f), 0.0f, kTol);
+  EXPECT_NEAR(g::eased_ramp(0.0f), 0.0f, kTol);
+  EXPECT_NEAR(g::eased_ramp(1.0f), 1.0f, kTol);
+  EXPECT_NEAR(g::eased_ramp(1.5f), 1.0f, kTol);
+  EXPECT_NEAR(g::eased_ramp(0.5f), 0.5f, kTol);
+
+  constexpr int kSamples = 1000;
+  float prev = g::eased_ramp(0.0f);
+  for (int i = 1; i <= kSamples; ++i) {
+    const float cur = g::eased_ramp(static_cast<float>(i) / kSamples);
+    // On the value, not the slope: dividing float noise at 1.0 by the sample
+    // step turns an epsilon into a visibly negative slope.
+    EXPECT_GE(cur, prev - 1e-6f) << "not monotonic at sample " << i;
+    prev = cur;
+  }
+}
+
+TEST(RampCurve, LeavesTheFloorWithVanishingAcceleration) {
+  // What separates the quintic from the cubic smoothstep it replaced. Both
+  // start at zero velocity, so velocity alone cannot tell them apart; the
+  // cubic's curvature at tau = 0 is its maximum, which is a jerk step exactly
+  // where the legs begin taking the body's weight. The quintic's is zero.
+  //
+  // Measured at the tau = 0 end only: the curve is symmetric, and near tau = 1
+  // the values sit at 1.0 where float spacing (1.2e-7) swamps a second
+  // difference this small.
+  constexpr float h = 1e-3f;
+  const float d2_at_zero = std::fabs(g::eased_ramp(2.0f * h) -
+                                     2.0f * g::eased_ramp(h) + g::eased_ramp(0.0f));
+
+  float d2_peak = 0.0f;
+  for (int i = 1; i < 999; ++i) {
+    const float t = static_cast<float>(i) / 1000.0f;
+    d2_peak = std::max(d2_peak, std::fabs(g::eased_ramp(t + h) -
+                                          2.0f * g::eased_ramp(t) +
+                                          g::eased_ramp(t - h)));
+  }
+  ASSERT_GT(d2_peak, 0.0f);
+  EXPECT_LT(d2_at_zero, 0.05f * d2_peak)
+      << "curvature at the floor is " << 100.0f * d2_at_zero / d2_peak
+      << "% of the ramp's peak; a cubic smoothstep scores ~100%";
 }

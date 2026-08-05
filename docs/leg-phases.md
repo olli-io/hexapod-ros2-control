@@ -50,6 +50,18 @@ For zero body velocity, AEP and PEP both collapse onto the leg's
 **nominal stance position** — the default foot placement when standing
 still.
 
+All three are **foot targets**, and a foot target is not a contact
+point. The IK reaches to the *centre* of the spherical foot tip (see the
+foot link in `hexa_description`'s `hexapod.urdf.xacro`), and a sphere on
+a flat floor touches `foot_radius` directly below its centre — at any
+tibia angle, which is what makes the offset a constant rather than a
+lean-dependent correction. Only the two places that state a **ground
+contact height** apply it (`kin::ik_z_for_contact`): the nominal stance,
+where `body_height` is belly clearance off the floor, and the fold /
+unfold ramp endpoints. Everything else — stride, swing clearance,
+reseat, the posture height envelope — is expressed relative to the
+nominal stance and inherits the offset rather than re-applying it.
+
 AEP..PEP is also a **bound**, not just a description. A planted foot
 tracks the ground by integrating the commanded velocity, which under a
 steady walk carries it from AEP to PEP and no further. When the command
@@ -156,10 +168,13 @@ pose:
 - **initialize** — engine state covering the cold-start sequence from
   the initial pose to standing.
 - **place feet** — INITIALIZE sub-phase: pair-wise foot placement from
-  the folded initial-pose footprint to the standing footprint, with
-  the foot held `place_feet_clearance` (~1 mm) above the floor at
-  touchdown so the swing arc doesn't scuff the ground.
+  the folded initial-pose footprint to the standing footprint, landing
+  each foot on the floor the belly is already resting on. The swing arc
+  arrives with zero vertical velocity, so this is where the ground
+  contact belongs — putting the feet down short of the floor only moves
+  the contact into the middle of the lift-body ramp.
 - **lift body** — INITIALIZE sub-phase that follows place feet: ramp
-  foot z in the body frame from the place-feet endpoint (1 mm above
-  the floor) down to nominal standing z, raising the body to standing
-  height as the legs extend and the feet make ground contact.
+  foot z in the body frame from the place-feet endpoint (the floor)
+  down to nominal standing z, raising the body to standing height as
+  the legs extend. A quintic, so the legs take up the body's weight
+  with zero velocity *and* zero acceleration at the contact end.

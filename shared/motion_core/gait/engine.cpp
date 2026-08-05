@@ -76,11 +76,6 @@ std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
 // hard clip would do, and well under what a swing already asks of the same leg.
 constexpr float kStanceExcursionGrace = 0.25f;
 
-// Quintic smoothstep. 0 -> 1 with zero slope and zero curvature at both ends.
-float ease5(float u) {
-  return u * u * u * (10.0f + u * (-15.0f + 6.0f * u));
-}
-
 // Ease the outward part of one stance step to zero as the anchor leaves its
 // band. Inward and tangential motion is untouched, so a leg carried out recovers
 // at full rate the moment the command turns — the bound is a wall, not a spring,
@@ -232,6 +227,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
                std::string strategy_name,
                std::map<std::string, Vec3> nominal_stance,
                std::map<std::string, Vec3> initial_stance, float coxa_to_bottom,
+               float foot_radius,
                std::map<std::string, LegContext> leg_contexts,
                std::optional<std::map<std::string, kin::LegSpec>> leg_specs,
                std::optional<ReseatGeometryByLeg> reseat_geometry)
@@ -239,6 +235,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
       strategy_(std::move(strategy)),
       strategy_name_(std::move(strategy_name)),
       coxa_to_bottom_(coxa_to_bottom),
+      foot_radius_(foot_radius),
       legs_(std::move(leg_contexts)),
       leg_specs_(std::move(leg_specs)),
       reseat_geometry_(std::move(reseat_geometry)) {
@@ -358,18 +355,16 @@ void Engine::set_target_height(float target_height) {
 
 std::unique_ptr<InitializeController> Engine::build_initialize() {
   return std::make_unique<InitializeController>(
-      initial_, nominal_, coxa_to_bottom_, config_.init_pair_swing_time,
-      config_.init_lift_body_time, config_.init_swing_clearance,
-      config_.init_place_feet_clearance, config_.swing_width,
-      config_.controller_dt);
+      initial_, nominal_, coxa_to_bottom_, foot_radius_,
+      config_.init_pair_swing_time, config_.init_lift_body_time,
+      config_.init_swing_clearance, config_.swing_width, config_.controller_dt);
 }
 
 std::unique_ptr<FoldController> Engine::build_fold() {
   return std::make_unique<FoldController>(
-      initial_, nominal_, coxa_to_bottom_, config_.init_pair_swing_time,
-      config_.init_lift_body_time, config_.init_swing_clearance,
-      config_.init_place_feet_clearance, config_.swing_width,
-      config_.controller_dt);
+      initial_, nominal_, coxa_to_bottom_, foot_radius_,
+      config_.init_pair_swing_time, config_.init_lift_body_time,
+      config_.init_swing_clearance, config_.swing_width, config_.controller_dt);
 }
 
 std::unique_ptr<EngagementController> Engine::build_engagement() {
@@ -895,7 +890,6 @@ EngineConfig engine_config_from_config() {
   cfg.init_pair_swing_time = c.init_pair_swing_time;
   cfg.init_lift_body_time = c.init_lift_body_time;
   cfg.init_swing_clearance = c.init_swing_clearance;
-  cfg.init_place_feet_clearance = c.init_place_feet_clearance;
   cfg.reseat_pose_settle_delay = c.reseat_pose_settle_delay;
   cfg.reseat_height_change_threshold = c.reseat_height_change_threshold;
   cfg.reseat_pair_swing_time = c.reseat_pair_swing_time;
@@ -932,11 +926,13 @@ std::map<std::string, Vec3> stance_from(
 
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
-    const ::hexa::config::StandingPose& standing) {
+    float foot_radius, const ::hexa::config::StandingPose& standing) {
   // The foot tip sits its group's tip_reach out from the coxa axis, swivelled by
-  // the group's splay, at a depth that puts the body bottom body_height off the
-  // ground.
-  const float depth = coxa_to_bottom + standing.body_height;
+  // the group's splay, deep enough that the tip touches ground body_height below
+  // the body bottom. IK aims at the tip sphere's centre, one radius above that
+  // contact point.
+  const float target_z = kin::ik_z_for_contact(
+      -(coxa_to_bottom + standing.body_height), foot_radius);
 
   std::array<JointAngles, kNumLegs> out{};
   for (std::size_t i = 0; i < kNumLegs; ++i) {
@@ -959,7 +955,7 @@ std::array<JointAngles, kNumLegs> standing_pose_from(
     // reaches do. Throws UnreachableTarget if it cannot.
     out[i] = kin::inverse_kinematics(
         Vec3(grp.tip_reach * std::cos(th_c), grp.tip_reach * std::sin(th_c),
-             -depth),
+             target_z),
         specs[i]);
 
     for (std::size_t j = 0; j < 3; ++j) {
@@ -1035,6 +1031,7 @@ std::map<std::string, LegContext> build_leg_contexts_from(
 
 std::array<JointAngles, kNumLegs> standing_pose_from_config() {
   return standing_pose_from(baked_leg_specs(), ::hexa::config::kCoxaToBottom,
+                            ::hexa::config::kFootRadius,
                             ::hexa::config::kStandingPose);
 }
 
@@ -1064,7 +1061,7 @@ std::unique_ptr<Engine> make_default_engine(
     const EngineConfig& engine_cfg,
     const std::array<JointAngles, kNumLegs>& standing_pose,
     const std::array<JointAngles, kNumLegs>& initial_pose,
-    float coxa_to_bottom) {
+    float coxa_to_bottom, float foot_radius) {
   auto factory = strategies().find(strategy_name);
   if (factory == strategies().end()) {
     throw std::invalid_argument("unknown strategy: " + strategy_name);
@@ -1072,7 +1069,7 @@ std::unique_ptr<Engine> make_default_engine(
   return std::make_unique<Engine>(
       engine_cfg, factory->second(), strategy_name,
       nominal_stance_from(specs, standing_pose),
-      initial_stance_from(specs, initial_pose), coxa_to_bottom,
+      initial_stance_from(specs, initial_pose), coxa_to_bottom, foot_radius,
       build_leg_contexts_from(specs, standing_pose), leg_specs_from(specs),
       reseat_geometry_from(specs, standing_pose));
 }
@@ -1081,7 +1078,7 @@ std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
   return make_default_engine(
       strategy_name, baked_leg_specs(), engine_config_from_config(),
       standing_pose_from_config(), ::hexa::config::kInitialPose,
-      ::hexa::config::kCoxaToBottom);
+      ::hexa::config::kCoxaToBottom, ::hexa::config::kFootRadius);
 }
 
 std::string state_value(EngineState s) {

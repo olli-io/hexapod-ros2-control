@@ -70,11 +70,6 @@ namespace {
 // SwingProfile, never from the caller's velocity.
 Vec3 planar(const Vec3& v) { return Vec3(v[0], v[1], 0.0f); }
 
-// Quintic smoothstep. 0 -> 1 with zero slope and zero curvature at both ends.
-float ease5(float u) {
-  return u * u * u * (10.0f + u * (-15.0f + 6.0f * u));
-}
-
 // Septic smoothstep: ease5 plus a vanishing third derivative at both ends.
 //
 // This is what replaces the old ground-matched ramps. The swing's horizontal

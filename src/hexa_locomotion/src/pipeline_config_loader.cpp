@@ -127,6 +127,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     cfg.initial_pose[i] = initial.at(nm);
   }
   cfg.coxa_to_bottom = f(geo["body"]["coxa_to_bottom"]);
+  cfg.foot_radius = f(geo["foot"]["radius"]);
 
   // ── tuning.yaml gait_node → gait::EngineConfig ──
   auto& e = cfg.engine;
@@ -147,7 +148,6 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.init_pair_swing_time = f(g["initialize"]["pair_swing_time"]);
   e.init_lift_body_time = f(g["initialize"]["lift_body_time"]);
   e.init_swing_clearance = f(g["initialize"]["swing_clearance"]);
-  e.init_place_feet_clearance = f(g["initialize"]["place_feet_clearance"]);
   e.reseat_pose_settle_delay = f(g["reseat"]["pose_settle_delay"]);
   e.reseat_height_change_threshold = f(g["reseat"]["height_change_threshold"]);
   e.reseat_pair_swing_time = f(g["reseat"]["pair_swing_time"]);
@@ -167,7 +167,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   const float r_outer = hexa::gait::outer_stance_radius(
       hexa::gait::nominal_stance_from(
           cfg.leg_specs, hexa::gait::standing_pose_from(
-                             cfg.leg_specs, cfg.coxa_to_bottom,
+                             cfg.leg_specs, cfg.coxa_to_bottom, cfg.foot_radius,
                              cfg.standing_pose)));
   cfg.caps.linear_max_by_gait.clear();
   cfg.caps.angular_max_by_gait.clear();

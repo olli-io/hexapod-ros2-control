@@ -56,6 +56,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     }
   }
   EXPECT_NEAR(loaded.coxa_to_bottom, baked.coxa_to_bottom, kTol);
+  EXPECT_NEAR(loaded.foot_radius, baked.foot_radius, kTol);
   EXPECT_NEAR(loaded.standing_pose.body_height, baked.standing_pose.body_height,
               kTol);
   for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
@@ -88,7 +89,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.init_pair_swing_time, be.init_pair_swing_time, kTol);
   EXPECT_NEAR(le.init_lift_body_time, be.init_lift_body_time, kTol);
   EXPECT_NEAR(le.init_swing_clearance, be.init_swing_clearance, kTol);
-  EXPECT_NEAR(le.init_place_feet_clearance, be.init_place_feet_clearance, kTol);
   EXPECT_NEAR(le.reseat_pose_settle_delay, be.reseat_pose_settle_delay, kTol);
   EXPECT_NEAR(le.reseat_height_change_threshold,
               be.reseat_height_change_threshold, kTol);

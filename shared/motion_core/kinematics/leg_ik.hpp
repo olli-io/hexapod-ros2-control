@@ -39,4 +39,15 @@ Vec3 forward_kinematics(const JointAngles& angles, const LegSpec& spec);
 // annulus around the femur joint.
 JointAngles inverse_kinematics(const Vec3& target, const LegSpec& spec);
 
+// IK target z that puts the ground contact at contact_z. Both functions above
+// terminate at the *centre* of the spherical foot tip (the tibia tip; see the
+// foot link in hexapod.urdf.xacro), and a sphere on a flat floor touches
+// directly below its centre whatever the tibia's lean — so the offset is exactly
+// foot_radius at every joint angle, not a lean-dependent correction. Callers
+// apply it in the nominal body frame, before apply_body_pose, so it is a
+// world-vertical offset and stays exact under a body-pose tilt.
+inline float ik_z_for_contact(float contact_z, float foot_radius) {
+  return contact_z + foot_radius;
+}
+
 }  // namespace hexa
