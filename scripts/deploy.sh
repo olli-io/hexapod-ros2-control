@@ -6,7 +6,7 @@
 #   --pico             the Pi Pico 2 W firmware — an RP2350 .uf2.
 #
 # Workstation-only commands (Pi target):
-#   build              cross-build ARM64 image, save to .deploy/<sha>.tar.gz
+#   build [--fresh]    cross-build ARM64 image, save to .deploy/<sha>.tar.gz
 #   push <host>        scp image + compose + launcher, ssh-load + start (energizes on launch)
 #   sync-config <host> refresh the Pi's config from repo defaults — no image, no restart
 #
@@ -37,7 +37,9 @@ usage() {
 Usage: ./hexa deploy [--pico] <command> [args...]
 
 Raspberry Pi robot (ARM64 image):
-  build                       Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
+  build [--fresh]             Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
+                              Incremental (ccache + colcon build/ are cached across
+                              builds); --fresh drops those caches and recompiles all.
   push <host>                 scp + ssh-load the latest tarball to <host>, then start (energizes on launch).
   sync-config <host> [--force]
                               Refresh config from repo defaults — no image, no restart.
@@ -61,11 +63,26 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
+# --fresh drops robot.Dockerfile's ccache / build/ mounts, for when stale
+# incremental state is suspected. `--no-cache` does not clear cache mounts.
 cmd_build() {
+    local fresh=0 arg
+    for arg in "$@"; do
+        case "${arg}" in
+            --fresh) fresh=1 ;;
+            *)       die "unknown flag '${arg}' (usage: hexa deploy build [--fresh])" ;;
+        esac
+    done
+
     require_cmd docker
     docker buildx version >/dev/null 2>&1 || die "docker buildx not available (install docker-buildx-plugin)"
     [[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]] \
         || die "aarch64 binfmt handler not registered — install qemu-user-static + qemu-user-static-binfmt (Arch) or equivalent, so cross-building linux/arm64 works."
+
+    if [[ "${fresh}" -eq 1 ]]; then
+        echo ">> Dropping the build cache mounts (ccache + colcon build/)"
+        docker builder prune --force --filter type=exec.cachemount >/dev/null
+    fi
 
     mkdir -p "${DEPLOY_DIR}"
 

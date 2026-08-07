@@ -27,6 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # runtime stage only. Building an ament_python package never imports it, so the
 # builder has no use for them and they would only pad this layer.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        ccache \
         ros-jazzy-ament-cmake \
         ros-jazzy-ament-cmake-gtest \
         ros-jazzy-ament-index-cpp \
@@ -64,11 +65,24 @@ COPY shared/ /workspace/shared/
 # not the symlinked dev layout, so install/ is fully self-contained afterwards.
 RUN rm -rf /workspace/src/hexa_simulation /workspace/shared/motion_core/test
 
-RUN . /opt/ros/jazzy/setup.sh \
+# Pinned, not defaulted: ccache 4.x picks $XDG_CACHE_HOME/ccache, which would
+# land outside the mount below and be discarded with the layer.
+ENV CCACHE_DIR=/root/.ccache
+
+# Cache mounts, not layer content: every compile here is emulated when
+# cross-built from x86, so incremental state is worth carrying across builds.
+# sharing=locked on build/ — concurrent builds would corrupt one tree.
+# `./hexa deploy build --fresh` drops both.
+RUN --mount=type=cache,target=/root/.ccache,sharing=shared \
+    --mount=type=cache,target=/workspace/build,sharing=locked \
+    . /opt/ros/jazzy/setup.sh \
     && colcon build \
         --merge-install \
         --cmake-args -DCMAKE_BUILD_TYPE=Release \
-    && rm -rf /workspace/build /workspace/log
+                     -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                     -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    && ccache -s \
+    && rm -rf /workspace/log
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime
