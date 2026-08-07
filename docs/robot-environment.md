@@ -108,7 +108,30 @@ ls -l /dev/ttyAMA0                          # servo UART from §3 (Pi 4: ttyS0)
 getent group input | cut -d: -f3            # INPUT_GID (example: 994)
 ```
 
-## 5. First deploy from the workstation
+## 5. First install
+
+Two ways in. Either gets you the same `~/hexa-robot/` layout.
+
+**From a release, on the Pi** — no workstation and no cross-build:
+
+```
+curl -fsSL https://raw.githubusercontent.com/olli-io/hexapod-ros2-control/main/install.sh | bash
+```
+
+`install.sh` checks the dependencies before it downloads anything (64-bit
+userland, Docker + compose v2, free space, RAM, and the UART / SPI / PWM this
+section's wiring should have produced), then pulls the release's ARM64 image
+tarball plus the matching compose, launcher, systemd templates, `tuning.yaml`
+and buzzer player, loads the image, and seeds `.env` with **this** Pi's group
+IDs and device names — so §4 and §6 are already done for you. It starts
+nothing unless you pass `--start`. Useful flags: `--check-only` (checks, then
+stop), `--tag <tag>` (a specific release), `--dir <path>`, `--keep-archive`.
+Re-running it later is the upgrade path: it keeps your `.env` values and only
+appends keys the release added, exactly as `sync-config` does (§9).
+
+**From a workstation** — the development path, and the rest of this section:
+
+## 5a. First deploy from the workstation
 
 `./hexa deploy build` cross-compiles `linux/arm64` under QEMU, so the
 workstation needs an aarch64 binfmt_misc handler pointing at a **static** QEMU
@@ -328,8 +351,16 @@ carries the credentials.
 
 - **network** — `hexapod`
 - **password** — `hexahexa`
-- **the robot** — `http://192.168.4.1/`, or any address at all (the hotspot
-  resolves every hostname to the robot and redirects port 80 to 8080)
+- **the robot** — `http://control.hexa/`, or `http://192.168.4.1/`, or any
+  address at all: the hotspot resolves every hostname to the robot, and the
+  teleop server sends anything that is not one of its own files to the
+  controller page.
+
+Usually there is nothing to type. The hotspot advertises the controller's URL
+in the DHCP lease (RFC 8910) and leaves every connectivity probe unanswered, so
+a phone joining the network decides it has found a captive portal and opens the
+controller by itself — the same popup a café's sign-in page arrives in. Pull
+down and reconnect if a phone was already joined before this was installed.
 
 ### Install
 
@@ -367,9 +398,14 @@ ssh -t <host> 'cd ~/hexa-robot && ./hexa robot install-network'
   up before.
 - **Ethernet, if plugged in, is a route.** AP clients are NATed to whatever
   uplink exists; with nothing on `eth0` the hotspot is islanded.
-- **The OS probe URLs are not hijacked**, so phones show their usual "no
-  internet" notice instead of opening a cut-down sign-in browser. Open
-  `http://hexapod/` in a real browser.
+- **The popup browser is a cut-down one.** iOS and Android open captive
+  portals in a sandboxed web view, not the real browser: it works, but it has
+  no address bar, and dismissing it drops the connection to the robot. "Open in
+  browser" (or typing `control.hexa`) moves the controller somewhere it can
+  stay.
+- **`control.hexa` only exists on the hotspot.** It is the AP's own DNS
+  answering, so on any other network the robot is its address as usual — which
+  is what the info screen shows there.
 
 The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by default,
 and the webapp prompts to claim control when it connects. See

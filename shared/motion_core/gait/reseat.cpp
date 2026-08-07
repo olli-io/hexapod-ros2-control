@@ -1,5 +1,6 @@
 #include "gait/reseat.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <stdexcept>
@@ -99,6 +100,14 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
   // the lateral arch is dropped; the rise/descent split and the touchdown probe
   // are the gait's, so a foot re-plants as gently as it lands mid-walk.
   swing_.width = 0.0f;
+  // swing_arc measures its apex from the higher end, which on a descent is the
+  // origin, so zero clearance tops the arc out where the foot already is rather
+  // than climbing over it; zero lift-off velocity drops the one term that would
+  // bulge it up off that start. The braked descent and touchdown probe survive
+  // both, so a landing arrives as gently as any other touchdown.
+  landing_swing_ = swing_;
+  landing_swing_.clearance = 0.0f;
+  landing_swing_.liftoff_velocity = 0.0f;
   require_all_legs(current_stance, "current_stance");
   require_all_legs(target_stance, "target_stance");
   if (pair_swing_time <= 0.0f) {
@@ -111,7 +120,10 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
     target_[name] = target_stance.at(name);
     positions_[name] = current_stance.at(name);
   }
-  seed_pair_origin();
+  seed_landing();
+  if (!landing_) {
+    seed_pair_origin();
+  }
 }
 
 std::map<std::string, LegOutput> ReseatController::update(float dt) {
@@ -123,6 +135,10 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     return out;
   }
 
+  if (landing_) {
+    return tick_landing(dt);
+  }
+
   if (dwell_remaining_ > 0.0f) {
     // Held between two pair swings: every foot stays put. Seed the next pair's
     // origins on the tick the dwell expires.
@@ -131,18 +147,13 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
       dwell_remaining_ = 0.0f;
       seed_pair_origin();
     }
-    std::map<std::string, LegOutput> out;
-    for (const auto& name : LEG_NAMES) {
-      out[name] = LegOutput{positions_[name], 0.0f, true};
-    }
-    return out;
+    return emit_held();
   }
 
   t_in_pair_ += dt;
   const float phase = t_in_pair_ / pair_swing_time_;
   const std::array<std::string, 2>& active = PAIR_ORDER[pair_idx_];
 
-  std::map<std::string, LegOutput> out;
   if (phase >= 1.0f) {
     // Snap both active legs to their targets simultaneously and advance.
     for (const auto& name : active) {
@@ -158,10 +169,7 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     } else {
       seed_pair_origin();
     }
-    for (const auto& name : LEG_NAMES) {
-      out[name] = LegOutput{positions_[name], 0.0f, true};
-    }
-    return out;
+    return emit_held();
   }
 
   // Mid-pair: the active legs follow a rest-to-rest swing arc from their
@@ -170,6 +178,7 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
   // may already be standing on its target, in which case it stays down — the
   // pair is mirrored to keep the body balanced, and lifting fewer feet only ever
   // helps that.
+  std::map<std::string, LegOutput> out;
   for (const auto& name : LEG_NAMES) {
     const bool is_active = (name == active[0] || name == active[1]);
     if (is_active && (pair_origin_.at(name) - target_.at(name)).norm() >
@@ -182,10 +191,79 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {
-      out[name] = LegOutput{positions_[name], 0.0f, true};
+      out[name] = held(name);
     }
   }
   return out;
+}
+
+std::map<std::string, LegOutput> ReseatController::tick_landing(float dt) {
+  t_in_pair_ += dt;
+  const float phase = t_in_pair_ / pair_swing_time_;
+
+  if (phase >= 1.0f) {
+    for (const auto& entry : landing_origin_) {
+      positions_[entry.first] = target_[entry.first];
+    }
+    landing_origin_.clear();
+    landing_ = false;
+    t_in_pair_ = 0.0f;
+    if (pair_dwell_time_ > 0.0f && remaining_pair_needs_moving()) {
+      dwell_remaining_ = pair_dwell_time_;
+    } else {
+      seed_pair_origin();
+    }
+    return emit_held();
+  }
+
+  std::map<std::string, LegOutput> out;
+  for (const auto& name : LEG_NAMES) {
+    auto it = landing_origin_.find(name);
+    if (it == landing_origin_.end()) {
+      out[name] = held(name);
+      continue;
+    }
+    // Onto the full target rather than straight down: an airborne foot carries
+    // no weight, so the horizontal travel is free, and arriving home lets
+    // seed_pair_origin skip its pair outright.
+    const Vec3 target = target_[name];
+    const Vec3 point =
+        swing_arc(phase, it->second, target, identity_y_sign(target),
+                  pair_swing_time_, landing_swing_, Vec3::Zero(), Vec3::Zero());
+    positions_[name] = point;
+    out[name] = LegOutput{point, phase, false};
+  }
+  return out;
+}
+
+// How far above its target a foot may sit and still be carrying weight. The
+// touchdown probe is that height by definition, and it is already tuned to clear
+// servo resolution and inter-leg height error — which an engagement's planted
+// feet, a fraction of a millimetre high, need it to.
+float ReseatController::contact_band() const {
+  return std::max(swing_.touchdown_probe_height, kInPlaceEpsilon);
+}
+
+LegOutput ReseatController::held(const std::string& name) const {
+  const Vec3& p = positions_.at(name);
+  return LegOutput{p, 0.0f, p[2] <= target_.at(name)[2] + contact_band()};
+}
+
+std::map<std::string, LegOutput> ReseatController::emit_held() const {
+  std::map<std::string, LegOutput> out;
+  for (const auto& name : LEG_NAMES) {
+    out[name] = held(name);
+  }
+  return out;
+}
+
+void ReseatController::seed_landing() {
+  for (const auto& name : LEG_NAMES) {
+    if (positions_[name][2] > target_[name][2] + contact_band()) {
+      landing_origin_[name] = positions_[name];
+    }
+  }
+  landing_ = !landing_origin_.empty();
 }
 
 bool ReseatController::remaining_pair_needs_moving() const {

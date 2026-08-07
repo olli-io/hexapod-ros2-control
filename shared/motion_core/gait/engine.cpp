@@ -536,7 +536,9 @@ std::map<std::string, LegOutput> Engine::update(
     // (3.4 s), so a short drive usually ends inside it, and every planted foot
     // jumped up to half a stride at once. The ladder below arcs each foot home
     // instead, and skips the ones already there — so an early abort, where
-    // nothing has moved yet, still costs nothing.
+    // nothing has moved yet, still costs nothing. Unlike the settle route there
+    // is no all_planted() window to wait for: the engagement's swings overlap
+    // whatever is planted, so the ladder lands the airborne feet itself.
     if (cmd_zero) {
       hand_off_to_reseat();
       return tick_reseat(dt);
@@ -764,7 +766,9 @@ bool Engine::settle_beats_reseat() const {
   // Worst case for the gait: the last leg to get its turn is a whole cycle away.
   const float natural = config_.settle_swing_time / swing_end;
   // Worst case for the ladder: one swing spent waiting for the legs already in
-  // the air to land, then three mirrored pairs with a dwell between them.
+  // the air to land, then three mirrored pairs with a dwell between them. The
+  // ladder's own landing stage is empty here: this route only reaches it with
+  // every foot planted.
   const float pairs = static_cast<float>(PAIR_ORDER.size());
   const float ladder = config_.settle_swing_time +
                        pairs * config_.reseat_pair_swing_time +
@@ -797,8 +801,9 @@ void Engine::finish_or_hand_off_settle() {
 
 void Engine::hand_off_to_reseat() {
   // build_reseat reads last_targets_, so the ladder starts from where the feet
-  // actually are — including anything still in the air, which it arcs down
-  // rather than dropping.
+  // actually are. Anything still in the air is landed by the ladder's own first
+  // stage, before it lifts a foot that is down — which is what makes this safe
+  // to call without an all_planted() check.
   stance_.reset();
   reset_swing_state();
   reseat_ = build_reseat(nominal_);

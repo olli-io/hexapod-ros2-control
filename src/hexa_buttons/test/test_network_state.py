@@ -50,6 +50,7 @@ def test_token_is_unique_per_request_and_per_process():
 def test_parses_a_full_hotspot_report():
     state = parse_state(
         "mode=hotspot\ntoken=3f9a2c01-2\nresult=ok\nssid=hexapod\npsk=hexahexa\n"
+        "portal=control.hexa\n"
     )
     assert state == NetworkState(
         mode=MODE_HOTSPOT,
@@ -57,7 +58,15 @@ def test_parses_a_full_hotspot_report():
         result=RESULT_OK,
         ssid="hexapod",
         psk="hexahexa",
+        portal="control.hexa",
     )
+
+
+def test_a_report_from_a_host_that_names_no_portal_still_parses():
+    """An older network-mode.sh on the Pi predates the key; the panel falls back
+    to the address rather than the node failing to read the file."""
+    state = parse_state("mode=hotspot\nresult=ok\nssid=hexapod\n")
+    assert state is not None and state.portal == ""
     assert state.is_hotspot
     assert not state.failed
 

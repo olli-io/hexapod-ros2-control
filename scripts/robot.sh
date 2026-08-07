@@ -437,7 +437,8 @@ cmd_install_network() {
     sudo "${NETWORK_SCRIPT}" --report --state "${REPO_ROOT}/log/network.state"
 
     echo ">> Enabled. Hold the info button 3 s to switch network mode."
-    echo "   Hotspot:       SSID 'hexapod', password 'hexahexa', http://192.168.4.1/"
+    echo "   Hotspot:       SSID 'hexapod', password 'hexahexa', http://control.hexa/"
+    echo "                  (a joining phone is offered it automatically)"
     echo "   Switch by hand: ./hexa robot network-mode [toggle|hotspot|station|status]"
     echo "   Watch it:      journalctl -u hexa-network-spool -u hexa-network-report -b"
     echo

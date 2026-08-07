@@ -49,7 +49,7 @@ RESULT_SWITCHING = "switching"
 RESULT_OK = "ok"
 RESULT_ERROR = "error"
 
-_KEYS = ("mode", "token", "result", "reason", "ssid", "psk")
+_KEYS = ("mode", "token", "result", "reason", "ssid", "psk", "portal")
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,11 @@ class NetworkState:
     reason: str = ""
     ssid: str = ""
     psk: str = ""
+    #: The name the hotspot's own DNS answers for the robot (``control.hexa``).
+    #: Reported by the host for the same reason the credentials are: the script
+    #: that publishes the name is the only place it is defined. Empty on a robot
+    #: whose helper predates it — the panel falls back to the address.
+    portal: str = ""
 
     @property
     def is_hotspot(self) -> bool:

@@ -30,8 +30,21 @@ Full sim-container details: [`docs/sim-environment.md`](docs/sim-environment.md)
 
 ## Quickstart (Robot)
 
-All host commands go through the `hexa` dispatcher in the repo root; nothing is
-built on the host.
+Install a released image straight onto the Pi — no workstation, no cross-build:
+
+```
+curl -fsSL https://raw.githubusercontent.com/olli-io/hexapod-ros2-control/main/install.sh | bash
+```
+
+It checks every dependency first (64-bit OS, Docker + compose v2, disk, RAM,
+wiring), then downloads the latest release's ARM64 image into `~/hexa-robot/`
+and seeds `.env` with this Pi's own group IDs and device names. It does not
+start anything — bringing the stack up energizes the servos, so that stays a
+deliberate `./hexa robot up`. Pass `--check-only` to run just the checks,
+`--tag <tag>` for a specific release, `--start` to bring it up when done.
+
+To build and ship from a workstation instead, all host commands go through the
+`hexa` dispatcher in the repo root; nothing is built on the host.
 
 - ```./hexa deploy build``` — cross-build the production image for the Pi (arm64).
 - ```./hexa deploy push <hostname@host_ip>``` — ship that image to the robot via ssh.

@@ -62,6 +62,7 @@ from hexa_teleop.teleop_arbitration import (
     web_release,
 )
 
+from . import captive_portal
 from .web_mapping import (
     NUM_BUTTONS,
     button_labels_for_mode,
@@ -122,6 +123,7 @@ class WebTeleopNode(Node):
             raw = yaml.safe_load(f)
         server_cfg = raw.get("server", {}) or {}
         self._port = int(server_cfg.get("port", 8080))
+        self._portal_port = int(server_cfg.get("portal_port", 80))
         self._ws_heartbeat_s = float(server_cfg.get("ws_heartbeat_s", 5.0))
         self._input_timeout_s = float(
             (raw.get("safety", {}) or {}).get("input_timeout_s", 0.5)
@@ -308,7 +310,10 @@ class WebTeleopNode(Node):
         app.router.add_get("/logs", self._handle_logs)
         app.router.add_post("/control/release", self._handle_release)
         app.router.add_get("/", self._handle_index)
-        app.router.add_get("/{filename}", self._handle_static)
+        # Catch-all, registered last so the routes above still win. On the
+        # robot's hotspot every hostname resolves here, so an unrecognised path
+        # is not an error — see ``captive_portal`` and ``_handle_get``.
+        app.router.add_get("/{tail:.*}", self._handle_get)
         runner = aiohttp.web.AppRunner(app, access_log=None)
         await runner.setup()
         site = aiohttp.web.TCPSite(runner, "0.0.0.0", self._port)
@@ -316,19 +321,63 @@ class WebTeleopNode(Node):
         self.get_logger().info(
             f"web teleop server on port {self._port} (web dir: {self._web_dir})"
         )
+        await self._start_portal_site(runner)
+
+    async def _start_portal_site(self, runner: aiohttp.web.AppRunner) -> None:
+        """Also answer on port 80, so the hotspot's name needs no port typed.
+
+        ``http://control.hexa/`` and an OS's connectivity probe both arrive on
+        port 80, and serving it directly beats depending on the AP's nftables
+        redirect (``network-mode.sh``), which needs an ``nft`` binary the host
+        may not have.
+
+        Best-effort by necessity: only a root container may bind a privileged
+        port, which the robot's is and the sim's is not. A failure is one log
+        line — the main port is already up, and the redirect still stands where
+        it exists.
+        """
+        if not self._portal_port or self._portal_port == self._port:
+            return
+        try:
+            await aiohttp.web.TCPSite(runner, "0.0.0.0", self._portal_port).start()
+        except OSError as e:
+            self.get_logger().info(
+                f"not serving port {self._portal_port} ({e.strerror or e}) — "
+                f"reach the UI on port {self._port}"
+            )
+            return
+        self.get_logger().info(f"also serving on port {self._portal_port}")
+
+    def _index_response(self) -> aiohttp.web.Response:
+        # no-store because a captive-portal browser that cached this page would
+        # show it again on the *next* network, where it controls nothing.
+        return aiohttp.web.FileResponse(
+            Path(self._web_dir) / "index.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def _handle_index(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        return aiohttp.web.FileResponse(Path(self._web_dir) / "index.html")
+        return self._index_response()
 
-    async def _handle_static(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        filename = request.match_info["filename"]
-        # Prevent path traversal: only serve flat files from web_dir
-        if "/" in filename or ".." in filename or filename == "":
-            raise aiohttp.web.HTTPNotFound()
-        filepath = Path(self._web_dir) / filename
-        if not filepath.is_file():
-            raise aiohttp.web.HTTPNotFound()
-        return aiohttp.web.FileResponse(filepath)
+    async def _handle_get(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """A webapp asset, or somebody who needs the controller.
+
+        Nothing here 404s: on the hotspot the AP answers every hostname with
+        the robot, so an unrecognised path is a person, not a mistake. See
+        ``captive_portal`` for why they are redirected rather than served the
+        page where they stand.
+        """
+        filename = captive_portal.static_filename(
+            captive_portal.request_path(request.path)
+        )
+        if filename:
+            filepath = Path(self._web_dir) / filename
+            if filepath.is_file():
+                return aiohttp.web.FileResponse(filepath)
+        # Absolute, and to this same host: the client asked for
+        # captive.apple.com (or whichever name it probes), so that is the one
+        # its captive-portal browser already treats as the portal.
+        raise aiohttp.web.HTTPFound(f"http://{request.host}/")
 
     async def _handle_logs(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         """Run the configured log command and return its last N lines."""

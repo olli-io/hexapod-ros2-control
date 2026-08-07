@@ -1,7 +1,10 @@
 // Reseat ladder: arbitrary current foot positions -> a target stance. Float fork
-// of reseat.hpp (plan part 06). Used by two engine paths (posture-height change,
-// paused->standing cleanup) with the same ladder mechanics. The pair order
-// mirrors InitializeController.PLACE_FEET.
+// of reseat.hpp (plan part 06). Used by three engine paths (posture-height
+// change, settle cleanup, abandoned engagement) with the same ladder mechanics.
+// The pair order mirrors InitializeController.PLACE_FEET.
+//
+// An abandoned engagement hands over feet that are still in the air, so the
+// ladder lands those before it lifts any foot that is down.
 #pragma once
 
 #include <array>
@@ -73,18 +76,31 @@ class ReseatController {
   void seed_pair_origin();
   bool pair_needs_moving(std::size_t idx) const;
   bool remaining_pair_needs_moving() const;
+  // Latch the origins of every foot seeded above its target. Height is the only
+  // contact signal the ladder is given, and every target sits on the same ground
+  // plane the stance does, so it is enough.
+  void seed_landing();
+  float contact_band() const;
+  std::map<std::string, LegOutput> tick_landing(float dt);
+  LegOutput held(const std::string& name) const;
+  std::map<std::string, LegOutput> emit_held() const;
 
   std::map<std::string, Vec3> target_;
   float pair_swing_time_;
   float pair_dwell_time_;
   SwingProfile swing_;
+  // swing_ with the climb taken out: a landing foot must never rise.
+  SwingProfile landing_swing_;
   float controller_dt_;
 
   std::map<std::string, Vec3> positions_;
   std::map<std::string, Vec3> pair_origin_;
+  std::map<std::string, Vec3> landing_origin_;
   std::size_t pair_idx_ = 0;
+  // Shared by the landing stage and the pair swings; they never overlap.
   float t_in_pair_ = 0.0f;
   float dwell_remaining_ = 0.0f;
+  bool landing_ = false;
   bool done_ = false;
 };
 

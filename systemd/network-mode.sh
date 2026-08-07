@@ -24,8 +24,10 @@
 # not start without one (`raspi-config`, Localisation -> WLAN Country).
 #
 # The web teleop needs no reverse proxy: it is already an aiohttp server bound
-# to 0.0.0.0:8080, and with host networking that includes the AP interface. All
-# this adds is a port-80 redirect so any address a phone types lands on it.
+# to 0.0.0.0:8080 (and to :80 where the container may have it), and with host
+# networking that includes the AP interface. What this adds is the name
+# `control.hexa`, wildcard DNS so any address a phone types lands on the server,
+# a DHCP-advertised portal URL, and a port-80 redirect as a fallback.
 #
 # Everything is overridable from the environment:
 #   HEXA_AP_SSID      network name to advertise          (default hexapod)
@@ -35,6 +37,7 @@
 #   HEXA_AP_ADDR      the robot's address on the AP      (default 192.168.4.1)
 #   HEXA_AP_CIDR      prefix length for it               (default 24)
 #   HEXA_AP_CHANNEL   2.4 GHz channel                    (default 6)
+#   HEXA_PORTAL_HOST  name the AP answers for the robot  (default control.hexa)
 #   HEXA_PORTAL_PORT  port the web teleop listens on     (default 8080)
 #   HEXA_NM_WAIT      seconds to allow nmcli per step    (default 45)
 #
@@ -51,6 +54,11 @@ IFACE="${HEXA_AP_IFACE:-wlan0}"
 ADDR="${HEXA_AP_ADDR:-192.168.4.1}"
 CIDR="${HEXA_AP_CIDR:-24}"
 CHANNEL="${HEXA_AP_CHANNEL:-6}"
+# The name to put in front of a person. Defined here and nowhere else: the AP's
+# own DNS is what makes it resolve, this script writes that, and the panel gets
+# it back in the state file rather than keeping a second copy. `.hexa` is not a
+# delegated TLD, so it cannot collide with a real name a browser might prefer.
+PORTAL_HOST="${HEXA_PORTAL_HOST:-control.hexa}"
 PORTAL_PORT="${HEXA_PORTAL_PORT:-8080}"
 NM_WAIT="${HEXA_NM_WAIT:-45}"
 
@@ -88,6 +96,7 @@ write_state() {
         echo "reason=${3:-}"
         echo "ssid=${SSID}"
         echo "psk=${PSK}"
+        echo "portal=${PORTAL_HOST}"
     } > "${_tmp}" 2>/dev/null || { log "cannot write ${_tmp}"; return 0; }
     chmod 644 "${_tmp}" 2>/dev/null
     mv -f "${_tmp}" "${STATE_FILE}" 2>/dev/null || log "cannot replace ${STATE_FILE}"
@@ -145,6 +154,11 @@ preflight() {
 # Wildcard DNS, so any hostname a phone asks for resolves to the robot. NM only
 # starts a dnsmasq for `shared` connections, so this drop-in is inert while the
 # Pi is in station mode — which is why it is installed once rather than toggled.
+#
+# It also hands out the portal URL in the DHCP lease itself (RFC 8910), which is
+# how a modern client learns where to go without having to be contradicted by a
+# failed connectivity probe first. Clients that ignore option 114 still get the
+# probe treatment from the teleop server; the two are belt and braces.
 portal_dns_install() {
     _dir="$(dirname "${PORTAL_DNS}")"
     mkdir -p "${_dir}" 2>/dev/null || { log "cannot create ${_dir}"; return 1; }
@@ -154,7 +168,15 @@ portal_dns_install() {
 # NetworkManager's ipv4.method=shared runs its own dnsmasq for the AP; this
 # makes it answer every name with the robot, so a phone that types anything at
 # all lands on the web teleop. Only ever read while the AP is up.
+#
+# The friendly name first, though the wildcard below would already cover it:
+# this is the one line to change if the robot should answer to something else,
+# and it keeps working if anyone ever narrows the wildcard.
+address=/${PORTAL_HOST}/${ADDR}
 address=/#/${ADDR}
+# RFC 8910: name the portal in the DHCP lease, so a client that understands it
+# offers the controller as soon as it joins, before any probe is even sent.
+dhcp-option=114,"http://${PORTAL_HOST}/"
 # No upstream to forward to, and no point leaking queries at one.
 no-resolv
 EOF
@@ -166,10 +188,12 @@ portal_dns_remove() {
     log "captive DNS drop-in removed"
 }
 
-# Port 80 -> the teleop server. Its own nftables table, so teardown is one
-# command and we can never damage a rule somebody else owns. This also catches
-# clients that ignore DHCP's DNS and hard-code a resolver, which the wildcard
-# above cannot reach.
+# Port 80 -> the teleop server, for hosts where the container could not bind 80
+# itself (it tries: hexa_webteleop's server.portal_port). Its own nftables
+# table, so teardown is one command and we can never damage a rule somebody else
+# owns. Belt and braces, and the reason neither mechanism is load-bearing on its
+# own: `nft` is not installed everywhere, and an unprivileged container cannot
+# have port 80.
 portal_redirect_up() {
     command -v nft >/dev/null 2>&1 || { log "no nft — skipping the port 80 redirect"; return 0; }
     portal_redirect_down
@@ -244,7 +268,7 @@ go_hotspot() {
     fi
 
     portal_redirect_up
-    log "hotspot up: join '${SSID}' and browse to http://${ADDR}/"
+    log "hotspot up: join '${SSID}' and browse to http://${PORTAL_HOST}/ (${ADDR})"
     write_state hotspot ok
 }
 

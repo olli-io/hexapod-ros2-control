@@ -72,6 +72,22 @@ def battery_percent(voltage: float, config: InfoConfig) -> int:
     return _round_half_away(min(max(ratio, 0.0), 1.0) * 100.0)
 
 
+def _control_line(ip: str, config: InfoConfig, network: NetworkState | None) -> str:
+    """Where to point a browser.
+
+    On the hotspot that is the name the AP's own DNS answers (``control.hexa``),
+    not an address and a port: the teleop server is on port 80 there, and a name
+    is what a person can retype after their phone locks. Anywhere else there is
+    no such name — the robot is a guest on somebody else's network — so it stays
+    the address a phone can actually route to.
+    """
+    if network is not None and network.is_hotspot and network.portal:
+        return f"Control {config.arrow} {network.portal}"
+    if ip:
+        return f"Control {config.arrow} {ip}:{config.control_port}"
+    return f"Control {config.arrow} no network"
+
+
 def battery_screen(
     voltage: float | None,
     ip: str,
@@ -92,11 +108,7 @@ def battery_screen(
     else:
         pct = battery_percent(voltage, config)
         battery = f"Battery {config.arrow} {pct} %  ( {voltage:.1f} V )"
-    if ip:
-        control = f"Control {config.arrow} {ip}:{config.control_port}"
-    else:
-        control = f"Control {config.arrow} no network"
-    lines = [battery, control]
+    lines = [battery, _control_line(ip, config, network)]
     if network is not None and network.is_hotspot and network.ssid:
         lines.append(f"WiFi {config.arrow} {network.ssid} / {network.psk}")
     return "\n".join(lines)
@@ -160,18 +172,9 @@ def network_screen(
         lines = [f"Hotspot {config.arrow} {state.ssid}"]
         if state.psk:
             lines.append(f"Password {config.arrow} {state.psk}")
-        lines.append(
-            f"Control {config.arrow} {ip}:{config.control_port}"
-            if ip
-            else f"Control {config.arrow} no network"
-        )
+        lines.append(_control_line(ip, config, state))
         return "\n".join(lines)
-    control = (
-        f"Control {config.arrow} {ip}:{config.control_port}"
-        if ip
-        else f"Control {config.arrow} no network"
-    )
-    return f"Hotspot off\n{control}"
+    return f"Hotspot off\n{_control_line(ip, config, state)}"
 
 
 def screen_text(

@@ -23,6 +23,8 @@ from hexa_buttons import (
 HOTSPOT = NetworkState(
     mode=MODE_HOTSPOT, result=RESULT_OK, ssid="hexapod", psk="hexahexa"
 )
+#: What a current host reports: the same hotspot, plus the name its DNS answers.
+NAMED_HOTSPOT = dataclasses.replace(HOTSPOT, portal="control.hexa")
 STATION = NetworkState(mode=MODE_STATION, result=RESULT_OK)
 
 
@@ -149,6 +151,28 @@ def test_the_hotspot_result_screen_names_the_network_and_where_to_point():
         "Hotspot -> hexapod\n"
         "Password -> hexahexa\n"
         "Control -> 192.168.4.1:8080"
+    )
+
+
+def test_the_hotspot_screens_show_the_name_over_the_address():
+    """The AP resolves control.hexa itself and serves port 80, so that is what a
+    person should be reading off the panel and typing."""
+    assert battery_screen(7.5, "192.168.4.1", InfoConfig(), NAMED_HOTSPOT) == (
+        "Battery -> 50 %  ( 7.5 V )\n"
+        "Control -> control.hexa\n"
+        "WiFi -> hexapod / hexahexa"
+    )
+    assert network_screen(NAMED_HOTSPOT, "192.168.4.1", InfoConfig(), 3.0) == (
+        "Hotspot -> hexapod\nPassword -> hexahexa\nControl -> control.hexa"
+    )
+
+
+def test_the_name_is_only_used_on_the_hotspot():
+    """Off the AP nothing resolves it — the robot is a guest on somebody else's
+    network, so the routable address is the only useful thing to show."""
+    named_station = dataclasses.replace(STATION, portal="control.hexa")
+    assert network_screen(named_station, "10.0.0.5", InfoConfig(), 3.0) == (
+        "Hotspot off\nControl -> 10.0.0.5:8080"
     )
 
 

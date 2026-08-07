@@ -91,14 +91,14 @@ has to join is always one press away rather than only visible in the seconds
 after a switch:
 
     Battery -> 50 %  ( 7.4 V )
-    Control -> 192.168.4.1:8080
+    Control -> control.hexa
     WiFi -> hexapod / hexahexa
 
 and finishing a switch puts up the result — the credentials, or what went wrong:
 
     Hotspot -> hexapod
     Password -> hexahexa
-    Control -> 192.168.4.1:8080
+    Control -> control.hexa
 
     Network switch failed
     Could not start the hotspot
@@ -106,6 +106,13 @@ and finishing a switch puts up the result — the credentials, or what went wron
 
 No pack reading yet renders as `-- %  ( --.- V )` rather than a fabricated 0 %,
 which would read as a dead battery. No address renders as `no network`.
+
+The control line is a **name** on the hotspot and an **address** everywhere
+else. `control.hexa` is the AP's own DNS answering, and the teleop server is on
+port 80 there, so that is what a person can read off the panel and retype; on
+somebody else's network nothing resolves it, so the screen goes back to
+`192.168.172.42:8080`. The name comes back in the state file from the same
+script that publishes it, for the same reason the credentials do.
 
 **Lines are budgeted at 30 characters** (`LINE_BUDGET` in `info_text.py`). The
 panel is four lines of a proportional 16 px font wrapping at 252 px, and
@@ -169,8 +176,9 @@ the same way around it. Two files on the bind-mounted log volume:
 The host runs `systemd/network-mode.sh` and is the **authority on the current
 mode** — the AP profile being active is the whole definition of it — so the
 button sends `toggle` rather than naming a target, and this node only ever
-renders what it was told. The SSID and password live in that script and come
-back in the state file; they are deliberately not duplicated in `buttons.yaml`.
+renders what it was told. The SSID, the password and the hotspot's name for the
+robot (`control.hexa`) live in that script and come back in the state file; they
+are deliberately not duplicated in `buttons.yaml`.
 
 The **token** separates "the host answered me" from "this file still holds the
 answer to a switch from ten minutes ago". It carries a per-process nonce, so a

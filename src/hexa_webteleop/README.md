@@ -75,6 +75,20 @@ Alongside `/ws`:
   `logs.command` (default: recent `~/.ros/log` files), for the log page.
 - **`POST /control/release`** — hands control back to the gamepad
   (out-of-band equivalent of the webapp's `release_control`).
+- **everything else** — redirected to `/`. Nothing 404s, because on the
+  robot's hotspot (`systemd/network-mode.sh`) the AP answers every hostname
+  with the robot, so an unrecognised path is a person who wants the
+  controller. Leaving the OS connectivity probes (`/generate_204`,
+  `/hotspot-detect.html`, …) among them is what makes a joining phone declare
+  a captive portal and open the controller by itself. Rules in
+  `captive_portal.py` (pure, unit-tested); the redirect goes to the root
+  rather than serving the page in place because the webapp's asset paths are
+  relative.
+
+The server also binds `server.portal_port` (80) alongside its own, so
+`http://control.hexa/` needs no port typed and the probes — which are plain
+port 80 — arrive at all. Best-effort: a privileged port needs a root container
+(the robot's is, the sim's is not), and a refusal is logged and ignored.
 
 ## Config
 

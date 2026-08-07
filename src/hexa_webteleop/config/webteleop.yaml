@@ -21,6 +21,12 @@ allow_unstable_gaits: true
 server:
   port: 8080 # HTTP + WebSocket on the same port
   ws_heartbeat_s: 5.0 # ping each client; close it if a pong is missed
+  # Second port to answer on, so the robot's hotspot name works with no port
+  # typed (http://control.hexa/) and so phone connectivity probes — which are
+  # plain port 80 — reach the captive-portal handling. Best-effort: binding a
+  # privileged port needs a root container (the robot's is, the sim's is not),
+  # and a refusal is logged and ignored. 0 disables it.
+  portal_port: 80
 
 # Safety watchdog. If no stick/button message arrives within
 # input_timeout_s (dropped WebSocket, slept phone, backgrounded tab) the

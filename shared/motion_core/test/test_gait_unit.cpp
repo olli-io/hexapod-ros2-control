@@ -6,9 +6,11 @@
 // firmware build applies to the port sources.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
+#include <memory>
 #include <string>
 #include <tuple>
 
@@ -680,6 +682,20 @@ TEST(Engine, EveryHandoverHasAStretchWithAllSixFeetDown) {
     const float fraction =
         static_cast<float>(six->second) / static_cast<float>(total);
     EXPECT_GT(fraction, 0.04f) << c.gait;
+  }
+}
+
+// crawl and surf have no instant with all six down, so they are out of scope
+// above — but three loaded feet is the floor for every gait, and it is what a
+// stop interrupting one is entitled to assume.
+TEST(Engine, NoGaitWalksOnFewerThanThreeFeet) {
+  for (const char* gait : {"tripod", "tetrapod", "surf", "crawl", "ripple"}) {
+    int lowest = 6;
+    for (const auto& [stance, ticks] : stance_count_histogram(gait, 1200)) {
+      (void)ticks;
+      lowest = std::min(lowest, stance);
+    }
+    EXPECT_GE(lowest, 3) << gait << " is statically unstable";
   }
 }
 
@@ -1417,6 +1433,65 @@ TEST(Engine, ReleasingMidEngagementReplantsInsteadOfTeleporting) {
   }
 }
 
+// The stop has to keep the robot standing, whichever route it takes. A release
+// inside the engagement is the hard case: it hands the reseat ladder feet that
+// are still in the air, and the metachronal gaits engage for one whole cycle
+// (1.7 s on a crawl, 3.4 s on a ripple), so short drives end there routinely.
+TEST(Engine, AStopNeverDropsBelowThreeLoadedFeet) {
+  constexpr float kTickDt = 0.005f;
+  const auto cfg = g::engine_config_from_config();
+  const auto nominal = g::nominal_stance_from_config();
+  const float budget = 4.0f * cfg.reseat_pair_swing_time +
+                       3.0f * cfg.reseat_pair_dwell_time +
+                       cfg.settle_debounce_delay + cfg.settle_swing_time;
+
+  for (const char* gait : {"tripod", "tetrapod", "surf", "crawl", "ripple"}) {
+    const auto [v_x, v_y, omega] = shaped_full_stick(gait);
+    bool covered_engagement = false;
+
+    for (const int drive_ticks : {40, 80, 160, 240, 320, 400, 800}) {
+      auto e = g::make_default_engine(gait);
+      run_to_stand(*e);
+      for (int i = 0; i < drive_ticks; ++i) {
+        e->update(kTickDt, {v_x, v_y}, omega);
+      }
+      const bool released_engaging =
+          e->state() == g::EngineState::ENGAGING;
+      covered_engagement = covered_engagement || released_engaging;
+
+      int fewest_loaded = 6;
+      int stop_ticks = -1;
+      for (int i = 0; i < 4000; ++i) {
+        const auto out = e->update(kTickDt, {0.0f, 0.0f}, 0.0f);
+        int loaded = 0;
+        for (const auto& [name, leg] : out) {
+          // A foot only carries weight if it is both claimed as stance and
+          // actually on the ground; the two used to disagree.
+          const float band = nominal.at(name)[2] + cfg.touchdown_probe_height;
+          if (leg.stance && leg.foot_target[2] <= band) {
+            ++loaded;
+          }
+        }
+        fewest_loaded = std::min(fewest_loaded, loaded);
+        if (e->state() == g::EngineState::STAND && i > 3) {
+          stop_ticks = i;
+          break;
+        }
+      }
+
+      const std::string where = std::string(gait) + " released after " +
+                                std::to_string(drive_ticks) + " ticks" +
+                                (released_engaging ? " (engaging)" : "");
+      ASSERT_GE(stop_ticks, 0) << where << " never reached STAND";
+      EXPECT_GE(fewest_loaded, 3) << where << " went statically unstable";
+      EXPECT_LT(static_cast<float>(stop_ticks) * kTickDt, budget) << where;
+    }
+
+    EXPECT_TRUE(covered_engagement)
+        << gait << " never released inside its engagement";
+  }
+}
+
 TEST(Engine, ZeroCommandSettlesToStand) {
   auto e = g::make_default_engine("tripod");
   run_to_stand(*e);
@@ -1978,6 +2053,129 @@ TEST(Reseat, RejectsAHeightInfeasibleForAnyGroup) {
   }
   EXPECT_TRUE(found)
       << "expected a height the front group can reach and the rear cannot";
+}
+
+namespace {
+
+std::unique_ptr<g::ReseatController> make_reseat(
+    const std::map<std::string, g::Vec3>& current,
+    const std::map<std::string, g::Vec3>& target) {
+  const auto cfg = g::engine_config_from_config();
+  return std::make_unique<g::ReseatController>(
+      current, target, cfg.reseat_pair_swing_time, cfg.reseat_pair_dwell_time,
+      cfg.reseat_profile(), cfg.controller_dt);
+}
+
+int ticks_to_done(g::ReseatController& r, float dt) {
+  int ticks = 0;
+  for (; ticks < 4000 && !r.done(); ++ticks) {
+    r.update(dt);
+  }
+  return ticks;
+}
+
+}  // namespace
+
+// An abandoned engagement hands the ladder feet that are still in the air. Those
+// carry no weight, so the ladder must not count them as support, and must put
+// them down before it lifts anything that is standing — otherwise the pair it
+// lifts plus the pair it is hanging leaves too few feet loaded and the body
+// tilts onto the gap.
+TEST(Reseat, LandsAirborneFeetBeforeLiftingAnyThatAreDown) {
+  constexpr float kTickDt = 0.005f;
+  const auto cfg = g::engine_config_from_config();
+  const auto nominal = g::nominal_stance_from_config();
+  // The crawl case: the two legs whose phase offsets put them in the air at the
+  // start of an engagement, caught mid-swing.
+  const std::array<std::string, 2> airborne = {"l_middle", "r_rear"};
+
+  auto current = nominal;
+  for (const auto& n : g::LEG_NAMES) {
+    current[n] = nominal.at(n) + g::Vec3(-0.04f, 0.0f, 0.0f);
+  }
+  for (const auto& n : airborne) {
+    current[n] = nominal.at(n) + g::Vec3(0.02f, 0.01f, cfg.step_height);
+  }
+
+  auto r = make_reseat(current, nominal);
+  ASSERT_FALSE(r->done());
+
+  int first_liftoff_tick = -1;
+  int landed_tick = -1;
+  float worst_rise = 0.0f;
+  int fewest_loaded = 6;
+  for (int i = 0; i < 4000 && !r->done(); ++i) {
+    const auto out = r->update(kTickDt);
+
+    int loaded = 0;
+    bool grounded_lifted = false;
+    bool all_landed = true;
+    for (const auto& [name, leg] : out) {
+      const bool down =
+          leg.foot_target[2] <= nominal.at(name)[2] + cfg.touchdown_probe_height;
+      if (leg.stance) {
+        EXPECT_TRUE(down) << name << " reported stance while off the ground";
+        ++loaded;
+      }
+      const bool is_airborne_leg =
+          std::find(airborne.begin(), airborne.end(), name) != airborne.end();
+      if (is_airborne_leg) {
+        if (!down) all_landed = false;
+        worst_rise =
+            std::max(worst_rise, leg.foot_target[2] - current.at(name)[2]);
+      } else if (!down) {
+        grounded_lifted = true;
+      }
+    }
+    fewest_loaded = std::min(fewest_loaded, loaded);
+    if (all_landed && landed_tick < 0) landed_tick = i;
+    if (grounded_lifted && first_liftoff_tick < 0) first_liftoff_tick = i;
+  }
+
+  EXPECT_TRUE(r->done()) << "the ladder never finished";
+  EXPECT_GE(fewest_loaded, 3) << "statically unstable";
+  ASSERT_GE(landed_tick, 0) << "the airborne feet never came down";
+  ASSERT_GE(first_liftoff_tick, 0) << "no grounded foot was ever re-planted";
+  EXPECT_LT(landed_tick, first_liftoff_tick)
+      << "a standing foot lifted before the airborne ones had landed";
+  // A landing is a descent: swing_arc's ease5 lift and ease7 base do not cancel
+  // exactly, so a few millimetres of bulge is expected; a climb is not.
+  EXPECT_LT(worst_rise, 0.005f) << "a landing foot climbed above where it started";
+
+  for (const auto& n : g::LEG_NAMES) {
+    const auto out = r->update(kTickDt);
+    EXPECT_LT((out.at(n).foot_target - nominal.at(n)).norm(), 1e-5f)
+        << n << " did not finish on its nominal stance";
+  }
+}
+
+// The landing stage has to cost nothing when it is not needed: settle_beats_reseat
+// and the stop budget both price the ladder at three pair swings and two dwells,
+// and both routes that reach it with six feet planted must still pay exactly that.
+TEST(Reseat, CostsNothingWhenEveryFootIsAlreadyDown) {
+  constexpr float kTickDt = 0.005f;
+  const auto cfg = g::engine_config_from_config();
+  const auto nominal = g::nominal_stance_from_config();
+  const auto swing_ticks = static_cast<int>(cfg.reseat_pair_swing_time / kTickDt);
+  const auto dwell_ticks = static_cast<int>(cfg.reseat_pair_dwell_time / kTickDt);
+
+  EXPECT_TRUE(make_reseat(nominal, nominal)->done())
+      << "a stance already on target should need no ladder at all";
+
+  // Displaced in the ground plane only — the case every settle hands over.
+  auto scattered = nominal;
+  for (const auto& n : g::LEG_NAMES) {
+    scattered[n] = nominal.at(n) + g::Vec3(-0.05f, 0.0f, 0.0f);
+  }
+  auto all_six = make_reseat(scattered, nominal);
+  EXPECT_NEAR(ticks_to_done(*all_six, kTickDt),
+              3 * swing_ticks + 2 * dwell_ticks, 8);
+
+  auto one_pair = nominal;
+  one_pair["l_front"] = nominal.at("l_front") + g::Vec3(-0.05f, 0.0f, 0.0f);
+  one_pair["r_rear"] = nominal.at("r_rear") + g::Vec3(-0.05f, 0.0f, 0.0f);
+  auto skipped = make_reseat(one_pair, nominal);
+  EXPECT_NEAR(ticks_to_done(*skipped, kTickDt), swing_ticks, 8);
 }
 
 TEST(Limits, ScaleToEnvelopeIsNoOpWhenInRange) {
