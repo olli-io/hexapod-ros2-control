@@ -2,7 +2,7 @@
 # Hexapod robot installer for the Raspberry Pi. Run it on the Pi:
 #
 #   curl -fsSL https://raw.githubusercontent.com/olli-io/hexapod-ros2-control/main/install.sh | bash
-#   curl -fsSL .../install.sh | bash -s -- --tag v0.2.0 --start
+#   curl -fsSL .../install.sh | bash -s -- --tag release-1.0.0 --start
 #
 # What it does, in order: check every dependency and refuse early if one is
 # missing; download the release's ARM64 image tarball plus the matching support

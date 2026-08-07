@@ -129,6 +129,13 @@ stop), `--tag <tag>` (a specific release), `--dir <path>`, `--keep-archive`.
 Re-running it later is the upgrade path: it keeps your `.env` values and only
 appends keys the release added, exactly as `sync-config` does (§9).
 
+Those releases are produced by `.github/workflows/release.yml`: pushing a
+`release-x.x.x` tag reachable from `main` builds this image on a native arm64
+runner and attaches it as the single `hexa-robot_arm64_<tag>.tar.gz` asset that
+`install.sh` looks for. The support files come from the same tag's source
+archive, so the tag has to be a real one on the released commit. §5a below is
+the alternative path, not the only one.
+
 **From a workstation** — the development path, and the rest of this section:
 
 ## 5a. First deploy from the workstation

@@ -1,0 +1,115 @@
+# Build the robot (production) ARM64 image on a release-x.x.x tag and attach it
+# to a GitHub Release, in the exact shape install.sh already knows how to
+# consume: one gzipped `docker save` archive named hexa-robot_arm64_<tag>.tar.gz.
+#
+# Runs on a native arm64 runner (free for this public repo), so unlike
+# `./hexa deploy build` on an x86 workstation there is no QEMU in the loop.
+name: release
+
+on:
+  push:
+    tags:
+      - 'release-[0-9]+.[0-9]+.[0-9]+'
+  # Build-only dry run: everything except creating the release, so the workflow
+  # can be proven without spending a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Full history: the guard below needs main to compare against.
+          fetch-depth: 0
+
+      # GitHub Actions ignores `branches:` on tag events, so "tags on main" has
+      # to be asserted here.
+      - name: Refuse tags that are not on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main \
+            || { echo "::error::${GITHUB_REF_NAME} is not on main — refusing to release"; exit 1; }
+
+      - name: Derive tag and version
+        id: names
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              tag="${GITHUB_REF_NAME}"
+              version="${tag#release-}"
+          else
+              version="$(git rev-parse --short HEAD)"
+              tag="dryrun-${version}"
+          fi
+          {
+              echo "tag=${tag}"
+              echo "version=${version}"
+              echo "tarball=hexa-robot_arm64_${tag}.tar.gz"
+          } >> "${GITHUB_OUTPUT}"
+          echo ">> ${tag} -> hexa-robot:${version}"
+
+      # The builder stage carries ros-base plus every dev header, and the
+      # compressed tarball alone is ~215 MB. There should be ample room; the df
+      # makes it a one-look diagnosis if there ever isn't.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the ARM64 robot image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            -f robot.Dockerfile \
+            -t "hexa-robot:${{ steps.names.outputs.version }}" \
+            -t "hexa-robot:latest" \
+            --output type=docker \
+            .
+
+      # docker save | gzip, not a buildx OCI tar: install.sh does
+      # `gunzip -c … | docker load` and gzip -t's the download first. Both tags
+      # go into the one archive so a load on the Pi gets :latest — which is what
+      # docker-compose.robot.yaml runs — without relying on its retag fallback.
+      - name: Save and compress the image
+        run: |
+          docker save \
+            "hexa-robot:${{ steps.names.outputs.version }}" \
+            "hexa-robot:latest" \
+            | gzip > "${{ steps.names.outputs.tarball }}"
+          ls -lh "${{ steps.names.outputs.tarball }}"
+          df -h /
+
+      # Exactly one .tar.gz asset per release: install.sh's resolve_release()
+      # dies with "pick one with --asset" if its regex matches more than one.
+      - name: Publish the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.names.outputs.tag }}
+          TARBALL: ${{ steps.names.outputs.tarball }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+              echo ">> ${TAG} already exists — replacing its asset"
+              gh release upload "${TAG}" "${TARBALL}" --clobber
+          else
+              gh release create "${TAG}" \
+                  --title "${TAG}" \
+                  --generate-notes \
+                  "${TARBALL}"
+          fi
+
+      - name: Dry run summary
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo ">> Dry run: built ${{ steps.names.outputs.tarball }}, no release created"

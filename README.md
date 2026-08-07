@@ -41,7 +41,8 @@ wiring), then downloads the latest release's ARM64 image into `~/hexa-robot/`
 and seeds `.env` with this Pi's own group IDs and device names. It does not
 start anything — bringing the stack up energizes the servos, so that stays a
 deliberate `./hexa robot up`. Pass `--check-only` to run just the checks,
-`--tag <tag>` for a specific release, `--start` to bring it up when done.
+`--tag <tag>` for a specific release (release tags are `release-x.x.x`),
+`--start` to bring it up when done.
 
 To build and ship from a workstation instead, all host commands go through the
 `hexa` dispatcher in the repo root; nothing is built on the host.
