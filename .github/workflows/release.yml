@@ -1,18 +1,15 @@
-# Build the robot (production) ARM64 image on a release-x.x.x tag and attach it
-# to a GitHub Release, in the exact shape install.sh already knows how to
-# consume: one gzipped `docker save` archive named hexa-robot_arm64_<tag>.tar.gz.
-#
-# Runs on a native arm64 runner (free for this public repo), so unlike
-# `./hexa deploy build` on an x86 workstation there is no QEMU in the loop.
 name: release
 
 on:
   push:
     tags:
       - 'release-[0-9]+.[0-9]+.[0-9]+'
-  # Build-only dry run: everything except creating the release, so the workflow
-  # can be proven without spending a tag.
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a prerelease instead of only building'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -30,11 +27,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          # Full history: the guard below needs main to compare against.
           fetch-depth: 0
 
-      # GitHub Actions ignores `branches:` on tag events, so "tags on main" has
-      # to be asserted here.
       - name: Refuse tags that are not on main
         if: github.event_name == 'push'
         run: |
@@ -59,9 +53,6 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           echo ">> ${tag} -> hexa-robot:${version}"
 
-      # The builder stage carries ros-base plus every dev header, and the
-      # compressed tarball alone is ~215 MB. There should be ample room; the df
-      # makes it a one-look diagnosis if there ever isn't.
       - name: Reclaim runner disk
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
@@ -77,10 +68,6 @@ jobs:
             --output type=docker \
             .
 
-      # docker save | gzip, not a buildx OCI tar: install.sh does
-      # `gunzip -c … | docker load` and gzip -t's the download first. Both tags
-      # go into the one archive so a load on the Pi gets :latest — which is what
-      # docker-compose.robot.yaml runs — without relying on its retag fallback.
       - name: Save and compress the image
         run: |
           docker save \
@@ -90,15 +77,15 @@ jobs:
           ls -lh "${{ steps.names.outputs.tarball }}"
           df -h /
 
-      # Exactly one .tar.gz asset per release: install.sh's resolve_release()
-      # dies with "pick one with --asset" if its regex matches more than one.
       - name: Publish the release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.names.outputs.tag }}
           TARBALL: ${{ steps.names.outputs.tarball }}
         run: |
+          prerelease=""
+          [ "${GITHUB_EVENT_NAME}" = "push" ] || prerelease="--prerelease"
           if gh release view "${TAG}" >/dev/null 2>&1; then
               echo ">> ${TAG} already exists — replacing its asset"
               gh release upload "${TAG}" "${TARBALL}" --clobber
@@ -106,10 +93,12 @@ jobs:
               gh release create "${TAG}" \
                   --title "${TAG}" \
                   --generate-notes \
+                  ${prerelease} \
                   "${TARBALL}"
           fi
+          echo ">> published ${TAG}${prerelease:+ (prerelease)}"
 
       - name: Dry run summary
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
         run: |
           echo ">> Dry run: built ${{ steps.names.outputs.tarball }}, no release created"
