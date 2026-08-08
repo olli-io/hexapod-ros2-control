@@ -61,7 +61,7 @@ class InitializeController {
                        float coxa_to_bottom, float foot_radius,
                        float pair_swing_time, float lift_body_time,
                        float swing_clearance, float swing_width,
-                       float touchdown_velocity, float touchdown_probe_height,
+                       float touchdown_velocity, float touchdown_probe_fraction,
                        float controller_dt);
 
   InitializeState state() const { return state_; }
@@ -99,7 +99,7 @@ class FoldController {
                  float coxa_to_bottom, float foot_radius,
                  float pair_swing_time, float lift_body_time,
                  float swing_clearance, float swing_width,
-                 float touchdown_velocity, float touchdown_probe_height,
+                 float touchdown_velocity, float touchdown_probe_fraction,
                  float controller_dt);
 
   FoldState state() const { return state_; }

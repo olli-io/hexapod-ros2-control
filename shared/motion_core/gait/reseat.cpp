@@ -236,11 +236,12 @@ std::map<std::string, LegOutput> ReseatController::tick_landing(float dt) {
 }
 
 // How far above its target a foot may sit and still be carrying weight. The
-// touchdown probe is that height by definition, and it is already tuned to clear
-// servo resolution and inter-leg height error — which an engagement's planted
-// feet, a fraction of a millimetre high, need it to.
+// touchdown probe is that height by definition — here at this controller's own
+// pair swing time — and it is already tuned to clear servo resolution and
+// inter-leg height error — which an engagement's planted feet, a fraction of a
+// millimetre high, need it to.
 float ReseatController::contact_band() const {
-  return std::max(swing_.touchdown_probe_height, kInPlaceEpsilon);
+  return std::max(swing_.probe_band(pair_swing_time_), kInPlaceEpsilon);
 }
 
 LegOutput ReseatController::held(const std::string& name) const {

@@ -358,7 +358,7 @@ std::unique_ptr<InitializeController> Engine::build_initialize() {
       initial_, nominal_, coxa_to_bottom_, foot_radius_,
       config_.init_pair_swing_time, config_.init_lift_body_time,
       config_.init_swing_clearance, config_.swing_width,
-      config_.touchdown_velocity, config_.touchdown_probe_height,
+      config_.touchdown_velocity, config_.touchdown_probe_fraction,
       config_.controller_dt);
 }
 
@@ -367,7 +367,7 @@ std::unique_ptr<FoldController> Engine::build_fold() {
       initial_, nominal_, coxa_to_bottom_, foot_radius_,
       config_.init_pair_swing_time, config_.init_lift_body_time,
       config_.init_swing_clearance, config_.swing_width,
-      config_.touchdown_velocity, config_.touchdown_probe_height,
+      config_.touchdown_velocity, config_.touchdown_probe_fraction,
       config_.controller_dt);
 }
 
@@ -888,7 +888,7 @@ EngineConfig engine_config_from_config() {
   cfg.step_height = c.step_height;
   cfg.swing_width = c.swing_width;
   cfg.touchdown_velocity = c.touchdown_velocity;
-  cfg.touchdown_probe_height = c.touchdown_probe_height;
+  cfg.touchdown_probe_fraction = c.touchdown_probe_fraction;
   cfg.swing_phase_margin = c.swing_phase_margin;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;

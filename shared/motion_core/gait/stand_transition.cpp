@@ -15,13 +15,13 @@ InitializeController::InitializeController(
     std::map<std::string, Vec3> nominal_stance, float coxa_to_bottom,
     float foot_radius, float pair_swing_time, float lift_body_time,
     float swing_clearance, float swing_width, float touchdown_velocity,
-    float touchdown_probe_height, float controller_dt)
+    float touchdown_probe_fraction, float controller_dt)
     : pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
       swing_{.clearance = swing_clearance,
              .width = swing_width,
              .touchdown_velocity = touchdown_velocity,
-             .touchdown_probe_height = touchdown_probe_height},
+             .touchdown_probe_fraction = touchdown_probe_fraction},
       controller_dt_(controller_dt) {
   require_all_legs(initial_stance, "initial_stance");
   require_all_legs(nominal_stance, "nominal_stance");
@@ -155,14 +155,14 @@ FoldController::FoldController(std::map<std::string, Vec3> initial_stance,
                                float pair_swing_time, float lift_body_time,
                                float swing_clearance, float swing_width,
                                float touchdown_velocity,
-                               float touchdown_probe_height,
+                               float touchdown_probe_fraction,
                                float controller_dt)
     : pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
       swing_{.clearance = swing_clearance,
              .width = swing_width,
              .touchdown_velocity = touchdown_velocity,
-             .touchdown_probe_height = touchdown_probe_height},
+             .touchdown_probe_fraction = touchdown_probe_fraction},
       controller_dt_(controller_dt) {
   require_all_legs(initial_stance, "initial_stance");
   require_all_legs(nominal_stance, "nominal_stance");

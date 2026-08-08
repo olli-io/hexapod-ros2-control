@@ -26,6 +26,11 @@ struct LegContext {
   Vec3 nominal_stance = Vec3::Zero();
 };
 
+// Largest share of the swing the constant-velocity probe may take. The climb
+// and the brake split the rest evenly, so at the cap each still keeps 30% of
+// the swing — the brake never collapses however large the probe.
+constexpr float kMaxProbeFraction = 0.4f;
+
 // Shape of one swing, independent of where the foot is travelling. Bundled so
 // the engine, the engagement controller and the strategies all shape a swing the
 // same way instead of each defaulting a different subset.
@@ -35,15 +40,27 @@ struct SwingProfile {
   // Sideways shift of the arc; 0 = straight fore/aft.
   float width = 0.0f;
   // Vertical speed the foot still carries as it meets the ground, and the speed
-  // of the probe below. Shapes only the descent's approach — the apex and the
-  // horizontal track never move.
+  // of the probe below. Shapes only the descent's approach — the track through
+  // space never moves.
   float touchdown_velocity = 0.0f;
-  // Height above the touchdown point over which the descent holds exactly
-  // touchdown_velocity, rather than still easing as it arrives. This is the
-  // band a foot may meet the ground anywhere inside and still land at the
-  // intended speed, so it is what has to beat the servos' position resolution.
-  // 0 restores a zero-speed landing.
-  float touchdown_probe_height = 0.0f;
+  // Share of the swing spent in the straight probe at exactly
+  // touchdown_velocity, rather than still easing as it arrives. The probe's
+  // height — the band a foot may meet the ground anywhere inside and still land
+  // at the intended speed, which is what has to beat the servos' position
+  // resolution — is touchdown_velocity * fraction * swing_time, so it always
+  // fits in the swing whatever the timing config. The probe's time comes off
+  // the tail of the swing and the climb and brake split the remainder, so a
+  // taller probe also moves the apex earlier and buys the whole descent time.
+  // Clamped to kMaxProbeFraction; 0 restores a zero-speed landing.
+  float touchdown_probe_fraction = 0.0f;
+
+  // The probe band's height for a swing of `swing_time` seconds.
+  float probe_band(float swing_time) const {
+    const float f = touchdown_probe_fraction < kMaxProbeFraction
+                        ? touchdown_probe_fraction
+                        : kMaxProbeFraction;
+    return touchdown_velocity * f * swing_time;
+  }
 };
 
 // Per-tick stride description for one leg. stride_vector is the body-frame
@@ -125,18 +142,22 @@ inline float ease5(float u) {
 // zero horizontal acceleration, and only pulls away from it as O(t^4). That is
 // what keeps it from scrubbing while it may still be touching.
 //
-// The blend runs in real time so the horizontal travel spans the whole swing.
-// That bounds the body-frame excursion outside the AEP..PEP envelope to a few
-// millimetres — a curve that finishes its travel early rides the moving ground
-// line for the remainder, which sweeps the foot beyond the AEP by ground speed
-// times the time left and out of the joint envelope at full stride.
+// The blend spans the whole swing. That bounds the body-frame excursion
+// outside the AEP..PEP envelope to a few millimetres — a curve that finishes
+// its travel early rides the moving ground line for the remainder, which
+// sweeps the foot beyond the AEP by ground speed times the time left and out
+// of the joint envelope at full stride.
 //
-// The vertical is eased independently, with its apex pinned to t = 0.5 — the
-// geometric midpoint of the shaped travel, since ease7(0.5) = 0.5 — so the arc
-// is symmetric in space and no knob can displace the apex along the track. The
-// descent brakes down to a straight probe that meets the ground at exactly
-// profile.touchdown_velocity; the lift-off speed is derived
-// (4 * clearance / swing_time, the largest monotone climb), not configured.
+// The vertical is eased independently, with its apex over the spatial midpoint
+// of the travel — the blend's clock is warped to cross half-travel at the
+// apex — so the arc is symmetric in space and no knob can displace the apex
+// along the track. The apex's *time* is derived, not configured: the straight
+// probe (which meets the ground at exactly profile.touchdown_velocity) takes
+// touchdown_probe_fraction off the tail of the swing, and the climb and the
+// braked descent split the remaining time evenly, so a taller probe shifts
+// the bell of the arc earlier and the schedule always fits swing_time. The
+// lift-off speed is likewise derived (2 * clearance / climb_time, the largest
+// monotone climb).
 //
 // origin/target_ground_velocity are the stance velocities at the two ends —
 // horizontal only, the profile supplies the vertical shaping. nullopt defaults

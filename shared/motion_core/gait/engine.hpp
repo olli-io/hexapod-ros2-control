@@ -51,7 +51,7 @@ struct EngineConfig {
   float step_height = 0.0f;
   float swing_width = 0.0f;
   float touchdown_velocity = 0.0f;
-  float touchdown_probe_height = 0.0f;
+  float touchdown_probe_fraction = 0.0f;
   // Share of each gait's nominal swing window handed back to stance at the
   // touchdown end, so every handover has a stretch with all six feet planted.
   float swing_phase_margin = 0.0f;
@@ -75,7 +75,7 @@ struct EngineConfig {
     p.clearance = step_height;
     p.width = swing_width;
     p.touchdown_velocity = touchdown_velocity;
-    p.touchdown_probe_height = touchdown_probe_height;
+    p.touchdown_probe_fraction = touchdown_probe_fraction;
     return p;
   }
 
@@ -87,7 +87,7 @@ struct EngineConfig {
     SwingProfile p;
     p.clearance = reseat_swing_clearance;
     p.touchdown_velocity = touchdown_velocity;
-    p.touchdown_probe_height = touchdown_probe_height;
+    p.touchdown_probe_fraction = touchdown_probe_fraction;
     return p;
   }
 };

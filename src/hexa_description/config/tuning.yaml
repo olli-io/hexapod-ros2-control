@@ -51,23 +51,25 @@ gait_node:
     # Sideways shift of the foot's arc (m). 0 = straight fore/aft steps.
     swing_width: 0.02
 
-    # The arc itself is fixed and symmetric — apex at the midpoint. The two
-    # knobs below act only on how fast the foot travels along it, and the
-    # lift-off speed is not a knob at all: with the touchdown tail pinned, the
-    # foot leaves the ground at whatever speed covers the remaining path in
-    # the time that remains, which scales as step_height over swing time.
+    # The arc's shape in space is fixed — apex over the middle of the travel.
+    # The two knobs below act only on the descent's schedule. The rest of the
+    # timing is derived: the probe takes its share off the tail of the swing,
+    # the climb and the braked descent split what remains evenly, and the
+    # lift-off speed is whatever covers the climb in the time it gets.
 
-    # Descent speed at ground contact (m/s), and the probe speed below. Too
-    # low and the probe (its height over this speed) becomes a long low sweep
-    # rather than a drop; below one servo step per 200 Hz tick the descent
-    # comes out as a staircase.
-    touchdown_velocity: 0.005
+    # Descent speed at ground contact (m/s), and the probe speed below. Below
+    # one servo step per 200 Hz tick the descent comes out as a staircase.
+    touchdown_velocity: 0.07
 
-    # Height at which the descent stops easing and holds touchdown_velocity
-    # (m). This is the band a foot may meet the ground anywhere inside and
-    # still land at the intended speed, so keep it above servo resolution and
-    # inter-leg height error. 0 restores a zero-speed landing.
-    touchdown_probe_height: 0.01
+    # Share of the swing spent in the straight probe at exactly
+    # touchdown_velocity. The probe's height — the band a foot may meet the
+    # ground anywhere inside and still land at the intended speed — is
+    # touchdown_velocity x fraction x swing_time, so size the two together to
+    # beat servo resolution and inter-leg height error. Raising it also shifts
+    # the apex earlier, giving the whole descent more time. Hard-capped at
+    # 0.4, which still leaves the climb and the brake 30% of the swing each.
+    # 0 restores a zero-speed landing.
+    touchdown_probe_fraction: 0.4
 
     # ─── Cycle timing ───────────────────────────────────────────────
 
