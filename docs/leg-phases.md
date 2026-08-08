@@ -170,9 +170,9 @@ pose:
 - **place feet** — INITIALIZE sub-phase: pair-wise foot placement from
   the folded initial-pose footprint to the standing footprint, landing
   each foot on the floor the belly is already resting on. The swing arc
-  arrives with zero vertical velocity, so this is where the ground
-  contact belongs — putting the feet down short of the floor only moves
-  the contact into the middle of the lift-body ramp.
+  probes down the last stretch at the gait's touchdown speed, so this is
+  where the ground contact belongs — putting the feet down short of the
+  floor only moves the contact into the middle of the lift-body ramp.
 - **lift body** — INITIALIZE sub-phase that follows place feet: ramp
   foot z in the body frame from the place-feet endpoint (the floor)
   down to nominal standing z, raising the body to standing height as

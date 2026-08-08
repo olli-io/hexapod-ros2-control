@@ -48,6 +48,7 @@ g::InitializeController make_initialize(const Ladder& l) {
       l.initial, l.nominal, hexa::config::kCoxaToBottom,
       hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
       l.cfg.init_lift_body_time, l.cfg.init_swing_clearance, l.cfg.swing_width,
+      l.cfg.touchdown_velocity, l.cfg.touchdown_probe_height,
       l.cfg.controller_dt);
 }
 
@@ -55,7 +56,8 @@ g::FoldController make_fold(const Ladder& l) {
   return g::FoldController(l.initial, l.nominal, hexa::config::kCoxaToBottom,
                            hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
                            l.cfg.init_lift_body_time, l.cfg.init_swing_clearance,
-                           l.cfg.swing_width, l.cfg.controller_dt);
+                           l.cfg.swing_width, l.cfg.touchdown_velocity,
+                           l.cfg.touchdown_probe_height, l.cfg.controller_dt);
 }
 
 void expect_near(const g::Vec3& got, const g::Vec3& want,

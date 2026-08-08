@@ -100,14 +100,13 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
   // the lateral arch is dropped; the rise/descent split and the touchdown probe
   // are the gait's, so a foot re-plants as gently as it lands mid-walk.
   swing_.width = 0.0f;
-  // swing_arc measures its apex from the higher end, which on a descent is the
-  // origin, so zero clearance tops the arc out where the foot already is rather
-  // than climbing over it; zero lift-off velocity drops the one term that would
-  // bulge it up off that start. The braked descent and touchdown probe survive
-  // both, so a landing arrives as gently as any other touchdown.
+  // Zero clearance drops the vertical shaping entirely, so the landing rides
+  // the plain eased blend from where the foot is down onto its target —
+  // monotone, never climbing over its own start. That also forgoes the probe:
+  // the descent is endpoint-soft (the blend arrives with zero velocity) rather
+  // than probe-gentle, which a landing between two heights never was anyway.
   landing_swing_ = swing_;
   landing_swing_.clearance = 0.0f;
-  landing_swing_.liftoff_velocity = 0.0f;
   require_all_legs(current_stance, "current_stance");
   require_all_legs(target_stance, "target_stance");
   if (pair_swing_time <= 0.0f) {

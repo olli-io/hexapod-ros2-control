@@ -51,34 +51,23 @@ gait_node:
     # Sideways shift of the foot's arc (m). 0 = straight fore/aft steps.
     swing_width: 0.02
 
-    # Share of the airborne time spent rising to the apex; 0.5 is even. Keep
-    # it near the middle: forward travel spreads over the whole swing, height
-    # does not, so a low value tops the foot out early and sweeps it in low,
-    # catching on what the step was meant to clear. Gentle landings come from
-    # the two values below, which cost no altitude.
-    swing_apex_fraction: 0.35
+    # The arc itself is fixed and symmetric — apex at the midpoint. The two
+    # knobs below act only on how fast the foot travels along it, and the
+    # lift-off speed is not a knob at all: with the touchdown tail pinned, the
+    # foot leaves the ground at whatever speed covers the remaining path in
+    # the time that remains, which scales as step_height over swing time.
 
     # Descent speed at ground contact (m/s), and the probe speed below. Too
     # low and the probe (its height over this speed) becomes a long low sweep
     # rather than a drop; below one servo step per 200 Hz tick the descent
     # comes out as a staircase.
-    touchdown_velocity: 0.05
+    touchdown_velocity: 0.005
 
-    # Height at which the descent stops braking and holds touchdown_velocity
-    # (m). A braked curve only reaches that speed at ground level, so with
-    # servos resolving height to a couple of tenths of a millimetre every
-    # contact happens early and hard — the jerk at each handover. A straight
-    # final segment lands gently anywhere inside it, so keep this above servo
-    # resolution and inter-leg height error. Costs: the foot is pressed up to
-    # this far into the ground, and the probe lasts proportionally longer.
-    # 0 restores the plain braked descent.
-    touchdown_probe_height: 0.0025
-
-    # Speed the foot leaves the ground at (m/s) — the mirror of
-    # touchdown_velocity. 0 creeps it off inside a single servo step while it
-    # still carries weight, smearing the load handover. Also keep this above
-    # one servo step per tick.
-    liftoff_velocity: 0.3
+    # Height at which the descent stops easing and holds touchdown_velocity
+    # (m). This is the band a foot may meet the ground anywhere inside and
+    # still land at the intended speed, so keep it above servo resolution and
+    # inter-leg height error. 0 restores a zero-speed landing.
+    touchdown_probe_height: 0.01
 
     # ─── Cycle timing ───────────────────────────────────────────────
 
@@ -86,8 +75,8 @@ gait_node:
     # set top speed: past max_swing_time the robot shortens its stride
     # instead. Keep within ~25% of each other or placement misbehaves when
     # reversing direction.
-    min_swing_time: 0.5
-    max_swing_time: 0.6
+    min_swing_time: 0.4
+    max_swing_time: 0.5
 
     # Share of each gait's swing window handed back to the ground at the
     # touchdown end, so legs overlap instead of swapping on a knife edge that
@@ -103,23 +92,11 @@ gait_node:
     yaw_bias: 0.6
 
     # ─── Settling to a stop ─────────────────────────────────────────
-    #
-    # At a zero command the gait keeps running with a zero stride, so every
-    # touchdown collapses onto the leg's resting stance and the walk re-plants
-    # its own feet — one cycle for a tripod. Gaits swinging in smaller groups
-    # are slower, and a crawl cannot finish this way at all; those land what
-    # is in the air and hand the rest to reseat. The engine takes whichever is
-    # quicker, so retuning either side moves the line on its own.
-
     settle:
       # Wait (s) after cmd_vel hits zero before committing to stop. Longer =
       # fewer accidental stops when the stick crosses zero.
       debounce_delay: 0.4
-      # Airborne time (s) per settling foot, so also the worst-case stop.
-      # A settling step covers at most half a stride, so it can beat
-      # min_swing_time without moving faster horizontally — but it lifts just
-      # as high, so shortening this (or swing_apex_fraction) makes a stop
-      # out-climb a walk, which it must not.
+      # Airborne time (s) per settling foot
       swing_time: 0.45
 
     # ─── Cold-start sequence ────────────────────────────────────────

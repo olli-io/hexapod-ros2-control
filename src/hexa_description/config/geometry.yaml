@@ -20,7 +20,7 @@ leg:
   # Visual radii (m) — sim only.
   coxa_radius: 0.02
   femur_radius: 0.015
-  tibia_radius: 0.008
+  tibia_radius: 0.0048
   # Segment masses (kg) — sim only.
   coxa_mass: 0.05
   femur_mass: 0.08
@@ -51,20 +51,20 @@ joints:
   # ( ds3235sg: 0.13 s/60° @ 6.8V × 0.9 ) converted to rad/s
   # effort (Nm) and velocity (rad/s) are sim only.
   coxa:
-    lower_limit_deg: -45
-    upper_limit_deg: 45
+    lower_limit_deg: -65
+    upper_limit_deg: 65
     effort: 3.09
-    velocity: 7.25
+    velocity: 5.25
   femur:
     lower_limit_deg: -35
     upper_limit_deg: 95
     effort: 3.09
-    velocity: 7.25
+    velocity: 5.25
   tibia:
     lower_limit_deg: 20
     upper_limit_deg: 158
     effort: 3.09
-    velocity: 7.25
+    velocity: 5.25
 
 initial_pose:
   # Joint angles held at startup, before any commanded motion. Assumes symmetry for front and read legs.

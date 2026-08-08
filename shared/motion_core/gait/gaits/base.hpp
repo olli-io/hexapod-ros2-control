@@ -34,24 +34,16 @@ struct SwingProfile {
   float clearance = 0.0f;
   // Sideways shift of the arc; 0 = straight fore/aft.
   float width = 0.0f;
-  // Share of the swing spent climbing to the apex. The rest is the descent, so
-  // lowering this lengthens the descent and lands the foot more gently — at the
-  // cost of a steeper climb off the ground.
-  float apex_fraction = 0.5f;
   // Vertical speed the foot still carries as it meets the ground, and the speed
-  // of the probe below.
+  // of the probe below. Shapes only the descent's approach — the apex and the
+  // horizontal track never move.
   float touchdown_velocity = 0.0f;
-  // Height above the touchdown point over which the descent is a straight line
-  // at exactly touchdown_velocity, rather than a curve still braking as it
-  // arrives. This is the band a foot may meet the ground anywhere inside and
-  // still land at the intended speed, so it is what has to beat the servos'
-  // position resolution. 0 restores the plain braked descent.
+  // Height above the touchdown point over which the descent holds exactly
+  // touchdown_velocity, rather than still easing as it arrives. This is the
+  // band a foot may meet the ground anywhere inside and still land at the
+  // intended speed, so it is what has to beat the servos' position resolution.
+  // 0 restores a zero-speed landing.
   float touchdown_probe_height = 0.0f;
-  // Vertical speed the foot leaves the ground at. The mirror of
-  // touchdown_velocity: 0 peels the foot off with zero initial slope, which
-  // makes it creep through the first fraction of a millimetre; a non-zero value
-  // breaks contact at a definite speed instead.
-  float liftoff_velocity = 0.0f;
 };
 
 // Per-tick stride description for one leg. stride_vector is the body-frame
@@ -133,21 +125,23 @@ inline float ease5(float u) {
 // zero horizontal acceleration, and only pulls away from it as O(t^4). That is
 // what keeps it from scrubbing while it may still be touching.
 //
-// The vertical is independent of the horizontal: a quintic rise to the apex and
-// a quintic-Hermite descent that reaches the ground at exactly
-// profile.touchdown_velocity with zero vertical acceleration. Keeping the two
-// axes decoupled is the point — the descent gets the whole of its half of the
-// swing to slow down in, instead of having to brake inside a band just above
-// the ground.
+// The blend runs in real time so the horizontal travel spans the whole swing.
+// That bounds the body-frame excursion outside the AEP..PEP envelope to a few
+// millimetres — a curve that finishes its travel early rides the moving ground
+// line for the remainder, which sweeps the foot beyond the AEP by ground speed
+// times the time left and out of the joint envelope at full stride.
+//
+// The vertical is eased independently, with its apex pinned to t = 0.5 — the
+// geometric midpoint of the shaped travel, since ease7(0.5) = 0.5 — so the arc
+// is symmetric in space and no knob can displace the apex along the track. The
+// descent brakes down to a straight probe that meets the ground at exactly
+// profile.touchdown_velocity; the lift-off speed is derived
+// (4 * clearance / swing_time, the largest monotone climb), not configured.
 //
 // origin/target_ground_velocity are the stance velocities at the two ends —
 // horizontal only, the profile supplies the vertical shaping. nullopt defaults
 // to the analytical -stride / swing_time; pass Vec3::Zero() for a rest-to-rest
 // move (pause, reseat, the initialize ladder).
-//
-// profile.apex_fraction is the share of the swing spent climbing to the apex.
-// 0.5 splits it evenly. Below 0.5 the descent runs longer, so the foot comes
-// down more slowly for the same step height, at the cost of a steeper climb.
 Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
                const Vec3& target, int identity_y_sign, float swing_time,
                const SwingProfile& profile,

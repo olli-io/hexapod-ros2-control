@@ -61,6 +61,7 @@ class InitializeController {
                        float coxa_to_bottom, float foot_radius,
                        float pair_swing_time, float lift_body_time,
                        float swing_clearance, float swing_width,
+                       float touchdown_velocity, float touchdown_probe_height,
                        float controller_dt);
 
   InitializeState state() const { return state_; }
@@ -79,8 +80,7 @@ class InitializeController {
   std::map<std::string, Vec3> ground_targets_;
   float pair_swing_time_;
   float lift_body_time_;
-  float swing_clearance_;
-  float swing_width_;
+  SwingProfile swing_;
   float controller_dt_;
 
   std::map<std::string, Vec3> positions_;
@@ -99,6 +99,7 @@ class FoldController {
                  float coxa_to_bottom, float foot_radius,
                  float pair_swing_time, float lift_body_time,
                  float swing_clearance, float swing_width,
+                 float touchdown_velocity, float touchdown_probe_height,
                  float controller_dt);
 
   FoldState state() const { return state_; }
@@ -117,8 +118,7 @@ class FoldController {
   std::map<std::string, Vec3> ground_targets_;
   float pair_swing_time_;
   float lift_body_time_;
-  float swing_clearance_;
-  float swing_width_;
+  SwingProfile swing_;
   float controller_dt_;
 
   std::map<std::string, Vec3> positions_;

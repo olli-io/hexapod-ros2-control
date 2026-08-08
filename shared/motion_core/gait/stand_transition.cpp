@@ -14,11 +14,14 @@ InitializeController::InitializeController(
     std::map<std::string, Vec3> initial_stance,
     std::map<std::string, Vec3> nominal_stance, float coxa_to_bottom,
     float foot_radius, float pair_swing_time, float lift_body_time,
-    float swing_clearance, float swing_width, float controller_dt)
+    float swing_clearance, float swing_width, float touchdown_velocity,
+    float touchdown_probe_height, float controller_dt)
     : pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
-      swing_clearance_(swing_clearance),
-      swing_width_(swing_width),
+      swing_{.clearance = swing_clearance,
+             .width = swing_width,
+             .touchdown_velocity = touchdown_velocity,
+             .touchdown_probe_height = touchdown_probe_height},
       controller_dt_(controller_dt) {
   require_all_legs(initial_stance, "initial_stance");
   require_all_legs(nominal_stance, "nominal_stance");
@@ -79,16 +82,15 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
   }
 
   // Mid-pair: active legs follow a rest-to-rest swing arc from initial_stance to
-  // the ground target. Endpoint velocities pinned to zero.
+  // the ground target, probing down onto the floor at the gait's touchdown
+  // speed. Endpoint ground velocities pinned to zero.
   for (const auto& name : LEG_NAMES) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = initial_[name];
       const Vec3 target = ground_targets_[name];
-      const SwingProfile profile{.clearance = swing_clearance_,
-                                 .width = swing_width_};
       const Vec3 point =
           swing_arc(phase, origin, target, identity_y_sign(target),
-                    pair_swing_time_, profile, Vec3::Zero(), Vec3::Zero());
+                    pair_swing_time_, swing_, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {
@@ -152,11 +154,15 @@ FoldController::FoldController(std::map<std::string, Vec3> initial_stance,
                                float coxa_to_bottom, float foot_radius,
                                float pair_swing_time, float lift_body_time,
                                float swing_clearance, float swing_width,
+                               float touchdown_velocity,
+                               float touchdown_probe_height,
                                float controller_dt)
     : pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
-      swing_clearance_(swing_clearance),
-      swing_width_(swing_width),
+      swing_{.clearance = swing_clearance,
+             .width = swing_width,
+             .touchdown_velocity = touchdown_velocity,
+             .touchdown_probe_height = touchdown_probe_height},
       controller_dt_(controller_dt) {
   require_all_legs(initial_stance, "initial_stance");
   require_all_legs(nominal_stance, "nominal_stance");
@@ -241,16 +247,14 @@ std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
   }
 
   // Mid-pair: active legs follow a rest-to-rest swing arc from the ground target
-  // up to the folded initial_stance position. Endpoint velocities zero.
+  // up to the folded initial_stance position. Endpoint ground velocities zero.
   for (const auto& name : LEG_NAMES) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = ground_targets_[name];
       const Vec3 target = initial_[name];
-      const SwingProfile profile{.clearance = swing_clearance_,
-                                 .width = swing_width_};
       const Vec3 point =
           swing_arc(phase, origin, target, identity_y_sign(origin),
-                    pair_swing_time_, profile, Vec3::Zero(), Vec3::Zero());
+                    pair_swing_time_, swing_, Vec3::Zero(), Vec3::Zero());
       positions_[name] = point;
       out[name] = LegOutput{point, phase, false};
     } else {

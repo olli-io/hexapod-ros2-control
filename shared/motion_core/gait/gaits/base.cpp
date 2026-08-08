@@ -72,24 +72,37 @@ Vec3 planar(const Vec3& v) { return Vec3(v[0], v[1], 0.0f); }
 
 // Septic smoothstep: ease5 plus a vanishing third derivative at both ends.
 //
-// This is what replaces the old ground-matched ramps. The swing's horizontal
-// track is a blend between the two ground lines (see swing_arc), so the blend
-// weight's derivatives at the ends are exactly the foot's departure from ground
-// speed there. All three vanishing means the foot leaves and meets the ground
-// travelling at the ground velocity, and pulls away from it only as O(t^4) —
-// the same protection the ramps gave inside their band, but continuous, with no
-// segment to time and no height to configure.
-float ease7(float u) {
+// The swing's horizontal track is a blend between the two ground lines (see
+// swing_arc), so the blend weight's derivatives at the ends are exactly the
+// foot's departure from ground speed there. All three vanishing means the foot
+// leaves and meets the ground travelling at the ground velocity, and pulls away
+// from it only as O(t^4) — no segment to time, no height to configure.
+//
+// The blend runs in *real time*, deliberately. Any reparameterization that
+// finishes the horizontal travel early leaves the foot riding the moving
+// ground line for the rest of the swing, which in the body frame carries it
+// beyond the AEP by ground_speed x time-remaining — workspace this robot's
+// front coxa splay does not have. ease7 spreads the travel over the whole
+// swing, so that excursion stays a few millimetres.
+float ease7_poly(float u) {
   const float u2 = u * u;
   return u2 * u2 * (35.0f + u * (-84.0f + u * (70.0f - 20.0f * u)));
 }
 
-// Unit-amplitude lift profile: 0 at both ends, 1 at `apex`, built from two
-// halves of ease5. Slope and curvature vanish at the ends and at the apex, so
-// the foot peels off the ground rather than stepping off it, and the two halves
-// join smoothly at the top.
-float bump(float t, float apex) {
-  return t < apex ? ease5(t / apex) : 1.0f - ease5((t - apex) / (1.0f - apex));
+// Evaluate from the nearer end: near u = 1 the polynomial's order-100 terms
+// cancel down to ~1, leaving float noise big enough to jitter the foot by
+// micrometres right at the touchdown seam. Reflecting keeps both tails exact.
+float ease7(float u) {
+  return u <= 0.5f ? ease7_poly(u) : 1.0f - ease7_poly(1.0f - u);
+}
+
+// Unit-amplitude lateral profile: two halves of ease5 joined at the midpoint.
+// Peaks where the horizontal blend crosses one half (ease7(0.5) = 0.5), so the
+// bulge is symmetric about the middle of the travel, and flat at the ends —
+// the sideways bulge has no touchdown speed to deliver, and any end slope
+// would hand the foot a lateral velocity at the seams with stance.
+float bump(float t) {
+  return t < 0.5f ? ease5(2.0f * t) : ease5(2.0f * (1.0f - t));
 }
 
 // Quintic-Hermite basis function for a prescribed derivative at the *end* of
@@ -113,32 +126,37 @@ float hermite_end_slope(float u) {
 // of the way to the AEP skimming the ground, which is both useless and exactly
 // what a swing is for avoiding. Held to the tail of the swing, the horizontal
 // blend has already converged (ease7 is past 0.99 by t = 0.85), so the probe is
-// very nearly pure vertical motion.
+// very nearly pure vertical motion relative to the ground.
 //
 // The height cap keeps the braking segment from collapsing onto a probe that
 // would then have to shed the whole step height at once.
 constexpr float kMaxProbeSwingFraction = 0.15f;
 constexpr float kMaxProbeHeightFraction = 0.5f;
 
-// How high the foot rides above the ground it is stepping between, as a
-// function of swing progress. Climb and descent are shaped independently — this
-// is the asymmetry: the foot is asked to break contact briskly and to arrive
-// slowly.
+// How high the foot rides above the blended base, as a function of swing
+// progress. The apex is pinned to t = 0.5 — the geometric midpoint of the
+// shaped travel, since ease7(0.5) = 0.5 — so the arc is symmetric in space
+// however the two halves are eased in time. There is no timing knob in the
+// geometry: the split fell out of removing swing_apex_fraction, and the
+// lift-off speed is derived below.
 //
 // Climb: the quintic lift, plus a mirrored Hermite term that hands the foot a
-// prescribed *upward* speed at t = 0. The reflected argument puts the basis
-// function's unit slope at the start of the segment instead of its end, and its
-// value and slope both vanish at u = 1, so the apex is untouched.
+// definite upward speed at t = 0 (zero would creep it off the ground inside a
+// single servo step while it still carries weight). The speed is not a knob:
+// 4 * clearance / swing_time — the end slope of the parabola through the same
+// apex, and provably the largest value for which the climb stays monotone. It
+// scales with step_height over swing time, so higher steps and quicker swings
+// break contact faster.
 //
 // Descent: the quintic brake down to `probe_height`, then a straight line at
-// exactly `touchdown_velocity` the rest of the way. The braked part carries the
-// same Hermite term the descent has always had, scaled to the shortened
-// segment, so it arrives at the probe travelling at exactly the probe's speed —
-// the seam matches in position and velocity both.
+// exactly `touchdown_velocity` the rest of the way. The braked part carries a
+// Hermite term scaled to the shortened segment, so it arrives at the probe
+// travelling at exactly the probe's speed — the seam matches in position and
+// velocity both.
 //
 // The probe is the point of the split. A curve that merely *approaches*
-// touchdown_velocity only reaches it in the limit at ground level: a fraction of
-// a millimetre up it is still descending far faster, so a foot that meets the
+// touchdown_velocity only reaches it in the limit at ground level: a fraction
+// of a millimetre up it is still descending faster, so a foot that meets the
 // ground early — which on real servos it always does — lands hard. A straight
 // segment lands at the same speed anywhere inside its height.
 //
@@ -149,17 +167,16 @@ constexpr float kMaxProbeHeightFraction = 0.5f;
 // between two different heights — a reseat that is also changing body height —
 // keeps its endpoints and its clearance, but the base is still settling under
 // the probe, so its last stretch is not held to the probe speed.
-float swing_height(float t, float apex, float clearance, float swing_time,
-                   float liftoff_velocity, float touchdown_velocity,
-                   float probe_height) {
-  if (t < apex) {
-    const float climb_time = apex * swing_time;
-    const float u = t / apex;
+float swing_height(float t, float clearance, float swing_time,
+                   float touchdown_velocity, float probe_height) {
+  const float liftoff_velocity = 4.0f * clearance / swing_time;
+  const float half_time = 0.5f * swing_time;
+  if (t < 0.5f) {
+    const float u = 2.0f * t;
     return clearance * ease5(u) -
-           liftoff_velocity * climb_time * hermite_end_slope(1.0f - u);
+           liftoff_velocity * half_time * hermite_end_slope(1.0f - u);
   }
 
-  const float descent_time = (1.0f - apex) * swing_time;
   float probe_time = 0.0f;
   float probe_z = 0.0f;
   if (touchdown_velocity > 0.0f && probe_height > 0.0f) {
@@ -172,10 +189,10 @@ float swing_height(float t, float apex, float clearance, float swing_time,
     probe_z = touchdown_velocity * probe_time;
   }
 
-  const float elapsed = (t - apex) * swing_time;
-  const float brake_time = descent_time - probe_time;
+  const float elapsed = (t - 0.5f) * swing_time;
+  const float brake_time = half_time - probe_time;
   if (elapsed >= brake_time) {
-    return touchdown_velocity * (descent_time - elapsed);
+    return touchdown_velocity * (half_time - elapsed);
   }
   const float w = brake_time > 0.0f ? elapsed / brake_time : 1.0f;
   return probe_z + (clearance - probe_z) * (1.0f - ease5(w)) -
@@ -206,29 +223,27 @@ Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
   const Vec3 to_touchdown = target - v_ground_out * (swing_time * (1.0f - t));
   Vec3 point = (1.0f - blend) * from_liftoff + blend * to_touchdown;
 
-  // Guard the split so neither half of the arc collapses.
-  const float apex_fraction = std::clamp(profile.apex_fraction, 0.05f, 0.95f);
-  const float lift = bump(t, apex_fraction);
-
   // Apex height is measured from the ground the foot is stepping between, so
-  // swing_clearance keeps meaning "how high the foot lifts".
-  const float ground_z = std::max(swing_origin[2], target[2]);
-  const float apex_z = (1.0f - ease7(apex_fraction)) * swing_origin[2] +
-                       ease7(apex_fraction) * target[2];
-  const float apex_clearance =
-      std::max(0.0f, ground_z + profile.clearance - apex_z);
+  // swing_clearance keeps meaning "how high the foot lifts". The blended base
+  // under the apex is the endpoint midpoint (ease7(0.5) = 0.5), so on a swing
+  // between two heights the lift's amplitude absorbs half the height gap and
+  // the arc tops out at the higher end plus the profile's clearance. A profile
+  // asking for no lift at all (the reseat landing) gets no shaping either —
+  // lifting over half the height gap would swing the foot up off a start it
+  // was told to descend from — and rides the plain eased blend instead.
+  if (profile.clearance > 0.0f) {
+    const float ground_z = std::max(swing_origin[2], target[2]);
+    const float clearance =
+        std::max(0.0f, ground_z + profile.clearance -
+                           0.5f * (swing_origin[2] + target[2]));
+    point[2] += swing_height(t, clearance, swing_time,
+                             profile.touchdown_velocity,
+                             profile.touchdown_probe_height);
+  }
 
-  // Asymmetric by design: a brisk break from the ground, and a descent that
-  // brakes early and then probes down the last stretch at a steady, slow speed.
-  // See swing_height.
-  point[2] += swing_height(t, apex_fraction, apex_clearance, swing_time,
-                           profile.liftoff_velocity,
-                           profile.touchdown_velocity,
-                           profile.touchdown_probe_height);
-
-  // Lateral arch. Shares the lift profile's shape rather than its height, so it
+  // Lateral bulge. Shares the lift's symmetry rather than its height, so it
   // survives a swing with zero clearance (the pause descent).
-  point[1] += (identity_y_sign > 0 ? profile.width : -profile.width) * lift;
+  point[1] += (identity_y_sign > 0 ? profile.width : -profile.width) * bump(t);
 
   return point;
 }

@@ -50,10 +50,8 @@ struct EngineConfig {
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
   float swing_width = 0.0f;
-  float swing_apex_fraction = 0.5f;
   float touchdown_velocity = 0.0f;
   float touchdown_probe_height = 0.0f;
-  float liftoff_velocity = 0.0f;
   // Share of each gait's nominal swing window handed back to stance at the
   // touchdown end, so every handover has a stretch with all six feet planted.
   float swing_phase_margin = 0.0f;
@@ -76,24 +74,20 @@ struct EngineConfig {
     SwingProfile p;
     p.clearance = step_height;
     p.width = swing_width;
-    p.apex_fraction = swing_apex_fraction;
     p.touchdown_velocity = touchdown_velocity;
     p.touchdown_probe_height = touchdown_probe_height;
-    p.liftoff_velocity = liftoff_velocity;
     return p;
   }
 
   // How a reseat swing is shaped. Its own clearance (a re-plant lifts far less
-  // than a step), but the gait's rise/descent split and touchdown probe: a foot
-  // re-planting has the same landing to make as one finishing a step, so it is
-  // eased the same way instead of falling back on the unshaped defaults.
+  // than a step), but the gait's touchdown probe: a foot re-planting has the
+  // same landing to make as one finishing a step, so it is eased the same way
+  // instead of falling back on the unshaped defaults.
   SwingProfile reseat_profile() const {
     SwingProfile p;
     p.clearance = reseat_swing_clearance;
-    p.apex_fraction = swing_apex_fraction;
     p.touchdown_velocity = touchdown_velocity;
     p.touchdown_probe_height = touchdown_probe_height;
-    p.liftoff_velocity = liftoff_velocity;
     return p;
   }
 };
