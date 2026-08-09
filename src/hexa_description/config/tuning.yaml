@@ -59,7 +59,7 @@ gait_node:
 
     # Descent speed at ground contact (m/s), and the probe speed below. Below
     # one servo step per 200 Hz tick the descent comes out as a staircase.
-    touchdown_velocity: 0.07
+    touchdown_velocity: 0.025
 
     # Share of the swing spent in the straight probe at exactly
     # touchdown_velocity. The probe's height — the band a foot may meet the
@@ -69,7 +69,7 @@ gait_node:
     # the apex earlier, giving the whole descent more time. Hard-capped at
     # 0.4, which still leaves the climb and the brake 30% of the swing each.
     # 0 restores a zero-speed landing.
-    touchdown_probe_fraction: 0.4
+    touchdown_probe_fraction: 0.10
 
     # ─── Cycle timing ───────────────────────────────────────────────
 

@@ -97,10 +97,13 @@ float ease7(float u) {
 }
 
 // Unit-amplitude lateral profile: two halves of ease5 joined at the midpoint.
-// Evaluated on the warped clock, so it peaks where the horizontal blend
-// crosses one half — the middle of the travel — and is flat at the ends: the
-// sideways bulge has no touchdown speed to deliver, and any end slope would
-// hand the foot a lateral velocity at the seams with stance.
+// Evaluated on the *blend*, not on a clock, so the bulge is a pure function of
+// along-track progress: it peaks at half-travel, and — via the chain rule —
+// its unwind rate carries the blend's own O(t^4) departure from ground speed
+// at both seams. On a clock the unwind ran through the whole descent, and
+// under a lateral command (bulge collinear with the travel) it added to the
+// blend's residual on one side of the body: that middle foot skated sideways
+// at ~0.2 m/s millimetres off the floor, dragging its tip at every touchdown.
 float bump(float t) {
   return t < 0.5f ? ease5(2.0f * t) : ease5(2.0f * (1.0f - t));
 }
@@ -259,7 +262,7 @@ Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
   // Lateral bulge. Shares the lift's spatial symmetry rather than its height,
   // so it survives a swing with zero clearance (the pause descent).
   point[1] +=
-      (identity_y_sign > 0 ? profile.width : -profile.width) * bump(tau);
+      (identity_y_sign > 0 ? profile.width : -profile.width) * bump(blend);
 
   return point;
 }

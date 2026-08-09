@@ -54,17 +54,17 @@ joints:
     lower_limit_deg: -65
     upper_limit_deg: 65
     effort: 3.09
-    velocity: 5.25
+    velocity: 7.25
   femur:
     lower_limit_deg: -35
     upper_limit_deg: 95
     effort: 3.09
-    velocity: 5.25
+    velocity: 7.25
   tibia:
     lower_limit_deg: 20
     upper_limit_deg: 158
     effort: 3.09
-    velocity: 5.25
+    velocity: 7.25
 
 initial_pose:
   # Joint angles held at startup, before any commanded motion. Assumes symmetry for front and read legs.
