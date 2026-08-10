@@ -26,6 +26,7 @@ unit-testable standalone.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from pathlib import Path
 
@@ -218,6 +219,35 @@ def input_is_stale(
 def neutral_inputs() -> tuple[tuple[float, float], tuple[float, float], tuple[int, ...]]:
     """Neutral webapp input: centred sticks, all buttons released."""
     return (0.0, 0.0), (0.0, 0.0), (0,) * NUM_BUTTONS
+
+
+def resync_gait(
+    name: str, cfg: JoyConfig, state: JoyState, caps: VelocityCaps
+) -> JoyConfig | None:
+    """Resync stick caps and the gait cycler to a commanded gait.
+
+    Fed every ``/cmd_gait`` value the node hears — its own accepted
+    switches (heard back via loopback) and the gamepad's — so both
+    initiators take one bookkeeping path. Returns ``cfg`` rebuilt with
+    the gait's velocity caps, or ``None`` when the name is unknown to
+    the caps table (a foreign string on the topic; the caller logs and
+    keeps the old caps).
+
+    A gait valid in the catalog but outside ``cfg.gait_cycle`` (the
+    gamepad may allow unstable gaits this config excludes) still gets
+    its caps; the cycler keeps its old position, so the web's next
+    prev/next resumes from where its own selection left off.
+    """
+    try:
+        new_linear = caps.linear_max(name)
+        new_angular = caps.angular_max(name)
+    except KeyError:
+        return None
+    if name in cfg.gait_cycle:
+        state.current_gait_idx = cfg.gait_cycle.index(name)
+    return dataclasses.replace(
+        cfg, gait_linear_max=new_linear, gait_angular_z_max=new_angular
+    )
 
 
 def button_labels_for_mode(cfg: JoyConfig, mode: str) -> tuple[str, ...]:

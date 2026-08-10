@@ -11,6 +11,7 @@ from hexa_webteleop import (
     load_web_config,
     map_web,
     neutral_inputs,
+    resync_gait,
 )
 from hexa_teleop.joy_mapping import apply_deadband
 from hexa_webteleop.web_mapping import GAIT, POSTURE, ANIMATION
@@ -150,8 +151,7 @@ posture_node:
 """
 
 
-@pytest.fixture
-def cfg(tmp_path):
+def _load(tmp_path):
     web_path = tmp_path / "webteleop.yaml"
     gait_path = tmp_path / "gait.yaml"
     posture_path = tmp_path / "posture.yaml"
@@ -160,10 +160,18 @@ def cfg(tmp_path):
     gait_path.write_text(_GAIT_YAML)
     posture_path.write_text(_POSTURE_YAML)
     geometry_path.write_text(_GEOMETRY_YAML)
-    loaded_cfg, initial_mode, default_gait, caps = load_web_config(
-        web_path, gait_path, posture_path, geometry_path
-    )
+    return load_web_config(web_path, gait_path, posture_path, geometry_path)
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    loaded_cfg, initial_mode, default_gait, _ = _load(tmp_path)
     return loaded_cfg, initial_mode, default_gait
+
+
+@pytest.fixture
+def cfg_and_caps(tmp_path):
+    return _load(tmp_path)
 
 
 def _buttons(*pressed_indices) -> tuple[int, ...]:
@@ -409,6 +417,57 @@ def test_gait_prev_cycles_backward(cfg):
     assert out.gait_select is not None
     # wraps to last
     assert out.gait_select == "ripple"
+
+
+# ─── resync_gait: external /cmd_gait switches ───────────────────────
+
+def test_resync_gait_updates_caps_and_cycler(cfg_and_caps):
+    loaded_cfg, _, _, caps = cfg_and_caps
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=0)
+    new_cfg = resync_gait("ripple", loaded_cfg, state, caps)
+    assert new_cfg is not None
+    assert state.current_gait_idx == loaded_cfg.gait_cycle.index("ripple")
+    assert math.isclose(new_cfg.gait_linear_max, caps.linear_max("ripple"))
+    assert math.isclose(new_cfg.gait_angular_z_max, caps.angular_max("ripple"))
+
+
+def test_resync_gait_unknown_name_returns_none(cfg_and_caps):
+    # A foreign string on /cmd_gait: no cfg, cycler untouched.
+    loaded_cfg, _, _, caps = cfg_and_caps
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=1)
+    assert resync_gait("moonwalk", loaded_cfg, state, caps) is None
+    assert state.current_gait_idx == 1
+
+
+def test_resync_gait_outside_cycle_updates_caps_only(cfg_and_caps):
+    # crawl is in the catalog but filtered from this config's gait_cycle
+    # (unstable) — the gamepad may still command it. Caps follow; the
+    # cycler keeps its old position.
+    loaded_cfg, _, _, caps = cfg_and_caps
+    assert "crawl" not in loaded_cfg.gait_cycle
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    new_cfg = resync_gait("crawl", loaded_cfg, state, caps)
+    assert new_cfg is not None
+    assert state.current_gait_idx == 2
+    assert math.isclose(new_cfg.gait_linear_max, caps.linear_max("crawl"))
+
+
+def test_resync_gait_own_loopback_is_idempotent(cfg_and_caps):
+    # The node hears its own accepted publish back via loopback; map_joy
+    # already advanced the cycler on the press, so the resync must land
+    # on the same slot.
+    loaded_cfg, _, _, caps = cfg_and_caps
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=0)
+    out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)  # gait_next
+    assert out.gait_select is not None
+    idx_after_press = state.current_gait_idx
+    new_cfg = resync_gait(out.gait_select, loaded_cfg, state, caps)
+    assert new_cfg is not None
+    assert state.current_gait_idx == idx_after_press
 
 
 # ─── map_web: init button ───────────────────────────────────────────

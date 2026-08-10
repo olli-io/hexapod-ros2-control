@@ -38,6 +38,10 @@ let manualDisconnect = false;
 let arbitrationEnabled = false;
 let owner = "gamepad";
 let currentMode = "gait";
+// Names as latched on /cmd_gait and /animation/mode; empty animation
+// means nothing latched yet (pipeline startup default) → placeholder.
+let currentGait = "";
+let currentAnimation = "";
 
 // Re-send held input this often (ms) so the server's input watchdog
 // (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a
@@ -112,9 +116,12 @@ function handleMessage(msg) {
       arbitrationEnabled = msg.arbitration_enabled;
       owner = msg.owner;
       currentMode = msg.mode;
+      currentGait = msg.gait;
+      currentAnimation = msg.animation;
       updateModeDisplay();
       updateButtonLabels(msg.button_labels);
       updateOwnerDisplay();
+      updateStatusDisplay();
       break;
     case "busy":
       // Server already has another device; it closes the socket right
@@ -130,6 +137,14 @@ function handleMessage(msg) {
     case "owner":
       owner = msg.owner;
       updateOwnerDisplay();
+      break;
+    case "gait":
+      currentGait = msg.gait;
+      updateStatusDisplay();
+      break;
+    case "animation":
+      currentAnimation = msg.animation;
+      updateStatusDisplay();
       break;
     case "gait_state":
       break;
@@ -168,6 +183,11 @@ function updateOwnerDisplay() {
   $("button-grid").classList.toggle("hidden", controllerActive);
   setJoysticksEnabled(!controllerActive);
   updateControllerOverlay();
+}
+
+function updateStatusDisplay() {
+  $("status-gait").textContent = currentGait || "—";
+  $("status-animation").textContent = currentAnimation || "—";
 }
 
 function setJoysticksEnabled(enabled) {

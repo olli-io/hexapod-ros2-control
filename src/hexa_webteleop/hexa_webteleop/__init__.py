@@ -5,6 +5,7 @@ from .web_mapping import (
     load_web_config,
     map_web,
     neutral_inputs,
+    resync_gait,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "load_web_config",
     "map_web",
     "neutral_inputs",
+    "resync_gait",
 ]

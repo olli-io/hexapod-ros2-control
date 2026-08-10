@@ -78,12 +78,14 @@ Vec3 planar(const Vec3& v) { return Vec3(v[0], v[1], 0.0f); }
 // leaves and meets the ground travelling at the ground velocity, and pulls away
 // from it only as O(t^4) — no segment to time, no height to configure.
 //
-// The blend spans the *whole* swing, deliberately. Any schedule that finishes
-// the horizontal travel early leaves the foot riding the moving ground line
-// for the rest of the swing, which in the body frame carries it beyond the AEP
-// by ground_speed x time-remaining — workspace this robot's front coxa splay
-// does not have. ease7 (through apex_warp below) keeps the travel spread over
-// the full swing, so that excursion stays a few millimetres.
+// The blend spans the swing up to the touchdown ride (granted_ride_time
+// below). Finishing the horizontal travel early leaves the foot riding the
+// moving ground line for the rest of the swing, which in the body frame
+// carries it beyond the AEP by ground_speed x time-remaining — workspace this
+// robot's front coxa splay does not have at full stride. So the ride is
+// metered against profile.ride_headroom, and a swing granted none keeps the
+// travel spread over the full swing, where that excursion stays a few
+// millimetres.
 float ease7_poly(float u) {
   const float u2 = u * u;
   return u2 * u2 * (35.0f + u * (-84.0f + u * (70.0f - 20.0f * u)));
@@ -114,9 +116,12 @@ float bump(float t) {
 // probe put the apex in *time* — the track through space never changes, only
 // the schedule along it. The chain rule keeps the seams intact: ease7's first
 // three derivatives vanish at the ends, so they still vanish through any
-// smooth warp. apex_time <= 0.5, so the warp only ever *slows* the tail
-// (w'(1) = apex_time / (1 - apex_time) <= 1), which shrinks the body-frame
-// excursion beyond the AEP that the blend's real-time span exists to bound.
+// smooth warp. It runs on the travel clock, so apex_time arrives divided by
+// travel_end: exactly 0.5 — the identity — when the ride takes the whole
+// probe, below it when the headroom grants less. apex_time <= 0.5 either way,
+// so the warp only ever *slows* the tail (w'(1) = apex_time / (1 - apex_time)
+// <= 1), which shrinks the body-frame excursion beyond the AEP that the
+// blend's span exists to bound.
 float apex_warp(float t, float apex_time) {
   const float k = apex_time / (1.0f - apex_time);
   return t / (t + k * (1.0f - t));
@@ -149,6 +154,46 @@ float granted_probe_time(float clearance, float swing_time,
   }
   return std::min(std::min(probe_fraction, kMaxProbeFraction) * swing_time,
                   kMaxProbeHeightFraction * clearance / touchdown_velocity);
+}
+
+// How long before touchdown the horizontal travel may finish, leaving the
+// foot riding the touchdown ground line: world-frame stationary over its
+// landing point while the probe descends, so an early contact anywhere the
+// ride covers lands without horizontal slip.
+//
+// The grant is the lesser of two meters — and their product is probe_time^2,
+// so it can never exceed the probe:
+//
+//  - headroom / speed. The parked foot sits beyond the touchdown target by
+//    ground_speed x ride_time in the body frame, and profile.ride_headroom is
+//    the most overshoot the stance envelope affords.
+//  - speed x probe_time^2 / headroom. The ride is granted in proportion to
+//    the slip it prevents, which also vanishes with the ground speed. This
+//    keeps slow swings on the un-ridden schedule: granted the whole probe,
+//    they compress their travel into a mid-swing peak the walking yardstick
+//    never reaches (the settle's swings lift at an eased-out crawl and were
+//    the first to show it), and it makes zero speed the smooth limit rather
+//    than a special case — every rest-to-rest ladder keeps the old arc
+//    exactly.
+//
+// Both meters read the *faster* of the swing's two seam speeds. The origin
+// speed is latched for the whole swing, so under a settle — the live end
+// easing to zero beneath an airborne foot — the grant is constant and the
+// travel clock never shifts under the foot; and the live end still bounds the
+// overshoot at <= headroom whichever branch binds. Gated on the probe:
+// without one the arc lands at the very end of the swing, where the blend's
+// own tail already meets the ground track.
+float granted_ride_time(float ride_headroom, float origin_speed,
+                        float target_speed, float probe_time) {
+  if (ride_headroom <= 0.0f || probe_time <= 0.0f) {
+    return 0.0f;
+  }
+  const float speed = std::max(origin_speed, target_speed);
+  if (speed <= 0.0f) {
+    return 0.0f;
+  }
+  return std::min(speed * probe_time * probe_time / ride_headroom,
+                  ride_headroom / speed);
 }
 
 // How high the foot rides above the blended base, as a function of swing
@@ -242,14 +287,25 @@ Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
       granted_probe_time(clearance, swing_time, profile.touchdown_velocity,
                          profile.touchdown_probe_fraction);
   const float apex_time = 0.5f * (1.0f - probe_time / swing_time);
-  const float tau = apex_warp(t, apex_time);
+  // The travel clock: the blend's full span, ending where the ride begins.
+  // ride_time <= probe_time <= 0.4 * swing_time, so travel_end >= 0.6; a zero
+  // ride makes u == t and the warp argument apex_time exactly — the un-ridden
+  // arc, bit for bit.
+  const float ride_time =
+      granted_ride_time(profile.ride_headroom, v_ground_in.norm(),
+                        v_ground_out.norm(), probe_time);
+  const float travel_end = 1.0f - ride_time / swing_time;
+  const float u = std::min(t / travel_end, 1.0f);
+  const float tau = apex_warp(u, apex_time / travel_end);
   const float blend = ease7(tau);
 
   // The two ground lines: where a foot planted at lift-off would have got to by
   // now, and where the foot about to touch down would have come from had it been
   // planted all along. Blending between them with ease7 pins the swing to the
-  // first at t = 0 and the second at t = 1 in position, velocity *and*
-  // acceleration, which is exactly the continuity stance needs at both seams.
+  // first at t = 0 and the second from travel_end on (the ride — at a granted
+  // ride the swing *is* the touchdown line for the rest of the descent) in
+  // position, velocity *and* acceleration, which is exactly the continuity
+  // stance needs at both seams.
   const Vec3 from_liftoff = swing_origin + v_ground_in * (swing_time * t);
   const Vec3 to_touchdown = target - v_ground_out * (swing_time * (1.0f - t));
   Vec3 point = (1.0f - blend) * from_liftoff + blend * to_touchdown;

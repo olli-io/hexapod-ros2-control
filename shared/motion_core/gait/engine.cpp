@@ -64,18 +64,6 @@ std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
   return {cfg.min_swing_time * scale, cfg.max_swing_time * scale};
 }
 
-// How far past its design band a stance anchor may drift before the integrator
-// stops it, as a fraction of the band. The band is half a stride — exactly the
-// AEP..PEP envelope a steady walk rides — so the grace is only what a leg
-// borrows while the command turns under it.
-//
-// It is also the distance the foot has to shed its ground speed over, so it
-// trades excursion against how hard the foot is braked. On this geometry a full
-// lateral reversal peaks 14 mm past the band unbounded, and 0.25 gives up 8 mm
-// of that for a braking step of ~8% of stance speed per tick — a tenth of what a
-// hard clip would do, and well under what a swing already asks of the same leg.
-constexpr float kStanceExcursionGrace = 0.25f;
-
 // Ease the outward part of one stance step to zero as the anchor leaves its
 // band. Inward and tangential motion is untouched, so a leg carried out recovers
 // at full rate the moment the command turns — the bound is a wall, not a spring,

@@ -4,7 +4,15 @@ Web-app teleop — an HTTP + WebSocket server hosting a phone/tablet control
 UI that publishes the **same** ROS topics as the gamepad teleop
 (`hexa_teleop`): `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/animation/mode`,
 `/gait/initialize`, plus `/teleop/owner`. Subscribes `/gait/state` for
-switch gating.
+switch gating, and the latched `/cmd_gait` + `/animation/mode` themselves —
+the only truth for the current selection (locomotion publishes no name
+feedback), heard from **both** teleops and from its own publishes via
+loopback. `/cmd_gait` does double duty: it drives the UI's status strip
+*and* resyncs the node's stick velocity caps and gait cycler when the
+gamepad switches gaits (`web_mapping.resync_gait`), so the two teleops
+agree on more than the display. `/animation/mode` is display-only —
+syncing the animation cycler would be dead code, since the shared
+`map_joy` resets it to 0 on every ANIMATION-mode entry.
 
 ## Architecture
 
@@ -29,6 +37,12 @@ switch gating.
   mode-dependent (node pushes labels on mode change). While a controller
   owns control the grid becomes an inline "Take control" prompt and the
   sticks are disabled.
+- **Status strip** — a one-line readout above the button grid showing the
+  current gait and animation mode (em dash until an animation is first
+  latched). Fed by the node from the latched command topics, so it follows
+  gamepad-initiated switches too, and stays visible while the take-control
+  prompt replaces the grid — a controller owner switching gaits is exactly
+  when the passive observer wants to see it.
 
 Default stick mapping (config): left = forward/strafe (gait) or x/y
 translation (posture); right = turn, plus forward on its Y axis so either

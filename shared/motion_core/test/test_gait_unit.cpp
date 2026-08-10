@@ -122,12 +122,14 @@ struct SwingTrace {
 };
 
 g::SwingProfile make_profile(float touchdown_velocity, float width = 0.0f,
-                             float probe_fraction = 0.0f) {
+                             float probe_fraction = 0.0f,
+                             float ride_headroom = 0.0f) {
   g::SwingProfile profile;
   profile.clearance = kStepHeight;
   profile.width = width;
   profile.touchdown_velocity = touchdown_velocity;
   profile.touchdown_probe_fraction = probe_fraction;
+  profile.ride_headroom = ride_headroom;
   return profile;
 }
 
@@ -140,10 +142,10 @@ g::SwingProfile make_profile(float touchdown_velocity, float width = 0.0f,
 // more, so the descent is classified from the trace itself: everything after
 // the highest sample.
 SwingTrace profile_swing(float touchdown_velocity, float width = 0.0f,
-                         float scrub_band = 0.002f,
-                         float probe_fraction = 0.0f) {
+                         float scrub_band = 0.002f, float probe_fraction = 0.0f,
+                         float ride_headroom = 0.0f) {
   const g::SwingProfile profile =
-      make_profile(touchdown_velocity, width, probe_fraction);
+      make_profile(touchdown_velocity, width, probe_fraction, ride_headroom);
   // What counts as landing at the intended speed rather than merely heading
   // towards it. Half as much again as asked for is generous; the point of the
   // measurement is the *height* over which it holds.
@@ -578,6 +580,138 @@ TEST(Trajectory, OversizedProbeIsClampedRatherThanCollapsingTheBrake) {
   EXPECT_NEAR(p.apex_height, kStepHeight, 3e-3f);
   EXPECT_GT(p.min_height, -1e-5f);
   EXPECT_LT(p.max_velocity_jump, 0.05f);
+}
+
+// ── The touchdown ride ──
+
+namespace {
+constexpr float kRideProbeFraction = 0.4f;
+// The probe's span at this file's swing time; the fraction cap binds, not the
+// height cap.
+constexpr float kRideProbeTime = kRideProbeFraction * kSwingTime;
+// The grant is the lesser of the overshoot meter (headroom / speed) and the
+// slip-need taper (speed x probe^2 / headroom), so the whole probe is ridden
+// exactly where they cross: headroom = ground speed x probe time. The tight
+// headroom caps the ride at 5 mm of overshoot instead.
+constexpr float kMatchedHeadroom = kLegSpeed * kRideProbeTime;
+constexpr float kTightHeadroom = 0.005f;
+}  // namespace
+
+// At the matched headroom the horizontal travel finishes at the probe's start
+// and the foot rides the touchdown ground line: world-frame stationary over
+// its landing point through the whole band, so an early contact anywhere
+// inside it lands without slip. Without the ride, a contact at the top of the
+// band catches the foot still travelling at several times the ground speed
+// and scrubs it millimetres along the floor until the blend runs out — the
+// vertical half of the probe promised a constant-speed landing anywhere in
+// the band, and this is the horizontal half of that promise.
+TEST(Trajectory, RideHoldsTheGroundTrackThroughTheWholeProbeBand) {
+  const float band = kTouchdownV * kRideProbeFraction * kSwingTime;
+  const SwingTrace ridden = profile_swing(kTouchdownV, 0.0f, 0.9f * band,
+                                          kRideProbeFraction, kMatchedHeadroom);
+  EXPECT_LT(ridden.max_ground_offset, 1e-4f);
+  // The landing itself is unchanged: probe speed, ground velocity.
+  EXPECT_NEAR(ridden.touchdown_velocity.x, -kLegSpeed, 1e-3f);
+  EXPECT_NEAR(ridden.touchdown_velocity.z, -kTouchdownV, 2e-3f);
+
+  // The un-ridden arc is still finishing its travel through the band.
+  const SwingTrace bare =
+      profile_swing(kTouchdownV, 0.0f, 0.9f * band, kRideProbeFraction);
+  EXPECT_GT(bare.max_ground_offset, 1.5e-3f);
+}
+
+// The ride's two meters, pinned where each binds: at the matched headroom the
+// whole probe is ridden; a tight headroom stops the ride at exactly its own
+// overshoot; a headroom larger than matched buys *less* ride, not more — the
+// slip-need taper takes over, because a slow foot has little slip to prevent.
+TEST(Trajectory, RideParksWhereItsMetersAllow) {
+  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
+
+  const auto parked_x = [&](float headroom, float ride_time) {
+    const auto pts = sample_arc(
+        make_profile(kTouchdownV, 0.0f, kRideProbeFraction, headroom),
+        kSwingTime, v_ground);
+    const float travel_end = 1.0f - ride_time / kSwingTime;
+    const std::size_t i =
+        static_cast<std::size_t>(travel_end * static_cast<float>(kSteps));
+    return pts[i].x;
+  };
+
+  // Matched: the whole probe is ridden, parked ground speed x probe time out.
+  EXPECT_NEAR(parked_x(kMatchedHeadroom, kRideProbeTime),
+              kAep.x + kLegSpeed * kRideProbeTime, 3e-4f);
+
+  // Tight: the overshoot meter binds.
+  const float tight_granted = kTightHeadroom / kLegSpeed;
+  ASSERT_LT(tight_granted, kRideProbeTime);
+  EXPECT_NEAR(parked_x(kTightHeadroom, tight_granted),
+              kAep.x + kTightHeadroom, 3e-4f);
+
+  // Oversized: the taper binds — the grant shrinks below the full probe.
+  const float big = 2.0f * kMatchedHeadroom;
+  const float taper_granted = kLegSpeed * kRideProbeTime * kRideProbeTime / big;
+  ASSERT_LT(taper_granted, kRideProbeTime);
+  EXPECT_NEAR(parked_x(big, taper_granted),
+              kAep.x + kLegSpeed * taper_granted, 3e-4f);
+}
+
+// The warp keeps the apex over the spatial midpoint of the travel even when a
+// partial ride compresses the travel clock off the probe boundary.
+TEST(Trajectory, RideKeepsTheApexOverTheTravelMidpoint) {
+  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
+  for (const float headroom : {kTightHeadroom, kMatchedHeadroom}) {
+    const auto pts = sample_arc(
+        make_profile(kTouchdownV, 0.0f, kRideProbeFraction, headroom),
+        kSwingTime, v_ground);
+    std::size_t apex_i = 0;
+    for (std::size_t i = 1; i < pts.size(); ++i) {
+      if (pts[i].z > pts[apex_i].z) {
+        apex_i = i;
+      }
+    }
+    const float phase = static_cast<float>(apex_i) / static_cast<float>(kSteps);
+    EXPECT_NEAR(shaped_progress(pts[apex_i], phase, kSwingTime, v_ground),
+                0.5f, 0.02f)
+        << "headroom=" << headroom;
+  }
+}
+
+// Everything the arc guarantees survives the ride, at every headroom: exact
+// endpoints, the configured apex height, no dig below ground, no C1 break —
+// including the new travel -> ride seam.
+TEST(Trajectory, RidePreservesTheArcInvariants) {
+  for (const float headroom :
+       {0.0f, kTightHeadroom, kMatchedHeadroom, 2.0f * kMatchedHeadroom}) {
+    const SwingTrace p =
+        profile_swing(kTouchdownV, 0.02f, 0.002f, kRideProbeFraction, headroom);
+    const std::string at = "headroom=" + std::to_string(headroom);
+    EXPECT_NEAR(p.start.x, kPep.x, 1e-4f) << at;
+    EXPECT_NEAR(p.start.z, kPep.z, 1e-4f) << at;
+    EXPECT_NEAR(p.end.x, kAep.x, 1e-4f) << at;
+    EXPECT_NEAR(p.end.z, kAep.z, 1e-4f) << at;
+    EXPECT_NEAR(p.apex_height, kStepHeight, 3e-3f) << at;
+    EXPECT_GT(p.min_height, -1e-5f) << at;
+    EXPECT_LT(p.max_velocity_jump, 0.05f) << at;
+  }
+}
+
+// A rest-to-rest swing gets no ride: with no ground motion there is no slip
+// to prevent, and the grant tapers to zero with the speed. So the pause and
+// reseat shapes are untouched by the headroom, and zero speed is the smooth
+// limit of a slowing command rather than a special case.
+TEST(Trajectory, RideVanishesAtZeroGroundVelocity) {
+  const g::SwingProfile ridden =
+      make_profile(kTouchdownV, 0.0f, kRideProbeFraction, kMatchedHeadroom);
+  const g::SwingProfile bare =
+      make_profile(kTouchdownV, 0.0f, kRideProbeFraction);
+  for (const float phase : {0.25f, 0.5f, 0.75f, 0.9f}) {
+    const g::Vec3 a = g::swing_arc(phase, kPep, kAep, 1, kSwingTime, ridden,
+                                   g::Vec3::Zero(), g::Vec3::Zero());
+    const g::Vec3 b = g::swing_arc(phase, kPep, kAep, 1, kSwingTime, bare,
+                                   g::Vec3::Zero(), g::Vec3::Zero());
+    EXPECT_NEAR(a.x, b.x, 1e-7f) << phase;
+    EXPECT_NEAR(a.z, b.z, 1e-7f) << phase;
+  }
 }
 
 // The lateral arch peaks at swing_width and closes back to the straight

@@ -42,6 +42,23 @@ enum class EngineState {
   FAULT,
 };
 
+// How far past its design band a stance anchor may drift before the integrator
+// stops it, as a fraction of the band. The band is half a stride — exactly the
+// AEP..PEP envelope a steady walk rides — so the grace is only what a leg
+// borrows while the command turns under it.
+//
+// It is also the distance the foot has to shed its ground speed over, so it
+// trades excursion against how hard the foot is braked. On this geometry a full
+// lateral reversal peaks 14 mm past the band unbounded, and 0.25 gives up 8 mm
+// of that for a braking step of ~8% of stance speed per tick — a tenth of what a
+// hard clip would do, and well under what a swing already asks of the same leg.
+//
+// The swing's touchdown ride shares the same envelope: its headroom beyond the
+// live AEP is grace x band (see SwingProfile::ride_headroom), and the AEP is
+// never further than the band from nominal, so a parked foot stays inside the
+// same ceiling a stance anchor may drift to.
+constexpr float kStanceExcursionGrace = 0.25f;
+
 // Engine-internal knobs, sourced entirely from tuning.yaml's gait_node block
 // (baked into config::kEngine). None are on the wire.
 struct EngineConfig {
@@ -76,13 +93,19 @@ struct EngineConfig {
     p.width = swing_width;
     p.touchdown_velocity = touchdown_velocity;
     p.touchdown_probe_fraction = touchdown_probe_fraction;
+    // Derived, not configured: the stance band's grace, so the ride can park
+    // a foot exactly as far past its AEP as a stance anchor may drift past
+    // the band, and no further.
+    p.ride_headroom = kStanceExcursionGrace * 0.5f * stride_length;
     return p;
   }
 
   // How a reseat swing is shaped. Its own clearance (a re-plant lifts far less
   // than a step), but the gait's touchdown probe: a foot re-planting has the
   // same landing to make as one finishing a step, so it is eased the same way
-  // instead of falling back on the unshaped defaults.
+  // instead of falling back on the unshaped defaults. No ride_headroom: a
+  // reseat lands on still ground, so there is no ground motion to ride and no
+  // slip for the ride to prevent.
   SwingProfile reseat_profile() const {
     SwingProfile p;
     p.clearance = reseat_swing_clearance;

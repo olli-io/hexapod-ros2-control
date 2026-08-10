@@ -56,25 +56,42 @@
         <span class="joystick-label">Left</span>
       </div>
 
-      <!-- 3x3 grid. DOM order is visual order; JS keys off data-index.
-           Row 1: mode select. Row 2/3: per-mode actions, init centred,
-           prev/next stacked at center-left/bottom-left, height ▲/▼ right. -->
-      <div id="button-grid">
-        <button class="mode-btn" data-index="0"></button>
-        <button class="mode-btn" data-index="1"></button>
-        <button class="mode-btn" data-index="2"></button>
-        <button class="action-btn" data-index="5"></button>
-        <button class="action-btn" data-index="3"></button>
-        <button class="action-btn" data-index="7"></button>
-        <button class="action-btn" data-index="6"></button>
-        <button class="action-btn" data-index="4"></button>
-        <button class="action-btn" data-index="8"></button>
-      </div>
+      <!-- Center column: status strip over the button grid. The strip is a
+           sibling of the grid, not inside it, so it stays visible while the
+           control prompt replaces the grid — a controller owner switching
+           gaits is exactly when the passive observer wants to see it. -->
+      <div id="center-panel">
+        <div id="status-bar">
+          <span class="status-item">
+            <span class="status-key">Gait</span>
+            <span class="status-value" id="status-gait">&mdash;</span>
+          </span>
+          <span class="status-item">
+            <span class="status-key">Anim</span>
+            <span class="status-value" id="status-animation">&mdash;</span>
+          </span>
+        </div>
 
-      <!-- Replaces the button grid in place while a controller is active. -->
-      <div id="control-prompt" class="hidden">
-        <p>The hexapod is currently being controlled by a game controller</p>
-        <button id="take-control-btn">Take control</button>
+        <!-- 3x3 grid. DOM order is visual order; JS keys off data-index.
+             Row 1: mode select. Row 2/3: per-mode actions, init centred,
+             prev/next stacked at center-left/bottom-left, height ▲/▼ right. -->
+        <div id="button-grid">
+          <button class="mode-btn" data-index="0"></button>
+          <button class="mode-btn" data-index="1"></button>
+          <button class="mode-btn" data-index="2"></button>
+          <button class="action-btn" data-index="5"></button>
+          <button class="action-btn" data-index="3"></button>
+          <button class="action-btn" data-index="7"></button>
+          <button class="action-btn" data-index="6"></button>
+          <button class="action-btn" data-index="4"></button>
+          <button class="action-btn" data-index="8"></button>
+        </div>
+
+        <!-- Replaces the button grid in place while a controller is active. -->
+        <div id="control-prompt" class="hidden">
+          <p>The hexapod is currently being controlled by a game controller</p>
+          <button id="take-control-btn">Take control</button>
+        </div>
       </div>
 
       <div class="joystick" id="right-joystick">

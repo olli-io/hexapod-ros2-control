@@ -53,6 +53,19 @@ struct SwingProfile {
   // taller probe also moves the apex earlier and buys the whole descent time.
   // Clamped to kMaxProbeFraction; 0 restores a zero-speed landing.
   float touchdown_probe_fraction = 0.0f;
+  // How far beyond the touchdown target the arc may park the foot to ride the
+  // touchdown ground line. Riding the line makes the foot world-frame
+  // stationary over its landing point while the probe descends, so an early
+  // contact in the ridden part of the band lands without horizontal slip; the
+  // price is parking past the target by ground speed times the time ridden,
+  // which is what this headroom meters. Because the live AEP never sits more
+  // than half a stride from the nominal stance (stride_vector's magnitude
+  // clamp), headroom = grace x half-stride keeps every parked foot inside the
+  // stance integrator's ceiling — whatever the command did mid-swing. The
+  // grant also tapers away with the ground speed (see granted_ride_time), so
+  // slow and rest-to-rest swings keep the un-ridden schedule. 0 disables the
+  // ride and the blend spans the whole swing.
+  float ride_headroom = 0.0f;
 
   // The probe band's height for a swing of `swing_time` seconds.
   float probe_band(float swing_time) const {
@@ -142,11 +155,16 @@ inline float ease5(float u) {
 // zero horizontal acceleration, and only pulls away from it as O(t^4). That is
 // what keeps it from scrubbing while it may still be touching.
 //
-// The blend spans the whole swing. That bounds the body-frame excursion
-// outside the AEP..PEP envelope to a few millimetres — a curve that finishes
-// its travel early rides the moving ground line for the remainder, which
-// sweeps the foot beyond the AEP by ground speed times the time left and out
-// of the joint envelope at full stride.
+// The blend spans the swing up to the touchdown ride. Finishing the travel
+// early rides the moving ground line for the remainder, which sweeps the foot
+// beyond the AEP by ground speed times the time left — so the ride is metered
+// against profile.ride_headroom, and with none the blend spans the whole swing
+// and the body-frame excursion outside the AEP..PEP envelope stays a few
+// millimetres. Where the headroom affords it, the travel
+// instead completes at the probe's start and the foot descends the whole band
+// already moving with the ground: an early contact anywhere inside it lands
+// without slip — the horizontal analog of what the probe does for the
+// vertical.
 //
 // The vertical is eased independently, with its apex over the spatial midpoint
 // of the travel — the blend's clock is warped to cross half-travel at the

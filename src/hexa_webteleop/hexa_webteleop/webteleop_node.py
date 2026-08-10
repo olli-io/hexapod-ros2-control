@@ -37,7 +37,6 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import threading
 import time
@@ -70,6 +69,7 @@ from .web_mapping import (
     load_web_config,
     map_web,
     neutral_inputs,
+    resync_gait,
 )
 
 # The webapp sends one stick message per ``touchmove``, which browsers
@@ -115,6 +115,9 @@ class WebTeleopNode(Node):
         )
         self._active_gait: str = default_gait
         self._latest_gait_state: str = ""
+        # Empty until something is latched on /animation/mode — the
+        # pipeline is on its startup default; the UI shows a placeholder.
+        self._latest_animation_mode: str = ""
 
         # Server config
         with cfg_path.open() as f:
@@ -178,6 +181,17 @@ class WebTeleopNode(Node):
         self._sub_gait_state = self.create_subscription(
             String, "/gait/state", self._on_gait_state, latched_qos
         )
+        # The latched command topics are the only truth for the current
+        # gait / animation selection (locomotion publishes no name
+        # feedback), and both teleops write them. Subscribing — own
+        # publishes included, via loopback — gives display and the
+        # caps/cycler resync one code path whichever teleop switched.
+        self._sub_cmd_gait = self.create_subscription(
+            String, "/cmd_gait", self._on_cmd_gait, latched_qos
+        )
+        self._sub_animation_mode = self.create_subscription(
+            String, "/animation/mode", self._on_animation_mode, latched_qos
+        )
 
         # Publish "gamepad" on startup so a dormant gamepad from a
         # previous web-node instance is released.
@@ -209,6 +223,42 @@ class WebTeleopNode(Node):
                 "type": "gait_state",
                 "state": msg.data,
             })
+
+    def _on_cmd_gait(self, msg: String) -> None:
+        """Every gait switch on the wire — the gamepad's, or our own
+        accepted publish heard back via loopback. All the bookkeeping
+        lives here (``_tick`` only gates and publishes): stick caps,
+        cycler index, and the client display. Runs on the same
+        single-threaded executor as ``_tick``, so ``_cfg`` / ``_state``
+        need no lock.
+        """
+        name = msg.data
+        if name == self._active_gait:
+            return
+        new_cfg = resync_gait(name, self._cfg, self._state, self._caps)
+        if new_cfg is None:
+            self.get_logger().warning(
+                f"/cmd_gait={name!r} unknown to velocity caps — keeping "
+                f"{self._active_gait!r}"
+            )
+            return
+        self._cfg = new_cfg
+        self._active_gait = name
+        self.get_logger().info(
+            f"stick linear_max={new_cfg.gait_linear_max:.3f} m/s, "
+            f"angular_max={new_cfg.gait_angular_z_max:.3f} rad/s for gait "
+            f"{name!r}"
+        )
+        self._broadcast_to_clients({"type": "gait", "gait": name})
+
+    def _on_animation_mode(self, msg: String) -> None:
+        if msg.data == self._latest_animation_mode:
+            return
+        self._latest_animation_mode = msg.data
+        self._broadcast_to_clients({
+            "type": "animation",
+            "animation": msg.data,
+        })
 
     def _tick(self) -> None:
         with self._lock:
@@ -259,20 +309,11 @@ class WebTeleopNode(Node):
         if out.gait_select is not None:
             if self._latest_gait_state in _GAIT_SWITCH_STATES:
                 self.get_logger().info(f"switching gait to {out.gait_select!r}")
+                # Caps + cycler bookkeeping happens in _on_cmd_gait when
+                # this publish loops back — the path gamepad switches
+                # already take. Sticks run on the old cap for the tick or
+                # two until then, invisible at 60 Hz.
                 self._pub_cmd_gait.publish(String(data=out.gait_select))
-                self._active_gait = out.gait_select
-                new_linear = self._caps.linear_max(self._active_gait)
-                new_angular = self._caps.angular_max(self._active_gait)
-                self._cfg = dataclasses.replace(
-                    self._cfg,
-                    gait_linear_max=new_linear,
-                    gait_angular_z_max=new_angular,
-                )
-                self.get_logger().info(
-                    f"stick linear_max={new_linear:.3f} m/s, "
-                    f"angular_max={new_angular:.3f} rad/s for gait "
-                    f"{self._active_gait!r}"
-                )
             else:
                 self.get_logger().info(
                     f"gait switch to {out.gait_select!r} dropped — "
@@ -454,6 +495,8 @@ class WebTeleopNode(Node):
             "owner": self._arbitration.owner if self._arbitration_enabled else GAMEPAD,
             "arbitration_enabled": self._arbitration_enabled,
             "gait_state": self._latest_gait_state,
+            "gait": self._active_gait,
+            "animation": self._latest_animation_mode,
         })
 
         try:
