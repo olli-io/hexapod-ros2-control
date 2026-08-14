@@ -73,6 +73,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   const auto& le = loaded.engine;
   const auto& be = baked.engine;
   EXPECT_NEAR(le.stride_length, be.stride_length, kTol);
+  EXPECT_NEAR(le.stride_length_radial, be.stride_length_radial, kTol);
   EXPECT_NEAR(le.min_swing_time, be.min_swing_time, kTol);
   EXPECT_NEAR(le.max_swing_time, be.max_swing_time, kTol);
   EXPECT_NEAR(le.step_height, be.step_height, kTol);

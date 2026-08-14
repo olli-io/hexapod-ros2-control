@@ -105,6 +105,7 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/gait/reseat.cpp
     ${HEXA_SHARED}/gait/limits.cpp
     ${HEXA_SHARED}/gait/engine.cpp
+    ${HEXA_SHARED}/gait/reversal.cpp
     ${HEXA_SHARED}/posture/pose.cpp        # body-pose algebra, float fork (part 08)
     ${HEXA_SHARED}/posture/animations.cpp  # animation stack (part 08)
     ${HEXA_SHARED}/posture/posture.cpp     # posture controller / signal derivation (part 08)

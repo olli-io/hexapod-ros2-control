@@ -74,6 +74,7 @@ set(FW_PIPELINE_SOURCES
   ${FW_SRC}/gait/reseat.cpp
   ${FW_SRC}/gait/limits.cpp
   ${FW_SRC}/gait/engine.cpp
+  ${FW_SRC}/gait/reversal.cpp
   ${FW_SRC}/posture/pose.cpp
   ${FW_SRC}/posture/animations.cpp
   ${FW_SRC}/posture/posture.cpp)

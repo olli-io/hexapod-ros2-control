@@ -98,6 +98,50 @@ engagement carries its planted feet at the commanded velocity, so a zero
 command only freezes them where they were; it has no way to walk them
 home, and the ladder is what puts them back.
 
+### Reversing
+
+Turning the stick around under a walking robot is not a velocity change like
+any other. Every planted foot is somewhere between its AEP and its PEP, and
+the instant travel reverses, the ones that landed most recently have no
+excursion left in the new direction at all: their anchors pin against the
+stance ceiling and stop tracking the ground for the rest of their stance
+window. Half the legs drag.
+
+The **reversal ladder** answers it by re-registering the schedule against the
+feet rather than re-planting them. Reflected about the swing end, a leg's stance
+progress *s* becomes *1 - s*, so the runway it has left in the new direction is
+the runway it just consumed in the old one — which is exactly where its foot is
+standing. A leg at touchdown maps to lift-off, because the old AEP it stands on
+is the new PEP. One reflection — the **mirror** — fixes all six at once, and on
+the gaits that carry a wave down the body it turns the wave around with them.
+
+That identity holds only where the foot is where the schedule says it is, and
+two things have to be true for that. Nothing may be in the air, since the
+reflection reverses swing progress against a latched lift-off end. And the
+stride has to be the one the legs have been walking *and* will go on walking.
+Stride is pinned at `stride_length` across the whole band from the **knee** —
+the speed at which `derive_cycle_time` stops stretching the cycle and starts
+shortening the stride instead — up to the velocity cap, and the phase clock is
+locked to distance travelled throughout it, so the identity is exact there to
+within a millimetre. Below the knee the cycle time saturates, the clock outruns
+the travel and the feet bunch toward nominal: 24-29 mm off at 40% of the knee
+speed. Reflecting there hands every leg tens of millimetres of runway it does
+not have, and it ploughs into its excursion ceiling — inward, under the body,
+for a middle leg walking sideways.
+
+So the ladder does not stop the walk before mirroring. It **holds** it at the
+knee, waits for the gait's next all-down window, reflects there, and releases.
+What is left afterwards is the stopping distance from the knee against the
+stance band's grace: the robot is still travelling the old way as the reflection
+lands, and no reflection can give back ground the robot has yet to stop
+covering.
+
+A reversal that is already below the knee is not held — its feet are canonical
+for its own shorter stride, but the walk being asked for is a longer one, so the
+reflection would over-credit them just the same, and its excursions are smaller
+in proportion anyway. Neither are crawl and surf, whose swings run end to end so
+that all six feet are never down at once.
+
 ## 3. Cycle-level parameters
 
 Properties of the gait cycle (the synchronized motion of all six legs):

@@ -26,6 +26,41 @@ struct LegContext {
   Vec3 nominal_stance = Vec3::Zero();
 };
 
+// A leg's own radial axis in the ground plane: the unit vector from its coxa
+// mount out to its nominal stance, and the reach along it. A property of the
+// standing pose, so it moves only when a reseat commits a new nominal — read it
+// off the leg each tick rather than caching it.
+struct RadialAxis {
+  float u_x = 0.0f;
+  float u_y = 0.0f;
+  // |nominal_stance_xy - mount_xy|; zero for a degenerate leg, which then
+  // constrains nothing.
+  float tip_reach = 0.0f;
+};
+
+RadialAxis radial_axis(const LegContext& leg);
+
+// How far past its design band a stance anchor may drift before the integrator
+// stops it, as a fraction of the band. The band is half a stride — exactly the
+// AEP..PEP envelope a steady walk rides — so the grace is only what a leg
+// borrows while the command turns under it.
+//
+// It is also the distance the foot has to shed its ground speed over, so it
+// trades excursion against how hard the foot is braked. On this geometry a full
+// lateral reversal peaks 14 mm past the band unbounded, and 0.25 gives up 8 mm
+// of that for a braking step of ~8% of stance speed per tick — a tenth of what a
+// hard clip would do, and well under what a swing already asks of the same leg.
+//
+// The swing's touchdown ride shares the same envelope: its headroom beyond the
+// live AEP is grace x band (see SwingProfile::ride_headroom), and the AEP is
+// never further than the band from nominal, so a parked foot stays inside the
+// same ceiling a stance anchor may drift to.
+//
+// Lives here beside SwingProfile rather than in the engine: the engagement
+// shapes its own swings and needs the same headroom, and both halves of the
+// envelope — the band's ceiling and the ride's overshoot — read this one number.
+constexpr float kStanceExcursionGrace = 0.25f;
+
 // Largest share of the swing the constant-velocity probe may take. The climb
 // and the brake split the rest evenly, so at the cap each still keeps 30% of
 // the swing — the brake never collapses however large the probe.
@@ -67,13 +102,22 @@ struct SwingProfile {
   // ride and the blend spans the whole swing.
   float ride_headroom = 0.0f;
 
+  // The configured probe share after its hard cap.
+  float probe_fraction() const {
+    return touchdown_probe_fraction < kMaxProbeFraction
+               ? touchdown_probe_fraction
+               : kMaxProbeFraction;
+  }
+
   // The probe band's height for a swing of `swing_time` seconds.
   float probe_band(float swing_time) const {
-    const float f = touchdown_probe_fraction < kMaxProbeFraction
-                        ? touchdown_probe_fraction
-                        : kMaxProbeFraction;
-    return touchdown_velocity * f * swing_time;
+    return touchdown_velocity * probe_fraction() * swing_time;
   }
+
+  // Swing progress at which the probe begins. From here on the foot is inside
+  // the band it may meet the ground anywhere within, so this is where a swing
+  // stops being free to move over the ground and starts having to answer for it.
+  float probe_start() const { return 1.0f - probe_fraction(); }
 };
 
 // Per-tick stride description for one leg. stride_vector is the body-frame
@@ -108,8 +152,68 @@ std::map<std::string, std::pair<float, float>> per_leg_planar_velocity(
     const std::map<std::string, LegContext>& leg_contexts,
     std::pair<float, float> v_body_xy, float omega_z);
 
-// Per-leg stride displacement, magnitude-clamped to stride_length.
+// Per-leg stride displacement, magnitude-clamped to the tick's effective stride
+// (see effective_stride_length).
 Vec3 stride_vector(float v_x, float v_y, float stance_time, float stride_length);
+
+// The longest stride this leg may take along the unit direction (d_x, d_y)
+// before its own coxa-to-foot reach closes by more than stride_length_radial.
+//
+// A stride is laid down as +/- half of itself about the nominal stance, so what
+// a leg spends is not the stride but the reach it gives up at the near end:
+//
+//   |R * r + a * L * d| >= R - stride_length_radial / 2,   a = 1/2
+//
+// Solved rather than projected. The half-stride's tangential component partly
+// restores the reach, so projecting the stride onto r overstates what a leg
+// gives up — 92 mm against the true 95 mm for a rear leg walking forward. The
+// one leg that gets none of that relief is the one travelling straight out
+// along its own axis (d parallel to r), which is a middle leg walking sideways:
+// exactly the case this budget exists to price. Projecting instead would charge
+// the rear legs for a forward walk they have always managed.
+//
+// With c = d . r the closure is a quadratic in L, and the near root is
+//
+//   L = (R / a) * (-c - sqrt(c^2 - 1 + m^2 / R^2)),   m = R - radial / 2
+//
+// c is taken *unsigned* — every leg is assumed to be the one tucking, never the
+// one extending. The signed form makes the budget differ between d and -d on a
+// fore/aft-asymmetric stance, which would break the reversal ladder's premise
+// that the stride is the one the legs have been *and* will be walking.
+//
+// Returns +infinity when the closure can never bind (non-positive
+// discriminant), so a slack budget and a purely tangential direction — every
+// leg under pure yaw — leave the stride untouched.
+float radial_stride_budget(const RadialAxis& axis, float d_x, float d_y,
+                           float stride_length_radial);
+
+// One stride scalar for the whole tick: stride_length, cut to the tightest
+// per-leg radial budget.
+//
+// The stride has to be common. Every planted foot is rigidly attached to the
+// same body and translates at the same velocity, so per-leg strides would only
+// scrub the feet against each other; the per-leg part is the derivation, not
+// the result. Each leg contributes a constraint and the tightest one wins.
+//
+// Each budget is divided by that leg's share of the fastest leg's speed,
+// because that share is what the leg actually lays down: in the distance-locked
+// band stance_time is the tick's stride over max_leg_v, so a leg at half the
+// peak speed takes half the stride. Under pure translation all six shares are 1
+// and this is a plain minimum; it only bites when yaw skews the leg speeds. It
+// also means a leg barely moving relaxes to no constraint on its own, with no
+// epsilon to pick.
+//
+// Returns stride_length exactly when nothing is moving, when the budget is
+// slack, or when no leg binds.
+float effective_stride_length(
+    const std::map<std::string, LegContext>& legs,
+    const std::map<std::string, std::pair<float, float>>& leg_velocities,
+    float stride_length, float stride_length_radial);
+
+// Same, for callers holding a command rather than a per-leg velocity map.
+float effective_stride_length(const std::map<std::string, LegContext>& legs,
+                              std::pair<float, float> v_body_xy, float omega_z,
+                              float stride_length, float stride_length_radial);
 
 // Phase at which swing ends and stance resumes.
 //

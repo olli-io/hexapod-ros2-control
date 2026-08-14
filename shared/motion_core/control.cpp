@@ -94,9 +94,14 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
 Control::Control(const ::hexa::config::ControlConfig& control,
                  const hexa::gait::VelocityCaps& caps,
                  const std::map<std::string, hexa::Vec3>& nominal_stance,
+                 const std::map<std::string, hexa::gait::LegContext>& legs,
+                 float stride_length, float stride_length_radial,
                  const std::string& default_gait)
     : caps_(caps),
       stance_xy_(nominal_stance),
+      legs_(legs),
+      stride_length_(stride_length),
+      stride_length_radial_(stride_length_radial),
       vmax_ramp_time_linear_(control.vmax_ramp_time_linear),
       vmax_ramp_time_angular_(control.vmax_ramp_time_angular),
       active_gait_(default_gait),
@@ -138,10 +143,32 @@ std::tuple<float, float, float> Control::shape(
     have_engine_state_ = true;
   }
 
+  // Derate the linear cap by whatever the radial budget lets this heading lay
+  // down. Without it the stick still tops out at the isotropic cap while the
+  // engine shortens the stride underneath it, and the difference comes out as
+  // planted feet scrubbing along the ground.
+  //
+  // Read off the *requested* command, deliberately. scale_to_envelope cuts the
+  // linear and angular parts by different factors, so on a translation-plus-yaw
+  // mix the post-cut per-leg headings differ slightly from the pre-cut ones and
+  // the engine's own effective stride will not be identical to this one. The
+  // engine's is the one that governs where feet go; this one only decides where
+  // the stick runs out. They agree exactly for pure translation and pure yaw.
+  const float ratio = stride_ratio_for(v_x, v_y, omega_z);
   auto [sx, sy, sw] = hexa::gait::scale_to_envelope(
-      v_x, v_y, omega_z, stance_xy_, caps_.linear_max(active_gait_),
+      v_x, v_y, omega_z, stance_xy_, caps_.linear_max(active_gait_) * ratio,
       caps_.yaw_bias(active_gait_));
   return limiter_.step(sx, sy, sw, dt);
+}
+
+float Control::stride_ratio_for(float v_x, float v_y, float omega_z) const {
+  if (stride_length_ <= 0.0f || legs_.empty()) {
+    return 1.0f;
+  }
+  return hexa::gait::effective_stride_length(legs_, {v_x, v_y}, omega_z,
+                                             stride_length_,
+                                             stride_length_radial_) /
+         stride_length_;
 }
 
 }  // namespace hexa::control

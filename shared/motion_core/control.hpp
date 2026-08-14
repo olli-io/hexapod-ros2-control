@@ -64,11 +64,15 @@ class Control {
  public:
   // Build from explicit tuning/geometry (hexa_locomotion's runtime-YAML path):
   // control ramp times + snap tolerances, the per-gait velocity caps, the
-  // standing foot positions (the lever arms the envelope cut works through), and
-  // the starting gait. The no-arg ctor delegates here with the baked constants.
+  // standing foot positions (the lever arms the envelope cut works through), the
+  // leg contexts and stride knobs the radial budget prices a heading against,
+  // and the starting gait. The no-arg ctor delegates here with the baked
+  // constants.
   Control(const ::hexa::config::ControlConfig& control,
           const hexa::gait::VelocityCaps& caps,
           const std::map<std::string, hexa::Vec3>& nominal_stance,
+          const std::map<std::string, hexa::gait::LegContext>& legs,
+          float stride_length, float stride_length_radial,
           const std::string& default_gait);
 
   // Cut to the active gait's envelope, then rate-cap toward it. Resets the
@@ -91,8 +95,15 @@ class Control {
   float accel_linear_for(const std::string& gait) const;
   float accel_angular_for(const std::string& gait) const;
 
+  // The heading-dependent cut on the linear cap: the share of stride_length the
+  // radial budget lets this command lay down. 1 when nothing binds.
+  float stride_ratio_for(float v_x, float v_y, float omega_z) const;
+
   hexa::gait::VelocityCaps caps_;
   std::map<std::string, hexa::Vec3> stance_xy_;
+  std::map<std::string, hexa::gait::LegContext> legs_;
+  float stride_length_;
+  float stride_length_radial_;
   float vmax_ramp_time_linear_;
   float vmax_ramp_time_angular_;
   std::string active_gait_;

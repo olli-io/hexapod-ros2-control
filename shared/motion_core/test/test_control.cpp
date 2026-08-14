@@ -45,7 +45,13 @@ hexa::gait::VelocityCaps test_caps() {
 }
 
 ctl::Control make_control() {
-  return ctl::Control(::hexa::config::kControl, test_caps(), test_stance(),
+  // No leg contexts: this fixture's stance is a synthetic regular hexagon, not
+  // the real geometry, so there is no leg axis to price a heading against. An
+  // empty map leaves the radial budget inert and the envelope cut isotropic,
+  // which is what these tests are about.
+  return ctl::Control(::hexa::config::kControl, test_caps(), test_stance(), {},
+                      ::hexa::config::kEngine.stride_length,
+                      ::hexa::config::kEngine.stride_length_radial,
                       std::string(::hexa::config::kDefaultGait));
 }
 

@@ -95,6 +95,7 @@ set(FW_GAIT_SOURCES
   ${GAIT_SRC}/reseat.cpp
   ${GAIT_SRC}/limits.cpp
   ${GAIT_SRC}/engine.cpp
+  ${GAIT_SRC}/reversal.cpp
   ${KIN_SRC}/leg_ik.cpp
   ${KIN_SRC}/body_transform.cpp)
 
@@ -106,6 +107,12 @@ add_dependencies(dump_config gen_config)
 target_include_directories(dump_config PRIVATE ${FW_SRC})
 target_compile_options(dump_config PRIVATE -Wall -Wextra -Wdouble-promotion
                        -fexceptions)
+
+# Diagnostic probe (not a test): drives engine + posture + compose/IK on a
+# direction sweep and reports the commanded joint rates against the servo limit
+# plus the world-frame approach near touchdown. This is where a stride radial to
+# a leg's own coxa shows up as drag, so it is the vehicle for the
+# stride_length_radial before/after. Defined after FW_POSTURE_SOURCES below.
 
 # Behavioural unit test: float-only, so it runs through hexa_host_test() and is
 # compiled under -Wdouble-promotion (the same gate as the firmware build). A
@@ -121,13 +128,21 @@ target_compile_options(test_gait_unit PRIVATE -fexceptions)
 hexa_host_test(test_stand_transition test_stand_transition.cpp ${FW_GAIT_SOURCES})
 target_compile_options(test_stand_transition PRIVATE -fexceptions)
 
+# The touchdown-target rate bound, measured as world-frame slip under the landing
+# foot. Split out of the engine suite because it is measured against a driven
+# *world* frame rather than the body-frame targets everything else there asserts
+# on.
+hexa_host_test(test_reversal test_reversal.cpp ${FW_GAIT_SOURCES})
+target_compile_options(test_reversal PRIVATE -fexceptions)
+
 # ── Control velocity shaping (part 07) ──
 # BodyVelocityLimiter slew + Control scale-to-envelope / reset wiring. Float
 # only, so it runs through hexa_host_test() under -Wdouble-promotion. Needs the
 # gait limits (scale_to_envelope + caps) it shapes against.
 hexa_host_test(test_control test_control.cpp
   ${FW_SRC}/control.cpp
-  ${GAIT_SRC}/limits.cpp)
+  ${GAIT_SRC}/limits.cpp
+  ${GAIT_SRC}/gaits/base.cpp)
 target_compile_options(test_control PRIVATE -fexceptions)
 
 # ── Teleop joy mapping (part 07) ──
@@ -168,6 +183,17 @@ set(FW_POSTURE_SOURCES
   ${POSTURE_SRC}/pose.cpp
   ${POSTURE_SRC}/animations.cpp
   ${POSTURE_SRC}/posture.cpp)
+
+# See the note beside dump_config: the lateral-drag probe, which needs posture
+# in the loop as well as the gait sources.
+add_executable(probe_lateral probe_lateral.cpp ${FW_GAIT_SOURCES}
+               ${FW_POSTURE_SOURCES})
+add_dependencies(probe_lateral gen_config)
+target_include_directories(probe_lateral PRIVATE ${FW_SRC})
+# No -Wdouble-promotion here: the probe is all printf, whose float arguments
+# promote by definition. The flag is a purity gate on the port sources, and
+# test_gait_unit already compiles every one of them under it.
+target_compile_options(probe_lateral PRIVATE -Wall -Wextra -fexceptions)
 
 # Gait-active body-animation master switch (tuning.yaml
 # gait_body_animations_enabled): pins that a walking tick emits no body offset

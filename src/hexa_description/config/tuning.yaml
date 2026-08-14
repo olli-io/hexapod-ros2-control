@@ -46,6 +46,20 @@ gait_node:
 
     # Ground travel per step (m). Shorter = gentler on the joints, slower.
     stride_length: 0.1
+
+    # Most a leg's own coxa-to-foot reach may close over one half stride (m).
+    #
+    # A stride pointed straight out along a leg's own axis spends all of itself
+    # closing that reach — the middle legs walking sideways, whose axis is body
+    # y exactly — and a foot tucked in under the body pushes badly and outruns
+    # its servos. Every direction is priced against the worst-placed leg, and
+    # the tick's stride is cut to what that leg can afford; the top speed comes
+    # down with it, since the cycle cannot run faster than min_swing_time.
+    # Lower = safer sideways, slower sideways. Forward and yaw are unaffected
+    # until this drops below ~0.081.
+    #
+    # Set equal to stride_length to disable (restores an isotropic stride).
+    stride_length_radial: 0.084
     # Foot lift during a step (m).
     step_height: 0.04
     # Sideways shift of the foot's arc (m). 0 = straight fore/aft steps.
@@ -77,8 +91,8 @@ gait_node:
     # set top speed: past max_swing_time the robot shortens its stride
     # instead. Recommendation: keep within ~25% of each other or placement misbehaves when
     # reversing direction.
-    min_swing_time: 0.7
-    max_swing_time: 1
+    min_swing_time: 0.5
+    max_swing_time: 0.6
 
     # Share of each gait's swing window handed back to the ground at the
     # touchdown end, so legs overlap instead of swapping on a knife edge that
@@ -136,8 +150,8 @@ control_node:
 
     # Ease time from standstill to full speed and back. Lower = snappier,
     # more foot slip on reversals.
-    vmax_ramp_time_linear: 0.8 # s
-    vmax_ramp_time_angular: 1.0 # s
+    vmax_ramp_time_linear: 0.8
+    vmax_ramp_time_angular: 1
 
     # Leftover speed at the end of a ramp gets snapped to zero.
     snap_tol_linear: 1.0e-4 # m/s

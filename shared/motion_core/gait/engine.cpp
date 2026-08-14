@@ -174,13 +174,24 @@ void SwingPlanner::liftoff(const std::string& name, const Vec3& origin,
 }
 
 void SwingPlanner::retarget(const std::string& name, const Vec3& target,
-                            std::pair<float, float> v_leg, float swing_time) {
+                            std::pair<float, float> v_leg, float swing_time,
+                            float phase_in_swing, float dt,
+                            const SwingProfile& profile) {
   if (!is_swing_.at(name)) {
     return;
   }
-  target_[name] = target;
   v_target_[name] = v_leg;
   swing_time_[name] = swing_time;
+
+  Vec3& aimed = target_[name];
+  if (phase_in_swing < profile.probe_start()) {
+    aimed = target;
+    return;
+  }
+  const Vec3 move = target - aimed;
+  const float distance = std::hypot(move[0], move[1]);
+  const float budget = profile.touchdown_velocity * dt;
+  aimed = distance <= budget ? target : aimed + (budget / distance) * move;
 }
 
 void SwingPlanner::touchdown(const std::string& name) {
@@ -257,6 +268,54 @@ float Engine::master_phase() const {
     return engagement_->exit_master();
   }
   return clock_->master();
+}
+
+std::tuple<float, float, float> Engine::shape_reversal(
+    float dt, std::pair<float, float> v_body_xy, float omega_z) {
+  const float swing_end =
+      swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
+  const float stance_fraction = 1.0f - swing_end;
+
+  ReversalGate::Input in;
+  in.applied_xy = applied_xy_;
+  in.applied_omega = applied_omega_;
+  in.request_xy = v_body_xy;
+  in.request_omega = omega_z;
+  in.walking = state_ == EngineState::GAIT;
+  in.all_planted = all_planted();
+  in.can_mirror = clock_.has_value() &&
+                  has_all_down_window(clock_->offsets(), swing_end);
+  // The knee: the leg speed at which derive_cycle_time stops stretching the
+  // cycle and starts shortening the stride instead. Above it the clock is locked
+  // to the distance travelled and the feet sit exactly where the schedule says.
+  //
+  // Read off the stride the travel being *held* is laying down, not the
+  // configured one: on a direction the radial budget has cut, the isotropic knee
+  // sits above that direction's own velocity cap and the gate would read every
+  // reversal as already below it. The cap and the knee are cut by the same
+  // ratio, so their span stays max_swing_time / min_swing_time whatever the
+  // heading. The budget reads direction unsigned, so this is also the same knee
+  // on both sides of the mirror.
+  const float knee_stride = effective_stride_length(
+      legs_, applied_xy_, applied_omega_, config_.stride_length,
+      config_.stride_length_radial);
+  in.knee_speed = stance_fraction > 0.0f && config_.max_swing_time > 0.0f
+                      ? knee_stride * swing_end /
+                            (config_.max_swing_time * stance_fraction)
+                      : 0.0f;
+  // Two cycles at the slowest the gait ever runs: long enough that a window
+  // cannot be missed, short enough that a gait which somehow never offers one
+  // does not sit on the stick.
+  in.timeout = swing_end > 0.0f ? 2.0f * config_.max_swing_time / swing_end
+                                : 0.0f;
+  in.zero_tol = config_.cmd_zero_tol;
+  in.dt = dt;
+
+  const ReversalGate::Output out = reversal_.step(legs_, in);
+  if (out.mirror && in.walking && in.all_planted) {
+    clock_->mirror(swing_end);
+  }
+  return {out.v_xy.first, out.v_xy.second, out.omega};
 }
 
 void Engine::apply_strategy(const std::string& name) {
@@ -365,9 +424,10 @@ std::unique_ptr<EngagementController> Engine::build_engagement() {
   const auto [min_cycle_time, max_cycle_time] =
       cycle_time_bounds(config_, swing_end);
   return std::make_unique<EngagementController>(
-      nominal_, config_.stride_length, min_cycle_time, max_cycle_time,
-      strategy_->duty_factor(), config_.swing_phase_margin,
-      config_.swing_profile(), config_.controller_dt);
+      nominal_, config_.stride_length, config_.stride_length_radial,
+      min_cycle_time, max_cycle_time, strategy_->duty_factor(),
+      config_.swing_phase_margin, config_.swing_profile(),
+      config_.controller_dt);
 }
 
 std::unique_ptr<ReseatController> Engine::build_reseat(
@@ -415,6 +475,8 @@ std::map<std::string, LegOutput> Engine::emit_held() const {
 
 std::map<std::string, LegOutput> Engine::update(
     float dt, std::pair<float, float> v_body_xy, float omega_z) {
+  applied_xy_ = v_body_xy;
+  applied_omega_ = omega_z;
   const bool cmd_zero = cmd_is_zero(v_body_xy, omega_z);
   if (cmd_zero) {
     cmd_zero_elapsed_ += dt;
@@ -537,6 +599,11 @@ std::map<std::string, LegOutput> Engine::update(
     }
     auto out = tick_engagement(dt, v_body_xy, omega_z);
     if (engagement_->state() == EngagementState::DONE) {
+      // The engagement schedules its legs off the strategy's own offset table,
+      // so a clock left mirrored by an earlier reversal would hand every leg a
+      // phase out by twice its offset. The reflection is a registration against
+      // the feet where they stood, and this walk starts from a stand.
+      clock_->set_offsets(strategy_->phase_offsets());
       clock_->reset(engagement_->exit_master());
       stance_.seed(last_targets_, last_stance_);
       reset_swing_state();
@@ -597,11 +664,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     v_body_xy = {v_body_xy.first * cmd_gain_, v_body_xy.second * cmd_gain_};
     omega_z *= cmd_gain_;
   }
-  const float stride_length = config_.stride_length;
   const float swing_end =
       swing_end_phase(strategy_->duty_factor(), config_.swing_phase_margin);
   const float stance_fraction = 1.0f - swing_end;
-  const SwingProfile swing_profile = config_.swing_profile();
 
   const auto leg_velocities = per_leg_planar_velocity(legs_, v_body_xy, omega_z);
   float max_leg_v = 0.0f;
@@ -609,6 +674,16 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     (void)name;
     max_leg_v = std::max(max_leg_v, std::hypot(v.first, v.second));
   }
+
+  // The stride this tick can actually lay down. A stride travelling out along a
+  // leg's own axis closes that leg's reach, and the worst-placed leg sets the
+  // number for all six — they share one stance_time, so they share one stride.
+  // Everything downstream reads this rather than config_.stride_length: the
+  // cycle time, the per-leg stride vectors, the stance band the anchors are held
+  // inside, and the swing's touchdown-ride headroom.
+  const float stride_length = effective_stride_length(
+      legs_, leg_velocities, config_.stride_length, config_.stride_length_radial);
+  const SwingProfile swing_profile = config_.swing_profile(stride_length);
 
   const auto [min_cycle_time, max_cycle_time] =
       cycle_time_bounds(config_, swing_end);
@@ -619,7 +694,7 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   const float settle_cycle_time =
       config_.settle_swing_time / std::max(swing_end, 1.0e-6f);
   const float walk_cycle_time =
-      derive_cycle_time(max_leg_v, config_.stride_length, stance_fraction,
+      derive_cycle_time(max_leg_v, stride_length, stance_fraction,
                         min_cycle_time, max_cycle_time);
   const float cycle_time =
       settling ? settle_cycle_time
@@ -699,13 +774,15 @@ std::map<std::string, LegOutput> Engine::tick_gait(
         swing_.liftoff(name, last_targets_[name], aep, {v_x, v_y},
                        std::max(swing_time, 1.0e-9f), identity_y_sign(nominal));
       }
+      const float phase_in_swing =
+          swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
       // Re-aim the touchdown end at the live AEP and stance velocity. The
       // stance integrator picks up this target at touchdown and immediately
       // integrates it at the live velocity, so a latched target would show up
-      // as a velocity step at the seam whenever cmd_vel moved mid-swing.
-      swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f));
-      const float phase_in_swing =
-          swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
+      // as a velocity step at the seam whenever cmd_vel moved mid-swing. Bounded
+      // once the foot is into its probe — see SwingPlanner::retarget.
+      swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f),
+                      phase_in_swing, dt, swing_profile);
       target = swing_.evaluate(name, phase_in_swing, swing_profile);
       // Keep the stance integrator's per-leg flag in sync.
       stance_.step(name, false, target, {v_x, v_y}, dt, bound);
@@ -871,6 +948,7 @@ EngineConfig engine_config_from_config() {
   const auto& c = ::hexa::config::kEngine;
   EngineConfig cfg;
   cfg.stride_length = c.stride_length;
+  cfg.stride_length_radial = c.stride_length_radial;
   cfg.min_swing_time = c.min_swing_time;
   cfg.max_swing_time = c.max_swing_time;
   cfg.step_height = c.step_height;

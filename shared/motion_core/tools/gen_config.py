@@ -565,6 +565,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("struct EngineConfig {")
     fields = [
         ("stride_length", gait["stride_length"]),
+        ("stride_length_radial", gait["stride_length_radial"]),
         ("min_swing_time", gait["min_swing_time"]),
         ("max_swing_time", gait["max_swing_time"]),
         ("step_height", gait["step_height"]),

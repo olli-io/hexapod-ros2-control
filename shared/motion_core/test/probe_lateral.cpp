@@ -47,10 +47,26 @@ void run_scenario(float vx_frac, float vy_frac, const char* label) {
   for (const auto& g : hexa::config::kGaits) {
     if (std::string(g.name.data()) == gait_name) vmax = g.linear_max;
   }
-  const float vx = vx_frac * vmax;
-  const float vy = vy_frac * vmax;
-  std::printf("\n#### %s: cmd=(%.3f, %.3f) m/s, gait=%s\n", label, vx, vy,
-              gait_name.c_str());
+  // The cap is derated by the same ratio the stride is, or the command outruns
+  // the stride the gait can lay down and the feet scrub for the excess. This
+  // probe calls engine->update directly, so Control::shape is not in the loop
+  // to do it. A disabled budget leaves the ratio at exactly 1.
+  const float dir = std::hypot(vx_frac, vy_frac);
+  float ratio = 1.0f;
+  float eff = hexa::config::kEngine.stride_length;
+  if (dir > 0.0f) {
+    eff = effective_stride_length(
+        build_leg_contexts_from_config(), {vx_frac / dir, vy_frac / dir}, 0.0f,
+        hexa::config::kEngine.stride_length,
+        hexa::config::kEngine.stride_length_radial);
+    ratio = eff / hexa::config::kEngine.stride_length;
+  }
+  const float vx = vx_frac * vmax * ratio;
+  const float vy = vy_frac * vmax * ratio;
+  std::printf(
+      "\n#### %s: cmd=(%.3f, %.3f) m/s, gait=%s, stride=%.4f m (%.0f%% cap)\n",
+      label, vx, vy, gait_name.c_str(), static_cast<double>(eff),
+      static_cast<double>(ratio * 100.0f));
 
   const auto nominal = nominal_stance_from_config();
 
@@ -316,6 +332,10 @@ void run_scenario(float vx_frac, float vy_frac, const char* label) {
 }  // namespace
 
 int main() {
+  // Forward is the control: no leg travels along its own axis, so the budget
+  // never binds and these numbers must not move when it is switched on.
+  run_scenario(1.0f, 0.0f, "FORWARD 100% speed");
+  run_scenario(0.7071f, 0.7071f, "DIAGONAL 100% speed");
   run_scenario(0.0f, 1.0f, "LATERAL 100% speed");
   run_scenario(0.0f, 0.9f, "LATERAL 90% speed");
   run_scenario(0.0f, 0.8f, "LATERAL 80% speed");

@@ -132,6 +132,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   // ── tuning.yaml gait_node → gait::EngineConfig ──
   auto& e = cfg.engine;
   e.stride_length = f(g["stride_length"]);
+  e.stride_length_radial = f(g["stride_length_radial"]);
   e.min_swing_time = f(g["min_swing_time"]);
   e.max_swing_time = f(g["max_swing_time"]);
   e.step_height = f(g["step_height"]);

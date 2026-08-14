@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <string>
+#include <tuple>
 
 #include "config_generated.hpp"
 #include "kinematics/leg_ik.hpp"
@@ -63,7 +64,11 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
           cfg.default_gait, cfg.leg_specs, cfg.engine, standing_pose_,
           cfg.initial_pose, cfg.coxa_to_bottom, cfg.foot_radius)),
       caps_(cfg.caps),
-      control_(cfg.control, cfg.caps, nominal_stance_, cfg.default_gait),
+      control_(cfg.control, cfg.caps, nominal_stance_,
+               hexa::gait::build_leg_contexts_from(cfg.leg_specs,
+                                                   standing_pose_),
+               cfg.engine.stride_length, cfg.engine.stride_length_radial,
+               cfg.default_gait),
       posture_(cfg.posture),
       // Supervisor safety stays baked (kInputTimeoutS is from webteleop YAML and
       // kBattery from hardware.yaml's `battery:` ladder, both outside the
@@ -226,6 +231,14 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
     cmd_y = 0.0f;
     cmd_z = 0.0f;
   }
+
+  // Reversal ladder: a command opposed to the travel the robot is carrying holds
+  // the walk at the knee — the slowest speed that still walks a full stride —
+  // until the gait has all six feet down, reflects the phase circle there, and
+  // releases. Ahead of the shaping, like force_zero, so what comes out is a
+  // command the limiter ramps rather than a step it fights.
+  std::tie(cmd_x, cmd_y, cmd_z) =
+      engine_->shape_reversal(in.dt, {cmd_x, cmd_y}, cmd_z);
 
   const auto [vx, vy, wz] = control_.shape(cmd_x, cmd_y, cmd_z, st, in.dt);
   const std::map<std::string, hexa::gait::LegOutput> out =

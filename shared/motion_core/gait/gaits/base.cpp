@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace hexa::gait {
 
@@ -34,6 +35,91 @@ Vec3 stride_vector(float v_x, float v_y, float stance_time,
     sy *= scale;
   }
   return Vec3(sx, sy, 0.0f);
+}
+
+RadialAxis radial_axis(const LegContext& leg) {
+  const float d_x = leg.nominal_stance[0] - leg.mount_xyz[0];
+  const float d_y = leg.nominal_stance[1] - leg.mount_xyz[1];
+  const float r = std::hypot(d_x, d_y);
+  if (r <= 0.0f) {
+    return RadialAxis{};
+  }
+  return RadialAxis{d_x / r, d_y / r, r};
+}
+
+float radial_stride_budget(const RadialAxis& axis, float d_x, float d_y,
+                           float stride_length_radial) {
+  const float unbounded = std::numeric_limits<float>::infinity();
+  const float r_outer = axis.tip_reach;
+  if (r_outer <= 0.0f || stride_length_radial <= 0.0f) {
+    return unbounded;
+  }
+  // The reach the near end of the stride may close to. A budget large enough to
+  // pull the foot onto the coxa axis is no budget at all.
+  const float m = r_outer - 0.5f * stride_length_radial;
+  if (m <= 0.0f) {
+    return unbounded;
+  }
+  const float d = std::hypot(d_x, d_y);
+  if (d <= 0.0f) {
+    return unbounded;
+  }
+  const float c =
+      -std::fabs((d_x * axis.u_x + d_y * axis.u_y) / d);
+  const float disc = c * c - 1.0f + (m * m) / (r_outer * r_outer);
+  if (disc <= 0.0f) {
+    return unbounded;
+  }
+  // a = 1/2: the stride is laid down as half of itself either side of nominal.
+  return 2.0f * r_outer * (-c - std::sqrt(disc));
+}
+
+float effective_stride_length(
+    const std::map<std::string, LegContext>& legs,
+    const std::map<std::string, std::pair<float, float>>& leg_velocities,
+    float stride_length, float stride_length_radial) {
+  // The documented disable. It also falls out of the arithmetic, but only to
+  // within a square root's last bit, and this is a value people will set.
+  if (stride_length_radial >= stride_length) {
+    return stride_length;
+  }
+
+  float max_leg_v = 0.0f;
+  for (const auto& [name, v] : leg_velocities) {
+    (void)name;
+    max_leg_v = std::max(max_leg_v, std::hypot(v.first, v.second));
+  }
+  if (max_leg_v <= 0.0f) {
+    return stride_length;
+  }
+
+  float allowed = stride_length;
+  for (const auto& [name, leg] : legs) {
+    const auto it = leg_velocities.find(name);
+    if (it == leg_velocities.end()) {
+      continue;
+    }
+    const float v_x = it->second.first;
+    const float v_y = it->second.second;
+    const float speed = std::hypot(v_x, v_y);
+    if (speed <= 0.0f) {
+      continue;
+    }
+    const float budget =
+        radial_stride_budget(radial_axis(leg), v_x, v_y, stride_length_radial);
+    // The leg lays down speed / max_leg_v of the tick's stride, so the stride
+    // its own budget affords is that much longer.
+    allowed = std::min(allowed, budget * (max_leg_v / speed));
+  }
+  return allowed;
+}
+
+float effective_stride_length(const std::map<std::string, LegContext>& legs,
+                              std::pair<float, float> v_body_xy, float omega_z,
+                              float stride_length, float stride_length_radial) {
+  return effective_stride_length(
+      legs, per_leg_planar_velocity(legs, v_body_xy, omega_z), stride_length,
+      stride_length_radial);
 }
 
 float swing_end_phase(float duty_factor, float margin_fraction) {

@@ -23,10 +23,10 @@ enum class EngagementState { IDLE, ENGAGING, DONE };
 class EngagementController {
  public:
   EngagementController(std::map<std::string, Vec3> nominal_stance,
-                       float stride_length, float min_cycle_time,
-                       float max_cycle_time, float duty_factor,
-                       float swing_phase_margin, const SwingProfile& swing,
-                       float controller_dt);
+                       float stride_length, float stride_length_radial,
+                       float min_cycle_time, float max_cycle_time,
+                       float duty_factor, float swing_phase_margin,
+                       const SwingProfile& swing, float controller_dt);
 
   EngagementState state() const { return state_; }
 
@@ -52,6 +52,7 @@ class EngagementController {
 
   std::map<std::string, Vec3> nominal_;
   float stride_length_;
+  float stride_length_radial_;
   float min_cycle_time_;
   float max_cycle_time_;
   float duty_factor_;

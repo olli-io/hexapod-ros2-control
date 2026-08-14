@@ -21,6 +21,11 @@ class PhaseOffsets {
   const std::map<std::string, float>& offsets() const { return offsets_; }
   float at(const std::string& leg) const { return offsets_.at(leg); }
 
+  // Every leg's cycle start negated. Reverses the direction the wave travels
+  // down the body, which is what a gait walking the other way wants; a tripod's
+  // table is its own negation, so for tripod this is the identity.
+  PhaseOffsets reversed() const;
+
  private:
   std::map<std::string, float> offsets_;
 };
@@ -32,9 +37,29 @@ class GaitClock {
   explicit GaitClock(PhaseOffsets offsets);
 
   float master() const { return master_; }
+  const PhaseOffsets& offsets() const { return offsets_; }
   void reset(float master = 0.0f);
   void advance(float dt, float cycle_time);
   std::map<std::string, float> phases() const;
+
+  // Reflect every leg's phase about `about`: phase -> pymod(about - phase, 1).
+  // Reflecting the master and negating the offsets is identically that map, and
+  // reflecting the master alone is not — it misses every leg by twice its own
+  // offset. Reflecting twice returns the clock exactly where it started.
+  //
+  // Reflected about the swing end, this is the map a reversal wants: a leg's
+  // stance progress s becomes 1 - s, so the runway it has left in the new travel
+  // direction is the runway it just consumed in the old one. A leg at touchdown
+  // lifts off immediately, because the old AEP it stands on is the new PEP.
+  //
+  // Exact only where the feet are where the schedule says they are — foot
+  // excursion e == (0.5 - s) * stride — and only with every foot planted, since
+  // on a leg in the air it reverses swing progress against a latched origin.
+  void mirror(float about);
+
+  // Replace the offset table, e.g. to restore a strategy's canonical one after a
+  // mirror. Leaves the master phase alone.
+  void set_offsets(PhaseOffsets offsets) { offsets_ = std::move(offsets); }
 
  private:
   PhaseOffsets offsets_;

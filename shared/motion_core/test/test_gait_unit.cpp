@@ -1121,6 +1121,16 @@ float saturating_speed(const g::EngineConfig& cfg, float duty_factor = 0.5f) {
          (cfg.min_swing_time * (1.0f - swing_end));
 }
 
+// The stride the radial budget lets a heading lay down. Both the stance band and
+// the cap Control::shape applies are cut by this, so a test driving the engine
+// directly has to cut its own command by the same ratio or it commands travel
+// the gait has no stride for and every anchor pins on the ceiling.
+float axis_stride(const g::EngineConfig& cfg, std::pair<float, float> axis) {
+  return g::effective_stride_length(g::build_leg_contexts_from_config(), axis,
+                                    0.0f, cfg.stride_length,
+                                    cfg.stride_length_radial);
+}
+
 // One tick of BodyVelocityLimiter's vectorial linear slew, so the reversal these
 // tests drive is the one the robot actually sees. Lateral-only, so the vector
 // slew reduces to a scalar one.
@@ -1307,7 +1317,10 @@ TEST(Engine, StanceAnchorNeverPassesItsCeiling) {
 TEST(Engine, SteadyWalkNeverTouchesTheStanceBound) {
   const auto cfg = g::engine_config_from_config();
   const auto nominal = g::nominal_stance_from_config();
-  const float speed = saturating_speed(cfg);
+  // Lateral, so the radial budget is at its tightest — and the command has to be
+  // derated with it, exactly as Control::shape would.
+  const float stride = axis_stride(cfg, {0.0f, 1.0f});
+  const float speed = saturating_speed(cfg) * (stride / cfg.stride_length);
 
   auto e = g::make_default_engine("tripod");
   run_to_stand(*e);
@@ -1340,7 +1353,7 @@ TEST(Engine, SteadyWalkNeverTouchesTheStanceBound) {
   EXPECT_LT(worst_error, 1e-5f) << "the bound is attenuating a steady walk";
   // And it rides right up to the band, so the knee cannot be set any lower
   // without biting in ordinary use.
-  EXPECT_NEAR(reached, 0.5f * cfg.stride_length, speed * kReversalDt * 2.0f);
+  EXPECT_NEAR(reached, 0.5f * stride, speed * kReversalDt * 2.0f);
 }
 
 // The bound is a wall, not a spring: a leg carried out to the ceiling has to come
@@ -2499,5 +2512,203 @@ TEST(Limits, PerLegYawVelocityUsesTheStanceRadius) {
     const float r = std::hypot(stance[0], stance[1]);
     EXPECT_NEAR(std::hypot(v.first, v.second), omega * r, 1e-5f)
         << name << " yaw lever arm is not its stance radius";
+  }
+}
+
+// ── Direction-aware stride budget ────────────────────────────────────────────
+//
+// A stride is spent along each leg's own axis differently: a middle leg walking
+// sideways travels straight out along its coxa-to-foot line and closes its whole
+// reach doing it, where the same stride forward is nearly all tangential. These
+// cover the pure budget arithmetic; the engine wiring is exercised separately.
+
+namespace {
+
+// The design target for stride_length_radial. Held locally so these tests state
+// the invariant rather than tracking whatever tuning.yaml currently ships.
+constexpr float kRadialBudget = 0.084f;
+
+// 36 headings around the circle, so no test leans on an axis-aligned special
+// case.
+std::vector<std::pair<float, float>> headings() {
+  std::vector<std::pair<float, float>> out;
+  for (int i = 0; i < 36; ++i) {
+    const float a = static_cast<float>(i) * 10.0f * 3.14159265f / 180.0f;
+    out.emplace_back(std::cos(a), std::sin(a));
+  }
+  return out;
+}
+
+}  // namespace
+
+// The documented disable: a budget no tighter than the stride cannot bind, in
+// any direction, and must return the stride bit-for-bit rather than to within a
+// square root's last bit.
+TEST(RadialStride, IsExactlyStrideLengthWhenSlack) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const float stride = g::engine_config_from_config().stride_length;
+
+  for (const auto& [d_x, d_y] : headings()) {
+    const float v_x = 0.15f * d_x;
+    const float v_y = 0.15f * d_y;
+    EXPECT_FLOAT_EQ(
+        g::effective_stride_length(legs, {v_x, v_y}, 0.0f, stride, stride),
+        stride)
+        << "heading (" << d_x << ", " << d_y << ")";
+  }
+  EXPECT_FLOAT_EQ(
+      g::effective_stride_length(legs, {0.0f, 0.0f}, 0.5f, stride, stride),
+      stride);
+  EXPECT_FLOAT_EQ(
+      g::effective_stride_length(legs, {0.0f, 0.0f}, 0.0f, stride, stride),
+      stride);
+}
+
+// The whole point of solving the closure instead of projecting the stride onto
+// the leg axis. The rear legs sit at 150 degrees, so walking forward their axis
+// carries 0.866 of the travel — nearly as radial as a middle leg is sideways —
+// and a projected budget would shorten the forward stride to pay for a lateral
+// problem the rear legs do not have.
+TEST(RadialStride, ForwardWalkingKeepsTheFullStride) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const float stride = g::engine_config_from_config().stride_length;
+
+  EXPECT_FLOAT_EQ(g::effective_stride_length(legs, {0.15f, 0.0f}, 0.0f, stride,
+                                             kRadialBudget),
+                  stride);
+  EXPECT_FLOAT_EQ(g::effective_stride_length(legs, {-0.15f, 0.0f}, 0.0f, stride,
+                                             kRadialBudget),
+                  stride);
+}
+
+// A middle leg's axis is body y exactly, so a lateral stride spends all of
+// itself closing that leg's reach and the budget binds at its own value.
+TEST(RadialStride, LateralStrideIsCutToTheBudget) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const float stride = g::engine_config_from_config().stride_length;
+
+  EXPECT_NEAR(g::effective_stride_length(legs, {0.0f, 0.15f}, 0.0f, stride,
+                                         kRadialBudget),
+              kRadialBudget, 1e-6f);
+  EXPECT_NEAR(g::effective_stride_length(legs, {0.0f, -0.15f}, 0.0f, stride,
+                                         kRadialBudget),
+              kRadialBudget, 1e-6f);
+}
+
+// The reversal ladder mirrors the phase circle in place and releases the walk
+// the other way. That only re-registers the schedule against the feet if the
+// stride is the same on both sides of the reflection, which is why the budget
+// reads the travel direction unsigned.
+TEST(RadialStride, IsIdenticalUnderReversal) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const float stride = g::engine_config_from_config().stride_length;
+
+  for (const auto& [d_x, d_y] : headings()) {
+    const float v_x = 0.12f * d_x;
+    const float v_y = 0.12f * d_y;
+    const float fwd = g::effective_stride_length(legs, {v_x, v_y}, 0.0f, stride,
+                                                 kRadialBudget);
+    const float rev = g::effective_stride_length(legs, {-v_x, -v_y}, 0.0f,
+                                                 stride, kRadialBudget);
+    EXPECT_FLOAT_EQ(fwd, rev) << "heading (" << d_x << ", " << d_y << ")";
+
+    const float mix = g::effective_stride_length(legs, {v_x, v_y}, 0.3f, stride,
+                                                 kRadialBudget);
+    const float mix_rev = g::effective_stride_length(
+        legs, {-v_x, -v_y}, -0.3f, stride, kRadialBudget);
+    EXPECT_FLOAT_EQ(mix, mix_rev) << "heading (" << d_x << ", " << d_y << ")";
+  }
+}
+
+// Under pure yaw every foot travels tangentially to the body centre, not along
+// its own leg axis, so no leg's reach closes and the yaw authority the stance
+// was sized for is untouched.
+TEST(RadialStride, PureYawIsUnconstrained) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const float stride = g::engine_config_from_config().stride_length;
+
+  for (const float omega : {0.2f, -0.2f, 0.6f, -0.6f}) {
+    EXPECT_FLOAT_EQ(g::effective_stride_length(legs, {0.0f, 0.0f}, omega,
+                                               stride, kRadialBudget),
+                    stride)
+        << "omega " << omega;
+  }
+}
+
+// The invariant the budget exists to enforce, stated directly: over the whole
+// circle, no leg's foot — at its touchdown, nor at the furthest the swing's
+// touchdown ride may park it past that — closes its own reach by more than the
+// budget allows. The ride's overshoot is grace x half-stride, so the worst point
+// is 0.5 x (1 + grace) of the stride out along the travel.
+TEST(RadialStride, NoLegClosesItsReachPastTheBudget) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const float stride = g::engine_config_from_config().stride_length;
+  const float park = 0.5f * (1.0f + g::kStanceExcursionGrace);
+
+  for (const auto& [d_x, d_y] : headings()) {
+    const float v_x = 0.15f * d_x;
+    const float v_y = 0.15f * d_y;
+    const auto vels = g::per_leg_planar_velocity(legs, {v_x, v_y}, 0.25f);
+    const float eff = g::effective_stride_length(legs, vels, stride,
+                                                 kRadialBudget);
+
+    float max_leg_v = 0.0f;
+    for (const auto& [name, v] : vels) {
+      (void)name;
+      max_leg_v = std::max(max_leg_v, std::hypot(v.first, v.second));
+    }
+    ASSERT_GT(max_leg_v, 0.0f);
+
+    for (const auto& [name, leg] : legs) {
+      const auto& v = vels.at(name);
+      const float speed = std::hypot(v.first, v.second);
+      if (speed <= 0.0f) {
+        continue;
+      }
+      // What this leg actually lays down: the tick's stride scaled by its share
+      // of the fastest foot's speed.
+      const float laid = eff * (speed / max_leg_v);
+      const g::RadialAxis axis = g::radial_axis(leg);
+      const float u_x = v.first / speed;
+      const float u_y = v.second / speed;
+      const float floor_reach = axis.tip_reach - 0.5f * kRadialBudget -
+                                g::kStanceExcursionGrace * 0.5f * laid;
+      // Both ends of the excursion: the budget reads the direction unsigned, so
+      // whichever of the two closes the reach is the one it answers for.
+      for (const float s : {1.0f, -1.0f}) {
+        const float parked_x = axis.tip_reach * axis.u_x + s * park * laid * u_x;
+        const float parked_y = axis.tip_reach * axis.u_y + s * park * laid * u_y;
+        EXPECT_GE(std::hypot(parked_x, parked_y), floor_reach - 1e-6f)
+            << name << " at heading (" << d_x << ", " << d_y << "), sign " << s;
+      }
+    }
+  }
+}
+
+// A shortened stride is only coherent if the top speed comes down with it: the
+// cycle cannot run faster than min_swing_time, so a command that outruns the
+// stride the gait can lay down just clamps stride_vector and scrubs. Derating
+// the cap by the same ratio lands every direction on the same cycle-time floor
+// that forward walking sits on today.
+TEST(RadialStride, DeratedCapLandsOnTheCycleTimeFloor) {
+  const auto legs = g::build_leg_contexts_from_config();
+  const auto cfg = g::engine_config_from_config();
+  const float swing_end =
+      g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+  const float stance_fraction = 1.0f - swing_end;
+  const float min_cycle = cfg.min_swing_time / swing_end;
+  const float max_cycle = cfg.max_swing_time / swing_end;
+  const auto caps = g::load_velocity_caps_from_config(
+      g::outer_stance_radius(g::nominal_stance_from_config()));
+  const float linear_max = caps.linear_max("tripod");
+
+  for (const auto& [d_x, d_y] : headings()) {
+    const float eff = g::effective_stride_length(
+        legs, {d_x, d_y}, 0.0f, cfg.stride_length, kRadialBudget);
+    const float derated = linear_max * (eff / cfg.stride_length);
+    EXPECT_NEAR(g::derive_cycle_time(derated, eff, stance_fraction, min_cycle,
+                                     max_cycle),
+                min_cycle, 1e-4f)
+        << "heading (" << d_x << ", " << d_y << ")";
   }
 }

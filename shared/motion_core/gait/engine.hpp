@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "gait/clock.hpp"
@@ -21,6 +22,7 @@
 #include "gait/gaits/base.hpp"
 #include "gait/kinematics.hpp"
 #include "gait/reseat.hpp"
+#include "gait/reversal.hpp"
 #include "gait/stand_transition.hpp"
 #include "gait/types.hpp"
 
@@ -42,27 +44,14 @@ enum class EngineState {
   FAULT,
 };
 
-// How far past its design band a stance anchor may drift before the integrator
-// stops it, as a fraction of the band. The band is half a stride — exactly the
-// AEP..PEP envelope a steady walk rides — so the grace is only what a leg
-// borrows while the command turns under it.
-//
-// It is also the distance the foot has to shed its ground speed over, so it
-// trades excursion against how hard the foot is braked. On this geometry a full
-// lateral reversal peaks 14 mm past the band unbounded, and 0.25 gives up 8 mm
-// of that for a braking step of ~8% of stance speed per tick — a tenth of what a
-// hard clip would do, and well under what a swing already asks of the same leg.
-//
-// The swing's touchdown ride shares the same envelope: its headroom beyond the
-// live AEP is grace x band (see SwingProfile::ride_headroom), and the AEP is
-// never further than the band from nominal, so a parked foot stays inside the
-// same ceiling a stance anchor may drift to.
-constexpr float kStanceExcursionGrace = 0.25f;
-
 // Engine-internal knobs, sourced entirely from tuning.yaml's gait_node block
 // (baked into config::kEngine). None are on the wire.
 struct EngineConfig {
   float stride_length = 0.0f;
+  // Most a leg's own coxa-to-foot reach may close over one half stride. The
+  // tick's stride is cut to what the worst-placed leg affords along its own
+  // axis — see effective_stride_length. Equal to stride_length disables it.
+  float stride_length_radial = 0.0f;
   float min_swing_time = 0.0f;
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
@@ -87,7 +76,11 @@ struct EngineConfig {
 
   // How a gait swing is shaped. Shared by the engine and the engagement
   // controller so a swing looks the same however the leg got airborne.
-  SwingProfile swing_profile() const {
+  // effective_stride is the stride the tick is actually laying down, which the
+  // radial budget may have cut below stride_length. The headroom tracks it so a
+  // shortened stride also parks its feet proportionally less far past the AEP —
+  // it stays the same share of the half-stride in every direction.
+  SwingProfile swing_profile(float effective_stride) const {
     SwingProfile p;
     p.clearance = step_height;
     p.width = swing_width;
@@ -96,9 +89,12 @@ struct EngineConfig {
     // Derived, not configured: the stance band's grace, so the ride can park
     // a foot exactly as far past its AEP as a stance anchor may drift past
     // the band, and no further.
-    p.ride_headroom = kStanceExcursionGrace * 0.5f * stride_length;
+    p.ride_headroom = kStanceExcursionGrace * 0.5f * effective_stride;
     return p;
   }
+
+  // At the configured stride — the shape of a swing when nothing has cut it.
+  SwingProfile swing_profile() const { return swing_profile(stride_length); }
 
   // How a reseat swing is shaped. Its own clearance (a re-plant lifts far less
   // than a step), but the gait's touchdown probe: a foot re-planting has the
@@ -165,8 +161,31 @@ class SwingPlanner {
   // swing duration the curve is built against — a stale one would scale every
   // realized velocity by latched / live whenever cycle_time moved mid-swing.
   // No-op unless the leg is mid-swing.
+  //
+  // Rate-bounded from the probe on, because there the target's own motion *is*
+  // the slip: the arc has become the touchdown ground line (swing_arc's blend
+  // reaches 1 at travel_end), so the foot's velocity over the ground is exactly
+  // d(target)/dt, and the foot is by then inside the band it may meet the ground
+  // anywhere within. A steady command holds the AEP still and never feels this;
+  // a command ramping through low speed slides the AEP at half the stance time
+  // times the acceleration — 89 mm/s on the baked config, which is *faster than
+  // the robot walks* — and that is the drag a reversal leaves behind.
+  //
+  // The budget is the foot's own descent speed, so integrated over the probe it
+  // comes to exactly the probe band's height: the landing's horizontal drag can
+  // never exceed the height it may land within. Metering it by the ground speed
+  // instead reads well ("no faster than the ground it is landing on") but allows
+  // a slide of the same order as the walk itself, and measures 2.5x worse — any
+  // target motion under a foot in the probe is slip, whatever the robot's speed.
+  // What the target gives up is aim: it lands where it was pointed at probe
+  // entry rather than chasing the AEP to the last millimetre.
+  //
+  // v_target_ stays live and unbounded: it sets the arc's slope, and its own
+  // contribution to the slip carries a (1 - t) factor that vanishes at
+  // touchdown, so bounding it would only break the seam continuity it exists for.
   void retarget(const std::string& name, const Vec3& target,
-                std::pair<float, float> v_leg, float swing_time);
+                std::pair<float, float> v_leg, float swing_time,
+                float phase_in_swing, float dt, const SwingProfile& profile);
   void touchdown(const std::string& name);
   Vec3 evaluate(const std::string& name, float phase_in_swing,
                 const SwingProfile& profile) const;
@@ -221,6 +240,16 @@ class Engine {
   std::map<std::string, LegOutput> update(float dt,
                                           std::pair<float, float> v_body_xy,
                                           float omega_z);
+
+  // Shape a command that reverses the robot's travel — see gait/reversal.hpp for
+  // what the ladder does and why. Call once per tick with the raw command,
+  // *before* the velocity shaping whose output is fed to update(); the return is
+  // what to shape. The travel being reversed is read from the command update()
+  // was last given, so the two calls belong to the same loop. A caller that skips
+  // this entirely gets the old behaviour, not a broken one.
+  std::tuple<float, float, float> shape_reversal(
+      float dt, std::pair<float, float> v_body_xy, float omega_z);
+
 
  private:
   void apply_strategy(const std::string& name);
@@ -308,6 +337,12 @@ class Engine {
   // Per-leg: its lift-off came due while the settle was holding them, so it is
   // sitting this swing window out. See the hold in tick_gait.
   std::map<std::string, bool> held_down_;
+
+  ReversalGate reversal_;
+  // The command update() was last given — what the robot is carrying, as
+  // distinct from what is being asked of it. The reversal ladder's reference.
+  std::pair<float, float> applied_xy_{0.0f, 0.0f};
+  float applied_omega_ = 0.0f;
 
   float applied_height_ = 0.0f;
   float target_height_ = 0.0f;

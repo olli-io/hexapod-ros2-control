@@ -22,9 +22,11 @@ float smoothstep_env(float tau) {
 
 EngagementController::EngagementController(
     std::map<std::string, Vec3> nominal_stance, float stride_length,
-    float min_cycle_time, float max_cycle_time, float duty_factor,
-    float swing_phase_margin, const SwingProfile& swing, float controller_dt)
+    float stride_length_radial, float min_cycle_time, float max_cycle_time,
+    float duty_factor, float swing_phase_margin, const SwingProfile& swing,
+    float controller_dt)
     : stride_length_(stride_length),
+      stride_length_radial_(stride_length_radial),
       min_cycle_time_(min_cycle_time),
       max_cycle_time_(max_cycle_time),
       duty_factor_(duty_factor),
@@ -112,8 +114,16 @@ std::map<std::string, LegOutput> EngagementController::update(
     max_cmd_leg_v = std::max(max_cmd_leg_v, std::hypot(v.first, v.second));
   }
   const float stance_fraction = 1.0f - swing_end_;
+  // The engagement lays down the same stride the walk it is handing over to
+  // will, so it prices the command against the legs the same way — see
+  // effective_stride_length. A ladder that engaged on the full stride would
+  // hand the gait feet already outside the band it is about to hold them in.
+  const float stride_length = effective_stride_length(
+      leg_contexts_, cmd_leg_v, stride_length_, stride_length_radial_);
+  SwingProfile swing = swing_;
+  swing.ride_headroom = kStanceExcursionGrace * 0.5f * stride_length;
   const float cycle_time =
-      derive_cycle_time(max_cmd_leg_v, stride_length_, stance_fraction,
+      derive_cycle_time(max_cmd_leg_v, stride_length, stance_fraction,
                         min_cycle_time_, max_cycle_time_);
   const float stance_time = cycle_time * stance_fraction;
 
@@ -171,13 +181,13 @@ std::map<std::string, LegOutput> EngagementController::update(
       } else {
         const auto& v = cmd_leg_v.at(name);
         const Vec3 stride_vec =
-            stride_vector(v.first, v.second, stance_time, stride_length_);
+            stride_vector(v.first, v.second, stance_time, stride_length);
         StrideParams stride;
         stride.stride_vector = stride_vec;
         stride.cycle_time = cycle_time;
         stride.swing_end = swing_end_;
         stride.controller_dt = controller_dt_;
-        stride.swing = swing_;
+        stride.swing = swing;
         foot = strategy_->foot_target(phase, stride, leg_contexts_.at(name));
         foot_position_[name] = foot;
       }
@@ -191,7 +201,7 @@ std::map<std::string, LegOutput> EngagementController::update(
 
       const auto& vc = cmd_leg_v.at(name);
       const Vec3 stride_vec =
-          stride_vector(vc.first, vc.second, stance_time, stride_length_);
+          stride_vector(vc.first, vc.second, stance_time, stride_length);
       const Vec3 nominal = nominal_[name];
       const Vec3 aep = live_aep(nominal, stride_vec);
 
@@ -210,7 +220,7 @@ std::map<std::string, LegOutput> EngagementController::update(
       const auto& vb = body_leg_v.at(name);
       const Vec3 foot = swing_arc(phase_in_swing, lift_off_position_[name], aep,
                                   identity_y_sign(nominal), leg_swing_time,
-                                  swing_, Vec3::Zero(),
+                                  swing, Vec3::Zero(),
                                   Vec3(-vb.first, -vb.second, 0.0f));
       foot_position_[name] = foot;
       out[name] = LegOutput{foot, phase, false};
