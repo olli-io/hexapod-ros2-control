@@ -167,12 +167,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
               kTol);
   EXPECT_NEAR(lp.pose_filter_tau_rotation, bp.pose_filter_tau_rotation, kTol);
   EXPECT_NEAR(lp.pose_filter_damping_ratio, bp.pose_filter_damping_ratio, kTol);
-  EXPECT_NEAR(lp.animation_reserve_x, bp.animation_reserve_x, kTol);
-  EXPECT_NEAR(lp.animation_reserve_y, bp.animation_reserve_y, kTol);
-  EXPECT_NEAR(lp.animation_reserve_z, bp.animation_reserve_z, kTol);
-  EXPECT_NEAR(lp.animation_reserve_roll, bp.animation_reserve_roll, kTol);
-  EXPECT_NEAR(lp.animation_reserve_pitch, bp.animation_reserve_pitch, kTol);
-  EXPECT_NEAR(lp.animation_reserve_yaw, bp.animation_reserve_yaw, kTol);
   EXPECT_NEAR(lp.pose_limit_x, bp.pose_limit_x, kTol);
   EXPECT_NEAR(lp.pose_limit_y, bp.pose_limit_y, kTol);
   EXPECT_NEAR(lp.pose_limit_roll, bp.pose_limit_roll, kTol);

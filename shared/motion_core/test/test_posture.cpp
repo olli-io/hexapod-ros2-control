@@ -113,21 +113,15 @@ TEST(PostureGaitAnimationSwitch, AnimationModeExemptFromSwitch) {
 
 // A posture config with an explicit, deliberately asymmetric height envelope:
 // nominal belly at 0.05, ceiling at 0.14, floor at 0.02 — so the usable pose
-// offsets are +0.09 up and only -0.03 down. Animations are off and the reserve
-// is zeroed so the user pose gets the whole envelope and the assertions read
-// against the configured numbers directly.
+// offsets are +0.09 up and only -0.03 down. Animations are off so the user pose
+// gets the whole envelope and the assertions read against the configured
+// numbers directly.
 hexa::config::PostureConfig with_height_envelope() {
   hexa::config::PostureConfig p = hexa::config::kPosture;
   p.gait_body_animations_enabled = false;
   p.nominal_body_height = 0.05f;
   p.body_height_max = 0.14f;
   p.body_height_min = 0.02f;
-  p.animation_reserve_x = 0.0f;
-  p.animation_reserve_y = 0.0f;
-  p.animation_reserve_z = 0.0f;
-  p.animation_reserve_roll = 0.0f;
-  p.animation_reserve_pitch = 0.0f;
-  p.animation_reserve_yaw = 0.0f;
   return p;
 }
 
@@ -168,20 +162,6 @@ TEST(PosturePoseClamp, MidRangeHeightPassesThroughUntouched) {
   // +0.06 of lift = belly 0.11 m, inside the envelope: no clamping at all.
   EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, 0.06f, 0.0f, 0.0f, 0.0f}).z,
               0.06f, 1e-5f);
-}
-
-// The reserve is spent from both ends of an asymmetric envelope, not mirrored
-// off the larger one: with 0.01 held back the user keeps +0.08 / -0.02.
-TEST(PosturePoseClamp, AnimationReserveShrinksBothEndsOfTheHeightRange) {
-  hexa::config::PostureConfig p = with_height_envelope();
-  p.animation_reserve_z = 0.01f;
-  PostureController posture{p};
-  constexpr float kTol = 1e-5f;
-
-  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f}).z,
-              0.08f, kTol);
-  EXPECT_NEAR(idle_pose(posture, BodyPose{0.0f, 0.0f, -0.5f, 0.0f, 0.0f, 0.0f}).z,
-              -0.02f, kTol);
 }
 
 // The five symmetric axes come from the same config block; a runaway teleop

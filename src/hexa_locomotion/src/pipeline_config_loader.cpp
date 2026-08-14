@@ -228,12 +228,6 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.pose_filter_damping_ratio = f(p["pose_filter_damping_ratio"]);
   ps.gait_body_animations_enabled =
       p["gait_body_animations_enabled"].as<bool>();
-  ps.animation_reserve_x = f(p["animation_reserve_x"]);
-  ps.animation_reserve_y = f(p["animation_reserve_y"]);
-  ps.animation_reserve_z = f(p["animation_reserve_z"]);
-  ps.animation_reserve_roll = f(p["animation_reserve_roll"]);
-  ps.animation_reserve_pitch = f(p["animation_reserve_pitch"]);
-  ps.animation_reserve_yaw = f(p["animation_reserve_yaw"]);
   ps.pose_limit_x = f(p["pose_limit_x"]);
   ps.pose_limit_y = f(p["pose_limit_y"]);
   ps.pose_limit_roll = f(p["pose_limit_roll"]);

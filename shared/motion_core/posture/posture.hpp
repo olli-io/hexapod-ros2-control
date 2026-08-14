@@ -83,9 +83,8 @@ class PostureController {
   PostureController();
 
   // Build with explicit posture tuning (hexa_locomotion's runtime-YAML path):
-  // the animation amplitudes, filter taus, activation slew rate, and per-axis
-  // animation reserve all come from `posture`. The enabled-animation SET stays
-  // baked (kEnabledAnimations / kAnimationModeAnimations — structural, not a
+  // the animation amplitudes, filter taus, activation slew rate, and pose
+  // limits all come from `posture`. The enabled-animation SET stays baked (kEnabledAnimations / kAnimationModeAnimations — structural, not a
   // tuning knob). The no-arg ctor delegates here with config::kPosture.
   explicit PostureController(const ::hexa::config::PostureConfig& posture);
 
@@ -103,9 +102,9 @@ class PostureController {
 
   // Advance the filters and evaluate the active stack for this tick. Slews the
   // activation toward the walking flag, evaluates the stack twice (walking
-  // true/false), lerps between them, and composes the result with the user pose
-  // under the layered clamp — returning the body_pose_target, or IDENTITY when
-  // the engine state is outside POSTURE_ACTIVE_STATES. Mirrors _tick
+  // true/false), lerps between them, and sums the result with the user pose
+  // under the pose-limit clamp — returning the body_pose_target, or IDENTITY
+  // when the engine state is outside POSTURE_ACTIVE_STATES. Mirrors _tick
   // (+ _on_leg_targets / _step_filters, which run in-line here since firmware
   // has no wire).
   //   legs         — the engine's per-leg output this tick.
@@ -125,9 +124,6 @@ class PostureController {
 
   BodyPose user_pose_ = IDENTITY;
   PoseLimits limits_;
-  // The smoother saturates against this, leaving compose_layered's own user
-  // clamp inert.
-  PoseLimits user_env_;
   PoseSmoother pose_smoother_;
 
   // Gait-animation crossfade: activation slews 0<->1 toward the walking flag so
@@ -142,8 +138,6 @@ class PostureController {
   // selected ANIMATION-mode stack are untouched.
   bool gait_body_animations_enabled_;
   float activation_slew_rate_;
-  // Per-axis animation budget for the layered clamp (compose_layered).
-  PoseLimits anim_reserve_;
 
   // Filter state (mirrors the node's _support_centroid_xy / _swing_lift_z and
   // their latest-raw holders).

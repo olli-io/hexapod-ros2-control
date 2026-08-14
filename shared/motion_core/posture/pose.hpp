@@ -62,22 +62,6 @@ struct PoseLimits {
 // pose.clamp.
 BodyPose clamp(const BodyPose& pose, const PoseLimits& limits);
 
-// The user pose's share of the envelope: (limits - anim_reserve) per axis,
-// floored at 0 (ceilinged at 0 for z_min) so an oversized reserve collapses the
-// user's range rather than inverting it. Both compose_layered and the pose
-// smoother clamp against this, so they must agree on it.
-PoseLimits user_envelope(const PoseLimits& limits, const PoseLimits& anim_reserve);
-
-// Layered clamp: give the static user pose and the animation offset each their
-// own budget so a dialed-in posture can never asymmetrically clip the animation.
-// The user pose is clamped to user_envelope(limits, anim_reserve), the animation
-// to +/-anim_reserve, then summed and clamped to limits as a final guard (inert
-// while user_env + anim_reserve <= limits). Trade-off: the user's static range
-// shrinks by anim_reserve per axis. Mirrors pose.compose_layered.
-BodyPose compose_layered(const BodyPose& user, const BodyPose& animated,
-                         const PoseLimits& limits,
-                         const PoseLimits& anim_reserve);
-
 // Tuning for PoseSmoother, one (tau, zeta) pair per axis group.
 //
 // Parameterised by omega_n and zeta rather than by the reference

@@ -42,7 +42,7 @@ struct PipelineConfig {
   hexa::gait::VelocityCaps caps;          // per-gait linear_max/yaw_bias + angular_max
   std::string default_gait;
   hexa::config::ControlConfig control{};  // vmax_ramp_time_* + snap_tol_*
-  hexa::config::PostureConfig posture{};  // animation amplitudes, taus, reserves, slew
+  hexa::config::PostureConfig posture{};  // animation amplitudes, taus, limits, slew
 
   // Reconstruct the baked constexpr config (config_generated.hpp). Used by the
   // Pico / any default construction; also the parity anchor for the ROS loader.

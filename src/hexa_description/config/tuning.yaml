@@ -235,18 +235,11 @@ posture_node:
     pose_filter_tau_rotation: 0.135
     pose_filter_damping_ratio: 0.32
 
-    # Range (m / rad) reserved for the animation layer so a dialed-in body
-    # pose can't crowd it out and cause jitter, at the cost of a smaller
-    # manual posing range. Size these to cover the amplitudes above.
-    animation_reserve_x: 0.01
-    animation_reserve_y: 0.01
-    animation_reserve_z: 0
-    animation_reserve_roll: 0.15
-    animation_reserve_pitch: 0.15
-    animation_reserve_yaw: 0.15
-
     # Posing limits. Body height is ground to the hexa's underside; the other
     # five axes are symmetric (± the value), m for x/y and rad for rotation.
+    # The manual pose and the animation layer share this one envelope and their
+    # sum is clamped to it, so leave room for the amplitudes above — a pose
+    # dialed all the way out clips the animation on that axis.
     body_height_max_m: 0.14
     body_height_min_m: 0.02
     pose_limit_x: 0.05

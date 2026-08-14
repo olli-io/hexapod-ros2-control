@@ -786,20 +786,15 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("gait_bounce_step_height_ref", pn["gait_bounce_step_height_ref"]),
         ("support_centroid_tau", pn["support_centroid_tau"]),
         ("swing_lift_tau", pn["swing_lift_tau"]),
-        # Gait-animation crossfade + layered clamp (posture layering fix).
+        # Gait-animation crossfade (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
         # Spring/inertia smoother on the commanded body pose. tau = 1/omega_n
         # (s), damping_ratio = zeta; both frame-rate independent.
         ("pose_filter_tau_translation", pn["pose_filter_tau_translation"]),
         ("pose_filter_tau_rotation", pn["pose_filter_tau_rotation"]),
         ("pose_filter_damping_ratio", pn["pose_filter_damping_ratio"]),
-        ("animation_reserve_x", pn["animation_reserve_x"]),
-        ("animation_reserve_y", pn["animation_reserve_y"]),
-        ("animation_reserve_z", pn["animation_reserve_z"]),
-        ("animation_reserve_roll", pn["animation_reserve_roll"]),
-        ("animation_reserve_pitch", pn["animation_reserve_pitch"]),
-        ("animation_reserve_yaw", pn["animation_reserve_yaw"]),
-        # Composed-pose clamp envelope. body_height_{max,min} are ABSOLUTE belly
+        # Composed-pose clamp envelope, shared by the user pose and the
+        # animation layer. body_height_{max,min} are ABSOLUTE belly
         # clearance; nominal_body_height is the same standing-pose height the
         # gait engine solves the stance from, carried here so PostureController
         # can turn the pair into the pose offsets BodyPose::z actually is.

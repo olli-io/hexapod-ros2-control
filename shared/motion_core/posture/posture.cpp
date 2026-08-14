@@ -193,17 +193,8 @@ PostureController::PostureController(const config::PostureConfig& p)
               p.pose_limit_roll, p.pose_limit_pitch, p.pose_limit_yaw},
       gait_body_animations_enabled_(p.gait_body_animations_enabled),
       activation_slew_rate_(p.gait_activation_slew_rate),
-      // The animation reserve is symmetric on every axis including z, so it
-      // spends the same budget up and down.
-      anim_reserve_{p.animation_reserve_x,    p.animation_reserve_y,
-                    p.animation_reserve_z,    -p.animation_reserve_z,
-                    p.animation_reserve_roll, p.animation_reserve_pitch,
-                    p.animation_reserve_yaw},
       centroid_tau_(p.support_centroid_tau),
       swing_lift_tau_(p.swing_lift_tau) {
-  // Assigned in the body, not the init list: both derive from anim_reserve_,
-  // which is declared after them.
-  user_env_ = user_envelope(limits_, anim_reserve_);
   pose_smoother_ = PoseSmoother(PoseSmootherConfig{
       p.pose_filter_tau_translation, p.pose_filter_tau_rotation,
       p.pose_filter_damping_ratio});
@@ -315,10 +306,12 @@ BodyPose PostureController::update(
   // Clamped to the envelope going in as well as out, so the filter never
   // integrates toward — or winds up against — an unreachable value.
   const BodyPose user_smoothed =
-      pose_smoother_.step(clamp(user_pose_, user_env_), user_env_, dt);
+      pose_smoother_.step(clamp(user_pose_, limits_), limits_, dt);
 
-  // Layered clamp: the user pose and the animation each get their own budget.
-  return compose_layered(user_smoothed, animated, limits_, anim_reserve_);
+  // One shared envelope: the user pose and the animation both spend it, and the
+  // sum is clamped to it. Keeping an animation's amplitude reachable is a matter
+  // of leaving room in the tuned pose limits.
+  return clamp(add(user_smoothed, animated), limits_);
 }
 
 }  // namespace hexa::posture
