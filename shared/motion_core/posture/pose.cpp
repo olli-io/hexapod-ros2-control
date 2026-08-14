@@ -1,6 +1,8 @@
 // Body-pose small-offset algebra — float fork of hexa_posture/pose.py.
 #include "posture/pose.hpp"
 
+#include <cmath>
+
 namespace hexa::posture {
 
 BodyPose add(const BodyPose& a, const BodyPose& b) {
@@ -39,15 +41,46 @@ float clamp_axis(float v, float lo, float hi) {
   }
   return v;
 }
+
+// Both a length (m) and an angle (rad) floor. One value serves: 1e-6 of either
+// is far below what a servo can express, and far above the float noise at the
+// centimetre / third-of-a-radian magnitudes the envelope allows.
+constexpr float kPolarEps = 1e-6f;
+constexpr float kTwoPi = 6.283185307179586f;
+
+// Scale a pair onto the disc of radius r_max, direction preserved.
+void clamp_disc(float& a, float& b, float r_max) {
+  const float r = std::hypot(a, b);
+  if (r > r_max) {
+    const float k = r_max / r;
+    a *= k;
+    b *= k;
+  }
+}
+
+// The short-way-around representative of an angle error, in [-pi, pi].
+// std::remainder is the exact form (a - 2pi*round(a/2pi)); std::fmod is not —
+// it keeps the sign of the dividend.
+float wrap_pi(float a) { return std::remainder(a, kTwoPi); }
 }  // namespace
 
 BodyPose clamp(const BodyPose& pose, const PoseLimits& limits) {
-  return BodyPose{clamp_axis(pose.x, limits.x),
-                  clamp_axis(pose.y, limits.y),
-                  clamp_axis(pose.z, limits.z_min, limits.z_max),
-                  clamp_axis(pose.roll, limits.roll),
-                  clamp_axis(pose.pitch, limits.pitch),
-                  clamp_axis(pose.yaw, limits.yaw)};
+  BodyPose out{pose.x,
+               pose.y,
+               clamp_axis(pose.z, limits.z_min, limits.z_max),
+               pose.roll,
+               pose.pitch,
+               clamp_axis(pose.yaw, limits.yaw)};
+  clamp_disc(out.x, out.y, limits.xy_radius());
+  clamp_disc(out.roll, out.pitch, limits.tilt_radius());
+  return out;
+}
+
+PolarState to_polar(float a, float b) {
+  PolarState s;
+  s.radius = std::hypot(a, b);
+  s.angle = s.radius > kPolarEps ? std::atan2(b, a) : 0.0f;
+  return s;
 }
 
 namespace {
@@ -84,6 +117,75 @@ float omega_for(float tau, float dt) {
   const float w_max = 0.5f / dt;
   return w > w_max ? w_max : w;
 }
+
+// One step of the same spring on a pair carried in polar, so a direction sweep
+// holds its reach instead of cutting the chord. Magnitude and direction get
+// their own w; both integrate exactly as step_axis does, with the saturation
+// clamp folded in the same way.
+void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
+                float target_b, float r_max, float w_radius, float w_angle,
+                float zeta, float dt) {
+  if (w_radius <= 0.0f) {
+    // Bypass the whole pair. Snap in Cartesian rather than round-tripping
+    // through polar, so the result is bit-identical to the old per-axis snap.
+    out_a = target_a;
+    out_b = target_b;
+    clamp_disc(out_a, out_b, r_max);
+    s = to_polar(out_a, out_b);
+    return;
+  }
+
+  float target_r = std::hypot(target_a, target_b);
+  if (target_r > r_max) {
+    target_r = r_max;
+  }
+
+  // A pair sitting at the origin has no direction of its own, so adopt the
+  // target's outright instead of easing off a stale one — which would fling
+  // the body out along the old heading first and only then curve. Free: at
+  // radius 0 there is nothing to see move.
+  if (s.radius <= kPolarEps && target_r > kPolarEps) {
+    s.angle = std::atan2(target_b, target_a);
+    s.angle_rate = 0.0f;
+  }
+  // A target at the origin has no direction either. Freeze the heading and let
+  // the magnitude ease in, so a withdrawn pose retracts along its own line
+  // rather than spinning on the way to centre.
+  const float target_angle =
+      target_r > kPolarEps ? std::atan2(target_b, target_a) : s.angle;
+
+  if (w_angle <= 0.0f) {
+    s.angle = target_angle;
+    s.angle_rate = 0.0f;
+  } else {
+    const float err = wrap_pi(target_angle - s.angle);
+    s.angle_rate +=
+        (w_angle * w_angle * err - 2.0f * zeta * w_angle * s.angle_rate) * dt;
+    // Wrapping the state and not just the error keeps `angle` bounded however
+    // many turns it accumulates.
+    s.angle = wrap_pi(s.angle + s.angle_rate * dt);
+  }
+
+  s.radius_rate += (w_radius * w_radius * (target_r - s.radius) -
+                    2.0f * zeta * w_radius * s.radius_rate) *
+                   dt;
+  s.radius += s.radius_rate * dt;
+  if (s.radius < 0.0f) {
+    // The floor is what stops an undershoot swinging the pair through the
+    // origin and out the far side. The heading rate goes with it: a spin
+    // banked while the pair sat at the origin would otherwise be released the
+    // instant the magnitude came off zero.
+    s.radius = 0.0f;
+    s.radius_rate = 0.0f;
+    s.angle_rate = 0.0f;
+  } else if (s.radius > r_max) {
+    s.radius = r_max;
+    s.radius_rate = 0.0f;
+  }
+
+  out_a = s.radius * std::cos(s.angle);
+  out_b = s.radius * std::sin(s.angle);
+}
 }  // namespace
 
 BodyPose PoseSmoother::step(const BodyPose& target, const PoseLimits& envelope,
@@ -93,17 +195,17 @@ BodyPose PoseSmoother::step(const BodyPose& target, const PoseLimits& envelope,
   }
   const float wt = omega_for(cfg_.tau_translation, dt);
   const float wr = omega_for(cfg_.tau_rotation, dt);
+  const float wxa = omega_for(cfg_.tau_xy_angle, dt);
+  const float wta = omega_for(cfg_.tau_tilt_angle, dt);
   const float z = cfg_.damping_ratio;
 
-  step_axis(pose_.x, vel_.x, target.x, -envelope.x, envelope.x, wt, z, dt);
-  step_axis(pose_.y, vel_.y, target.y, -envelope.y, envelope.y, wt, z, dt);
-  step_axis(pose_.z, vel_.z, target.z, envelope.z_min, envelope.z_max, wt, z,
+  step_polar(xy_, pose_.x, pose_.y, target.x, target.y, envelope.xy_radius(),
+             wt, wxa, z, dt);
+  step_polar(tilt_, pose_.roll, pose_.pitch, target.roll, target.pitch,
+             envelope.tilt_radius(), wr, wta, z, dt);
+  step_axis(pose_.z, vel_z_, target.z, envelope.z_min, envelope.z_max, wt, z,
             dt);
-  step_axis(pose_.roll, vel_.roll, target.roll, -envelope.roll, envelope.roll,
-            wr, z, dt);
-  step_axis(pose_.pitch, vel_.pitch, target.pitch, -envelope.pitch,
-            envelope.pitch, wr, z, dt);
-  step_axis(pose_.yaw, vel_.yaw, target.yaw, -envelope.yaw, envelope.yaw, wr, z,
+  step_axis(pose_.yaw, vel_yaw_, target.yaw, -envelope.yaw, envelope.yaw, wr, z,
             dt);
   return pose_;
 }

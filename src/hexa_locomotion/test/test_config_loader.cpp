@@ -166,6 +166,9 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.pose_filter_tau_translation, bp.pose_filter_tau_translation,
               kTol);
   EXPECT_NEAR(lp.pose_filter_tau_rotation, bp.pose_filter_tau_rotation, kTol);
+  EXPECT_NEAR(lp.pose_filter_tau_xy_angle, bp.pose_filter_tau_xy_angle, kTol);
+  EXPECT_NEAR(lp.pose_filter_tau_tilt_angle, bp.pose_filter_tau_tilt_angle,
+              kTol);
   EXPECT_NEAR(lp.pose_filter_damping_ratio, bp.pose_filter_damping_ratio, kTol);
   EXPECT_NEAR(lp.pose_limit_x, bp.pose_limit_x, kTol);
   EXPECT_NEAR(lp.pose_limit_y, bp.pose_limit_y, kTol);

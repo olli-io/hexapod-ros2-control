@@ -19,8 +19,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "config_generated.hpp"
 #include "gait/engine.hpp"
@@ -165,19 +167,48 @@ TEST(PosturePoseClamp, MidRangeHeightPassesThroughUntouched) {
 }
 
 // The five symmetric axes come from the same config block; a runaway teleop
-// value must still be pinned to the tuning.yaml envelope.
+// value must still be pinned to the tuning.yaml envelope. One axis at a time,
+// because x-y and roll-pitch share a disc — a runaway on BOTH members of a pair
+// is the PairsClampToAnInscribedDisc case below, not this one.
 TEST(PosturePoseClamp, SymmetricAxesClampToTheConfiguredLimits) {
+  hexa::config::PostureConfig p = with_height_envelope();
+  constexpr float kTol = 1e-5f;
+
+  PostureController px{p};
+  EXPECT_NEAR(idle_pose(px, BodyPose{9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}).x,
+              p.pose_limit_x, kTol);
+  PostureController py{p};
+  EXPECT_NEAR(idle_pose(py, BodyPose{0.0f, -9.0f, 0.0f, 0.0f, 0.0f, 0.0f}).y,
+              -p.pose_limit_y, kTol);
+  PostureController pr{p};
+  EXPECT_NEAR(idle_pose(pr, BodyPose{0.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f}).roll,
+              p.pose_limit_roll, kTol);
+  PostureController pp{p};
+  EXPECT_NEAR(idle_pose(pp, BodyPose{0.0f, 0.0f, 0.0f, 0.0f, -9.0f, 0.0f}).pitch,
+              -p.pose_limit_pitch, kTol);
+  PostureController pyaw{p};
+  EXPECT_NEAR(idle_pose(pyaw, BodyPose{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 9.0f}).yaw,
+              p.pose_limit_yaw, kTol);
+}
+
+// x-y and roll-pitch ease as pairs, so their envelope is the disc inscribed in
+// the box, not the box: a diagonal runaway lands at limit/sqrt(2) on each
+// member, not at the corner. Deliberate — reach is then the same in every
+// direction. This case exists so reintroducing a box clamp fails loudly.
+TEST(PosturePoseClamp, PairsClampToAnInscribedDisc) {
   hexa::config::PostureConfig p = with_height_envelope();
   PostureController posture{p};
   constexpr float kTol = 1e-5f;
+  const float kInvSqrt2 = 0.70710678f;
 
   const BodyPose out =
-      idle_pose(posture, BodyPose{9.0f, -9.0f, 0.0f, 9.0f, -9.0f, 9.0f});
-  EXPECT_NEAR(out.x, p.pose_limit_x, kTol);
-  EXPECT_NEAR(out.y, -p.pose_limit_y, kTol);
-  EXPECT_NEAR(out.roll, p.pose_limit_roll, kTol);
-  EXPECT_NEAR(out.pitch, -p.pose_limit_pitch, kTol);
-  EXPECT_NEAR(out.yaw, p.pose_limit_yaw, kTol);
+      idle_pose(posture, BodyPose{9.0f, -9.0f, 0.0f, 9.0f, -9.0f, 0.0f});
+  EXPECT_NEAR(std::hypot(out.x, out.y), p.pose_limit_x, kTol);
+  EXPECT_NEAR(out.x, p.pose_limit_x * kInvSqrt2, kTol);
+  EXPECT_NEAR(out.y, -p.pose_limit_y * kInvSqrt2, kTol);
+  EXPECT_NEAR(std::hypot(out.roll, out.pitch), p.pose_limit_roll, kTol);
+  EXPECT_NEAR(out.roll, p.pose_limit_roll * kInvSqrt2, kTol);
+  EXPECT_NEAR(out.pitch, -p.pose_limit_pitch * kInvSqrt2, kTol);
 }
 
 // ── pose input filter ─────────────────────────────────────────────────────
@@ -302,17 +333,209 @@ TEST(PosturePoseFilter, InactiveStateResetsTheFilter) {
   EXPECT_LT(first.z, 0.1f * kStepZ);
 }
 
-// tau <= 0 is the off switch, in place of a separate enable flag.
+// tau <= 0 is the off switch, in place of a separate enable flag. Checked on a
+// pair as well as on z: the pair bypass is a separate branch in step_polar.
 TEST(PosturePoseFilter, ZeroTauBypassesTheFilter) {
   hexa::config::PostureConfig p = with_height_envelope();
   p.pose_filter_tau_translation = 0.0f;
   p.pose_filter_tau_rotation = 0.0f;
   PostureController posture{p};
-  posture.set_user_pose(kStepUp);
+  posture.set_user_pose(BodyPose{0.03f, 0.0f, kStepZ, 0.2f, 0.0f, 0.0f});
 
   const BodyPose first = posture.update(tripod_legs(), 0.0f, /*walking=*/false,
                                         EngineState::STAND, "tripod", kDt, 0.0f);
   EXPECT_NEAR(first.z, kStepZ, 1e-6f);
+  EXPECT_NEAR(first.x, 0.03f, 1e-6f);
+  EXPECT_NEAR(first.roll, 0.2f, 1e-6f);
+}
+
+// ── polar pair easing ─────────────────────────────────────────────────────
+//
+// These drive PoseSmoother directly rather than through PostureController: the
+// assertions are about the shape of the smoother's trajectory, and the
+// animation stack has nothing to contribute to them.
+
+using hexa::posture::PoseLimits;
+using hexa::posture::PoseSmoother;
+using hexa::posture::PoseSmootherConfig;
+
+constexpr PoseLimits kEnv{0.05f, 0.05f, 0.09f, -0.03f, 0.30f, 0.30f, 0.50f};
+
+// Hold `target` for `ticks` and return every intermediate pose.
+std::vector<BodyPose> run_to(PoseSmoother& s, const BodyPose& target,
+                             int ticks) {
+  std::vector<BodyPose> out;
+  out.reserve(static_cast<size_t>(ticks));
+  for (int i = 0; i < ticks; ++i) {
+    out.push_back(s.step(hexa::posture::clamp(target, kEnv), kEnv, kDt));
+  }
+  return out;
+}
+
+BodyPose xy_pose(float x, float y) {
+  return BodyPose{x, y, 0.0f, 0.0f, 0.0f, 0.0f};
+}
+
+// The headline case. Per-axis easing is isotropic, so its path between two
+// commands is a straight line: swinging a held reach 90 degrees traces the
+// chord, and the magnitude dips to sqrt((1-p)^2 + p^2) of the reach — 0.707 at
+// the crossing. That 29% collapse IS the jerk this change removes.
+TEST(PosturePolarFilter, DirectionSweepHoldsItsReach) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  constexpr float kR = 0.04f;
+  run_to(s, xy_pose(kR, 0.0f), 2000);
+  ASSERT_NEAR(s.value().x, kR, 1e-5f);
+
+  for (const BodyPose& p : run_to(s, xy_pose(0.0f, kR), 2000)) {
+    EXPECT_NEAR(std::hypot(p.x, p.y), kR, 0.05f * kR);
+    // Never behind the heading it started from — it sweeps the short way and
+    // rings about the destination, it does not set off backwards. (It does
+    // overshoot: zeta < 1 applies to the heading spring as much as any other.)
+    EXPECT_GE(std::atan2(p.y, p.x), -1e-6f);
+  }
+  EXPECT_NEAR(s.value().y, kR, 1e-5f);
+  EXPECT_NEAR(s.value().x, 0.0f, 1e-5f);
+}
+
+// Same for the tilt pair, so nobody wires only x-y.
+TEST(PosturePolarFilter, TiltDirectionSweepHoldsItsReach) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  constexpr float kR = 0.20f;
+  const BodyPose roll_out{0.0f, 0.0f, 0.0f, kR, 0.0f, 0.0f};
+  const BodyPose pitch_out{0.0f, 0.0f, 0.0f, 0.0f, kR, 0.0f};
+  run_to(s, roll_out, 2000);
+  ASSERT_NEAR(s.value().roll, kR, 1e-5f);
+
+  for (const BodyPose& p : run_to(s, pitch_out, 2000)) {
+    EXPECT_NEAR(std::hypot(p.roll, p.pitch), kR, 0.05f * kR);
+  }
+  EXPECT_NEAR(s.value().pitch, kR, 1e-5f);
+}
+
+// A direction step wider than a half-turn must go the short way, not unwind
+// the long way round. At +175 -> -175 degrees the short way stays on the -x
+// side throughout; the long way would carry the body through +x.
+TEST(PosturePolarFilter, DirectionTakesTheShortWayAcrossTheWrap) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  constexpr float kR = 0.04f;
+  const float a0 = 175.0f * 3.14159265f / 180.0f;
+  run_to(s, xy_pose(kR * std::cos(a0), kR * std::sin(a0)), 2000);
+  ASSERT_LT(s.value().x, 0.0f);
+
+  for (const BodyPose& p : run_to(s, xy_pose(kR * std::cos(-a0),
+                                             kR * std::sin(-a0)), 2000)) {
+    EXPECT_LT(p.x, 0.0f);
+  }
+  EXPECT_NEAR(s.value().y, kR * std::sin(-a0), 1e-5f);
+}
+
+// A target at the origin has no direction, so the pair retracts along its own
+// line instead of spinning to centre.
+TEST(PosturePolarFilter, WithdrawnPairRetractsAlongItsOwnLine) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  run_to(s, xy_pose(0.03f, 0.03f), 2000);
+
+  for (const BodyPose& p : run_to(s, xy_pose(0.0f, 0.0f), 2000)) {
+    EXPECT_NEAR(p.x, p.y, 1e-6f);  // heading frozen at 45 degrees
+    EXPECT_GE(p.x, -1e-6f);        // and never past the origin
+  }
+  EXPECT_NEAR(s.value().x, 0.0f, 1e-6f);
+}
+
+// The magnitude floor absorbs the zeta = 0.32 undershoot on a return to
+// centre. A deliberate change: the old per-axis filter overshot THROUGH the
+// origin and came out the far side. The floor must not wind up, though — the
+// pose has to move again on the very next tick.
+TEST(PosturePolarFilter, MagnitudeStopsAtTheOriginInsteadOfSwingingThrough) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  run_to(s, xy_pose(0.04f, 0.0f), 2000);
+
+  for (const BodyPose& p : run_to(s, xy_pose(0.0f, 0.0f), 400)) {
+    EXPECT_GE(p.x, -1e-6f);
+  }
+  ASSERT_NEAR(s.value().x, 0.0f, 1e-6f);
+
+  const BodyPose next = s.step(xy_pose(0.04f, 0.0f), kEnv, kDt);
+  EXPECT_GT(next.x, 0.0f);
+}
+
+// The pair twin of SaturatedAxisDoesNotWindUp: parked far outside, the
+// magnitude pins to the disc and still responds on the tick after withdrawal.
+TEST(PosturePolarFilter, SaturatedMagnitudeDoesNotWindUp) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  for (const BodyPose& p : run_to(s, xy_pose(10.0f, 10.0f), 2000)) {
+    EXPECT_LE(std::hypot(p.x, p.y), kEnv.xy_radius() + 1e-6f);
+  }
+  ASSERT_NEAR(std::hypot(s.value().x, s.value().y), kEnv.xy_radius(), 1e-6f);
+
+  const float before = s.value().x;
+  const BodyPose next = s.step(xy_pose(0.0f, 0.0f), kEnv, kDt);
+  EXPECT_LT(next.x, before);
+}
+
+// A pair leaving the origin has no direction of its own to unwind from: it
+// must go straight out along the commanded heading, not spiral off the seeded
+// zero angle.
+TEST(PosturePolarFilter, PairLeavesTheOriginAlongTheCommandedHeading) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  for (const BodyPose& p : run_to(s, xy_pose(0.0f, 0.04f), 2000)) {
+    EXPECT_NEAR(p.x, 0.0f, 1e-6f);
+  }
+  EXPECT_NEAR(s.value().y, 0.04f, 1e-5f);
+}
+
+// Single-axis motion must be numerically what it always was — the heading
+// snaps on the first tick and never moves again, leaving the magnitude spring
+// exactly the old scalar spring. This is what keeps the shipped feel of a
+// plain forward lean identical.
+TEST(PosturePolarFilter, SingleAxisMoveMatchesTheScalarKernel) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  // Symmetric z bounds, so the z axis cannot clamp before x does.
+  const PoseLimits env{0.05f, 0.05f, 0.05f, -0.05f, 0.30f, 0.30f, 0.50f};
+  const BodyPose target{0.03f, 0.0f, 0.03f, 0.0f, 0.0f, 0.0f};
+  for (int i = 0; i < 1000; ++i) {
+    const BodyPose p = s.step(target, env, kDt);
+    ASSERT_NEAR(p.x, p.z, 1e-6f);
+  }
+}
+
+// The direction tau is its own knob because tangential travel is magnitude
+// times heading rate: at equal taus a half-turn at full reach covers ~pi times
+// the path of a full radial move in the same time. Raising it must slow the
+// sweep and nothing else.
+TEST(PosturePolarFilter, DirectionTauSlowsTheSweepOnItsOwn) {
+  constexpr float kR = 0.04f;
+  auto ticks_to_quarter_turn = [&](float tau_angle) {
+    PoseSmootherConfig cfg;
+    cfg.tau_xy_angle = tau_angle;
+    PoseSmoother s{cfg};
+    run_to(s, xy_pose(kR, 0.0f), 2000);
+    int n = 0;
+    while (n < 4000 && std::atan2(s.value().y, s.value().x) < 0.25f * 3.14159f) {
+      s.step(xy_pose(0.0f, kR), kEnv, kDt);
+      ++n;
+    }
+    return n;
+  };
+  EXPECT_GT(ticks_to_quarter_turn(0.27f), 1.5 * ticks_to_quarter_turn(0.135f));
+}
+
+// reset() has to seed the polar state, not just the Cartesian pose, or the
+// first tick springs the heading away from a stale zero.
+TEST(PosturePolarFilter, ResetSeedsThePolarStateFromThePose) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  const BodyPose seed = xy_pose(0.0f, 0.04f);
+  s.reset(seed);
+
+  const BodyPose held = s.step(seed, kEnv, kDt);
+  EXPECT_NEAR(held.x, 0.0f, 1e-6f);
+  EXPECT_NEAR(held.y, 0.04f, 1e-6f);
+
+  // A quarter turn away from the seeded heading holds its reach, which it
+  // could not do from a heading that had been reset to zero.
+  for (const BodyPose& p : run_to(s, xy_pose(0.04f, 0.0f), 2000)) {
+    EXPECT_NEAR(std::hypot(p.x, p.y), 0.04f, 0.05f * 0.04f);
+  }
 }
 
 }  // namespace

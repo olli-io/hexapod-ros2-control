@@ -1,12 +1,7 @@
 # ros2_control controller manager + controller config for the real hexapod.
 #
-# Loaded by ros2_control_node (controller_manager package) in
-# hexa_bringup/launch/robot.launch.py. Mirrors hexa_simulation's
-# ros2_controllers.yaml except that use_sim_time is false and the
-# update_rate is the same 200 Hz cycle the gait/IK stack publishes at.
-#
-# Joint names mirror the URDF macro instantiations: {side}_{name}_{seg}_joint
-# where side ∈ {l, r}, name ∈ {front, middle, rear}, seg ∈ {coxa, femur, tibia}.
+# Loaded by ros2_control_node in hexa_bringup/launch/robot.launch.py. Mirrors
+# hexa_simulation's copy except for use_sim_time.
 
 controller_manager:
   ros__parameters:
@@ -14,19 +9,15 @@ controller_manager:
     use_sim_time: false
 
     # SCHED_FIFO priority for the control thread. 50 is above every SCHED_OTHER
-    # thread on the Pi — the executor, hexa_locomotion, the face renderer — so
-    # the 5 ms cycle stops losing whole timeslices to them, which is what the
-    # idle-robot overruns looked like (~5.4-6.0 ms stalls landing in the read
-    # phase and the update phase alike). It stays well under the 99 ceiling
-    # deliberately: at 90+ a spin or a deadlock here can starve kernel worker
-    # threads badly enough to take ssh down with it. Nothing else runs RT; if
-    # hexa_locomotion is ever promoted it must sit *below* this.
+    # thread on the Pi, which is what stopped the idle-robot overruns (~5.4-6.0
+    # ms stalls). Well under 99 deliberately: at 90+ a spin here can starve
+    # kernel workers badly enough to take ssh down. If hexa_locomotion is ever
+    # promoted to RT it must sit *below* this.
     #
     # Needs a non-zero rtprio ulimit in the container (docker-compose.robot.yaml)
     # or the node logs "Could not enable FIFO RT scheduling policy" and carries
-    # on at normal priority. The Pi runs a plain PREEMPT kernel, where hardirqs
-    # are not threaded, so 50 contends with nothing; on a PREEMPT_RT kernel the
-    # irq/* threads sit at 50 and this wants to be 49.
+    # on at normal priority. On a PREEMPT_RT kernel the irq/* threads sit at 50
+    # and this wants to be 49.
     thread_priority: 50
 
     joint_state_broadcaster:

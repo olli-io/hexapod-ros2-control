@@ -1,17 +1,14 @@
 display_node:
   ros__parameters:
-    # Master switch, read by the bringup launch files: set to false to
-    # bring the stack up without the face (the single face node is
-    # skipped — no face fitted, or the display is not wanted).
+    # Read by the bringup launch files: false skips the face node entirely.
     enabled: true
 
-    # Policy tick rate. The renderer half eases gaze / blinks
-    # autonomously on top, so a low rate suffices.
+    # Policy tick rate. The renderer eases gaze / blinks autonomously on top.
     update_rate_hz: 10.0
 
-    # Gait-state → expression map. One dotted param per canonical gait
-    # state (rclpy has no string-map parameter type). Valid values:
-    # neutral, happy, sleepy, dead, greedy, woozy, angry, love, scanning.
+    # One dotted param per canonical gait state (rclpy has no string-map type).
+    # Valid values: neutral, happy, sleepy, dead, greedy, woozy, angry, love,
+    # scanning.
     expression_map.folded: sleepy
     expression_map.initialize: neutral
     expression_map.stand: neutral
@@ -21,27 +18,15 @@ display_node:
     expression_map.reseating: neutral
     expression_map.folding: sleepy
 
-    # Expression while a posture animation mode is active.
     animation_expression: woozy
 
-    # Pose mode (feet planted, cmd_vel zero): the face answers the posture
-    # sticks rather than the gait state, which sits at `stand` throughout. The
-    # left stick tilts the body (roll/pitch), the right stick shifts it (x/y);
-    # sticks at rest fall back to expression_map.stand above. Yaw (L1/R1) and
-    # height (D-pad) are not stick-bound and count as neither.
-    #
-    # A stick reads as held once its offset magnitude reaches the threshold
-    # below, and stays held until it drops under threshold * posture_exit_ratio
-    # — without that band a hand resting on the threshold would blink the face
-    # back and forth. Thresholds are in the same units as /body/pose (radians,
-    # metres) and sit just above what the joystick deadband can produce; the
-    # full-scale deflections they are a fraction of are hexa_teleop's
-    # posture.roll_max_deg / pitch_max_deg (12 deg) and x_max / y_max (0.035 m).
+    # Pose mode: the face answers the posture sticks rather than the gait state,
+    # which sits at `stand` throughout. Left stick tilts (roll/pitch), right
+    # stick shifts (x/y); yaw and height are not stick-bound and count as
+    # neither. A stick reads as held at the threshold and stays held until it
+    # drops under threshold * posture_exit_ratio. Thresholds are in /body/pose
+    # units, against hexa_teleop's roll/pitch_max_deg and x/y_max full scale.
     # 0.0 disables that stick.
-    #
-    # The face reads the resulting body pose, not the stick, so a recorded
-    # posture baseline (Select) held while the sticks are centered wears the
-    # same expression as a live stick.
     posture_tilt_expression: happy
     posture_shift_expression: love
     posture_both_expression: angry
@@ -49,11 +34,8 @@ display_node:
     posture_shift_threshold_m: 0.005
     posture_exit_ratio: 0.6
 
-    # Expression while hexa_buttons reports a Bluetooth pairing scan on
-    # /bluetooth/scanning (a 3 s hold on the Bluetooth button). `scanning` is
-    # the only animated expression — two spinners on the neutral eyes' ring —
-    # and it outranks every other rule in the policy, including a flat pack:
-    # the operator asked for it by hand and is watching the panel for it.
+    # /bluetooth/scanning. The only animated expression, and it outranks every
+    # other rule in the policy including a flat pack.
     scanning_expression: scanning
 
     # Battery overrides: warning shows only when idle, critical always.
@@ -61,22 +43,15 @@ display_node:
     battery_warning_expression: sleepy
     battery_critical_expression: dead
     # 0.0 disables a threshold. Shipped disabled: the hardware.yaml
-    # voltage-divider scale is uncalibrated — set real pack thresholds
-    # once it is.
-    #
-    # These drive the FACE ONLY — which expression the eyes wear on a weak
-    # pack, not the safety policy. The undervoltage ladder that beeps, folds
-    # and cuts the servo rail is `battery:` in
-    # hexa_description/config/hardware.yaml; keep these in step with its
-    # warning_v / fold_v if you want the face to agree.
+    # voltage-divider scale is uncalibrated. FACE ONLY — the safety ladder that
+    # beeps, folds and cuts the rail is `battery:` in hardware.yaml.
     battery_warning_v: 0.0
     battery_critical_v: 0.0
     battery_hysteresis_v: 0.3
     battery_hold_s: 3.0
 
-    # Horizontal gaze from cmd_vel (gait-active). Axis values are
-    # normalized by the *_max caps (mirror the teleop velocity caps),
-    # then sign-quantized with enter/exit hysteresis. Vertical gaze
+    # Horizontal gaze from cmd_vel (gait-active). Axes are normalized by the
+    # *_max caps, then sign-quantized with enter/exit hysteresis. Vertical gaze
     # always follows body pitch, never cmd_vel.
     gaze_deadband: 0.15
     gaze_exit_ratio: 0.6
@@ -84,70 +59,49 @@ display_node:
     gaze_vy_max: 0.1
     gaze_wz_max: 0.5
 
-    # Gaze from body tilt (pitch in both modes, yaw/roll in pose
-    # mode), thresholds in radians.
+    # Gaze from body tilt (pitch in both modes, yaw/roll in pose mode).
     pose_pitch_threshold_rad: 0.08
     pose_tilt_threshold_rad: 0.08
 
-    # Text mode has no knobs here: publish a non-empty std_msgs/String on
-    # /display/text (transient_local) to replace the eyes with the message
-    # (Pixel Operator font, word-wrapped, centered, 4 lines max); publish an
-    # empty string to return to the face. Layout defaults live in
-    # shared/display_core/text_screen.hpp (TextScreenConfig). The subscription
-    # is transient_local, so CLI publishers must match:
-    #   ros2 topic pub --once --qos-durability transient_local \
-    #     /display/text std_msgs/msg/String "data: 'Hello'"
+    # Text mode has no knobs here: publish a non-empty String on /display/text
+    # (transient_local) to replace the eyes. Layout lives in
+    # shared/display_core/text_screen.hpp.
 
-    # Face animations. breathing (slow vertical gaze drift) runs while
-    # no /gait/state has been heard yet — the robot stack (servo UART,
-    # gait engine) is still initializing. idling (look-around-and-blink
-    # cycle) runs once the robot has stood idle and level for the start
-    # delay. Battery warning/critical suppress both animations.
+    # breathing runs until the first /gait/state; idling starts after the robot
+    # has stood idle and level for this long. Battery warning/critical suppress
+    # both.
     idling_start_delay_s: 4.0
 
     # --- Renderer half: SH1122 OLED panel ---
 
-    # SH1122 SPI bus (kernel spidev).
     spi_device: "/dev/spidev0.0"
     spi_speed_hz: 8000000
 
-    # Control pins on the GPIO character device, by chip + line offset (BCM
-    # numbering on a Raspberry Pi). cs_line: -1 leaves CS to the SPI controller
-    # (panel CS on CE0 / GPIO8, or tied low); a line >= 0 drives CS manually.
-    #
-    # -1 is what the Pi 5 needs. Its spi0 node claims GPIO8 as "spi0 CS0", so a
-    # userspace request for line 8 is refused, and the RP1 controller does not
-    # implement SPI_NO_CS — manual CS is simply not on the menu there.
+    # Control pins by chip + line offset (BCM numbering). cs_line: -1 leaves CS
+    # to the SPI controller, which is what the Pi 5 needs — its spi0 node claims
+    # GPIO8, and the RP1 controller has no SPI_NO_CS.
     gpio_chip: "/dev/gpiochip0"
     dc_line: 24
     rst_line: 25
     cs_line: -1
 
-    # Render loop rate (Hz), decoupled from update_rate_hz. Animation timing is
-    # wall-clock regardless. Frames are only pushed over SPI when they actually
-    # change, so a static face costs no bus traffic between blinks/gaze moves.
+    # Render loop rate (Hz), decoupled from update_rate_hz. Frames only go over
+    # SPI when they change.
     render_hz: 60
 
-    # Run the full pipeline without touching SPI/GPIO (dev box / CI / bring-up).
+    # Run the full pipeline without touching SPI/GPIO (dev box / CI).
     headless: false
 
-# --- Pi Pico 2 W firmware panel wiring ---
-#
 # Consumed ONLY by the firmware config codegen (motion_core/tools/gen_config.py),
-# NOT by the ROS display_node (which uses the spidev/gpiochip params above). Kept
-# here so display.yaml stays the single source of truth for the face; this block
-# sits outside display_node so the ROS node never sees it.
-#
-# The Pico drives the SH1122 over one hardware SPI block. GP0/GP1 (uart0) are the
-# Servo 2040 Chica link and the CYW43 radio owns its dedicated pins, so spi0 on
-# GP16-19 (+ two control GPIOs) is free. The eyes render on core1; see
-# pi-pico-firmware/src/face.cpp.
+# not by display_node — hence outside it. Kept here so display.yaml stays the
+# single source of truth for the face. spi0 on GP16-19 is what is left after the
+# Servo 2040 link (uart0 on GP0/1) and the CYW43 radio.
 pico_panel:
   enabled: true      # false skips the core1 launch (robot comes up faceless)
   spi_index: 0       # 0 = spi0, 1 = spi1
-  sck: 18            # SPI SCK  (spi0: GP18)
-  mosi: 19           # SPI MOSI (spi0: GP19)
-  cs: 17             # chip select (manual, GPIO)
-  dc: 20             # data/command
-  rst: 21            # reset
-  spi_hz: 8000000    # SH1122 rated to 40 MHz; 8 MHz is a conservative default
+  sck: 18
+  mosi: 19
+  cs: 17             # manual chip select
+  dc: 20
+  rst: 21
+  spi_hz: 8000000    # SH1122 rated to 40 MHz

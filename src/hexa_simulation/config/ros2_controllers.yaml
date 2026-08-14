@@ -1,24 +1,19 @@
 # ros2_control controller manager + controller config for the simulated hexapod.
 #
 # Loaded by the gz_ros2_control-system plugin (declared in
-# hexa_description/urdf/hexapod.gazebo.xacro) when use_sim:=true. Real-robot
-# bringup will provide its own copy via hexa_hardware / hexa_bringup.
-#
-# Joint names mirror the URDF macro instantiations: {side}_{name}_{seg}_joint
-# where side ∈ {l, r}, name ∈ {front, middle, rear}, seg ∈ {coxa, femur, tibia}.
+# hexa_description/urdf/hexapod.gazebo.xacro) when use_sim:=true. hexa_bringup
+# has its own copy for the real robot.
 
 controller_manager:
   ros__parameters:
-    update_rate: 200  # Hz. Matches the typical IK/gait command rate.
+    update_rate: 200  # Hz
     use_sim_time: true
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    # Single group position controller for all 18 joints. Takes a
-    # std_msgs/Float64MultiArray on /joint_group_position_controller/commands
-    # in the joint order listed below. The kinematics node will adapt to this
-    # interface once it lands.
+    # All 18 joints in one group; takes a std_msgs/Float64MultiArray on
+    # /joint_group_position_controller/commands in the order listed below.
     joint_group_position_controller:
       type: position_controllers/JointGroupPositionController
 

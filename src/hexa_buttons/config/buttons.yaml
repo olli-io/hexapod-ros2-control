@@ -1,134 +1,92 @@
 button_node:
   ros__parameters:
-    # Master switch, read by robot.launch.py: set to false to bring the stack
-    # up without the front-panel buttons (none fitted, or the header pins are
-    # wanted for something else).
+    # Read by robot.launch.py: false brings the stack up without the buttons.
     enabled: true
 
     # --- Wiring ---
     #
     # Two momentary switches, each between its BCM line and ground, held high by
-    # the SoC's internal pull-up (active_low + bias_pull_up below). No external
-    # resistor needed.
+    # the SoC's internal pull-up. No external resistor needed.
     #
-    # GPIO5/GPIO6 (physical pins 29/31, ground on 30 and 34) are deliberately
-    # clear of everything else the robot claims on the header: SPI0 on 8-11
-    # (the SH1122 face), the header UART on 14/15 (the Servo2040 link), PWM0 on
-    # 18 (the buzzer), 24/25 (the panel's DC/RST), and — the reason they are not
-    # 2/3 — i2c1 on 2/3, so an I2C peripheral can still be added later.
+    # GPIO5/6 are clear of everything else on the header: SPI0 on 8-11 (face),
+    # UART on 14/15 (Servo2040), PWM0 on 18 (buzzer), 24/25 (panel DC/RST), and
+    # i2c1 on 2/3 which is left free for a future peripheral.
     #
-    # Same character device as hexa_display's control lines; the two nodes
-    # request different lines on it, which the kernel arbitrates per line.
-    # This is the CONTAINER-side path (docker-compose.robot.yaml maps whatever
-    # ${GPIO_CHIP} the host calls it onto this fixed node), and the trailing
-    # number is what gpiozero's lgpio pin factory is pinned to.
+    # CONTAINER-side path (docker-compose.robot.yaml maps ${GPIO_CHIP} onto it);
+    # the trailing number is what gpiozero's lgpio factory is pinned to.
     gpio_chip: "/dev/gpiochip0"
     info_line: 5 # battery percentage + web teleop address; hold to switch network mode
     bluetooth_line: 6 # controller status; hold to pair
     #
-    # These two collapse onto gpiozero's pull_up/active_state pair, which are
-    # mutually constrained (see pull_kwargs in screen_logic.py):
+    # These collapse onto gpiozero's mutually constrained pull_up/active_state
+    # (see pull_kwargs in screen_logic.py):
     #   true  + true   -> pull_up: True    switch to ground, SoC pull-up
     #   false + false  -> pull_up: False   switch to 3V3, SoC pull-down
     #   true  + false  -> external pull-up, no SoC bias
-    #   false + true   -> rejected at startup: a pull-up holds the line high,
-    #                     so an active-high button would read as always pressed.
-    active_low: true # button shorts the line to ground
-    bias_pull_up: true # enable the SoC's internal pull-up
+    #   false + true   -> rejected at startup: would read as always pressed.
+    active_low: true
+    bias_pull_up: true
 
     # --- Timing ---
     #
-    # Nothing is polled: gpiozero delivers edges, so the buttons themselves
-    # cost nothing between presses. This is the housekeeping tick that runs the
-    # screen timeout, the scan timeout, and the ~1 Hz battery/address re-render
-    # — and it drains the event queue the GPIO threads write to, so it also
-    # bounds how long a press takes to reach the panel (one tick, 50 ms).
+    # Nothing is polled; gpiozero delivers edges. This is the housekeeping tick
+    # (screen timeout, scan timeout, ~1 Hz battery/address re-render) and it
+    # drains the GPIO threads' event queue, so it also bounds press latency.
     tick_rate_hz: 20.0
-    # Passed to gpiozero's Button(bounce_time=...): a level has to survive this
-    # long to count as a real edge. Applied below userspace.
+    # gpiozero Button(bounce_time=...), applied below userspace.
     debounce_s: 0.03
-    # Passed to Button(hold_time=...) for BOTH buttons: the hold on the
-    # Bluetooth button that starts a pairing scan, and the hold on the info
-    # button that switches network mode. The screens advertise this same
-    # number, so the panel can never promise a hold the buttons do not honour.
+    # Button(hold_time=...) for BOTH buttons. The screens advertise this same
+    # number, so the panel cannot promise a hold the buttons do not honour.
     hold_s: 3.0
     # An info screen hands the panel back to the face this long after it went
-    # up. Pressing the same button again dismisses it early; pressing the other
-    # one swaps screens (and restarts the clock).
+    # up. Same button dismisses early; the other swaps screens.
     screen_timeout_s: 6.0
-    # Backstop for a pairing scan that finds nothing. A successful scan ends
-    # earlier — a non-empty /bluetooth/status from the scanning utility means
-    # it paired. Either button cancels one at any time.
+    # Backstop for a scan that finds nothing. A non-empty /bluetooth/status ends
+    # one earlier; either button cancels.
     scan_timeout_s: 30.0
 
     # --- Battery screen ---
-    #
-    # Same publisher hexa_display's face policy reads.
     battery_topic: /hexa_hardware_aux/battery_state
-    # Linear voltage -> percentage map. 2S LiPo: 3.3 V/cell empty, 4.2 V/cell
-    # full. This drives the NUMBER ON THE SCREEN ONLY — it is not a safety
-    # threshold. The undervoltage ladder that beeps, folds and cuts the servo
-    # rail is `battery:` in hexa_description/config/hardware.yaml, and the
-    # expressions a weak pack puts on the face are battery_warning_v /
-    # battery_critical_v in hexa_display/config/display.yaml.
-    #
-    # Note the pack reading itself comes through the Servo2040's voltage
-    # divider, whose scale is uncalibrated on this build — measure against a
-    # meter before trusting the percentage.
+    # Linear voltage -> percentage map, 2S LiPo. SCREEN NUMBER ONLY — the safety
+    # ladder is `battery:` in hexa_description/config/hardware.yaml, the face
+    # expressions are battery_warning_v / battery_critical_v in display.yaml.
+    # The pack reading comes through the Servo2040's uncalibrated divider.
     battery_empty_v: 6.6
     battery_full_v: 8.4
 
-    # Port shown after the address. robot.launch.py overrides this with
-    # `server.port` from hexa_webteleop's webteleop.yaml, which is the source of
-    # truth; the value here is only the fallback for a hand-launched node.
+    # robot.launch.py overrides this with `server.port` from webteleop.yaml,
+    # which is the source of truth; this is the hand-launch fallback.
     control_port: 8080
-    # Interfaces to prefer when picking the address to show, in order. Anything
-    # not listed is used only if none of these has an IPv4 address.
+    # Preferred in order; anything unlisted is used only if none of these has an
+    # IPv4 address.
     ip_interfaces: ["wlan0", "eth0"]
 
     # --- Network mode switch (info button, hold) ---
     #
-    # Holding the info button asks the host to flip the Pi between joining a
-    # wifi network and hosting the `hexapod` hotspot that serves the web teleop.
+    # The container cannot run nmcli (unprivileged, no D-Bus, no NET_ADMIN), so
+    # a request goes into the bind-mounted log volume and a host systemd .path
+    # unit relays it to systemd/network-mode.sh.
     #
-    # It has to be the host that does it. The stack runs in an unprivileged
-    # container with host networking, no D-Bus socket and no NET_ADMIN, so it
-    # cannot run nmcli. The way around it: write a request into the
-    # bind-mounted log volume and let a host systemd .path unit relay it out to
-    # systemd/network-mode.sh. The buzzer used to hit the same wall with the PWM
-    # sysfs; it got a writable bind mount instead. NetworkManager has no
-    # equivalent, so this seam stays.
-    #
-    # So this whole block is INERT until `./hexa robot install-network` has been
-    # run on the Pi. Without it a hold spins the face for network_ack_timeout_s
-    # and then says so on the panel.
+    # INERT until `./hexa robot install-network` has been run on the Pi.
     network_toggle_enabled: true
-    # Container-side paths; the host sees these as ~/hexa-robot/log/network and
-    # ~/hexa-robot/log/network.state. The first is written here and read there,
-    # the second the other way round — never both on one file, or the host's
-    # own .path watcher would retrigger itself forever.
+    # Container-side paths (host: ~/hexa-robot/log/...). The first is written
+    # here and read there, the second the other way round — never both on one
+    # file, or the host's own .path watcher would retrigger forever.
     network_spool: /workspace/log/network
     network_state_file: /workspace/log/network.state
-    # How long to wait for the host to admit it exists. network-mode.sh writes
-    # `result=switching` before it touches the radio, so silence past this means
-    # the units were never installed — worth saying at once rather than after
-    # network_timeout_s.
+    # network-mode.sh writes `result=switching` before touching the radio, so
+    # silence past this means the units were never installed.
     network_ack_timeout_s: 5.0
     # Backstop for a switch the host took but never reported the end of. Ends on
-    # the result screen, not the face, so a silent failure still says something.
-    # Generous: an AP coming up plus a station reassociating with DHCP is slow.
+    # the result screen, not the face. Generous: AP up + station DHCP is slow.
     network_timeout_s: 60.0
-    # The result screen holds longer than an ordinary one — it carries a
-    # password somebody has to type into a phone.
+    # Longer than an ordinary screen — it carries a password to type in.
     network_info_timeout_s: 20.0
     #
-    # The SSID and password are deliberately NOT here. network-mode.sh owns
-    # them (HEXA_AP_SSID / HEXA_AP_PSK) and reports them back in the state file,
-    # so there is one source of truth and the panel cannot advertise
-    # credentials the radio is not actually using.
+    # SSID and password are deliberately not here: network-mode.sh owns them
+    # (HEXA_AP_SSID / HEXA_AP_PSK) and reports them back in the state file.
 
-    # Separator between a label and its value. ASCII on purpose: the display's
-    # bundled Pixel Operator font covers ASCII + Latin-1 only, so a U+2192
-    # arrow renders blank. To use one, add the codepoint to codepoints() in
-    # shared/display_core/tools/gen_font.py and regenerate hexa_text_font.c.
+    # ASCII on purpose: the bundled Pixel Operator font covers ASCII + Latin-1
+    # only, so U+2192 renders blank (add it to codepoints() in
+    # shared/display_core/tools/gen_font.py to use one).
     label_arrow: "->"

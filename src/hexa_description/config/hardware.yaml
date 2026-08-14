@@ -1,55 +1,51 @@
 # Servo2040 (Chica-protocol board) wiring + calibration.
 #
-# Servo pins 1..18 match the Servo2040 silkscreen; pin 0 is unused. Keep each
-# leg's three joints on consecutive pins so `write()` collapses to six SET
-# frames per cycle. The relay GPIO and the battery telemetry units are owned by
-# the firmware, not configured here — see the servo2040 driver's protocol.md.
+# Servo pins 1..18 match the silkscreen; pin 0 is unused. Keep each leg's three
+# joints on consecutive pins so `write()` collapses to six SET frames per cycle.
+# The relay GPIO and battery telemetry units are owned by the firmware — see the
+# servo2040 driver's protocol.md.
 #
-# Per-servo endpoint pulse widths live in the sibling `servo_calibration.yaml`,
-# indexed by pin (pin N -> entry N-1). That file is the machine-writable
-# calibration output; this one carries the hand-authored wiring.
+# Per-servo endpoint pulse widths live in the sibling `servo_calibration.yaml`
+# (machine-writable); this file carries the hand-authored wiring.
 
 connection:
-  type: uart # uart | i2c | usb — factory picks the concrete Transport.
-  # Per-model UART name: /dev/ttyAMA0 on a Pi 5 (needs dtparam=uart0=on),
-  # /dev/ttyS0 on a Pi 4 (whose ttyAMA0 belongs to Bluetooth). /dev/serial0 is
-  # NOT portable — on a Pi 5 it is the debug connector, not the header. Host
-  # pin muxing belongs in the OS (device-tree overlay), not here.
+  type: uart # uart | i2c | usb
+  # /dev/ttyAMA0 on a Pi 5 (needs dtparam=uart0=on), /dev/ttyS0 on a Pi 4.
+  # /dev/serial0 is NOT portable — on a Pi 5 it is the debug connector. Host pin
+  # muxing belongs in the device-tree overlay, not here.
   device: /dev/ttyAMA0
-  baud: 460800 # honoured on true-UART links; ignored on a USB-CDC build.
+  baud: 460800 # ignored on a USB-CDC build
 
 parser:
-  type: servo2040 # selects the BoardProtocol (currently only servo2040).
+  type: servo2040 # selects the BoardProtocol
   # Aux poll (battery + over-current STATUS) in ms, 0 disables. Read only by
-  # hexa_hardware, which runs those blocking round trips on its aux thread.
+  # hexa_hardware, on its aux thread.
   aux_period_ms: 100
-  # The same poll on the Pico, paced in control ticks. Read only by
-  # gen_config.py (-> kGetPeriodTicks); hexa_hardware ignores it.
+  # The same poll on the Pico, in control ticks. Read only by gen_config.py.
   get_period_ticks: 10
 
 # Undervoltage ladder — source of truth for the motion_core supervisor, the
 # baked firmware config, and hexa_hardware. Each rung arms after hold_s below
-# its threshold. The ladder only escalates: cutting the rail unloads the pack
-# and the voltage rebounds, so de-escalating would loop.
+# its threshold and only escalates (cutting the rail unloads the pack, so
+# de-escalating would loop).
 #   warning_v — buzzer only; the robot stays drivable.
 #   fold_v    — fold and safe-stop; the rail is cut once parked at FOLDED.
-#   cutoff_v  — cut the rail immediately and refuse to re-arm until power-cycle.
+#   cutoff_v  — cut the rail immediately, no re-arm until power-cycle.
 #
 # 0.0 disables a rung. SHIPPED DISABLED — the Servo2040's voltage-divider scale
-# is uncalibrated. Measure the pack against `~/battery_state` first, then set
-# all three in descending order (codegen rejects a mis-ordered ladder).
+# is uncalibrated. Measure against `~/battery_state` first, then set all three
+# in descending order (codegen rejects a mis-ordered ladder).
 battery:
   warning_v: 0.0
   fold_v: 0.0
   cutoff_v: 0.0
   hysteresis_v: 0.3 # rise above threshold+hysteresis to clear (pre-latch only)
-  hold_s: 3.0 # seconds below a threshold before that rung arms
+  hold_s: 3.0
 
-# Joint angle when the servo sits at center — a property of the assembled
-# build, not of a calibration sweep. A wrong value is a rigid offset on every
-# command for that segment. Selected per leg segment from the joint name; this
-# file is the sole source (geometry.yaml carries only the travel window, which
-# codegen cross-checks these against).
+# Joint angle when the servo sits at center — a property of the assembled build,
+# not of a calibration sweep. A wrong value is a rigid offset on every command.
+# Sole source; geometry.yaml carries only the travel window, which codegen
+# cross-checks these against.
 #   coxa  — deg from radial (0 = leg straight out from hip)
 #   femur — above_horizontal_deg (positive raises the knee)
 #   tibia — interior_deg (180 = fully extended)
@@ -63,7 +59,7 @@ servo_defaults:
   pulse_us: { min: 500, max: 2500 }
 
 servos:
-  # key: URDF joint name · pin: Servo2040 silkscreen number, also the key into
+  # key: URDF joint name · pin: silkscreen number, also the key into
   # servo_calibration.yaml. `reversed: true` for a mirror-mounted servo (the
   # URDF keeps identical joint axes left and right); set empirically on the
   # build. Optional `pulse_us: { min, max }` overrides servo_defaults.

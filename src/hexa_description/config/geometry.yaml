@@ -1,55 +1,49 @@
-# -- DISCLAIMER -- Bad geometry can physically damage your hexapod. Only
-# change these values if you know they are sensible.
+# -- DISCLAIMER -- Bad geometry can physically damage your hexapod. Only change
+# these values if you know they are sensible.
 #
-# Units: metres (length), degrees (angle), kilograms (mass), Nm (effort),
-# rad/s (velocity). Angles use each joint's own intuitive sense; deg→rad
-# conversion happens at load time.
-# Frame: REP-103 — +x forward, +y left, +z up.
+# Units: m, deg, kg, Nm, rad/s. Angles use each joint's own intuitive sense;
+# deg→rad conversion happens at load time. Frame: REP-103.
 
 body:
   # z=0 is the coxa rotation-axis plane; all coxas sit at this level.
-  coxa_to_bottom: 0.026 # coxa plane down to body bottom (+z half-height)
-  coxa_to_top: 0.02 # coxa plane up to body top (+z half-height)
+  coxa_to_bottom: 0.026
+  coxa_to_top: 0.02
   mass: 1.0 # sim only
 
 leg:
-  # Segment lengths (m), hip outward to foot tip.
+  # Segment lengths, hip outward to foot tip.
   coxa_length: 0.042
   femur_length: 0.08
   tibia_length: 0.13284
-  # Visual radii (m) — sim only.
+  # Visual radii and masses — sim only.
   coxa_radius: 0.02
   femur_radius: 0.015
   tibia_radius: 0.0048
-  # Segment masses (kg) — sim only.
   coxa_mass: 0.05
   femur_mass: 0.08
   tibia_mass: 0.06
 
 foot:
-  radius: 0.0048 # ground-contact sphere radius (m)
-  mass: 0.01 # foot tip mass (kg)
+  radius: 0.0048 # ground-contact sphere
+  mass: 0.01
 
 mounts:
-  # Hip mounts for the left-front and left-middle legs; symmetry fills in the rest.
-  #   x, y   — hip position (m) from body centre.
-  #   yaw_deg — leg direction, counter-clockwise from forward.
+  # Hip mounts for the left-front and left-middle legs; symmetry fills in the
+  # rest. x, y from body centre; yaw_deg counter-clockwise from forward.
   l_front: { x: 0.083, y: 0.0575, yaw_deg: 30 }
   l_middle: { x: 0.00, y: 0.082, yaw_deg: 90 }
 
 joints:
-  # Travel limits, applying equally to sim and the real robot.
-  # lower/upper_limit_deg are absolute bounds, each in its joint's own
+  # Absolute travel limits, sim and real robot alike, each in its joint's own
   # intuitive sense:
   #   coxa   — fore/aft sweep about the coxa +z axis; 0 = centered.
   #   femur  — lift above horizontal; positive raises the knee.
-  #   tibia  — interior knee angle between femur and tibia; 179 = fully extended.
-  # The joint angle at servo center is NOT here — it is a property of the
-  # physical build, and lives in hardware.yaml's `deg_at_center`. Codegen
-  # cross-checks that value against the window below.
-  # ( ds3235sg servo: 35 kg·cm @ 6.8V × 0.9 ) converted to Nm
-  # ( ds3235sg: 0.13 s/60° @ 6.8V × 0.9 ) converted to rad/s
-  # effort (Nm) and velocity (rad/s) are sim only.
+  #   tibia  — interior knee angle; 179 = fully extended.
+  # The joint angle at servo center is a property of the physical build and
+  # lives in hardware.yaml's `deg_at_center`; codegen cross-checks it against
+  # the window below.
+  # effort and velocity are sim only (ds3235sg: 35 kg·cm and 0.13 s/60° @ 6.8V,
+  # × 0.9, converted).
   coxa:
     lower_limit_deg: -65
     upper_limit_deg: 65
@@ -67,9 +61,9 @@ joints:
     velocity: 7.25
 
 initial_pose:
-  # Joint angles held at startup, before any commanded motion. Assumes symmetry for front and read legs.
-  # WARNING: this controller assumes no-feedback servos — they jump to these.
-  # positions instantly on power-up.
+  # Joint angles held at startup, before any commanded motion; symmetric front
+  # and rear. WARNING: these servos have no feedback — they jump here instantly
+  # on power-up.
   coxa:
     l_front_deg: 60 # 30° mount + 60° coxa → leg points at body-yaw 90°
     l_middle_deg: 0 # 90° mount + 0° coxa → leg points straight outward

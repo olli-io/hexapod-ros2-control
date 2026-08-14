@@ -1,13 +1,11 @@
-# Named tones in RTTTL (`name:defaults:notes`), the Nokia ringtone format, so
-# any ringtone written in it pastes in verbatim and keeps its own tempo. Format
-# and octave numbering: src/hexa_buzzer/README.md.
+# Named tones in RTTTL (`name:defaults:notes`), so any Nokia-format ringtone
+# pastes in verbatim and keeps its own tempo. Format and octave numbering:
+# src/hexa_buzzer/README.md. Quote the strings — an unquoted `#` would start a
+# comment instead of a sharp.
 #
-# Named for what they sound like; what one *means* is buzzer.yaml's events.
-# Quote the strings — an unquoted `#` would start a comment instead of a sharp.
-#
-# The stock five differ in contour, not pitch, to stay recognisable through a
-# closing door: rising = good, falling = done, alternating = wrong. Keep one
-# under 3 s; the shutdown unit gives the player 10 s.
+# Named for what they sound like; what one *means* is buzzer.yaml's events. The
+# stock five differ in contour, not pitch: rising = good, falling = done,
+# alternating = wrong. Keep one under 3 s (the shutdown unit allows 10 s).
 tunes:
   chirp: "chirp:d=4,o=6,b=200:4b5,8p,2e"
   ready: "ready:d=4,o=6,b=200:4e,8p,4g#,8p,2b"

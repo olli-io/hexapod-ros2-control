@@ -80,7 +80,7 @@ posture:
     right_stick_y: pose_x
 
   height:
-    rate_m_per_s: 0.05 # how fast the D-pad raises/lowers the body
+    rate_m_per_s: 0.05
 
 animation:
   bindings:

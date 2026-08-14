@@ -1,25 +1,22 @@
 buzzer_node:
   ros__parameters:
-    # Read by robot.launch.py: false leaves the node out entirely. The node is
-    # inert anyway without a PWM tree; this is for when you want it gone.
+    # Read by robot.launch.py: false leaves the node out. It is inert without a
+    # PWM tree anyway; this is for when you want it gone.
     enabled: true
 
-    # Buzzer + -> GPIO12 (BCM), buzzer - -> GND, ~100 ohm in series if too loud.
-    # Not GPIO18, which a bare `dtoverlay=pwm-2chan` takes: that line is I2S
-    # PCM_CLK and SPI1 CE0. See docs/robot-environment.md for the config.txt
-    # line. The container sees the block through a bind mount, not the real
-    # /sys path; the host units pass their own --pwm-dev.
+    # Buzzer + -> GPIO12 (BCM), - -> GND, ~100 ohm in series if too loud. Not
+    # GPIO18, which a bare `dtoverlay=pwm-2chan` takes (I2S PCM_CLK, SPI1 CE0) —
+    # see docs/robot-environment.md. The container sees the block through a bind
+    # mount; the host units pass their own --pwm-dev.
     pwm_dev: /pwm
-    # GPIO12 is channel 0 of the Pi 5's RP1 PWM0 block, and of a Pi 4's pwmchip0.
+    # GPIO12 is channel 0 of the Pi 5's RP1 PWM0, and of a Pi 4's pwmchip0.
     channel: 0
 
-    # Seconds to wait for the PWM driver to probe. Only a cold boot can outrun
-    # it, so the boot unit passes a non-zero wait and this does not.
-    #
-    # No tempo setting: each RTTTL tune carries its own bpm.
+    # Wait for the PWM driver to probe. Only a cold boot can outrun it, so the
+    # boot unit passes a non-zero wait and this does not.
     wait_s: 0.0
 
-    # Occasion -> tune in tunes.yaml. The left side is the word that arrives on
+    # Occasion -> tune in tunes.yaml. The left side is the word arriving on
     # /buzzer/play: hexa_hardware publishes up, fault and undervolt; the host
     # systemd units ask for boot and shutdown. Both sides resolve it here, so an
     # event sounds the same whichever plays it. A new event is a line here plus

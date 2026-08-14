@@ -1,35 +1,21 @@
-# -- WARNING -- Bad values here can damage your hexapod. Nothing validates
-# them: it will run whatever you put here.
-
+# -- WARNING -- Bad values here can damage your hexapod. Nothing validates them.
+#
 # Runtime gait/control/posture tuning, shared by sim, web-teleop and the Pico
-# firmware. Standard ROS 2 params file, one block per node.
+# firmware. Apply: sim — `hexa sim restart`; robot — edit ~/hexa-robot/tuning.yaml
+# then `hexa robot restart`; pico — reflash.
 #
-# Apply: sim — `hexa sim restart`; robot — edit ~/hexa-robot/tuning.yaml, then
-# `hexa robot restart`; pico — reflash (values are baked in at build time).
-#
-# Geometry, joint limits, servo tables and joystick bindings live elsewhere.
 # Units: m, s, rad — except `_deg` names.
 
-# ═══ Gait engine (gait_node) ════════════════════════════════════════
 gait_node:
   ros__parameters:
-    # ─── Engine basics ──────────────────────────────────────────────
-
-    # Engine tick period (s).
     controller_dt: 0.005
     # cmd_vel smaller than this counts as zero.
     cmd_zero_tol: 0.02
-    # Gait used at startup. The teleop D-pad cycles through the rest.
     default_gait: tripod
 
-    # ─── Default standing pose ──────────────────────────────────────
-
-    #   body_height — belly clearance off the ground (m).
-    #   tip_reach   — coxa axis to foot tip in the ground plane (m), so
-    #                 coxa_deg does not change it. Bigger = wider stance,
-    #                 more reach, more servo torque.
-    #   coxa_deg    — leg rotation off-centre; positive splays the feet
-    #                 outward, or rearward for the middle legs.
+    # tip_reach — coxa axis to foot tip in the ground plane.
+    # coxa_deg — leg rotation off-centre; positive splays feet outward
+    # (rearward for the middle legs).
     default_standing_pose:
       body_height: 0.06
       front:
@@ -42,166 +28,97 @@ gait_node:
         tip_reach: 0.135
         coxa_deg: 0
 
-    # ─── Stride geometry ────────────────────────────────────────────
-
-    # Ground travel per step (m). Shorter = gentler on the joints, slower.
-    stride_length: 0.1
-
-    # Most a leg's own coxa-to-foot reach may close over one half stride (m).
-    #
-    # A stride pointed straight out along a leg's own axis spends all of itself
-    # closing that reach — the middle legs walking sideways, whose axis is body
-    # y exactly — and a foot tucked in under the body pushes badly and outruns
-    # its servos. Every direction is priced against the worst-placed leg, and
-    # the tick's stride is cut to what that leg can afford; the top speed comes
-    # down with it, since the cycle cannot run faster than min_swing_time.
-    # Lower = safer sideways, slower sideways. Forward and yaw are unaffected
-    # until this drops below ~0.081.
-    #
-    # Set equal to stride_length to disable (restores an isotropic stride).
-    stride_length_radial: 0.084
-    # Foot lift during a step (m).
+    stride_length: 0.105
+    # Most a leg's own coxa-to-foot reach may close over one half stride. Every
+    # direction is priced against the worst-placed leg. Set equal to
+    # stride_length to disable (isotropic stride).
+    stride_length_radial: 0.085
     step_height: 0.04
-    # Sideways shift of the foot's arc (m). 0 = straight fore/aft steps.
+    # Sideways shift of the foot's arc. 0 = straight fore/aft steps.
     swing_width: 0.02
 
-    # The arc's shape in space is fixed — apex over the middle of the travel.
-    # The two knobs below act only on the descent's schedule. The rest of the
-    # timing is derived: the probe takes its share off the tail of the swing,
-    # the climb and the braked descent split what remains evenly, and the
-    # lift-off speed is whatever covers the climb in the time it gets.
-
-    # Descent speed at ground contact (m/s), and the probe speed below. Below
-    # one servo step per 200 Hz tick the descent comes out as a staircase.
+    # Descent speed at ground contact, and the probe speed below.
     touchdown_velocity: 0.015
-
     # Share of the swing spent in the straight probe at exactly
-    # touchdown_velocity. The probe's height — the band a foot may meet the
-    # ground anywhere inside and still land at the intended speed — is
-    # touchdown_velocity x fraction x swing_time, so size the two together to
-    # beat servo resolution and inter-leg height error. Raising it also shifts
-    # the apex earlier, giving the whole descent more time. Hard-capped at
-    # 0.4, which still leaves the climb and the brake 30% of the swing each.
-    # 0 restores a zero-speed landing.
+    # touchdown_velocity. Probe height = touchdown_velocity x fraction x
+    # swing_time. Hard-capped at 0.4; 0 restores a zero-speed landing.
     touchdown_probe_fraction: 0.4
 
-    # ─── Cycle timing ───────────────────────────────────────────────
-
-    # Airborne time per foot (s), fast and slow ends. With stride_length these
-    # set top speed: past max_swing_time the robot shortens its stride
-    # instead. Recommendation: keep within ~25% of each other or placement misbehaves when
-    # reversing direction.
-    min_swing_time: 0.5
-    max_swing_time: 0.6
+    # Airborne time per foot, fast and slow ends. Past max_swing_time the robot
+    # shortens its stride instead. Keep within ~25% of each other.
+    min_swing_time: 0.6
+    max_swing_time: 0.8
 
     # Share of each gait's swing window handed back to the ground at the
-    # touchdown end, so legs overlap instead of swapping on a knife edge that
-    # jitter can turn into too few feet down. Being a share of the window it
-    # buys the same overlap time in every gait: 0.12 gives a tripod 6% of its
-    # cycle with six feet down. Costs top speed.
+    # touchdown end, so legs overlap. Costs top speed.
     swing_phase_margin: 0.12
 
-    # ─── Velocity envelope ──────────────────────────────────────────
-
-    # Split of an over-limit command between turning and moving. 0.5 = equal;
-    # higher protects turn response at the cost of straight-line accuracy.
+    # Split of an over-limit command between turning and moving. 0.5 = equal.
     yaw_bias: 0.6
 
-    # ─── Settling to a stop ─────────────────────────────────────────
     settle:
-      # Wait (s) after cmd_vel hits zero before committing to stop. Longer =
-      # fewer accidental stops when the stick crosses zero.
+      # Wait after cmd_vel hits zero before committing to stop.
       debounce_delay: 0.4
-      # Airborne time (s) per settling foot
       swing_time: 0.45
 
-    # ─── Cold-start sequence ────────────────────────────────────────
-
     initialize:
-      # Time (s) per mirrored foot pair (three pairs).
       pair_swing_time: 0.3
-      # Time (s) to raise the body off its belly.
       lift_body_time: 0.5
-      # Extra foot lift (m); small, the folded foot starts high.
       swing_clearance: 0.04
 
-    # ─── Return-to-stance ladder ────────────────────────────────────
-    #
-    # Re-plants the feet in three mirrored pairs, skipping any already home.
-    # Used after a body height change and by gaits that cannot settle.
-
     reseat:
-      # How long (s) a new target height must hold before re-planting.
+      # How long a new target height must hold before re-planting.
       pose_settle_delay: 0.5
-      # Height change (m) small enough to ignore, so stick noise doesn't
-      # trigger a re-plant.
       height_change_threshold: 0.002
-      # Time (s) to swing each pair into place.
       pair_swing_time: 0.35
-      # Pause (s) between pairs so each lands before the next lifts.
       pair_dwell_time: 0.05
-      # Extra foot lift (m) mid-swing; small, feet start on the ground.
       swing_clearance: 0.02
 
-# ═══ Control velocity shaping (control_node) ════════════════════════
 control_node:
   ros__parameters:
     default_gait: "tripod"
 
-    # Ease time from standstill to full speed and back. Lower = snappier,
-    # more foot slip on reversals.
-    vmax_ramp_time_linear: 0.8
-    vmax_ramp_time_angular: 1
+    # Ease time from standstill to full speed and back.
+    vmax_ramp_time_linear: 0.3
+    vmax_ramp_time_angular: 0.3
 
     # Leftover speed at the end of a ramp gets snapped to zero.
     snap_tol_linear: 1.0e-4 # m/s
     snap_tol_angular: 1.0e-4 # rad/s
 
-# ═══ Posture animations (posture_node) ══════════════════════════════
-#
-# Body-movement layers on top of walking. Strengths and gains are
-# dimensionless.
+# Strengths and gains are dimensionless.
 posture_node:
   ros__parameters:
-    # Master switch for the default stack's gait-active body movement
-    # (gait_sway, gait_bounce); an explicitly selected animation mode is
-    # exempt. Experimental.
+    # Master switch for the default stack's gait-active body movement; an
+    # explicitly selected animation mode is exempt. Experimental.
     gait_body_animations_enabled: false
 
-    # Animations that run while walking. Each must be a known name.
     enabled_animations:
       - still
       - gait_sway
       - gait_bounce
 
-    # GaitSway: shifts the body sideways to stay over the feet, cancelling the
-    # rocking of four-footed gaits (tetrapod, crawl, surf); tripod and ripple
-    # barely need it. gain is the physical strength (1.0 = balanced); strength
-    # is a [0, 1] dial on top — start low, raise as you tune out the wobble.
+    # GaitSway: shifts the body sideways to stay over the feet. gain is the
+    # physical strength (1.0 = balanced); strength is a [0, 1] dial on top.
     gait_sway_gain: 1.0
     gait_sway_strength: 0.4
 
-    # Selectable in ANIMATION mode, cycled with D-up / D-down. Comma-separated
-    # entries combine several into one.
+    # Selectable in ANIMATION mode. Comma-separated entries combine several.
     animation_mode_animations:
       - vertical_body_roll
       - horizontal_body_roll
       - body_roll_3d
 
-    # VerticalBodyRoll (tripod only): bobs up/down and tilts fore/aft once per
-    # gait cycle. phase_offset shifts the tilt against the bob, in cycles.
+    # Rolls are tripod-only. phase_offset is in cycles.
     vertical_body_roll_z_amplitude: 0.02
     vertical_body_roll_pitch_amplitude_deg: 10.0
     vertical_body_roll_phase_offset: 0.0
 
-    # HorizontalBodyRoll (tripod only): sways side to side and turns
-    # left/right once per gait cycle.
     horizontal_body_roll_y_amplitude: 0.02
     horizontal_body_roll_yaw_amplitude_deg: 10.0
     horizontal_body_roll_phase_offset: 0.0
 
-    # BodyRoll3D (tripod only): both rolls combined, tracing a circle per
-    # cycle. horizontal offset 0.25 = circle, 0.5 = flat line.
+    # horizontal offset 0.25 = circle, 0.5 = flat line.
     body_roll_3d_z_amplitude: 0.02
     body_roll_3d_pitch_amplitude_deg: 10.0
     body_roll_3d_y_amplitude: 0.02
@@ -210,64 +127,49 @@ posture_node:
     body_roll_3d_pitch_phase_offset: 0.0
     body_roll_3d_yaw_phase_offset: 0.0
 
-    # GaitBounce: the body rides with the lifting feet — lowest at touchdown,
-    # highest at a foot's apex. arc_height (m) is the lift; keep it inside the
-    # body-movement range. step_height_ref should match step_height above so
-    # arc_height is a true height in metres.
+    # GaitBounce: the body rides with the lifting feet. step_height_ref should
+    # match step_height above so arc_height is a true height in metres.
     gait_bounce_arc_height: 0.1
     gait_bounce_step_height_ref: 0.08
 
-    # Smoothing (s) on the sway, so the foot-pair handover doesn't
-    # re-introduce the rocking.
     support_centroid_tau: 0.1
-    # Smoothing (s) on the bounce, rounding off the kink when the highest foot
-    # changes. Keep small or the body visibly lags the feet.
     swing_lift_tau: 0.04
-    # Animation fade in/out when walking starts or stops, so the body doesn't
-    # jump (higher = faster; 4.0 ≈ 0.25 s).
+    # Animation fade in/out when walking starts or stops (4.0 ≈ 0.25 s).
     gait_activation_slew_rate: 4.0
 
-    # Spring smoother on the commanded pose, so a stepped /body/pose ramps
-    # instead of snapping. tau = 1/omega_n (s, larger = heavier); damping
-    # below 1 overshoots. 0.135 / 0.32 gives ~35% overshoot settling in
-    # ~0.4 s. A tau of 0 bypasses that group.
+    # Spring smoother on the commanded pose. tau = 1/omega_n (larger = heavier);
+    # damping below 1 overshoots. A tau of 0 bypasses that group. x-y and
+    # roll-pitch are eased as PAIRS, in polar: magnitude taus below, direction
+    # in the _angle taus.
     pose_filter_tau_translation: 0.135
     pose_filter_tau_rotation: 0.135
+    pose_filter_tau_xy_angle: 0.135
+    pose_filter_tau_tilt_angle: 0.135
     pose_filter_damping_ratio: 0.32
 
-    # Posing limits. Body height is ground to the hexa's underside; the other
-    # five axes are symmetric (± the value), m for x/y and rad for rotation.
-    # The manual pose and the animation layer share this one envelope and their
-    # sum is clamped to it, so leave room for the amplitudes above — a pose
-    # dialed all the way out clips the animation on that axis.
+    # Posing limits. Body height is ground to underside; the other five axes are
+    # symmetric (± the value). Manual pose and animation share this envelope and
+    # their sum is clamped to it.
     body_height_max_m: 0.14
     body_height_min_m: 0.02
     pose_limit_x: 0.05
     pose_limit_y: 0.05
-    pose_limit_roll: 0.30
-    pose_limit_pitch: 0.30
+    pose_limit_roll: 0.35
+    pose_limit_pitch: 0.35
     pose_limit_yaw: 0.50
 
-# ═══ Posture-mode teleop limits (teleop_node) ═══════════════════════
-#
 # How far a stick may pose the body in posture mode.
-
 teleop_node:
   ros__parameters:
     posture:
-      # Body translation off centre (m).
       x_max: 0.04
       y_max: 0.04
-      # Body tilt and turn.
       roll_max_deg: 15.0
       pitch_max_deg: 15.0
       yaw_max_deg: 25.0
-      # Low-pass (s) on the eased yaw and wiggle inputs.
+      # Low-pass on the eased yaw and wiggle inputs.
       yaw_tau_s: 0.10
-      # Low-pass (s) on the init-button revert to the default posture.
+      # Low-pass on the init-button revert to the default posture.
       revert_tau_s: 0.25
-      # Point ahead of centre (m) the wiggle swings the body about.
+      # Point ahead of centre the wiggle swings the body about.
       wiggle_pivot_forward_m: 0.06
-
-# -- WARNING -- Bad values here can damage your hexapod. Nothing validates
-# them: it will run whatever you put here.

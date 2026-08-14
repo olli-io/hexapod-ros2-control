@@ -1,9 +1,7 @@
 # Web teleop config — phone/tablet webapp (two touch joysticks + 9 buttons).
 # Keys bind to function names (see joy_mapping.ALL_FUNCTIONS); "" is unbound.
-#
-# Top 3 buttons (btn_0, btn_1, btn_2) are fixed mode-select buttons in
-# base.bindings. Bottom 6 (btn_3 … btn_8) are per-mode — the node sends the
-# active mode's labels to the webapp so the UI can relabel them dynamically.
+# btn_0..2 are fixed mode-select buttons in base.bindings; btn_3..8 are
+# per-mode, and the node sends the active mode's labels to the webapp.
 
 initial_mode: gait # "gait" | "posture" | "animation"
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
@@ -13,23 +11,20 @@ allow_unstable_gaits: true
 server:
   port: 8080 # HTTP + WebSocket on the same port
   ws_heartbeat_s: 5.0 # ping each client; close it if a pong is missed
-  # Second port to answer on, so http://control.hexa/ needs no port typed and
-  # phone connectivity probes reach the captive-portal handling. Best-effort:
-  # a privileged port needs a root container, and a refusal is logged and
+  # Second port, so http://control.hexa/ needs no port typed and phone
+  # connectivity probes reach the captive-portal handling. Best-effort: a
+  # privileged port needs a root container, and a refusal is logged and
   # ignored. 0 disables it.
   portal_port: 80
 
-# If no stick/button message arrives within input_timeout_s (dropped
-# WebSocket, slept phone, backgrounded tab) the node feeds neutral input so
-# /cmd_vel falls to zero. Long enough to ride out jitter, short enough to stop
-# promptly.
+# No stick/button message within this and the node feeds neutral input, so
+# /cmd_vel falls to zero.
 safety:
   input_timeout_s: 0.5
 
-# Log viewer (logs page): the node runs `command` as a shell command on demand
-# (GET /logs) and returns its last `lines` lines. The default concatenates the
-# 20 most-recently-modified ROS log files. Robots under docker/systemd can
-# override, e.g. "journalctl -u hexapod -n 200 --no-pager -o short-iso".
+# Logs page: the node runs `command` as a shell command on demand (GET /logs)
+# and returns its last `lines` lines. Robots under docker/systemd can override,
+# e.g. "journalctl -u hexapod -n 200 --no-pager -o short-iso".
 logs:
   lines: 400
   command: >-
@@ -56,11 +51,10 @@ base:
     left_stick_y: 1
     right_stick_x: 2
     right_stick_y: 3
-  # The JS client already sends REP-103 normalised values (forward = +1,
-  # left = +1), so no sign flip is needed. Missing entries default to +1.0.
+  # The JS client already sends REP-103 normalised values, so no sign flip is
+  # needed. Missing entries default to +1.0.
   axis_signs: {}
 
-  # Fixed top-3 mode-select buttons.
   bindings:
     btn_0: gait_mode
     btn_1: posture_mode
@@ -93,7 +87,7 @@ posture:
     right_stick_y: tilt_pitch
 
   height:
-    rate_m_per_s: 0.05 # how fast btn_7/btn_8 raise/lower the body
+    rate_m_per_s: 0.05
 
 animation:
   bindings:
