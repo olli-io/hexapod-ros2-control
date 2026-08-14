@@ -1290,8 +1290,14 @@ TEST(Engine, StickReversalKeepsEveryFootReachable) {
 // to three times that.
 TEST(Engine, StanceAnchorNeverPassesItsCeiling) {
   const auto cfg = g::engine_config_from_config();
-  const float speed = saturating_speed(cfg);
-  const float band = 0.5f * cfg.stride_length;
+  // Lateral, so the radial budget is at its tightest. The band is half of the
+  // stride the engine is actually laying down, not half the configured one, and
+  // the command has to be derated to that same stride — exactly as
+  // Control::shape would — or the walk being measured is one the gait has no
+  // stride for and every anchor sits in the easing zone from the first tick.
+  const float stride = axis_stride(cfg, {0.0f, 1.0f});
+  const float speed = saturating_speed(cfg) * (stride / cfg.stride_length);
+  const float band = 0.5f * stride;
   // Mirrors kStanceExcursionGrace, which is engine-internal.
   const float ceiling = band * 1.25f;
   const float cycle = cfg.max_swing_time /

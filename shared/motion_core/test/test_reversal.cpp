@@ -76,6 +76,13 @@ struct SkidStats {
   std::string worst_stance_leg;
   int landings = 0;
   int mirrors = 0;
+  // What the engine did underneath the ladder's hold. The hold is a walk, not a
+  // released stick, so the engine must stay in GAIT through it; and once the
+  // command has come down onto the knee the clock must run no faster than the
+  // walk's own longest cycle, which is the rate the knee is defined by.
+  int hold_ticks = 0;
+  int hold_ticks_out_of_gait = 0;
+  float worst_hold_phase_step = 0.0f;
 };
 
 // What the command does once the gait is steady.
@@ -123,15 +130,24 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
   }
   EXPECT_EQ(e->state(), g::EngineState::STAND);
 
+  // The knee this axis holds at — where derive_cycle_time stops stretching the
+  // cycle, so the clock is at its slowest and any settle blend can only speed it
+  // up. Same formula the engine derives it by, off the same derated stride.
+  const float knee =
+      stride * swing_end / (cfg.max_swing_time * (1.0f - swing_end));
+
   float v = 0.0f;
   hexa::Vec3 body_w = hexa::Vec3::Zero();
   std::map<std::string, hexa::Vec3> last_targets;
+  bool holding = false;
   const auto tick = [&](float target) {
     std::pair<float, float> request =
         axis == 0 ? std::pair<float, float>{target, 0.0f}
                   : std::pair<float, float>{0.0f, target};
     if (ladder) {
       const auto [rx, ry, rw] = e->shape_reversal(kDt, request, 0.0f);
+      // The gate holds by handing back a command other than the one asked for.
+      holding = rx != request.first || ry != request.second;
       request = {rx, ry};
       (void)rw;
     }
@@ -181,6 +197,20 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
                         e->state() == g::EngineState::GAIT;
     prev_master = e->master_phase();
     prev_state = e->state();
+
+    if (holding) {
+      ++s.hold_ticks;
+      if (e->state() != g::EngineState::GAIT) ++s.hold_ticks_out_of_gait;
+      // Only once the limiter has brought the command down onto the knee: while
+      // it is still above, the walk legitimately runs a shorter cycle. The
+      // reflection is never the step measured here — the gate hands the request
+      // straight back on the tick it fires, so that tick is not a hold.
+      if (std::fabs(v) <= knee * 1.05f) {
+        s.worst_hold_phase_step =
+            std::max(s.worst_hold_phase_step, step > 0.5f ? 1.0f - step : step);
+      }
+    }
+
     if (walked && step > 0.1f && step < 0.9f) {
       ++s.mirrors;
       // What the reflection just promised each leg, against what the ground
@@ -306,6 +336,10 @@ SkidStats sweep(const std::string& gait, bool ladder) {
       }
       w.worst_over_credit = std::max(w.worst_over_credit, s.worst_over_credit);
       w.mirrors += s.mirrors;
+      w.hold_ticks += s.hold_ticks;
+      w.hold_ticks_out_of_gait += s.hold_ticks_out_of_gait;
+      w.worst_hold_phase_step =
+          std::max(w.worst_hold_phase_step, s.worst_hold_phase_step);
     }
   }
   return w;
@@ -332,6 +366,41 @@ TEST(Reversal, MirrorNeverCreditsALegMoreRunwayThanItHas) {
     EXPECT_LT(s.worst_over_credit, 0.02f)
         << gait << " was credited " << s.worst_over_credit * 100.0f
         << "% of a stance more than its foot position affords";
+  }
+}
+
+// The mechanism the test above rests on, asserted directly rather than through
+// the credit it spoils.
+//
+// cmd_zero_tol reads operator intent — has the stick been let go. The ladder's
+// hold means the opposite, and on a slow gait's derated axis it is *slower* than
+// that threshold: ripple's lateral knee is 0.0183 m/s against a 0.02 tolerance.
+// Read as a release, the hold decays cmd_gain_, which scales the applied
+// velocity down and blends the cycle toward settle_cycle_time — feet slow, clock
+// speeds up, feet bunch toward nominal — and, given long enough, takes the gain
+// to zero and drops the engine out of GAIT mid-ladder without ever reflecting.
+//
+// So: through the hold the engine keeps walking, and once the command has come
+// down onto the knee the clock runs no faster than max_cycle_time, which is the
+// rate the knee is defined by. Both bounds are read off the tuning rather than
+// written down, so a retune that moves the knee across the tolerance again fails
+// here instead of quietly bunching the feet.
+TEST(Reversal, TheLaddersHoldIsNotReadAsAReleasedStick) {
+  const auto cfg = g::engine_config_from_config();
+  for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
+    const SkidStats s = sweep(gait, /*ladder=*/true);
+    const float swing_end = g::swing_end_phase(
+        g::strategies().at(gait)()->duty_factor(), cfg.swing_phase_margin);
+    const float walk_step = kDt / (cfg.max_swing_time / swing_end);
+
+    ASSERT_GT(s.hold_ticks, 0) << gait << " never held, so nothing was tested";
+    EXPECT_EQ(s.hold_ticks_out_of_gait, 0)
+        << gait << " stopped walking under the ladder's hold";
+    // One tick's worth of slack: the limiter lands on the knee asymptotically,
+    // so the first tick inside the window can still be a hair above it.
+    EXPECT_LT(s.worst_hold_phase_step, walk_step * 1.05f)
+        << gait << " ran its clock " << s.worst_hold_phase_step / walk_step
+        << "x the walk's own rate while holding at the knee";
   }
 }
 

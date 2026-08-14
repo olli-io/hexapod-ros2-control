@@ -214,10 +214,17 @@ TEST(PosturePoseClamp, PairsClampToAnInscribedDisc) {
 // ── pose input filter ─────────────────────────────────────────────────────
 
 // A step to +0.06 of lift: inside the with_height_envelope() ceiling (+0.09)
-// even after the ~35% overshoot zeta = 0.32 produces, so these cases see the
-// filter's own response rather than the clamp's.
+// even after the overshoot the configured damping produces, so these cases see
+// the filter's own response rather than the clamp's.
 constexpr float kStepZ = 0.06f;
 const BodyPose kStepUp{0.0f, 0.0f, kStepZ, 0.0f, 0.0f, 0.0f};
+
+// Standard second-order overshoot, as a fraction of the step. Read off the
+// configured zeta rather than pinned to a literal, so retuning damping_ratio in
+// tuning.yaml moves the expectation with it instead of failing this.
+float predicted_overshoot(float zeta) {
+  return std::exp(-3.14159265f * zeta / std::sqrt(1.0f - zeta * zeta));
+}
 
 // Sim time -> pose z, from a cold controller, at an arbitrary tick period.
 float step_response_z_at(float horizon_s, float dt) {
@@ -255,11 +262,15 @@ TEST(PosturePoseFilter, StepResponseOvershootsThenSettles) {
                               .z);
     t += kDt;
   }
-  // zeta = 0.32 predicts exp(-pi*zeta/sqrt(1-zeta^2)) = ~35% overshoot. Bounded
-  // on both sides: too little means it is creeping (over-damped), too much
-  // means the damping term has been lost.
-  EXPECT_GT(peak, 1.15f * kStepZ) << "the response must cross the target";
-  EXPECT_LT(peak, 1.5f * kStepZ) << "overshoot must stay bounded";
+  // Bracketed either side of what the configured zeta predicts: too little
+  // means it is creeping (over-damped), too much means the damping term has
+  // been lost. The slack absorbs the 200 Hz grid missing the exact peak.
+  const float overshoot =
+      predicted_overshoot(with_height_envelope().pose_filter_damping_ratio);
+  EXPECT_GT(peak, kStepZ * (1.0f + 0.75f * overshoot))
+      << "the response must cross the target";
+  EXPECT_LT(peak, kStepZ * (1.0f + 1.25f * overshoot))
+      << "overshoot must stay bounded";
 
   for (int i = 0; i < 800; ++i) {  // out to 5 s
     posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND, "tripod",
@@ -457,9 +468,7 @@ TEST(PosturePolarFilter, MagnitudeEasesThroughTheOriginInsteadOfStopping) {
     depth = std::min(depth, p.x);
     EXPECT_NEAR(p.y, 0.0f, 1e-6f);  // straight through, no spin
   }
-  const float zeta = cfg.damping_ratio;
-  const float predicted =
-      -kR * std::exp(-3.14159265f * zeta / std::sqrt(1.0f - zeta * zeta));
+  const float predicted = -kR * predicted_overshoot(cfg.damping_ratio);
   EXPECT_NEAR(depth, predicted, 0.03f * kR);
 
   // And it rings down onto centre rather than parking at the rebound.

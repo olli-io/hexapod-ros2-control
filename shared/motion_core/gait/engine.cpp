@@ -477,7 +477,18 @@ std::map<std::string, LegOutput> Engine::update(
     float dt, std::pair<float, float> v_body_xy, float omega_z) {
   applied_xy_ = v_body_xy;
   applied_omega_ = omega_z;
-  const bool cmd_zero = cmd_is_zero(v_body_xy, omega_z);
+  // cmd_zero_tol reads *operator* intent — has the stick been let go. The
+  // ladder's hold means the opposite: it is the engine asking to keep walking,
+  // as slowly as it still lays down a full stride, so the schedule keeps
+  // matching the feet. On a slow gait's derated axis that hold sits below the
+  // tolerance (ripple lateral: 0.0183 m/s), and reading it as a release decays
+  // cmd_gain_, which slows the feet and speeds the clock — the one thing the
+  // reflection's premise forbids. It also keeps applied_xy_, latched above
+  // ungained, equal to what tick_gait actually walks, which is the speed the
+  // gate's own fire test is measuring. Bounded by the gate: the exemption ends
+  // when the mirror fires, when the request stops opposing (a centred stick
+  // included), or at the ladder's timeout — so it can never sit on a real stop.
+  const bool cmd_zero = cmd_is_zero(v_body_xy, omega_z) && !reversal_.armed();
   if (cmd_zero) {
     cmd_zero_elapsed_ += dt;
   } else {
