@@ -803,13 +803,10 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         # Gait-animation crossfade (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
         # Spring/inertia smoother on the commanded body pose. tau = 1/omega_n
-        # (s), damping_ratio = zeta; both frame-rate independent. The _angle
-        # pair tunes the direction of the polar-eased x-y and roll-pitch pairs;
-        # the two above tune their magnitude.
-        ("pose_filter_tau_translation", pn["pose_filter_tau_translation"]),
-        ("pose_filter_tau_rotation", pn["pose_filter_tau_rotation"]),
-        ("pose_filter_tau_xy_angle", pn["pose_filter_tau_xy_angle"]),
-        ("pose_filter_tau_tilt_angle", pn["pose_filter_tau_tilt_angle"]),
+        # (s), damping_ratio = zeta; both frame-rate independent. One spring
+        # for every axis group — the two polar-eased pairs' magnitude and
+        # direction, and the lone z and yaw.
+        ("pose_filter_tau", pn["pose_filter_tau"]),
         ("pose_filter_damping_ratio", pn["pose_filter_damping_ratio"]),
         # Composed-pose clamp envelope, shared by the user pose and the
         # animation layer. body_height_{max,min} are ABSOLUTE belly

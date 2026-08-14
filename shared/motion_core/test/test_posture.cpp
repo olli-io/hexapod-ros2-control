@@ -337,8 +337,7 @@ TEST(PosturePoseFilter, InactiveStateResetsTheFilter) {
 // pair as well as on z: the pair bypass is a separate branch in step_polar.
 TEST(PosturePoseFilter, ZeroTauBypassesTheFilter) {
   hexa::config::PostureConfig p = with_height_envelope();
-  p.pose_filter_tau_translation = 0.0f;
-  p.pose_filter_tau_rotation = 0.0f;
+  p.pose_filter_tau = 0.0f;
   PostureController posture{p};
   posture.set_user_pose(BodyPose{0.03f, 0.0f, kStepZ, 0.2f, 0.0f, 0.0f});
 
@@ -430,33 +429,66 @@ TEST(PosturePolarFilter, DirectionTakesTheShortWayAcrossTheWrap) {
 }
 
 // A target at the origin has no direction, so the pair retracts along its own
-// line instead of spinning to centre.
+// line instead of spinning to centre. The line runs through the origin and out
+// the far side — x and y stay equal on both sides of it.
 TEST(PosturePolarFilter, WithdrawnPairRetractsAlongItsOwnLine) {
   PoseSmoother s{PoseSmootherConfig{}};
   run_to(s, xy_pose(0.03f, 0.03f), 2000);
 
   for (const BodyPose& p : run_to(s, xy_pose(0.0f, 0.0f), 2000)) {
     EXPECT_NEAR(p.x, p.y, 1e-6f);  // heading frozen at 45 degrees
-    EXPECT_GE(p.x, -1e-6f);        // and never past the origin
   }
   EXPECT_NEAR(s.value().x, 0.0f, 1e-6f);
 }
 
-// The magnitude floor absorbs the zeta = 0.32 undershoot on a return to
-// centre. A deliberate change: the old per-axis filter overshot THROUGH the
-// origin and came out the far side. The floor must not wind up, though — the
-// pose has to move again on the very next tick.
-TEST(PosturePolarFilter, MagnitudeStopsAtTheOriginInsteadOfSwingingThrough) {
-  PoseSmoother s{PoseSmootherConfig{}};
-  run_to(s, xy_pose(0.04f, 0.0f), 2000);
+// The magnitude is not floored at the origin: a withdrawal eases through it
+// and rings down, so the return keeps the settle a floor would have clipped
+// off. Damping alone bounds the excursion — the depth past centre is the
+// standard second-order overshoot of the reach withdrawn.
+TEST(PosturePolarFilter, MagnitudeEasesThroughTheOriginInsteadOfStopping) {
+  PoseSmootherConfig cfg;
+  PoseSmoother s{cfg};
+  constexpr float kR = 0.04f;
+  run_to(s, xy_pose(kR, 0.0f), 2000);
+  ASSERT_NEAR(s.value().x, kR, 1e-5f);
 
+  float depth = 0.0f;
   for (const BodyPose& p : run_to(s, xy_pose(0.0f, 0.0f), 400)) {
-    EXPECT_GE(p.x, -1e-6f);
+    depth = std::min(depth, p.x);
+    EXPECT_NEAR(p.y, 0.0f, 1e-6f);  // straight through, no spin
   }
+  const float zeta = cfg.damping_ratio;
+  const float predicted =
+      -kR * std::exp(-3.14159265f * zeta / std::sqrt(1.0f - zeta * zeta));
+  EXPECT_NEAR(depth, predicted, 0.03f * kR);
+
+  // And it rings down onto centre rather than parking at the rebound.
+  run_to(s, xy_pose(0.0f, 0.0f), 2000);
   ASSERT_NEAR(s.value().x, 0.0f, 1e-6f);
 
-  const BodyPose next = s.step(xy_pose(0.04f, 0.0f), kEnv, kDt);
+  const BodyPose next = s.step(xy_pose(kR, 0.0f), kEnv, kDt);
   EXPECT_GT(next.x, 0.0f);
+}
+
+// Re-commanding a pair that is mid-rebound must not make it travel. Caught on
+// the far side of the origin the magnitude is carried negative, so the stored
+// heading is a half-turn from where the body actually stands; a target on that
+// far side is then the pair's own position and must read as zero error, not as
+// a 180-degree sweep back through the origin and around.
+TEST(PosturePolarFilter, RecommandingMidReboundDoesNotSweepTheLongWay) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  constexpr float kR = 0.04f;
+  run_to(s, xy_pose(kR, 0.0f), 2000);
+
+  // ~pi/omega_d after the withdrawal: the deepest point of the rebound.
+  run_to(s, xy_pose(0.0f, 0.0f), 90);
+  ASSERT_LT(s.value().x, 0.0f) << "expected to be past centre by now";
+
+  for (const BodyPose& p : run_to(s, xy_pose(-kR, 0.0f), 2000)) {
+    EXPECT_NEAR(p.y, 0.0f, 1e-6f) << "swept around instead of easing in place";
+    EXPECT_LT(p.x, 1e-6f) << "went back through the origin first";
+  }
+  EXPECT_NEAR(s.value().x, -kR, 1e-5f);
 }
 
 // The pair twin of SaturatedAxisDoesNotWindUp: parked far outside, the
@@ -499,15 +531,14 @@ TEST(PosturePolarFilter, SingleAxisMoveMatchesTheScalarKernel) {
   }
 }
 
-// The direction tau is its own knob because tangential travel is magnitude
-// times heading rate: at equal taus a half-turn at full reach covers ~pi times
-// the path of a full radial move in the same time. Raising it must slow the
-// sweep and nothing else.
-TEST(PosturePolarFilter, DirectionTauSlowsTheSweepOnItsOwn) {
+// The one tau governs the heading spring as well as the magnitude one — the
+// direction is a separate integrator, not a free ride on the radial move, so a
+// change to tau has to show up in a pure sweep at constant reach.
+TEST(PosturePolarFilter, SharedTauSlowsTheDirectionSweep) {
   constexpr float kR = 0.04f;
-  auto ticks_to_quarter_turn = [&](float tau_angle) {
+  auto ticks_to_quarter_turn = [&](float tau) {
     PoseSmootherConfig cfg;
-    cfg.tau_xy_angle = tau_angle;
+    cfg.tau = tau;
     PoseSmoother s{cfg};
     run_to(s, xy_pose(kR, 0.0f), 2000);
     int n = 0;

@@ -258,10 +258,7 @@ TEST(Posture, PoseFilter) {
   // above the tick period to integrate cleanly" — below ~4 ticks a tau runs
   // into PoseSmoother's omega*dt stability cap instead of meaning what it says.
   constexpr float kDt = 0.005f;  // hexa::pipeline::kDt
-  EXPECT_GT(cfg::kPosture.pose_filter_tau_translation, 4.0f * kDt);
-  EXPECT_GT(cfg::kPosture.pose_filter_tau_rotation, 4.0f * kDt);
-  EXPECT_GT(cfg::kPosture.pose_filter_tau_xy_angle, 4.0f * kDt);
-  EXPECT_GT(cfg::kPosture.pose_filter_tau_tilt_angle, 4.0f * kDt);
+  EXPECT_GT(cfg::kPosture.pose_filter_tau, 4.0f * kDt);
 
   // zeta = 0 is an undamped oscillator that never settles.
   EXPECT_GT(cfg::kPosture.pose_filter_damping_ratio, 0.0f);

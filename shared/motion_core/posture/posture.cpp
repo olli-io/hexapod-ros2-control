@@ -195,10 +195,8 @@ PostureController::PostureController(const config::PostureConfig& p)
       activation_slew_rate_(p.gait_activation_slew_rate),
       centroid_tau_(p.support_centroid_tau),
       swing_lift_tau_(p.swing_lift_tau) {
-  pose_smoother_ = PoseSmoother(PoseSmootherConfig{
-      p.pose_filter_tau_translation, p.pose_filter_tau_rotation,
-      p.pose_filter_tau_xy_angle, p.pose_filter_tau_tilt_angle,
-      p.pose_filter_damping_ratio});
+  pose_smoother_ = PoseSmoother(
+      PoseSmootherConfig{p.pose_filter_tau, p.pose_filter_damping_ratio});
 
   std::vector<std::string_view> enabled(config::kEnabledAnimations.begin(),
                                         config::kEnabledAnimations.end());

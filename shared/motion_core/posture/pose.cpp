@@ -46,6 +46,7 @@ float clamp_axis(float v, float lo, float hi) {
 // is far below what a servo can express, and far above the float noise at the
 // centimetre / third-of-a-radian magnitudes the envelope allows.
 constexpr float kPolarEps = 1e-6f;
+constexpr float kPi = 3.141592653589793f;
 constexpr float kTwoPi = 6.283185307179586f;
 
 // Scale a pair onto the disc of radius r_max, direction preserved.
@@ -119,13 +120,14 @@ float omega_for(float tau, float dt) {
 }
 
 // One step of the same spring on a pair carried in polar, so a direction sweep
-// holds its reach instead of cutting the chord. Magnitude and direction get
-// their own w; both integrate exactly as step_axis does, with the saturation
-// clamp folded in the same way.
+// holds its reach instead of cutting the chord. Magnitude and direction keep
+// SEPARATE state but share one w; both integrate exactly as step_axis does,
+// with the saturation clamp folded in the same way. (The w is a parameter, not
+// read off the config here, so giving the direction its own tau again is a
+// matter of passing a second one in.)
 void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
-                float target_b, float r_max, float w_radius, float w_angle,
-                float zeta, float dt) {
-  if (w_radius <= 0.0f) {
+                float target_b, float r_max, float w, float zeta, float dt) {
+  if (w <= 0.0f) {
     // Bypass the whole pair. Snap in Cartesian rather than round-tripping
     // through polar, so the result is bit-identical to the old per-axis snap.
     out_a = target_a;
@@ -138,6 +140,21 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
   float target_r = std::hypot(target_a, target_b);
   if (target_r > r_max) {
     target_r = r_max;
+  }
+
+  // The magnitude is SIGNED between ticks (see the integration below), and
+  // (-r, angle) is the same point as (r, angle + pi). Put it back in canonical
+  // form before anything reads the heading, so the origin test and the angle
+  // spring always see the direction the body is actually displaced in — a pair
+  // caught mid-crossing would otherwise be re-commanded against a heading a
+  // half-turn away from its own position and sweep the long way round to a
+  // point it was already standing on. Exact: negating the rate with the radius
+  // leaves the emitted point and its velocity untouched, and a heading rate is
+  // the same in both representations.
+  if (s.radius < 0.0f) {
+    s.radius = -s.radius;
+    s.radius_rate = -s.radius_rate;
+    s.angle = wrap_pi(s.angle + kPi);
   }
 
   // A pair sitting at the origin has no direction of its own, so adopt the
@@ -154,32 +171,34 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
   const float target_angle =
       target_r > kPolarEps ? std::atan2(target_b, target_a) : s.angle;
 
-  if (w_angle <= 0.0f) {
-    s.angle = target_angle;
-    s.angle_rate = 0.0f;
-  } else {
-    const float err = wrap_pi(target_angle - s.angle);
-    s.angle_rate +=
-        (w_angle * w_angle * err - 2.0f * zeta * w_angle * s.angle_rate) * dt;
-    // Wrapping the state and not just the error keeps `angle` bounded however
-    // many turns it accumulates.
-    s.angle = wrap_pi(s.angle + s.angle_rate * dt);
-  }
+  const float err = wrap_pi(target_angle - s.angle);
+  s.angle_rate += (w * w * err - 2.0f * zeta * w * s.angle_rate) * dt;
+  // Wrapping the state and not just the error keeps `angle` bounded however
+  // many turns it accumulates.
+  s.angle = wrap_pi(s.angle + s.angle_rate * dt);
 
-  s.radius_rate += (w_radius * w_radius * (target_r - s.radius) -
-                    2.0f * zeta * w_radius * s.radius_rate) *
-                   dt;
+  s.radius_rate +=
+      (w * w * (target_r - s.radius) - 2.0f * zeta * w * s.radius_rate) * dt;
   s.radius += s.radius_rate * dt;
-  if (s.radius < 0.0f) {
-    // The floor is what stops an undershoot swinging the pair through the
-    // origin and out the far side. The heading rate goes with it: a spin
-    // banked while the pair sat at the origin would otherwise be released the
-    // instant the magnitude came off zero.
-    s.radius = 0.0f;
-    s.radius_rate = 0.0f;
-    s.angle_rate = 0.0f;
-  } else if (s.radius > r_max) {
+  // The magnitude runs SIGNED and is free to cross the origin. A floor at zero
+  // would pin the pair at the one point on a withdrawal where it is moving
+  // fastest — at zeta < 1 the magnitude reaches the centre with most of its
+  // speed intact — clipping the whole settle off the end of the return and
+  // stopping the body dead. Damping is what bounds the excursion out the far
+  // side, and it is the only thing that should: the depth past centre is
+  // exp(-pi*zeta/sqrt(1-zeta^2)) of the reach withdrawn, so it is the damping
+  // ratio, not a clamp, that decides how far the body rebounds.
+  //
+  // The out_a/out_b derivation below needs no special case for a negative
+  // magnitude — it lands on the opposite side on its own — and the next tick
+  // folds the sign back into the heading.
+  if (s.radius > r_max) {
     s.radius = r_max;
+    s.radius_rate = 0.0f;
+  } else if (s.radius < -r_max) {
+    // The disc bound is on the magnitude's absolute value, so a rebound is
+    // held to the same envelope as a reach.
+    s.radius = -r_max;
     s.radius_rate = 0.0f;
   }
 
@@ -193,19 +212,17 @@ BodyPose PoseSmoother::step(const BodyPose& target, const PoseLimits& envelope,
   if (dt <= 0.0f) {
     return pose_;
   }
-  const float wt = omega_for(cfg_.tau_translation, dt);
-  const float wr = omega_for(cfg_.tau_rotation, dt);
-  const float wxa = omega_for(cfg_.tau_xy_angle, dt);
-  const float wta = omega_for(cfg_.tau_tilt_angle, dt);
+  // One spring for the whole pose: both pairs (magnitude and direction alike)
+  // and both lone axes.
+  const float w = omega_for(cfg_.tau, dt);
   const float z = cfg_.damping_ratio;
 
-  step_polar(xy_, pose_.x, pose_.y, target.x, target.y, envelope.xy_radius(),
-             wt, wxa, z, dt);
+  step_polar(xy_, pose_.x, pose_.y, target.x, target.y, envelope.xy_radius(), w,
+             z, dt);
   step_polar(tilt_, pose_.roll, pose_.pitch, target.roll, target.pitch,
-             envelope.tilt_radius(), wr, wta, z, dt);
-  step_axis(pose_.z, vel_z_, target.z, envelope.z_min, envelope.z_max, wt, z,
-            dt);
-  step_axis(pose_.yaw, vel_yaw_, target.yaw, -envelope.yaw, envelope.yaw, wr, z,
+             envelope.tilt_radius(), w, z, dt);
+  step_axis(pose_.z, vel_z_, target.z, envelope.z_min, envelope.z_max, w, z, dt);
+  step_axis(pose_.yaw, vel_yaw_, target.yaw, -envelope.yaw, envelope.yaw, w, z,
             dt);
   return pose_;
 }

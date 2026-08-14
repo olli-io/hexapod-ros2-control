@@ -77,8 +77,14 @@ BodyPose clamp(const BodyPose& pose, const PoseLimits& limits);
 // (r' = (a*a' + b*b')/r, angle' = (a*b' - b*a')/r^2) is singular at the origin,
 // and carrying the angle across a pass through the origin is exactly what keeps
 // the body from spinning when the pair is withdrawn.
+// `radius` is SIGNED. It is left negative for the tick in which a withdrawal
+// eases through the origin — (-r, angle) being the same point as (r, angle+pi),
+// which the Cartesian derivation handles unaided — and the next step folds the
+// sign back into `angle`. Anything reading a PolarState between steps therefore
+// gets the canonical non-negative form; anything reading `radius` as a distance
+// mid-step wants std::fabs.
 struct PolarState {
-  float radius = 0.0f;       // m for (x, y), rad for (roll, pitch)
+  float radius = 0.0f;       // m for (x, y), rad for (roll, pitch); signed
   float angle = 0.0f;        // rad, wrapped to [-pi, pi]
   float radius_rate = 0.0f;  // per s
   float angle_rate = 0.0f;   // rad/s
@@ -89,7 +95,8 @@ struct PolarState {
 // it, which costs no visible motion at radius 0.
 PolarState to_polar(float a, float b);
 
-// Tuning for PoseSmoother, one (tau, zeta) pair per axis group.
+// Tuning for PoseSmoother: one spring, shared by every axis group — the two
+// pair magnitudes, the two pair directions, and the lone z and yaw axes.
 //
 // Parameterised by omega_n and zeta rather than by the reference
 // implementation's raw spring/friction constants, because those constants are
@@ -98,12 +105,17 @@ PolarState to_polar(float a, float b);
 // sqrt(0.92/dt) and zeta = 0.0417/sqrt(dt). Its ~60 Hz gives 7.4 rad/s and
 // zeta 0.32; the same literals at our 200 Hz would give 13.6 and 0.59. The
 // defaults below reproduce the reference feel at any tick rate.
+//
+// One tau means a direction sweep and a radial move of equal size take equal
+// TIME, not equal path: a half-turn held at full reach covers pi times the
+// ground a full radial move does, so it travels pi times as fast. That is the
+// deliberate reading — the body's response to a stick is one time constant,
+// whatever the stick did — and it is why the two knobs are worth keeping in
+// step. Splitting the direction back out is a matter of restoring the second
+// omega_for() call in step(); the pair kernel already takes its own w.
 struct PoseSmootherConfig {
-  float tau_translation = 0.135f;  // s, magnitude of the x-y pair, and z
-  float tau_rotation = 0.135f;     // s, magnitude of the roll-pitch pair, and yaw
-  float tau_xy_angle = 0.135f;     // s, direction of the x-y pair
-  float tau_tilt_angle = 0.135f;   // s, direction of the roll-pitch pair
-  float damping_ratio = 0.32f;     // zeta, shared; < 1 overshoots
+  float tau = 0.135f;           // s, 1/omega_n; <= 0 bypasses the filter
+  float damping_ratio = 0.32f;  // zeta; < 1 overshoots
 };
 
 // Damped second-order smoother on the commanded body pose — a spring/inertia
@@ -115,8 +127,9 @@ struct PoseSmootherConfig {
 //
 // z and yaw are lone axes and run that directly — six mul-adds, no
 // transcendentals. x-y and roll-pitch instead ease as PAIRS, in polar: the
-// magnitude and the direction each get their own spring and the Cartesian pair
-// is derived from the result. Per-axis easing is isotropic, so its response to
+// magnitude and the direction each get their own spring (same tau, separate
+// state) and the Cartesian pair is derived from the result. Per-axis easing is
+// isotropic, so its response to
 // any step is a straight line; a command that swings the body sideways
 // therefore cut the chord, collapsing the magnitude to 0.707 of the reach at
 // the crossing and arriving as a sequence of angled segments. In polar a
@@ -144,13 +157,16 @@ class PoseSmoother {
   // envelope; integrating toward an unreachable value is the same wind-up from
   // the other side.
   //
-  // A pair's magnitude is also floored at zero, which is what keeps an
-  // undershoot from swinging it through the origin and out the far side. Note
-  // the consequence: withdrawing an x-y or tilt command no longer overshoots
-  // past centre the way the old per-axis filter did at zeta < 1.
+  // A pair's magnitude is NOT floored at zero: a withdrawal eases through the
+  // origin and rings down about it, exactly as the lone axes do. At zeta < 1
+  // the magnitude arrives at the centre still carrying most of its speed, so a
+  // floor there would clip the settle off the end of every return and stop the
+  // body dead at its fastest point. The rebound past centre is
+  // exp(-pi*zeta/sqrt(1-zeta^2)) of the reach withdrawn — 35% at zeta 0.32, 2%
+  // at 0.7 — which makes damping_ratio the knob that governs it.
   //
-  // tau <= 0 on a magnitude bypasses that whole group; tau <= 0 on a pair's
-  // angle snaps the direction and eases only the magnitude.
+  // tau <= 0 bypasses the filter outright — every axis snaps to the clamped
+  // target, which is the off switch in place of a separate enable flag.
   BodyPose step(const BodyPose& target, const PoseLimits& envelope, float dt);
 
   // Snap to `pose` and drop the stored velocity. The caller must do this

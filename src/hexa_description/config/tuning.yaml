@@ -137,15 +137,13 @@ posture_node:
     # Animation fade in/out when walking starts or stops (4.0 ≈ 0.25 s).
     gait_activation_slew_rate: 4.0
 
-    # Spring smoother on the commanded pose. tau = 1/omega_n (larger = heavier);
-    # damping below 1 overshoots. A tau of 0 bypasses that group. x-y and
-    # roll-pitch are eased as PAIRS, in polar: magnitude taus below, direction
-    # in the _angle taus.
-    pose_filter_tau_translation: 0.135
-    pose_filter_tau_rotation: 0.135
-    pose_filter_tau_xy_angle: 0.135
-    pose_filter_tau_tilt_angle: 0.135
-    pose_filter_damping_ratio: 0.32
+    # Spring smoother on the commanded pose, shared by all six axes. tau =
+    # 1/omega_n (larger = heavier); 0 bypasses the filter entirely. Damping
+    # below 1 overshoots, and on a withdrawal that overshoot is a real swing
+    # past centre — exp(-pi*z/sqrt(1-z^2)) of the reach given up, so ~35% at
+    # 0.32 and ~2% at 0.7.
+    pose_filter_tau: 0.18
+    pose_filter_damping_ratio: 0.6
 
     # Posing limits. Body height is ground to underside; the other five axes are
     # symmetric (± the value). Manual pose and animation share this envelope and
