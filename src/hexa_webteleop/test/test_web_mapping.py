@@ -82,14 +82,6 @@ posture:
     left_stick_x: pose_y
     right_stick_x: tilt_roll
     right_stick_y: tilt_pitch
-  x_max: 0.035
-  y_max: 0.035
-  roll_max_deg: 12.0
-  pitch_max_deg: 12.0
-  yaw_max_deg: 20.0
-  yaw_tau_s: 0.10
-  revert_tau_s: 0.25
-  wiggle_pivot_forward_m: 0.06
   height:
     rate_m_per_s: 0.05
 
@@ -148,6 +140,23 @@ posture_node:
       - body_roll_3d
     body_height_max_m: 0.13
     body_height_min_m: 0.01
+    pose_limit_x: 0.05
+    pose_limit_y: 0.05
+    pose_limit_roll: 0.30
+    pose_limit_pitch: 0.30
+    pose_limit_yaw: 0.50
+
+teleop_node:
+  ros__parameters:
+    posture:
+      x_max: 0.035
+      y_max: 0.035
+      roll_max_deg: 12.0
+      pitch_max_deg: 12.0
+      yaw_max_deg: 20.0
+      yaw_tau_s: 0.10
+      revert_tau_s: 0.25
+      wiggle_pivot_forward_m: 0.06
 """
 
 
@@ -213,6 +222,18 @@ def test_load_config_height_limits_come_from_tuning_not_webteleop(cfg):
     loaded_cfg, _, _ = cfg
     assert math.isclose(loaded_cfg.posture.height_max, 0.13 - 0.04)
     assert math.isclose(loaded_cfg.posture.height_min, 0.01 - 0.04)
+
+
+def test_load_config_scalar_limits_come_from_tuning_not_webteleop(cfg):
+    """webteleop.yaml declares no posture limits; tuning.yaml owns them.
+
+    Same block the gamepad teleop reads, so both front ends pose the body
+    over one range.
+    """
+    loaded_cfg, _, _ = cfg
+    assert math.isclose(loaded_cfg.posture.x_max, 0.035)
+    assert math.isclose(loaded_cfg.posture.roll_max, math.radians(12.0))
+    assert math.isclose(loaded_cfg.posture.wiggle_pivot_forward_m, 0.06)
 
 
 def test_load_config_button_count(cfg):

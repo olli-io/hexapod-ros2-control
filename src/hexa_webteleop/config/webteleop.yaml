@@ -1,17 +1,9 @@
 # Web teleop config — phone/tablet webapp (two touch joysticks + 9 buttons).
-#
-# The webapp's input model is simpler than a gamepad: 2 analog sticks
-# (each an x/y pair in [-1, 1], already REP-103 normalised by the JS
-# client) and 9 binary buttons. The config maps these virtual keys to
-# the same function namespace the gamepad uses (see
-# hexa_teleop.joy_mapping.ALL_FUNCTIONS), and the shared map_joy state
-# machine does the rest.
+# Keys bind to function names (see joy_mapping.ALL_FUNCTIONS); "" is unbound.
 #
 # Top 3 buttons (btn_0, btn_1, btn_2) are fixed mode-select buttons in
-# base.bindings. Bottom 6 (btn_3 … btn_8) are per-mode — the node sends
-# the active mode's labels to the webapp so the UI can relabel them
-# dynamically. init/record are allowed in per-mode bindings (the webapp
-# loader validates with ALL_FUNCTIONS, not the gamepad's restricted set).
+# base.bindings. Bottom 6 (btn_3 … btn_8) are per-mode — the node sends the
+# active mode's labels to the webapp so the UI can relabel them dynamically.
 
 initial_mode: gait # "gait" | "posture" | "animation"
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
@@ -21,31 +13,23 @@ allow_unstable_gaits: true
 server:
   port: 8080 # HTTP + WebSocket on the same port
   ws_heartbeat_s: 5.0 # ping each client; close it if a pong is missed
-  # Second port to answer on, so the robot's hotspot name works with no port
-  # typed (http://control.hexa/) and so phone connectivity probes — which are
-  # plain port 80 — reach the captive-portal handling. Best-effort: binding a
-  # privileged port needs a root container (the robot's is, the sim's is not),
-  # and a refusal is logged and ignored. 0 disables it.
+  # Second port to answer on, so http://control.hexa/ needs no port typed and
+  # phone connectivity probes reach the captive-portal handling. Best-effort:
+  # a privileged port needs a root container, and a refusal is logged and
+  # ignored. 0 disables it.
   portal_port: 80
 
-# Safety watchdog. If no stick/button message arrives within
-# input_timeout_s (dropped WebSocket, slept phone, backgrounded tab) the
-# node feeds neutral input so /cmd_vel falls to zero instead of latching
-# the last commanded velocity. Keep it a few control ticks long: large
-# enough to ride out transient jitter, short enough to stop promptly.
+# If no stick/button message arrives within input_timeout_s (dropped
+# WebSocket, slept phone, backgrounded tab) the node feeds neutral input so
+# /cmd_vel falls to zero. Long enough to ride out jitter, short enough to stop
+# promptly.
 safety:
   input_timeout_s: 0.5
 
-# Log viewer (logs page). The node runs `command` as a shell command
-# on demand (GET /logs) and returns its last `lines` lines. The source
-# differs per environment, so it is fully configurable here.
-#
-# Default: concatenate the 20 most-recently-modified ROS log files under
-# ~/.ros/log (oldest→newest so the tail keeps the freshest entries). This
-# covers every node of the current session in both dev and prod.
-#
-# Prod robots running under docker/systemd can override, e.g.:
-#   command: "journalctl -u hexapod -n 200 --no-pager -o short-iso"
+# Log viewer (logs page): the node runs `command` as a shell command on demand
+# (GET /logs) and returns its last `lines` lines. The default concatenates the
+# 20 most-recently-modified ROS log files. Robots under docker/systemd can
+# override, e.g. "journalctl -u hexapod -n 200 --no-pager -o short-iso".
 logs:
   lines: 400
   command: >-
@@ -56,9 +40,7 @@ base:
   deadband: 0.05 # smaller than gamepad (touch input is less noisy)
   trigger_threshold: 0.5 # unused (no analog triggers) but required by BaseConfig
 
-  # Webapp virtual key → Joy.{buttons,axes} index. The TS client sends
-  # stick events as {stick:"left"|"right", x, y} and button events as
-  # {index: 0..8, pressed: bool}. The node packs them into these slots.
+  # Webapp virtual key → Joy.{buttons,axes} index.
   buttons:
     btn_0: 0
     btn_1: 1
@@ -85,9 +67,6 @@ base:
     btn_2: animation_mode
 
 gait:
-  # Bottom 6 + 2 sticks. drive_x = forward/back, drive_y = strafe,
-  # drive_yaw = turn. Left stick drives x/y, right stick turns and adds
-  # forward via drive_x_aux, so either stick can drive on its own.
   bindings:
     btn_3: init
     btn_4: record
@@ -101,8 +80,6 @@ gait:
     right_stick_y: drive_x_aux
 
 posture:
-  # Left stick = body x/y translation, right stick = roll/pitch tilt.
-  # btn_5/btn_6 = yaw left/right (eased), btn_7/btn_8 = height.
   bindings:
     btn_3: init
     btn_4: record
@@ -115,22 +92,10 @@ posture:
     right_stick_x: tilt_roll
     right_stick_y: tilt_pitch
 
-  # Posture-mode scalar limits (mirror teleop_joy.yaml).
-  x_max: 0.035 # m
-  y_max: 0.035 # m
-  roll_max_deg: 12.0
-  pitch_max_deg: 12.0
-  yaw_max_deg: 20.0
-  yaw_tau_s: 0.10
-  revert_tau_s: 0.25
-  wiggle_pivot_forward_m: 0.06
-  # Rate only. The body-height envelope lives in hexa_description's tuning.yaml
-  # (posture_node body_height_max_m / body_height_min_m).
   height:
-    rate_m_per_s: 0.05
+    rate_m_per_s: 0.05 # how fast btn_7/btn_8 raise/lower the body
 
 animation:
-  # Same stick mapping as gait; bottom 6 cycle animations.
   bindings:
     btn_3: init
     btn_4: record
@@ -143,12 +108,7 @@ animation:
     right_stick_x: drive_yaw
     right_stick_y: drive_x_aux
 
-# Gait-mode stick scaling comes from hexa_description/config/tuning.yaml; the
-# web teleop node loads it at startup and swaps in the active gait's
-# cap whenever /cmd_gait updates — same pattern as teleop_joy.
-
-# Coexistence with the gamepad teleop (hexa_teleop). The web node is the
-# sole writer of /teleop/owner. Default owner is "gamepad"; the web node
-# claims control when a webapp requests it and releases on disconnect.
+# When enabled, the web node is the sole writer of /teleop/owner: it claims
+# control when a webapp requests it and releases on disconnect.
 arbitration:
   enabled: true

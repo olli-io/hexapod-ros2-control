@@ -106,12 +106,14 @@ port 80 — arrive at all. Best-effort: a privileged port needs a root container
 
 ## Config
 
-Server port/heartbeat, safety watchdog timeout, stick deadband, per-mode
-button→function bindings, and posture scalar limits all live in
+Server port/heartbeat, safety watchdog timeout, stick deadband, and per-mode
+button→function bindings live in
 [`config/webteleop.yaml`](config/webteleop.yaml) (documented inline).
-Velocity caps and the animation list come from
-`hexa_description/config/tuning.yaml` (SSoT — `gait_node` and
-`posture_node` blocks), not from here.
+Velocity caps, the animation list, and the posture-mode scalar limits come
+from `hexa_description/config/tuning.yaml` (SSoT — `gait_node`,
+`posture_node` and `teleop_node` blocks), not from here. The scalar limits
+being shared is what makes the webapp pose the body over the same range a
+gamepad does.
 
 ## Running
 

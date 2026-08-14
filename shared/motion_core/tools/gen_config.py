@@ -671,14 +671,28 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w(f"inline constexpr float kTriggerThreshold = {fl(base['trigger_threshold'])};"
       "  // pressed = axis < this")
     w("")
-    # Posture-mode scalar limits.
-    p = teleop["posture"]
-    ph = p["height"]
+    # Posture-mode scalar limits. Shared by both teleop front ends, so they are
+    # declared once in tuning.yaml's teleop_node block, not per front end.
+    p = posture["teleop_node"]["ros__parameters"]["posture"]
     # No height_{max,min}_m here: the body-height envelope is declared once, in
     # tuning.yaml's posture_node block (body_height_{max,min}_m), and joy_mapping
     # derives its integrator saturation from that. Only the rate — a teleop feel
     # knob, not a limit — belongs to teleop_joy.yaml.
-    w("// Posture-mode scalar limits (teleop_joy.yaml posture:).")
+    ph = teleop["posture"]["height"]
+    # Same envelope check hexa_common.load_posture_scalar_limits makes, so the
+    # firmware cannot bake a stick throw the posture stack would clamp away.
+    envelope = posture["posture_node"]["ros__parameters"]
+    for key, cap_key in (("x_max", "pose_limit_x"), ("y_max", "pose_limit_y"),
+                         ("roll_max_deg", "pose_limit_roll"),
+                         ("pitch_max_deg", "pose_limit_pitch"),
+                         ("yaw_max_deg", "pose_limit_yaw")):
+        value = math.radians(p[key]) if key.endswith("_deg") else p[key]
+        if value > envelope[cap_key]:
+            raise ValueError(
+                f"tuning.yaml teleop_node posture.{key} = {p[key]} "
+                f"({value:.4g}) reaches past posture_node {cap_key} = "
+                f"{envelope[cap_key]}")
+    w("// Posture-mode scalar limits (tuning.yaml teleop_node posture:).")
     w("struct PostureLimits {")
     for f in ("x_max", "y_max", "roll_max_deg", "pitch_max_deg", "yaw_max_deg",
               "yaw_tau_s", "revert_tau_s", "wiggle_pivot_forward_m",

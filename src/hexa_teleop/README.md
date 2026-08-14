@@ -30,11 +30,16 @@ While the device is absent it publishes empty `Joy` at `autorepeat_rate`
 
 ## Configuration
 
-Controller identity, per-mode bindings, and posture scalar limits all live
-in [`config/teleop_joy.yaml`](config/teleop_joy.yaml) (documented inline;
+Controller identity and per-mode bindings live in
+[`config/teleop_joy.yaml`](config/teleop_joy.yaml) (documented inline;
 override via `joy_config_file:=...`). The node starts in **gait** mode. The
 loader validates every binding at startup — unknown names/keys,
 button-vs-axis class mismatches, and cross-section conflicts all raise.
+
+Posture-mode scalar limits are not a teleop knob: they are shared with the
+web teleop and the firmware, so `hexa_description/config/tuning.yaml` owns
+them (`teleop_node` block), alongside the `posture_node` envelope each must
+stay inside. Velocity caps and the animation list come from the same file.
 
 ## Drive sticks (gait / animation mode)
 

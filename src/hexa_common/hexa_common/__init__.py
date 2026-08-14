@@ -19,13 +19,19 @@ from .posture_config import (
     load_animation_mode_animations,
     load_body_height_offsets,
 )
+from .teleop_scalar_limits import (
+    PostureScalarLimits,
+    load_posture_scalar_limits,
+)
 
 __all__ = [
     "GAIT_DESCRIPTORS",
     "GaitDescriptor",
+    "PostureScalarLimits",
     "VelocityCaps",
     "load_animation_mode_animations",
     "load_body_height_offsets",
+    "load_posture_scalar_limits",
     "load_velocity_caps",
     "outer_stance_radius",
     "scale_to_envelope",

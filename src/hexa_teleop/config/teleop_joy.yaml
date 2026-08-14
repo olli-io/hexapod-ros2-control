@@ -1,6 +1,5 @@
 # Joystick teleop config — X-input controller (Xbox, 8BitDo, etc.).
 # Keys bind to function names (see joy_mapping.ALL_FUNCTIONS); "" is unbound.
-# Hardware identity (indices, signs, threshold) lives in ``base`` only.
 
 initial_mode: gait # gait | posture | animation
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
@@ -24,8 +23,7 @@ base:
   axes:
     left_stick_x: 0
     left_stick_y: 1
-    l2: 2 # analog trigger (rest=+1.0, pressed=-1.0; joy_publisher
-    #       normalises these — joydev itself rests them at -1.0)
+    l2: 2 # analog trigger, rest=+1.0 pressed=-1.0
     right_stick_x: 3
     right_stick_y: 4
     r2: 5
@@ -51,10 +49,6 @@ base:
     start: init
     select: record
 
-# Right stick is full 2D translation; left stick is an arcade drive (turn on
-# X, forward on Y via drive_x_aux). The two forward sources sum and clip, then
-# the whole triple is fitted to the reachable velocity envelope — see the
-# package README for what that means for the feel.
 gait:
   bindings:
     l1: yaw_left
@@ -85,20 +79,8 @@ posture:
     right_stick_x: pose_y
     right_stick_y: pose_x
 
-  # Posture-mode scalar limits.
-  x_max: 0.04 # m
-  y_max: 0.04 # m
-  roll_max_deg: 15.0
-  pitch_max_deg: 15.0
-  yaw_max_deg: 25.0
-  yaw_tau_s: 0.10 # low-pass for L1/R1 yaw and L2/R2 wiggle
-  revert_tau_s: 0.25 # low-pass for Start-button revert
-  wiggle_pivot_forward_m: 0.06
-  # How fast the D-pad raises/lowers the body. How FAR it may go is not set
-  # here — that is the body-height envelope in hexa_description's tuning.yaml
-  # (posture_node body_height_max_m / body_height_min_m), which teleop reads.
   height:
-    rate_m_per_s: 0.05
+    rate_m_per_s: 0.05 # how fast the D-pad raises/lowers the body
 
 animation:
   bindings:
@@ -115,7 +97,7 @@ animation:
     right_stick_x: drive_y
     right_stick_y: drive_x
 
-# Web teleop coexistence: when enabled, gamepad publishes only while it owns
-# /teleop/owner (default owner "gamepad"). Disable for standalone gamepad.
+# When enabled, the gamepad publishes only while it owns /teleop/owner
+# (default owner "gamepad"). Disable for standalone gamepad.
 arbitration:
   enabled: true

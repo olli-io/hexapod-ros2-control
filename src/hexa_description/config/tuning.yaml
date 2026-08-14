@@ -248,5 +248,26 @@ posture_node:
     pose_limit_pitch: 0.30
     pose_limit_yaw: 0.50
 
+# ═══ Posture-mode teleop limits (teleop_node) ═══════════════════════
+#
+# How far a stick may pose the body in posture mode.
+
+teleop_node:
+  ros__parameters:
+    posture:
+      # Body translation off centre (m).
+      x_max: 0.04
+      y_max: 0.04
+      # Body tilt and turn.
+      roll_max_deg: 15.0
+      pitch_max_deg: 15.0
+      yaw_max_deg: 25.0
+      # Low-pass (s) on the eased yaw and wiggle inputs.
+      yaw_tau_s: 0.10
+      # Low-pass (s) on the init-button revert to the default posture.
+      revert_tau_s: 0.25
+      # Point ahead of centre (m) the wiggle swings the body about.
+      wiggle_pivot_forward_m: 0.06
+
 # -- WARNING -- Bad values here can damage your hexapod. Nothing validates
 # them: it will run whatever you put here.

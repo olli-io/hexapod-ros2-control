@@ -12,7 +12,7 @@ nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 
 ## Secondary config files
 
-- [`hexa_teleop/config/teleop_joy.yaml`](../src/hexa_teleop/config/teleop_joy.yaml) — joystick mapping, deadband, posture↔gait toggle, and per-mode `cmd_vel` / posture limits.
+- [`hexa_teleop/config/teleop_joy.yaml`](../src/hexa_teleop/config/teleop_joy.yaml) — joystick mapping, deadband, posture↔gait toggle, and the body-height rate. The posture-mode scalar limits are shared with the web teleop and the firmware, so `tuning.yaml`'s `teleop_node` block owns them.
 - [`hexa_webteleop/config/webteleop.yaml`](../src/hexa_webteleop/config/webteleop.yaml) — web teleop server + shared teleop mapping.
 - [`hexa_display/config/display.yaml`](../src/hexa_display/config/display.yaml) — face: enable switch, gait-state → expression map, gaze / battery knobs, and the SH1122 SPI/GPIO pins, render rate, headless switch.
 - [`hexa_buttons/config/buttons.yaml`](../src/hexa_buttons/config/buttons.yaml) — front-panel GPIO buttons: enable switch, line numbers and wiring polarity, debounce / hold / timeout clocks, and the pack voltage → percentage span shown on the battery screen. Real-robot only.

@@ -27,7 +27,6 @@ unit-testable standalone.
 from __future__ import annotations
 
 import dataclasses
-import math
 from pathlib import Path
 
 import yaml
@@ -36,6 +35,7 @@ from hexa_common import (
     VelocityCaps,
     load_animation_mode_animations,
     load_body_height_offsets,
+    load_posture_scalar_limits,
     load_velocity_caps,
     unit_stance_xy,
 )
@@ -79,6 +79,9 @@ def load_web_config(
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml, geometry_yaml)
     animation_list = load_animation_mode_animations(posture_yaml)
+    # Shared with the gamepad teleop and the firmware, so tuning.yaml owns
+    # them — the webapp poses the body over the same range a gamepad does.
+    posture_limits = load_posture_scalar_limits(posture_yaml)
     # Body-height envelope as pose offsets — owned by tuning.yaml, not by
     # webteleop.yaml. Used only to saturate the height integrator.
     height_min, height_max = load_body_height_offsets(gait_yaml, posture_yaml)
@@ -147,14 +150,8 @@ def load_web_config(
     height = posture_raw["height"]
     posture_cfg = PostureConfig(
         bindings=posture_bindings,
-        x_max=float(posture_raw["x_max"]),
-        y_max=float(posture_raw["y_max"]),
-        roll_max=math.radians(float(posture_raw["roll_max_deg"])),
-        pitch_max=math.radians(float(posture_raw["pitch_max_deg"])),
-        yaw_max=math.radians(float(posture_raw["yaw_max_deg"])),
-        yaw_tau=float(posture_raw["yaw_tau_s"]),
-        revert_tau=float(posture_raw["revert_tau_s"]),
-        wiggle_pivot_forward_m=float(posture_raw["wiggle_pivot_forward_m"]),
+        # PostureScalarLimits carries PostureConfig's own field names.
+        **dataclasses.asdict(posture_limits),
         height_max=height_max,
         height_min=height_min,
         height_rate=float(height["rate_m_per_s"]),

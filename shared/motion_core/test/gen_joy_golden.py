@@ -18,7 +18,7 @@ math, checked under a loose tolerance in the C++ test.
 from __future__ import annotations
 
 import argparse
-import math
+import dataclasses
 import os
 import sys
 
@@ -198,6 +198,9 @@ def main() -> int:
         outer_stance_radius,
         unit_stance_xy,
     )
+    from hexa_common.teleop_scalar_limits import (  # noqa: E402
+        load_posture_scalar_limits,
+    )
 
     teleop = yaml.safe_load(open(f"{src}/hexa_teleop/config/teleop_joy.yaml"))
     # gait + posture knobs come from hexa_description's tuning.yaml (single
@@ -223,19 +226,14 @@ def main() -> int:
     # Height envelope: absolute belly clearance in tuning.yaml, converted to the
     # pose offsets pose_z carries. Mirrors joy_mapping.cpp's posture_limits()
     # and hexa_common.load_body_height_offsets — the golden would drift from the
-    # C++ mapper if this were sourced anywhere else.
+    # C++ mapper if this or the scalar limits below were sourced anywhere else.
     nominal_height = float(gait["default_standing_pose"]["body_height"])
     pn = posture["posture_node"]["ros__parameters"]
     posture_cfg = jm.PostureConfig(
         bindings={str(k): str(v) for k, v in posture_raw["bindings"].items()},
-        x_max=float(posture_raw["x_max"]),
-        y_max=float(posture_raw["y_max"]),
-        roll_max=math.radians(float(posture_raw["roll_max_deg"])),
-        pitch_max=math.radians(float(posture_raw["pitch_max_deg"])),
-        yaw_max=math.radians(float(posture_raw["yaw_max_deg"])),
-        yaw_tau=float(posture_raw["yaw_tau_s"]),
-        revert_tau=float(posture_raw["revert_tau_s"]),
-        wiggle_pivot_forward_m=float(posture_raw["wiggle_pivot_forward_m"]),
+        # Scalar limits: tuning.yaml's teleop_node block, through the same
+        # loader hexa_teleop runs.
+        **dataclasses.asdict(load_posture_scalar_limits(tuning_path)),
         height_max=float(pn["body_height_max_m"]) - nominal_height,
         height_min=float(pn["body_height_min_m"]) - nominal_height,
         height_rate=float(height["rate_m_per_s"]),
