@@ -142,8 +142,8 @@ posture_node:
     # below 1 overshoots, and on a withdrawal that overshoot is a real swing
     # past centre — exp(-pi*z/sqrt(1-z^2)) of the reach given up, so ~35% at
     # 0.32 and ~2% at 0.7.
-    pose_filter_tau: 0.18
-    pose_filter_damping_ratio: 0.6
+    pose_filter_tau: 0.15
+    pose_filter_damping_ratio: 0.35
 
     # Posing limits. Body height is ground to underside; the other five axes are
     # symmetric (± the value). Manual pose and animation share this envelope and
