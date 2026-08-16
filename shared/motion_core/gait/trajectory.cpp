@@ -15,8 +15,7 @@ Vec3 quartic_bezier(const BezierNodes& points, float t) {
 
 Vec3 quartic_bezier_dot(const BezierNodes& points, float t) {
   const float s = 1.0f - t;
-  // d/dt of the Bernstein basis collapses to 4 * (degree-3 Bernstein over the
-  // differences of successive control points).
+  // d/dt collapses to 4 * (degree-3 Bernstein over the node differences).
   const Vec3 d0 = points[1] - points[0];
   const Vec3 d1 = points[2] - points[1];
   const Vec3 d2 = points[3] - points[2];

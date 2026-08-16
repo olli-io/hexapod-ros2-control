@@ -1,14 +1,6 @@
-// Integration supervisor implementation (plan part 09). See supervisor.hpp.
-
 #include "supervisor.hpp"
 
 namespace hexa::supervisor {
-
-// ── BatteryMonitor ──────────────────────────────────────────────────────────
-//
-// Port of hexa_display/expression_policy.py BatteryMonitor._step: a threshold
-// of 0 disables the flag; it raises after hold_s below threshold and clears
-// above threshold + hysteresis with no hold on the way up.
 
 BatteryMonitor::BatteryMonitor(float warning_v, float fold_v, float cutoff_v,
                                float hysteresis_v, float hold_s)
@@ -54,22 +46,19 @@ void BatteryMonitor::update(float voltage_v, float t_s) {
   cutoff_active_ = cutoff_.active;
 }
 
-// ── Supervisor ──────────────────────────────────────────────────────────────
-
 Supervisor::Supervisor(const Config& cfg)
     : cfg_(cfg),
       battery_(cfg.battery_warning_v, cfg.battery_fold_v, cfg.battery_cutoff_v,
                cfg.battery_hysteresis_v, cfg.battery_hold_s) {}
 
 Decision Supervisor::step(const Observation& obs) {
-  // Battery debounce advances only on a fresh sample; the flags hold between.
   if (obs.battery_valid) {
     battery_.update(obs.battery_v, static_cast<float>(obs.now_us) * 1e-6f);
   }
 
-  // Undervoltage ladder: take the deepest rung the flags justify, then latch it
-  // (see UndervoltStage). Reading the deepest rung rather than chaining them
-  // means a config with only cutoff_v set still escalates correctly.
+  // Take the deepest rung the flags justify, then latch it. Reading the deepest
+  // rather than chaining them means a config with only cutoff_v set still
+  // escalates correctly.
   UndervoltStage observed = UndervoltStage::kNone;
   if (battery_.warn()) observed = UndervoltStage::kWarn;
   if (battery_.fold()) observed = UndervoltStage::kFold;
@@ -77,8 +66,8 @@ Decision Supervisor::step(const Observation& obs) {
   if (observed > stage_) {
     stage_ = observed;
   }
-  // Tracked separately from stage_ so climbing kFold -> kCutoff does not re-fire
-  // a fold the cutoff is about to make moot.
+  // Separate from stage_ so kFold -> kCutoff does not re-fire a fold the cutoff
+  // is about to make moot.
   const bool request_fold = stage_ >= UndervoltStage::kFold && !fold_requested_;
   if (request_fold) {
     fold_requested_ = true;
@@ -87,11 +76,9 @@ Decision Supervisor::step(const Observation& obs) {
   const bool batt_fold = stage_ >= UndervoltStage::kFold;
   const bool batt_cutoff = stage_ == UndervoltStage::kCutoff;
 
-  // Input watchdog — mirror hexa_webteleop's stale-input rule. A live link that
-  // stops delivering frames for input_timeout_s is stale (pad edging out of
-  // range, radio hiccup); a clean disconnect is stale by definition. Stale ->
-  // main zeroes the command so the engine settles rather than latching the last
-  // velocity. Never walk on stale input.
+  // A live link that stops delivering frames for input_timeout_s is stale, as is
+  // a clean disconnect. Main then zeroes the command so the engine settles rather
+  // than latching the last velocity.
   bool input_stale;
   if (!obs.bt_connected) {
     input_stale = true;
@@ -103,24 +90,20 @@ Decision Supervisor::step(const Observation& obs) {
     input_stale = since_s >= cfg_.input_timeout_s;
   }
 
-  // Relay-arming discipline. Arm (energize) once the link is up and the engine
-  // is in an armable state — which now includes FOLDED, so the robot comes up
-  // energized in the folded pose and the INITIALIZE ladder runs with the rail
-  // already live. The consumer staggers the actual servo energize leg by leg
-  // (hexa::EnergizeSweep) so closing the relay is not an inrush spike.
+  // Arm once the link is up and the engine is armable, FOLDED included, so the
+  // robot comes up energized and the INITIALIZE ladder runs with the rail live.
+  // The consumer staggers the servo energize leg by leg (hexa::EnergizeSweep) so
+  // closing the relay is not an inrush spike.
   //
-  // Disarm on a clean fold — the *rising* edge of `folded`, i.e. a completed
-  // FOLDING -> FOLDED park, the safe moment to cut — or on a stage-3 cutoff, or
-  // on a latched over-current. Being folded at boot is not a park: at that point
-  // the rail is not armed yet, so the edge is a no-op and the next tick arms. A
-  // stale link / lost pilot deliberately does NOT drop the rail: the robot holds
-  // its stand and settles; cutting servo power mid-stance would collapse it.
+  // Disarm on the *rising* edge of `folded` (a completed park), a stage-3 cutoff,
+  // or a latched over-current. Folded at boot is not a park — the rail is not
+  // armed yet, so the edge is a no-op. A stale link deliberately does NOT drop
+  // the rail: cutting servo power mid-stance would collapse the robot.
   //
-  // Rung 2 does not cut the rail itself — it folds (request_fold above) and lets
-  // the clean-fold edge cut once parked, so the legs fold under power. Rung 3 is
+  // Rung 2 folds rather than cutting, so the legs fold under power, and rung 3 is
   // the backstop if that fold never completes. Re-arming is blocked from rung 2
-  // on, not just at the cutoff: unloading the rail lets the voltage rebound, and
-  // a gate reading only the live flags would re-arm into the same sag.
+  // on: unloading the rail lets the voltage rebound, and a gate reading only the
+  // live flags would re-arm into the same sag.
   const bool fold_completed = obs.folded && !prev_folded_;
   prev_folded_ = obs.folded;
   if (relay_armed_) {
@@ -131,20 +114,18 @@ Decision Supervisor::step(const Observation& obs) {
     relay_armed_ = true;
   }
 
-  // Safe-stop aggregate: main zeroes the command on a stale link OR the ladder
-  // at rung 2+, so the robot settles to a stand while the fold runs. Rung 1 is
-  // deliberately absent — a warning that immobilizes the robot strands it.
+  // Zero the command on a stale link or the ladder at rung 2+, so the robot
+  // settles while the fold runs. Rung 1 is absent: a warning that immobilizes the
+  // robot strands it.
   const bool force_zero = input_stale || batt_fold;
 
-  // Fault = a condition that demands the alarm cadence. Any ladder rung is a
-  // fault; a lost link is a fault only once armed (losing the pilot
-  // mid-operation), so pre-link boot scanning stays a calm slow blink.
+  // Any ladder rung is a fault; a lost link only once armed, so pre-link boot
+  // scanning stays a calm slow blink.
   const bool bt_lost = relay_armed_ && !obs.bt_connected;
   const bool fault = batt_warn || bt_lost || obs.fault;
 
-  // Solid means "linked and actually walking" — gated on the safe-stop: a stale
-  // link or weak pack zeroes the command (the robot settles), so the LED must
-  // not keep reading solid off the latched-but-discarded velocity.
+  // Gated on the safe-stop, so the LED cannot read solid off a latched velocity
+  // that is being discarded.
   LedPattern led;
   if (fault) {
     led = LedPattern::kFastBlink;

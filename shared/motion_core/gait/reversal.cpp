@@ -8,15 +8,13 @@ namespace hexa::gait {
 namespace {
 
 // How far apart two travel directions must be to count as a reversal rather than
-// a turn. The reflection maps stance progress s -> 1 - s, which is the right
-// answer for a leg whose travel exactly reverses and progressively the wrong one
-// as the turn shortens; 120 degrees is where the component that actually
-// reverses is still the larger half of the change.
+// a turn. The reflection is exactly right for a leg that reverses and
+// progressively wrong as the turn shortens; at 120 degrees the reversing
+// component is still the larger half of the change.
 constexpr float kReversalCos = -0.5f;
 
-// Slack on the hold speed before the reflection is allowed to fire. One tick of
-// the shaper's slew is well inside this, and the stride is flat across the whole
-// band above the knee, so arriving a little fast costs nothing.
+// Slack on the hold speed before the reflection may fire. The stride is flat
+// across the band above the knee, so arriving a little fast costs nothing.
 constexpr float kHoldTolerance = 1.05f;
 
 float dot(std::pair<float, float> a, std::pair<float, float> b) {
@@ -45,11 +43,9 @@ bool travel_reverses(const std::map<std::string, LegContext>& legs,
       norm(request_xy) + std::fabs(request_omega) <= zero_tol) {
     return false;
   }
-  // Every leg's velocity is the body's plus its own lever arm, so a body still
-  // heading the same way with the yaw still turning the same way cannot have
-  // reversed all six — one side's lever term would have to reverse without the
-  // other's. Cheap enough to run every tick, which is the point: the per-leg
-  // test below builds two maps, and a steady walk must not pay for that.
+  // A body still heading the same way with the yaw still turning the same way
+  // cannot have reversed all six. Cheap enough for a steady walk to run every
+  // tick instead of the two maps the per-leg test below builds.
   if (dot(request_xy, reference_xy) > 0.0f &&
       request_omega * reference_omega >= 0.0f) {
     return false;
@@ -75,11 +71,9 @@ ReversalGate::Output ReversalGate::step(
 
   if (armed_) {
     held_for_ += in.dt;
-    // Anything that took the engine out of GAIT, a command no longer opposed to
-    // the travel this started from, or a gait that has stopped being able to
-    // reflect: let go and leave the command to whatever owns the robot now. The
+    // Out of GAIT, no longer opposed, or no longer able to reflect: let go. The
     // timeout is the backstop — an unreflected reversal is the old behaviour,
-    // not a broken one, and it must never be worth waiting indefinitely for.
+    // not a broken one.
     const bool still_reversing =
         in.walking && in.can_mirror && held_for_ < in.timeout &&
         travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
@@ -90,7 +84,6 @@ ReversalGate::Output ReversalGate::step(
       return pass;
     }
   } else if (handled_) {
-    // Still the same reversal until the command stops opposing where it started.
     handled_ = in.walking &&
                travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
                                hold_omega_, in.zero_tol);
@@ -98,9 +91,8 @@ ReversalGate::Output ReversalGate::step(
   } else {
     const float carrying =
         max_leg_speed(legs, in.applied_xy, in.applied_omega);
-    // Below the knee the walk is already taking a shorter stride than the one it
-    // is being asked to walk next, so the reflection would over-credit every
-    // leg. Leave it alone; its excursions are smaller in the same proportion.
+    // Below the knee the walk is already on a shorter stride than the one asked
+    // for next, so the reflection would over-credit every leg.
     if (!in.walking || !in.can_mirror || carrying < in.knee_speed ||
         !travel_reverses(legs, in.request_xy, in.request_omega, in.applied_xy,
                          in.applied_omega, in.zero_tol)) {
@@ -113,9 +105,8 @@ ReversalGate::Output ReversalGate::step(
     hold_scale_ = in.knee_speed / carrying;
   }
 
-  // Down at the hold speed with every foot planted: the schedule and the feet
-  // agree, so this is the instant to reflect one onto the other and hand the
-  // command back.
+  // At the hold speed with every foot planted the schedule and the feet agree:
+  // reflect one onto the other and hand the command back.
   const float carrying = max_leg_speed(legs, in.applied_xy, in.applied_omega);
   if (in.all_planted && carrying <= in.knee_speed * kHoldTolerance) {
     armed_ = false;
@@ -123,9 +114,8 @@ ReversalGate::Output ReversalGate::step(
     return {in.request_xy, in.request_omega, true};
   }
 
-  // Otherwise hold the walk on the travel it is already carrying, slowed to the
-  // knee. Not stopped: the reflection is only exact against the stride the legs
-  // are actually walking, and a stopped walk has none.
+  // Otherwise hold the carried travel, slowed to the knee. Not stopped: the
+  // reflection is only exact against a stride the legs are actually walking.
   return {{hold_xy_.first * hold_scale_, hold_xy_.second * hold_scale_},
           hold_omega_ * hold_scale_,
           false};

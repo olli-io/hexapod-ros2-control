@@ -1,20 +1,5 @@
-// Hand-rolled single-precision 3-vector (plan part 04).
-//
-// Drop-in replacement for Eigen::Vector3d in the forked pure libs (kinematics,
-// gait, posture). The RP2350 has a single-precision FPU only, so the whole port
-// runs in float; Eigen is dropped to avoid its M33 alignment / SIMD tuning and
-// to keep the math trivially auditable. The API mirrors the slice of Eigen the
-// ported code actually uses:
-//
-//   - Vec3(x, y, z) construction and Vec3::Zero(),
-//   - element access via operator[] (leg.mount_xyz[0], target[2], ...) and the
-//     named .x / .y / .z members,
-//   - operator + - (binary and unary), scalar * (either side) and /,
-//     compound += -= *= /=,
-//   - dot / cross / squaredNorm / norm (hypotf-based) / normalized.
-//
-// JointAngles mirrors hexa_kinematics::JointAngles / hexa_gait::JointAngles
-// (std::array<double,3> upstream) as a float triple.
+// Hand-rolled single-precision 3-vector, in place of Eigen: the RP2350 has a
+// single-precision FPU only, so the whole port runs in float.
 #pragma once
 
 #include <array>
@@ -32,8 +17,6 @@ struct Vec3 {
 
   static constexpr Vec3 Zero() { return Vec3(0.0f, 0.0f, 0.0f); }
 
-  // Eigen-style indexed access (0=x, 1=y, 2=z). No bounds check, matching the
-  // forked code's fixed 0/1/2 usage.
   constexpr float& operator[](int i) { return i == 0 ? x : (i == 1 ? y : z); }
   constexpr const float& operator[](int i) const {
     return i == 0 ? x : (i == 1 ? y : z);
@@ -82,8 +65,6 @@ struct Vec3 {
   }
   constexpr float squaredNorm() const { return x * x + y * y + z * z; }
 
-  // 3-argument hypotf: matches the double engine's std::hypot(x, y, z) for
-  // magnitude-stable norms (used by stride clamping, reachability checks).
   float norm() const { return std::hypot(x, y, z); }
   Vec3 normalized() const {
     const float n = norm();
@@ -91,7 +72,6 @@ struct Vec3 {
   }
 };
 
-// scalar * vec (the vec * scalar order is the member operator above).
 constexpr Vec3 operator*(float s, const Vec3& v) { return v * s; }
 
 constexpr bool operator==(const Vec3& a, const Vec3& b) {
@@ -99,7 +79,6 @@ constexpr bool operator==(const Vec3& a, const Vec3& b) {
 }
 constexpr bool operator!=(const Vec3& a, const Vec3& b) { return !(a == b); }
 
-// Free-function forms mirroring the Eigen calls in the ported code.
 constexpr float dot(const Vec3& a, const Vec3& b) { return a.dot(b); }
 constexpr Vec3 cross(const Vec3& a, const Vec3& b) { return a.cross(b); }
 inline float norm(const Vec3& v) { return v.norm(); }

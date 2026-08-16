@@ -1,9 +1,6 @@
-// Host unit tests for the integration supervisor (plan part 09).
-//
-// Pure logic — no Pico SDK — so the failsafe / telemetry / status-LED policy is
-// exercised off-target: the battery hysteresis debounce (ported from
-// hexa_display's BatteryMonitor), the stale-input watchdog, the relay-arming
-// discipline, the status-LED mapping, and the tick-jitter accounting.
+// The supervisor's failsafe / telemetry / status-LED policy: the battery
+// hysteresis debounce, the stale-input watchdog, the relay-arming discipline, the
+// LED mapping and the tick-jitter accounting.
 
 #include "supervisor.hpp"
 

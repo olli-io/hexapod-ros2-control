@@ -1,9 +1,5 @@
-// Unit tests for the float velocity-shaping port (plan part 07).
-//
-// Exercises the BodyVelocityLimiter's constant-max-accel slew (the behavioural
-// contract ported from hexa_control/body_velocity_limiter.py) and the Control
-// stage's scale-to-envelope + limiter-reset-on-leaving-walking wiring. Float
-// only, so it compiles under -Wdouble-promotion alongside the firmware build.
+// The BodyVelocityLimiter's constant-max-accel slew, and the Control stage's
+// scale-to-envelope + limiter-reset-on-leaving-walking wiring.
 
 #include <cmath>
 #include <map>

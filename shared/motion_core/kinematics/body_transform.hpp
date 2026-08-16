@@ -1,26 +1,16 @@
-// Body frame <-> leg coxa-mount frame transforms, and body-pose composition
-// (plan part 05).
-//
-// Fork of hexa_kinematics_cpp/src/body_transform.cpp, double->float. Two layers
-// of body-frame manipulation:
-//
-//   - body_to_leg / leg_to_body map between the (nominal) body frame and a
-//     single leg's coxa-mount frame. Geometry only — no body-pose offset.
-//   - BodyPose + apply_body_pose represent a 6-DOF offset of the body from its
-//     nominal pose, and re-express a nominal-frame point as seen from the
-//     offset body frame.
-//
-// Mirrors hexa_interfaces/msg/BodyPose.msg. Rotation convention is intrinsic
-// XYZ (roll about body +x, then pitch about body +y, then yaw about body +z).
+// Body frame <-> leg coxa-mount frame transforms, and body-pose composition.
+// Two layers: body_to_leg / leg_to_body are geometry only, with no body-pose
+// offset; BodyPose + apply_body_pose re-express a nominal-frame point as seen
+// from the offset body frame. Rotation convention is intrinsic XYZ (roll about
+// body +x, then pitch about +y, then yaw about +z).
 #pragma once
 
-#include "config_generated.hpp"  // hexa::config::LegSpec
-#include "vec3.hpp"              // hexa::Vec3
+#include "config_generated.hpp"
+#include "vec3.hpp"
 
 namespace hexa {
 
-// Same generated geometry type the IK uses (redeclaring the identical alias in
-// this namespace is well-formed; leg_ik.hpp declares it too).
+// The identical alias in leg_ik.hpp is well-formed alongside this one.
 using LegSpec = config::LegSpec;
 
 // Map a point from the body frame into the leg's coxa-mount frame.

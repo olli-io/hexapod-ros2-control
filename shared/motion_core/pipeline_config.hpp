@@ -1,55 +1,45 @@
-// Runtime-supplied geometry + tuning config for the control brain (part 10).
+// Runtime-supplied geometry + tuning for the control brain. The Pico has no
+// filesystem and reads the baked config_generated.hpp constants, which baked()
+// reconstructs exactly; hexa_locomotion fills the same struct from geometry.yaml
+// / tuning.yaml at startup.
 //
-// The pipeline's builders normally read the baked config_generated.hpp constants
-// directly (the Pico has no filesystem). To let the ROS hexa_locomotion node
-// honor the repo's runtime-YAML tuning, the Pipeline ctor instead accepts a
-// PipelineConfig carrying the geometry.yaml + tuning.yaml subset. PipelineConfig::
-// baked() reconstructs the exact constexpr values, so the Pico (and every current
-// caller) keeps identical behavior; hexa_locomotion fills the same struct from
-// geometry.yaml / tuning.yaml at startup (reusing the double hexa_*_cpp loaders).
-//
-// Scope is deliberately geometry + tuning only. Joystick-binding tables and
-// servo calibration stay baked (the ROS node builds a CommandIntent from topics
-// and publishes joint radians, so it uses neither); supervisor safety
-// (kInputTimeoutS / kBattery, from webteleop/display YAML) also stays baked.
+// Scope is deliberately geometry + tuning only: joystick bindings, servo
+// calibration and supervisor safety all stay baked.
 #pragma once
 
 #include <array>
 #include <string>
 
-#include "config_generated.hpp"  // config::LegSpec / ControlConfig / PostureConfig
-#include "gait/engine.hpp"       // gait::EngineConfig
-#include "gait/limits.hpp"       // gait::VelocityCaps
-#include "leg_index.hpp"         // hexa::kNumLegs
-#include "vec3.hpp"              // hexa::JointAngles
+#include "config_generated.hpp"
+#include "gait/engine.hpp"
+#include "gait/limits.hpp"
+#include "leg_index.hpp"
+#include "vec3.hpp"
 
 namespace hexa::pipeline {
 
 struct PipelineConfig {
-  // ── geometry.yaml ──
+  // geometry.yaml
   std::array<hexa::config::LegSpec, hexa::kNumLegs> leg_specs;
   float coxa_to_bottom = 0.0f;
   float foot_radius = 0.0f;
-  // ── tuning.yaml gait_node.default_standing_pose ──
-  // A body height plus a per-group reach and splay, not joint angles:
-  // gait::standing_pose_from solves the per-leg triple from these plus the leg
-  // specs.
+  // tuning.yaml gait_node.default_standing_pose: a body height plus a per-group
+  // reach and splay, not joint angles — gait::standing_pose_from solves the
+  // per-leg triple from these and the leg specs.
   hexa::config::StandingPose standing_pose{};
-  // ── geometry.yaml, the two belly-rest poses ──
-  // folded is where the robot energizes and where a fold ends; initialized is
-  // the unfold ladder's endpoint, from which the reseat ladder stands it up.
+  // The two belly-rest poses: folded is where the robot energizes and where a
+  // fold ends, initialized is the unfold ladder's endpoint.
   std::array<hexa::JointAngles, hexa::kNumLegs> folded_pose{};
   std::array<hexa::JointAngles, hexa::kNumLegs> initialized_pose{};
 
-  // ── tuning.yaml ──
-  hexa::gait::EngineConfig engine{};      // already converted from config::kEngine
+  // tuning.yaml
+  hexa::gait::EngineConfig engine{};
   hexa::gait::VelocityCaps caps;          // per-gait linear_max/yaw_bias + angular_max
   std::string default_gait;
   hexa::config::ControlConfig control{};  // vmax_ramp_time_* + snap_tol_*
   hexa::config::PostureConfig posture{};  // animation amplitudes, taus, limits, slew
 
-  // Reconstruct the baked constexpr config (config_generated.hpp). Used by the
-  // Pico / any default construction; also the parity anchor for the ROS loader.
+  // The Pico's config, and the parity anchor for the ROS loader.
   static PipelineConfig baked();
 };
 

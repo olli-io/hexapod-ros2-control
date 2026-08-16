@@ -4,11 +4,9 @@
 #include <stdexcept>
 
 #include "gait/gaits/base.hpp"
-#include "gait/kinematics.hpp"  // kin::ik_z_for_contact
+#include "gait/kinematics.hpp"
 
 namespace hexa::gait {
-
-// ─────────────────────────────── RestPoseMove ───────────────────────────────
 
 RestPoseMove::RestPoseMove(std::map<std::string, Vec3> from_stance,
                            std::map<std::string, Vec3> to_stance,
@@ -36,18 +34,14 @@ std::map<std::string, LegOutput> RestPoseMove::update(float dt) {
 
   t_ += dt;
   const float tau = t_ / move_time_;
-  // ease5 for the same reason the body ramps use it: the servos start and stop
-  // with zero acceleration, so nothing snaps at either end of the move.
   const float s = eased_ramp(tau);
   for (const auto& name : LEG_NAMES) {
     const Vec3& from = from_.at(name);
     const Vec3& to = to_.at(name);
-    // Straight chord, no arc: both ends are in the air, so there is no floor to
-    // climb over and nothing to probe down onto.
+    // Straight chord: both ends are in the air, nothing to climb over.
     const Vec3 point = from + (to - from) * s;
-    // stance=true throughout — the belly is what is carrying the robot, and a
-    // foot reported airborne here would tell the caller a leg is available to
-    // plan a step with, which none of them are.
+    // stance=true throughout: the belly carries the robot, and no leg here is
+    // available to plan a step with.
     out[name] = LegOutput{point, tau, true};
   }
   if (tau >= 1.0f) {
@@ -58,8 +52,6 @@ std::map<std::string, LegOutput> RestPoseMove::update(float dt) {
   }
   return out;
 }
-
-// ───────────────────────────── InitializeController ─────────────────────────
 
 InitializeController::InitializeController(
     std::map<std::string, Vec3> folded_stance,
@@ -85,8 +77,7 @@ InitializeController::InitializeController(
   if (lift_body_time <= 0.0f) {
     throw std::invalid_argument("lift_body_time must be positive");
   }
-  // Zero is legal — the feet then land at the end of PLACE_FEET, as they used
-  // to. Negative would drive them through the floor the belly rests on.
+  // Zero is legal: the feet then land at the end of PLACE_FEET.
   if (place_clearance < 0.0f) {
     throw std::invalid_argument("place_clearance must not be negative");
   }
@@ -94,18 +85,11 @@ InitializeController::InitializeController(
     initialized_[name] = initialized_stance.at(name);
     nominal_[name] = nominal_stance.at(name);
   }
-  // Per-leg target at the end of PLACE_FEET: standing XY, feet place_clearance
-  // above the floor the belly is already resting on — which is -coxa_to_bottom
-  // for the contact point, one foot_radius higher for the IK target that
-  // produces it.
-  //
-  // The pairs deliberately stop short rather than landing. A pair that lands
-  // has to hold the floor while the next two swing, and any error in the belly
-  // height (foot compliance, an uneven floor, IK rounding) is taken as a
-  // preload against a leg that cannot yet be unloaded — the robot shuffles as
-  // each pair fights the one before it. Held clear, the six arrive unencumbered
-  // and meet the floor together, once, in the opening stretch of the LIFT_BODY
-  // ramp.
+  // Standing XY, place_clearance above the floor the belly rests on. The pairs
+  // stop short rather than landing: a pair that lands has to hold the floor
+  // while the next two swing, and any belly-height error is taken as a preload
+  // against a leg that cannot yet be unloaded, so the robot shuffles. Held
+  // clear, the six meet the floor together inside the LIFT_BODY ramp.
   lift_start_z_ =
       kin::ik_z_for_contact(-coxa_to_bottom + place_clearance, foot_radius);
   for (const auto& name : LEG_NAMES) {
@@ -147,7 +131,6 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
 
   std::map<std::string, LegOutput> out;
   if (phase >= 1.0f) {
-    // Snap the active pair to their ground targets and advance.
     for (const auto& name : active) {
       positions_[name] = ground_targets_[name];
     }
@@ -162,13 +145,9 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
     return out;
   }
 
-  // Mid-pair: active legs follow a rest-to-rest swing arc from the initialized
-  // pose down to the ground target, descending onto it at the gait's touchdown
-  // speed. Endpoint ground velocities pinned to zero. The probe still earns its
-  // keep with the target held clear of the floor: place_clearance is the slack
-  // it has to absorb an early contact into, and a foot arriving slowly is what
-  // keeps that contact — should the floor be higher than the belly says — a
-  // touch rather than a stub.
+  // Mid-pair: a rest-to-rest swing arc down to the ground target at the gait's
+  // touchdown speed. The probe still earns its keep with the target held clear:
+  // place_clearance is the slack an early contact has to be absorbed into.
   for (const auto& name : LEG_NAMES) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = initialized_[name];
@@ -187,12 +166,9 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
 
 std::map<std::string, LegOutput> InitializeController::tick_lift_body(
     float dt) {
-  // All six feet stay at standing XY; body-frame z ramps from the PLACE_FEET
-  // endpoint — the feet held place_clearance above the floor — down to
-  // nominal_stance.z. The first place_clearance of that travel is the six feet
-  // reaching for the floor and taking the load; the rest is the body rising.
-  // lift_ramp, not eased_ramp: the load transfer happens inside the ramp rather
-  // than at its start, so it wants the septic's opening (see lift_ramp).
+  // Standing XY throughout; body-frame z ramps from the PLACE_FEET endpoint down
+  // to nominal_stance.z. The first place_clearance of that travel is the feet
+  // taking the load, which is why this uses lift_ramp and not eased_ramp.
   t_in_lift_ += dt;
   const float tau = t_in_lift_ / lift_body_time_;
   const float s = lift_ramp(tau);
@@ -205,7 +181,7 @@ std::map<std::string, LegOutput> InitializeController::tick_lift_body(
     out[name] = LegOutput{point, tau, true};
   }
   if (tau >= 1.0f) {
-    // Snap to nominal so downstream sees no drift and advance to DONE.
+    // Snap to nominal so downstream sees no drift.
     for (const auto& name : LEG_NAMES) {
       positions_[name] = nominal_[name];
       out[name] = LegOutput{nominal_[name], 1.0f, true};
@@ -223,12 +199,9 @@ std::map<std::string, LegOutput> InitializeController::emit_nominal() const {
   return out;
 }
 
-// ──────────────────────────────── FoldController ────────────────────────────
-
 namespace {
-// Reverse of PAIR_ORDER. Belly-resting throughout LIFT_FEET, so weight-bearing
-// is not the constraint; reversing it just unwinds the order a reseat would
-// have planted the feet in.
+// Belly-resting throughout LIFT_FEET, so weight-bearing is not the constraint;
+// reversing just unwinds the order a reseat would have planted the feet in.
 const std::array<std::array<std::string, 2>, 3>& pair_order_reversed() {
   static const std::array<std::array<std::string, 2>, 3> reversed = {{
       PAIR_ORDER[2],
@@ -273,9 +246,8 @@ FoldController::FoldController(std::map<std::string, Vec3> folded_stance,
     initialized_[name] = initialized_stance.at(name);
     nominal_[name] = nominal_stance.at(name);
   }
-  // LOWER_BODY endpoint == LIFT_FEET swing origin: standing XY, body-on-belly
-  // height. The feet come off the floor from where they were standing, so the
-  // belly has taken the whole load before the first one lifts.
+  // LOWER_BODY endpoint == LIFT_FEET swing origin, so the belly has taken the
+  // whole load before the first foot lifts.
   lower_end_z_ = kin::ik_z_for_contact(-coxa_to_bottom, foot_radius);
   for (const auto& name : LEG_NAMES) {
     ground_targets_[name] =
@@ -298,9 +270,8 @@ std::map<std::string, LegOutput> FoldController::update(float dt) {
 }
 
 std::map<std::string, LegOutput> FoldController::tick_lower_body(float dt) {
-  // All six feet stay at standing XY; body-frame z ramps from nominal.z up to
-  // lower_end_z (foot closer to body; body lowers onto belly), so the belly
-  // reaches the floor exactly as the ramp runs out of speed.
+  // Standing XY throughout; z ramps up to lower_end_z, so the belly reaches the
+  // floor exactly as the ramp runs out of speed.
   t_in_lower_ += dt;
   const float tau = t_in_lower_ / lift_body_time_;
   const float s = eased_ramp(tau);
@@ -313,7 +284,6 @@ std::map<std::string, LegOutput> FoldController::tick_lower_body(float dt) {
     out[name] = LegOutput{point, tau, true};
   }
   if (tau >= 1.0f) {
-    // Snap to the LOWER_BODY endpoint and advance to LIFT_FEET.
     for (const auto& name : LEG_NAMES) {
       positions_[name] = ground_targets_[name];
       out[name] = LegOutput{ground_targets_[name], 1.0f, true};
@@ -330,7 +300,6 @@ std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
 
   std::map<std::string, LegOutput> out;
   if (phase >= 1.0f) {
-    // Snap the active pair to their initialized_stance entries and advance.
     for (const auto& name : active) {
       positions_[name] = initialized_[name];
     }
@@ -346,8 +315,7 @@ std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
     return out;
   }
 
-  // Mid-pair: active legs follow a rest-to-rest swing arc from the ground target
-  // up to the initialized_stance position. Endpoint ground velocities zero.
+  // Mid-pair: a rest-to-rest swing arc up to the initialized pose.
   for (const auto& name : LEG_NAMES) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = ground_targets_[name];
@@ -365,8 +333,7 @@ std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
 }
 
 std::map<std::string, LegOutput> FoldController::tick_tuck(float dt) {
-  // The unfold run backwards: all six feet draw in from the initialized pose to
-  // the folded one, belly down throughout.
+  // The unfold run backwards, belly down throughout.
   auto out = tuck_->update(dt);
   for (const auto& name : LEG_NAMES) {
     positions_[name] = out.at(name).foot_target;

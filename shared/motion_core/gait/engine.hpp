@@ -1,12 +1,7 @@
 // Gait engine — orchestrates clock, strategy, and the engagement / reseat
-// controllers. Float fork of engine.hpp (plan part 06). The engine is the only
-// stateful component in the gait chain; strategies stay pure. update() routes
-// between modes based on the commanded body velocity through the
-// FOLDED/INITIALIZE/STAND/ENGAGING/GAIT/SETTLING/FOLDING/RESEATING state
-// machine.
-//
-// The yaml builders of the double engine are replaced by *_from_config helpers
-// that read the baked config_generated.hpp (no filesystem on the RP2350).
+// controllers, and is the only stateful component in the gait chain. update()
+// routes the commanded body velocity through the
+// FOLDED/INITIALIZE/STAND/ENGAGING/GAIT/SETTLING/FOLDING/RESEATING machine.
 #pragma once
 
 #include <array>
@@ -34,23 +29,21 @@ enum class EngineState {
   STAND,
   ENGAGING,
   GAIT,
-  // Command has gone to zero (or a gait change is pending): the gait keeps
-  // running at a hard-zero stride, so every touchdown lands on the leg's
-  // nominal stance and the walk re-plants its own feet. Ends when all six have
-  // touched down — at most one cycle.
+  // Command gone to zero (or a gait change pending): the gait runs on at a
+  // hard-zero stride, so every touchdown lands on nominal and the walk re-plants
+  // its own feet. Ends when all six are down — at most one cycle.
   SETTLING,
   FOLDING,
   RESEATING,
   FAULT,
 };
 
-// Engine-internal knobs, sourced entirely from tuning.yaml's gait_node block
-// (baked into config::kEngine). None are on the wire.
+// Engine-internal knobs, from tuning.yaml's gait_node block. None are on the wire.
 struct EngineConfig {
   float stride_length = 0.0f;
-  // Most a leg's own coxa-to-foot reach may close over one half stride. The
-  // tick's stride is cut to what the worst-placed leg affords along its own
-  // axis — see effective_stride_length. Equal to stride_length disables it.
+  // Most a leg's coxa-to-foot reach may close over one half stride; the tick's
+  // stride is cut to what the worst-placed leg affords. Equal to stride_length
+  // disables it.
   float stride_length_radial = 0.0f;
   float min_swing_time = 0.0f;
   float max_swing_time = 0.0f;
@@ -58,8 +51,8 @@ struct EngineConfig {
   float swing_width = 0.0f;
   float touchdown_velocity = 0.0f;
   float touchdown_probe_fraction = 0.0f;
-  // Share of each gait's nominal swing window handed back to stance at the
-  // touchdown end, so every handover has a stretch with all six feet planted.
+  // Share of the nominal swing window handed back to stance at the touchdown
+  // end, so every handover has a stretch with all six feet planted.
   float swing_phase_margin = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
@@ -76,34 +69,27 @@ struct EngineConfig {
   float reseat_pair_dwell_time = 0.0f;
   float reseat_swing_clearance = 0.0f;
 
-  // How a gait swing is shaped. Shared by the engine and the engagement
-  // controller so a swing looks the same however the leg got airborne.
-  // effective_stride is the stride the tick is actually laying down, which the
-  // radial budget may have cut below stride_length. The headroom tracks it so a
-  // shortened stride also parks its feet proportionally less far past the AEP —
-  // it stays the same share of the half-stride in every direction.
+  // Shared with the engagement controller so a swing looks the same however the
+  // leg got airborne. effective_stride is the stride this tick actually lays
+  // down, which the radial budget may have cut; the headroom tracks it so it
+  // stays the same share of the half-stride in every direction.
   SwingProfile swing_profile(float effective_stride) const {
     SwingProfile p;
     p.clearance = step_height;
     p.width = swing_width;
     p.touchdown_velocity = touchdown_velocity;
     p.touchdown_probe_fraction = touchdown_probe_fraction;
-    // Derived, not configured: the stance band's grace, so the ride can park
-    // a foot exactly as far past its AEP as a stance anchor may drift past
-    // the band, and no further.
+    // Derived, not configured: a foot may park exactly as far past its AEP as a
+    // stance anchor may drift past the band.
     p.ride_headroom = kStanceExcursionGrace * 0.5f * effective_stride;
     return p;
   }
 
-  // At the configured stride — the shape of a swing when nothing has cut it.
   SwingProfile swing_profile() const { return swing_profile(stride_length); }
 
-  // How a reseat swing is shaped. Its own clearance (a re-plant lifts far less
-  // than a step), but the gait's touchdown probe: a foot re-planting has the
-  // same landing to make as one finishing a step, so it is eased the same way
-  // instead of falling back on the unshaped defaults. No ride_headroom: a
-  // reseat lands on still ground, so there is no ground motion to ride and no
-  // slip for the ride to prevent.
+  // Its own clearance (a re-plant lifts far less than a step) but the gait's
+  // touchdown probe, since the landing is the same. No ride_headroom: a reseat
+  // lands on still ground.
   SwingProfile reseat_profile() const {
     SwingProfile p;
     p.clearance = reseat_swing_clearance;
@@ -113,29 +99,25 @@ struct EngineConfig {
   }
 };
 
-// How far a stance anchor may drift from its leg's nominal stance.
-//
-// `band` is the excursion the gait designs for — half a stride, the AEP..PEP
-// envelope — which a steady walk rides exactly. `ceiling` is the hard limit the
-// anchor may never pass. Between the two the outward rate is eased to zero, so
-// the foot target stays velocity-continuous where a hard clip would kink it.
+// How far a stance anchor may drift from its leg's nominal stance. `band` is the
+// AEP..PEP envelope a steady walk rides exactly; `ceiling` is the hard limit.
+// Between them the outward rate eases to zero, where a hard clip would kink the
+// foot target.
 struct StanceBand {
   Vec3 nominal = Vec3::Zero();
   float band = 0.0f;
   float ceiling = 0.0f;
 };
 
-// Per-leg body-frame stance target as an integral from touchdown. Removes
-// foot-scrub under varying velocity; reproduces the closed-form stance Bezier
-// under constant velocity.
+// Per-leg stance target as an integral from touchdown: removes foot-scrub under
+// varying velocity, reproduces the stance Bezier under constant velocity.
 class StanceIntegrator {
  public:
   StanceIntegrator();
   void seed(const std::map<std::string, Vec3>& last_targets,
             const std::map<std::string, bool>& last_stance);
-  // Returns the integrated body-frame target if in stance, else nullopt. The
-  // integral is bounded by `bound`: without it a command reversal mid-stance
-  // walks the leg back past its own touchdown point with nothing to stop it.
+  // The integrated target if in stance, else nullopt. `bound` is what stops a
+  // command reversal mid-stance walking the leg back past its own touchdown.
   std::optional<Vec3> step(const std::string& name, bool in_stance,
                            const Vec3& swing_target,
                            std::pair<float, float> v_leg, float dt,
@@ -148,43 +130,30 @@ class StanceIntegrator {
   std::map<std::string, bool> is_stance_;
 };
 
-// Per-leg swing plan. The lift-off end (origin, its velocity, swing_time) is
-// latched when the foot leaves the ground; the touchdown end is re-aimed every
-// tick so the foot lands on the live AEP carrying the live stance velocity. A
-// latched touchdown end would step the foot's velocity at the swing->stance seam
-// whenever cmd_vel changed mid-swing.
+// Per-leg swing plan. The lift-off end is latched when the foot leaves the
+// ground; the touchdown end is re-aimed every tick onto the live AEP and stance
+// velocity, since a latched one would step the foot's velocity at the
+// swing->stance seam whenever cmd_vel changed mid-swing.
 class SwingPlanner {
  public:
   SwingPlanner();
   void liftoff(const std::string& name, const Vec3& origin, const Vec3& target,
                std::pair<float, float> v_leg, float swing_time,
                int identity_y_sign_val);
-  // Re-aim the touchdown end at the live AEP / stance velocity, and refresh the
-  // swing duration the curve is built against — a stale one would scale every
-  // realized velocity by latched / live whenever cycle_time moved mid-swing.
-  // No-op unless the leg is mid-swing.
+  // Re-aim the touchdown end at the live AEP / stance velocity and refresh the
+  // swing duration — a stale one would scale every realized velocity by
+  // latched / live whenever cycle_time moved mid-swing. No-op outside a swing.
   //
-  // Rate-bounded from the probe on, because there the target's own motion *is*
-  // the slip: the arc has become the touchdown ground line (swing_arc's blend
-  // reaches 1 at travel_end), so the foot's velocity over the ground is exactly
-  // d(target)/dt, and the foot is by then inside the band it may meet the ground
-  // anywhere within. A steady command holds the AEP still and never feels this;
-  // a command ramping through low speed slides the AEP at half the stance time
-  // times the acceleration — 89 mm/s on the baked config, which is *faster than
-  // the robot walks* — and that is the drag a reversal leaves behind.
-  //
-  // The budget is the foot's own descent speed, so integrated over the probe it
-  // comes to exactly the probe band's height: the landing's horizontal drag can
-  // never exceed the height it may land within. Metering it by the ground speed
-  // instead reads well ("no faster than the ground it is landing on") but allows
-  // a slide of the same order as the walk itself, and measures 2.5x worse — any
-  // target motion under a foot in the probe is slip, whatever the robot's speed.
-  // What the target gives up is aim: it lands where it was pointed at probe
-  // entry rather than chasing the AEP to the last millimetre.
+  // Rate-bounded from the probe on, where the target's own motion *is* slip: the
+  // arc has become the touchdown ground line, so the foot's ground velocity is
+  // exactly d(target)/dt while it may be touching. A command ramping through low
+  // speed slides the AEP faster than the robot walks. The budget is the foot's
+  // descent speed, so integrated over the probe it comes to the probe band's
+  // height — the drag can never exceed the height it may land within. What the
+  // target gives up is aim, not softness.
   //
   // v_target_ stays live and unbounded: it sets the arc's slope, and its own
-  // contribution to the slip carries a (1 - t) factor that vanishes at
-  // touchdown, so bounding it would only break the seam continuity it exists for.
+  // slip contribution carries a (1 - t) factor that vanishes at touchdown.
   void retarget(const std::string& name, const Vec3& target,
                 std::pair<float, float> v_leg, float swing_time,
                 float phase_in_swing, float dt, const SwingProfile& profile);
@@ -198,9 +167,8 @@ class SwingPlanner {
  private:
   std::map<std::string, Vec3> origin_;
   std::map<std::string, Vec3> target_;
-  // Latched at lift-off; sets the curve's departure tangent.
   std::map<std::string, std::pair<float, float>> v_origin_;
-  // Refreshed every swing tick; sets the velocity carried into stance.
+  // Refreshed every tick; sets the velocity carried into stance.
   std::map<std::string, std::pair<float, float>> v_target_;
   std::map<std::string, float> swing_time_;
   std::map<std::string, int> identity_y_sign_;
@@ -210,8 +178,7 @@ class SwingPlanner {
 class Engine {
  public:
   // leg_specs and reseat_geometry must be supplied together (both empty disables
-  // reseat, both set enables it). strategy_name must match the registry key for
-  // the supplied strategy.
+  // reseat). strategy_name must match the registry key for `strategy`.
   Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
          std::string strategy_name, std::map<std::string, Vec3> nominal_stance,
          std::map<std::string, Vec3> folded_stance,
@@ -227,16 +194,14 @@ class Engine {
   std::optional<std::string> pending_strategy_name() const {
     return pending_strategy_name_;
   }
-  // Committed body height, updated when a reseat ladder applies a new nominal.
   float applied_height() const { return applied_height_; }
 
   bool set_strategy(const std::string& name);
   bool start_initialize();
   bool start_fold();
   bool request_fold();
-  // Latch into FAULT from any state (over-current trip / hardware fault). Servos
-  // go limp on the real board; recovery is start_initialize() from FAULT, which
-  // reuses the cold-start INITIALIZE ladder. Idempotent while already faulted.
+  // Latch into FAULT from any state; servos go limp on the real board. Recovery
+  // is start_initialize(). Idempotent while already faulted.
   void enter_fault();
   void set_target_height(float target_height);
 
@@ -244,12 +209,10 @@ class Engine {
                                           std::pair<float, float> v_body_xy,
                                           float omega_z);
 
-  // Shape a command that reverses the robot's travel — see gait/reversal.hpp for
-  // what the ladder does and why. Call once per tick with the raw command,
-  // *before* the velocity shaping whose output is fed to update(); the return is
-  // what to shape. The travel being reversed is read from the command update()
-  // was last given, so the two calls belong to the same loop. A caller that skips
-  // this entirely gets the old behaviour, not a broken one.
+  // Shape a command that reverses the robot's travel (gait/reversal.hpp). Call
+  // once per tick with the raw command *before* the velocity shaping whose output
+  // goes to update(); the return is what to shape. Skipping it entirely gives the
+  // old behaviour, not a broken one.
   std::tuple<float, float, float> shape_reversal(
       float dt, std::pair<float, float> v_body_xy, float omega_z);
 
@@ -267,35 +230,28 @@ class Engine {
   bool cmd_is_zero(std::pair<float, float> v_body_xy, float omega_z) const;
   std::map<std::string, LegOutput> emit_stand() const;
   std::map<std::string, LegOutput> emit_held() const;
-  // `settling` overrides the command with a hard zero and runs the clock at the
-  // settle cycle time; see EngineState::SETTLING.
+  // `settling` forces a hard-zero command and the settle cycle time.
   std::map<std::string, LegOutput> tick_gait(float dt,
                                              std::pair<float, float> v_body_xy,
                                              float omega_z, bool settling);
-  // Every foot planted on its nominal stance — the standing pose, tested for
-  // rather than sequenced towards.
+  // Every foot planted on its nominal stance, tested for rather than sequenced
+  // towards.
   bool all_settled() const;
-  // No foot in the air. The gait's phase margin guarantees this window at every
-  // handover, so it is the earliest the reseat ladder can take over cleanly.
+  // No foot in the air; the phase margin guarantees this window at every
+  // handover.
   bool all_planted() const;
-  // Whether letting the gait finish the settle beats handing the remaining legs
-  // to the reseat ladder. A gait that swings its legs in many small groups walks
-  // them home one group at a time and takes a whole cycle over it; the ladder
-  // does three mirrored pairs regardless. Tripod wins on its own, the longer
-  // duty factors do not.
+  // Whether letting the gait finish the settle beats the reseat ladder's three
+  // mirrored pairs. Tripod wins; the longer duty factors, walking their legs home
+  // in many small groups, do not.
   bool settle_beats_reseat() const;
-  // Forget every in-flight swing, including any leg the settle was holding down.
   void reset_swing_state();
-  // One settle tick's exit test: stand if the feet are home, hand the rest to
-  // the reseat ladder if the gait would be slower at it, else keep settling.
+  // Stand if the feet are home, hand over to the reseat ladder if the gait would
+  // be slower at it, else keep settling.
   void finish_or_hand_off_settle();
-  // SETTLING -> STAND: commit any pending gait change and hand the feet, already
-  // on nominal, to the standing hold.
   void finish_settling();
-  // Give the feet, wherever they actually are, to the reseat ladder and enter
-  // RESEATING. The ladder arcs each one home and skips the ones already there,
-  // so it is the only correct way to reach a stand from a stance the gait did
-  // not re-plant itself — assigning nominal_ instead teleports them.
+  // The only correct way to reach a stand from a stance the gait did not
+  // re-plant itself: the ladder arcs each foot home from where it is, where
+  // assigning nominal_ would teleport it.
   void hand_off_to_reseat();
   std::map<std::string, LegOutput> tick_reseat(float dt);
   std::map<std::string, LegOutput> tick_fold(float dt);
@@ -328,23 +284,18 @@ class Engine {
   std::map<std::string, bool> last_stance_;
   float cmd_zero_elapsed_ = 0.0f;
   // Gain on the commanded velocity, eased 1 -> 0 across the debounce once the
-  // command is inside cmd_zero_tol (or a gait change is waiting), and eased back
-  // the same way if it returns.
-  //
-  // A command that small is one the engine has decided to call zero, but
-  // stride_vector still multiplies it by a whole stance — 3.5 s on a ripple — so
-  // 3 mm/s of "zero" is a 12 mm stride and half of that is live AEP. Zeroing it
-  // in one tick therefore snapped every airborne foot; a gait change, which
-  // settles from a *full* command, snapped them further. The settle is entered
-  // only once this reaches zero, so by then there is nothing left to step.
+  // command is inside cmd_zero_tol (or a gait change is waiting), and back again
+  // if it returns. Zeroing in one tick snapped every airborne foot: stride_vector
+  // multiplies even 3 mm/s by a whole stance, and half that stride is live AEP.
+  // The settle is entered only once this reaches zero.
   float cmd_gain_ = 1.0f;
-  // Per-leg: its lift-off came due while the settle was holding them, so it is
-  // sitting this swing window out. See the hold in tick_gait.
+  // Per-leg: lift-off came due while the settle was holding them, so the leg sits
+  // this swing window out.
   std::map<std::string, bool> held_down_;
 
   ReversalGate reversal_;
-  // The command update() was last given — what the robot is carrying, as
-  // distinct from what is being asked of it. The reversal ladder's reference.
+  // The command update() was last given — what the robot is carrying rather than
+  // what is asked of it, which is the reversal ladder's reference.
   std::pair<float, float> applied_xy_{0.0f, 0.0f};
   float applied_omega_ = 0.0f;
 
@@ -354,14 +305,11 @@ class Engine {
   bool pending_fold_ = false;
   std::optional<std::string> pending_strategy_name_;
 
-  // Snapshot of the reseat target, set when RESEATING is entered.
   std::map<std::string, Vec3> reseat_target_stance_;
   float reseat_target_height_ = 0.0f;
 };
 
-// ── Config builders (replace the double engine's YAML builders) ──
-//
-// All read the baked config_generated.hpp constants; no filesystem access.
+// Config builders reading the baked config_generated.hpp; no filesystem access.
 
 EngineConfig engine_config_from_config();
 std::array<JointAngles, kNumLegs> standing_pose_from_config();
@@ -372,28 +320,19 @@ std::map<std::string, kin::LegSpec> leg_specs_from_config();
 ReseatGeometryByLeg reseat_geometry_from_config();
 std::map<std::string, LegContext> build_leg_contexts_from_config();
 
-// Assemble a fully-wired engine (reseat enabled) from the baked config.
-// strategy_name must be a registry key (default "tripod").
+// Fully-wired engine (reseat enabled) from the baked config.
 std::unique_ptr<Engine> make_default_engine(
     const std::string& strategy_name = "tripod");
 
-// ── Parameterized builders (runtime geometry, e.g. hexa_locomotion's YAML) ──
-//
-// Same construction as the *_from_config() versions but from explicit leg specs,
-// standing pose, both rest poses, and engine config instead of the baked
-// constexpr, so a
-// ROS caller can supply runtime-loaded values. The no-arg versions above delegate
-// to these with the config_generated.hpp constants (so the Pico is unchanged).
+// Parameterized builders: the same construction from explicit runtime-loaded
+// values (hexa_locomotion's YAML). The no-arg versions above delegate to these
+// with the baked constants.
 
-// Per-leg resting joint angles from the standing pose: one belly clearance for
-// the body, plus a tip reach out from the leg's own coxa axis and a splay for
-// each of the three leg groups. femur/tibia come out uniform within a group —
-// the radial reach is the same for both its legs — and differ between groups
-// only where their reaches do. The coxa carries the splay, negated for rear legs
-// and again for right ones, so a positive value splays outward on every leg.
-// Throws hexa::UnreachableTarget if a tip reach / body height pair is
-// geometrically impossible, std::invalid_argument if a resulting angle falls
-// outside config::kJointLimits.
+// Per-leg resting joint angles: one belly clearance for the body, plus a per-
+// group tip reach and splay. The coxa carries the splay, negated for rear legs
+// and again for right ones, so a positive value splays outward everywhere.
+// Throws hexa::UnreachableTarget on an impossible reach / height pair, and
+// std::invalid_argument if an angle falls outside config::kJointLimits.
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
     float foot_radius, const ::hexa::config::StandingPose& standing);
@@ -401,8 +340,8 @@ std::array<JointAngles, kNumLegs> standing_pose_from(
 std::map<std::string, Vec3> nominal_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& standing_pose);
-// Both belly-rest poses go through the same FK; the two names exist so callers
-// cannot mix up which one they are handing over.
+// Both belly-rest poses go through the same FK; the two names keep callers from
+// mixing them up.
 std::map<std::string, Vec3> rest_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& rest_pose);
@@ -424,9 +363,9 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<JointAngles, kNumLegs>& initialized_pose,
     float coxa_to_bottom, float foot_radius);
 
-// Wire string for /gait/state (folded, initialize, stand, ...).
+// Wire string for /gait/state.
 std::string state_value(EngineState s);
-// Uppercase name for log messages (FOLDED, INITIALIZE, STAND, ...).
+// Uppercase name for log messages.
 std::string state_name(EngineState s);
 
 }  // namespace hexa::gait

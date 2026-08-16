@@ -1,16 +1,9 @@
-// Golden-trace parity test for the float joy_mapping port (plan part 07).
-//
-// Replays the SAME axes/buttons trace through the firmware's float map_joy
-// (src/joy_mapping.cpp, namespace hexa::teleop) that gen_joy_golden.py ran
-// through the untouched Python hexa_teleop.joy_mapping reference, and asserts
-// the JoyOutput matches frame-for-frame. The trace (kFrames) and the reference
-// outputs (kExpected) are baked into joy_golden_generated.hpp at build time from
-// the same YAMLs the firmware bakes, so any divergence is purely the
-// double->float port of the mapping math — checked under a loose tolerance.
-//
-// The JoyState / JoyConfig are seeded from config_generated.hpp exactly as
-// main.cpp does (initial mode, default-gait index, default-gait stick cap), so
-// the port and the reference start from identical state.
+// Golden-trace parity for map_joy: replays the same axes/buttons trace
+// gen_joy_golden.py ran through the Python hexa_teleop.joy_mapping reference and
+// asserts the JoyOutput matches frame for frame. The trace and the reference
+// outputs are baked into joy_golden_generated.hpp from the same YAMLs the
+// firmware bakes, and the JoyState / JoyConfig are seeded as main.cpp seeds
+// them, so any divergence is purely the mapping math.
 
 #include <string>
 

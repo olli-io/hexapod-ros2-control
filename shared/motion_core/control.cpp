@@ -3,8 +3,8 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "config_generated.hpp"  // kControl, kDefaultGait, kLegSpecs
-#include "gait/types.hpp"        // LEG_NAMES
+#include "config_generated.hpp"
+#include "gait/types.hpp"
 
 namespace hexa::control {
 
@@ -58,7 +58,6 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
     return state();
   }
 
-  // Linear pair: vectorial slew capped at accel_linear * dt.
   const float dx = tgt_vx - v_x_;
   const float dy = tgt_vy - v_y_;
   const float distance = std::hypot(dx, dy);
@@ -76,7 +75,6 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
     v_y_ = 0.0f;
   }
 
-  // Angular: scalar slew capped at accel_angular * dt.
   const float d_omega = tgt_omega - omega_;
   const float max_step_ang = accel_angular_ * dt;
   if (std::fabs(d_omega) <= max_step_ang) {
@@ -123,16 +121,13 @@ void Control::set_gait(const std::string& gait) {
   }
   active_gait_ = gait;
   limiter_.set_accel_linear(accel_linear_for(gait));
-  // The angular cap is the gait's linear cap over the stance radius, so it moves
-  // with the gait exactly as the linear one does.
   limiter_.set_accel_angular(accel_angular_for(gait));
 }
 
 std::tuple<float, float, float> Control::shape(
     float v_x, float v_y, float omega_z, hexa::gait::EngineState engine_state,
     float dt) {
-  // Reset the limiter on the engine leaving the walking set so each STAND ->
-  // ENGAGING starts clean (mirrors control_node's /gait/state edge handling).
+  // Reset on leaving the walking set, so each STAND -> ENGAGING starts clean.
   if (!have_engine_state_ || engine_state != engine_state_) {
     const bool was_walking = have_engine_state_ && is_walking(engine_state_);
     const bool now_walking = is_walking(engine_state);
@@ -143,17 +138,14 @@ std::tuple<float, float, float> Control::shape(
     have_engine_state_ = true;
   }
 
-  // Derate the linear cap by whatever the radial budget lets this heading lay
-  // down. Without it the stick still tops out at the isotropic cap while the
-  // engine shortens the stride underneath it, and the difference comes out as
-  // planted feet scrubbing along the ground.
+  // Derate the linear cap by what the radial budget lets this heading lay down,
+  // or the stick tops out at the isotropic cap while the engine shortens the
+  // stride underneath it and the planted feet scrub.
   //
-  // Read off the *requested* command, deliberately. scale_to_envelope cuts the
-  // linear and angular parts by different factors, so on a translation-plus-yaw
-  // mix the post-cut per-leg headings differ slightly from the pre-cut ones and
-  // the engine's own effective stride will not be identical to this one. The
-  // engine's is the one that governs where feet go; this one only decides where
-  // the stick runs out. They agree exactly for pure translation and pure yaw.
+  // Read off the *requested* command deliberately: scale_to_envelope cuts the
+  // linear and angular parts by different factors, so on a mixed command the
+  // engine's own effective stride differs slightly. The engine's governs where
+  // feet go; this one only decides where the stick runs out.
   const float ratio = stride_ratio_for(v_x, v_y, omega_z);
   auto [sx, sy, sw] = hexa::gait::scale_to_envelope(
       v_x, v_y, omega_z, stance_xy_, caps_.linear_max(active_gait_) * ratio,

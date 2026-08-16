@@ -1,4 +1,3 @@
-// Body-pose small-offset algebra — float fork of hexa_posture/pose.py.
 #include "posture/pose.hpp"
 
 #include <cmath>
@@ -42,9 +41,8 @@ float clamp_axis(float v, float lo, float hi) {
   return v;
 }
 
-// Both a length (m) and an angle (rad) floor. One value serves: 1e-6 of either
-// is far below what a servo can express, and far above the float noise at the
-// centimetre / third-of-a-radian magnitudes the envelope allows.
+// Serves as both a length (m) and an angle (rad) floor: 1e-6 of either is below
+// what a servo can express and above the float noise at these magnitudes.
 constexpr float kPolarEps = 1e-6f;
 constexpr float kPi = 3.141592653589793f;
 constexpr float kTwoPi = 6.283185307179586f;
@@ -59,9 +57,8 @@ void clamp_disc(float& a, float& b, float r_max) {
   }
 }
 
-// The short-way-around representative of an angle error, in [-pi, pi].
-// std::remainder is the exact form (a - 2pi*round(a/2pi)); std::fmod is not —
-// it keeps the sign of the dividend.
+// Short way round, in [-pi, pi]. std::remainder, not std::fmod, which keeps the
+// sign of the dividend.
 float wrap_pi(float a) { return std::remainder(a, kTwoPi); }
 }  // namespace
 
@@ -85,10 +82,8 @@ PolarState to_polar(float a, float b) {
 }
 
 namespace {
-// One semi-implicit Euler step of a damped spring on a single axis, with the
-// saturation clamp folded in so a pinned axis also drops its velocity.
-//
-// w is pre-clamped by the caller; a non-positive w means "bypass" and snaps.
+// One semi-implicit Euler step of a damped spring, with the saturation clamp
+// folded in so a pinned axis also drops its velocity. A non-positive w snaps.
 void step_axis(float& pos, float& vel, float target, float lo, float hi, float w,
                float zeta, float dt) {
   if (w <= 0.0f) {
@@ -107,9 +102,8 @@ void step_axis(float& pos, float& vel, float target, float lo, float hi, float w
   }
 }
 
-// Semi-implicit Euler on an oscillator diverges around w*dt > 2; capping at 0.5
-// keeps a mistyped tau at the fastest well-behaved response instead of shaking
-// the servos apart. Inert at the shipped tau, where w*dt ~ 0.037.
+// Semi-implicit Euler diverges around w*dt > 2, so a mistyped tau caps at the
+// fastest well-behaved response. Inert at the shipped tau (w*dt ~ 0.037).
 float omega_for(float tau, float dt) {
   if (tau <= 0.0f) {
     return 0.0f;  // bypass
@@ -121,15 +115,13 @@ float omega_for(float tau, float dt) {
 
 // One step of the same spring on a pair carried in polar, so a direction sweep
 // holds its reach instead of cutting the chord. Magnitude and direction keep
-// SEPARATE state but share one w; both integrate exactly as step_axis does,
-// with the saturation clamp folded in the same way. (The w is a parameter, not
-// read off the config here, so giving the direction its own tau again is a
-// matter of passing a second one in.)
+// separate state but share one w, which is a parameter so the direction can be
+// given its own tau again by passing a second one in.
 void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
                 float target_b, float r_max, float w, float zeta, float dt) {
   if (w <= 0.0f) {
-    // Bypass the whole pair. Snap in Cartesian rather than round-tripping
-    // through polar, so the result is bit-identical to the old per-axis snap.
+    // Snap in Cartesian rather than round-tripping through polar, so the result
+    // is bit-identical to the old per-axis snap.
     out_a = target_a;
     out_b = target_b;
     clamp_disc(out_a, out_b, r_max);
@@ -142,62 +134,49 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
     target_r = r_max;
   }
 
-  // The magnitude is SIGNED between ticks (see the integration below), and
-  // (-r, angle) is the same point as (r, angle + pi). Put it back in canonical
-  // form before anything reads the heading, so the origin test and the angle
-  // spring always see the direction the body is actually displaced in — a pair
-  // caught mid-crossing would otherwise be re-commanded against a heading a
-  // half-turn away from its own position and sweep the long way round to a
-  // point it was already standing on. Exact: negating the rate with the radius
-  // leaves the emitted point and its velocity untouched, and a heading rate is
-  // the same in both representations.
+  // The magnitude is SIGNED between ticks. Canonicalise before anything reads
+  // the heading, or a pair caught mid-crossing is re-commanded against a heading
+  // a half-turn from its own position and sweeps the long way round to a point
+  // it already stands on. Exact: negating the rate with the radius leaves the
+  // emitted point and its velocity untouched.
   if (s.radius < 0.0f) {
     s.radius = -s.radius;
     s.radius_rate = -s.radius_rate;
     s.angle = wrap_pi(s.angle + kPi);
   }
 
-  // A pair sitting at the origin has no direction of its own, so adopt the
-  // target's outright instead of easing off a stale one — which would fling
-  // the body out along the old heading first and only then curve. Free: at
-  // radius 0 there is nothing to see move.
+  // A pair at the origin has no direction, so adopt the target's outright rather
+  // than easing off a stale one and flinging the body along the old heading
+  // first. Free: at radius 0 there is nothing to see move.
   if (s.radius <= kPolarEps && target_r > kPolarEps) {
     s.angle = std::atan2(target_b, target_a);
     s.angle_rate = 0.0f;
   }
-  // A target at the origin has no direction either. Freeze the heading and let
-  // the magnitude ease in, so a withdrawn pose retracts along its own line
-  // rather than spinning on the way to centre.
+  // Nor has a target at the origin: freeze the heading so a withdrawn pose
+  // retracts along its own line rather than spinning on the way to centre.
   const float target_angle =
       target_r > kPolarEps ? std::atan2(target_b, target_a) : s.angle;
 
   const float err = wrap_pi(target_angle - s.angle);
   s.angle_rate += (w * w * err - 2.0f * zeta * w * s.angle_rate) * dt;
-  // Wrapping the state and not just the error keeps `angle` bounded however
-  // many turns it accumulates.
+  // Wrapping the state, not just the error, keeps `angle` bounded.
   s.angle = wrap_pi(s.angle + s.angle_rate * dt);
 
   s.radius_rate +=
       (w * w * (target_r - s.radius) - 2.0f * zeta * w * s.radius_rate) * dt;
   s.radius += s.radius_rate * dt;
-  // The magnitude runs SIGNED and is free to cross the origin. A floor at zero
-  // would pin the pair at the one point on a withdrawal where it is moving
-  // fastest — at zeta < 1 the magnitude reaches the centre with most of its
-  // speed intact — clipping the whole settle off the end of the return and
-  // stopping the body dead. Damping is what bounds the excursion out the far
-  // side, and it is the only thing that should: the depth past centre is
-  // exp(-pi*zeta/sqrt(1-zeta^2)) of the reach withdrawn, so it is the damping
-  // ratio, not a clamp, that decides how far the body rebounds.
-  //
-  // The out_a/out_b derivation below needs no special case for a negative
-  // magnitude — it lands on the opposite side on its own — and the next tick
-  // folds the sign back into the heading.
+  // The magnitude runs SIGNED and may cross the origin. A floor at zero would pin
+  // the pair where a withdrawal moves fastest and stop the body dead; damping
+  // bounds the excursion out the far side instead, at
+  // exp(-pi*zeta/sqrt(1-zeta^2)) of the reach withdrawn. The derivation below
+  // handles a negative magnitude unaided, and the next tick folds the sign back
+  // into the heading.
   if (s.radius > r_max) {
     s.radius = r_max;
     s.radius_rate = 0.0f;
   } else if (s.radius < -r_max) {
-    // The disc bound is on the magnitude's absolute value, so a rebound is
-    // held to the same envelope as a reach.
+    // The bound is on the absolute magnitude, so a rebound is held to the same
+    // envelope as a reach.
     s.radius = -r_max;
     s.radius_rate = 0.0f;
   }
@@ -212,8 +191,6 @@ BodyPose PoseSmoother::step(const BodyPose& target, const PoseLimits& envelope,
   if (dt <= 0.0f) {
     return pose_;
   }
-  // One spring for the whole pose: both pairs (magnitude and direction alike)
-  // and both lone axes.
   const float w = omega_for(cfg_.tau, dt);
   const float z = cfg_.damping_ratio;
 

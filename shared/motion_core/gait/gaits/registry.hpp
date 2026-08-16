@@ -1,5 +1,4 @@
-// Strategy registry: name -> zero-arg factory. Float fork of gaits/registry.hpp
-// (plan part 06). The engine looks up by name when set_strategy is called.
+// Strategy registry: name -> zero-arg factory, looked up by set_strategy.
 #pragma once
 
 #include <functional>
@@ -13,8 +12,7 @@ namespace hexa::gait {
 
 using StrategyFactory = std::function<std::unique_ptr<Strategy>()>;
 
-// The registered gait strategies, keyed by the same names the rest of the
-// system uses (tripod, surf, tetrapod, crawl, ripple).
+// Keyed by the names the rest of the system uses (tripod, surf, ...).
 const std::map<std::string, StrategyFactory>& strategies();
 
 }  // namespace hexa::gait

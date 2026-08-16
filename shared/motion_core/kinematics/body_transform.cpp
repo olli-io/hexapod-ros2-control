@@ -1,7 +1,3 @@
-// Body<->leg transforms + body-pose composition — float fork of
-// hexa_kinematics_cpp/src/body_transform.cpp (part 05). double->float
-// (cosf/sinf); the math is otherwise line-for-line the double source.
-
 #include "kinematics/body_transform.hpp"
 
 #include <cmath>

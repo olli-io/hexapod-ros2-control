@@ -1,12 +1,7 @@
-// Stand -> Gait engagement. Float fork of engagement.hpp (plan part 06).
-//
-// One per-leg state machine (INITIAL_STANCE / INITIAL_SWING / GAIT_LIKE) runs
-// one full master cycle from a standing start, under a smoothstep
-// body-velocity envelope, and hands the clock to the engine at master = 1.
-//
-// There is no resume counterpart: a stop runs through EngineState::SETTLING,
-// which never stops the gait clock, so a command that comes back is picked up
-// by the engine's own tick with nothing to re-enter.
+// Stand -> Gait engagement: one full master cycle from a standing start under a
+// smoothstep body-velocity envelope, handing the clock to the engine at
+// master = 1. There is no resume counterpart — a stop runs through
+// EngineState::SETTLING, which never stops the gait clock.
 #pragma once
 
 #include <map>
@@ -33,13 +28,12 @@ class EngagementController {
   // Master phase to seed the engine clock with on GAIT handoff (master mod 1).
   float exit_master() const { return pymod(master_, 1.0f); }
 
-  // Current internal body velocity (v_x, v_y, omega_z). Diagnostics/tests only.
+  // Diagnostics/tests only.
   Vec3 v_body() const { return Vec3(v_body_x_, v_body_y_, omega_); }
 
-  // Master horizon over which the body-velocity smoothstep ramps. Tests only.
+  // Master horizon the body-velocity smoothstep ramps over. Tests only.
   float smoothstep_window() const { return smoothstep_window_; }
 
-  // Arm the engagement from a STAND start.
   void begin(const Strategy& strategy,
              const std::map<std::string, LegContext>& leg_contexts);
 
@@ -56,7 +50,7 @@ class EngagementController {
   float min_cycle_time_;
   float max_cycle_time_;
   float duty_factor_;
-  // Phase at which swing ends; the nominal window already shrunk by the margin.
+  // Swing end, with the margin already taken off the nominal window.
   float swing_end_;
   SwingProfile swing_;
   float controller_dt_;

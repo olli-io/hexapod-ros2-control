@@ -1,20 +1,15 @@
-// What the legs do when the command turns under them.
+// What the legs do when the command turns under them. Two independent defects,
+// measured separately:
 //
-// Two independent defects live here, and they are measured separately.
+// **Swing skid.** Through the probe the arc *is* the touchdown ground line, so
+// the foot's ground velocity equals the target's own motion one for one, and a
+// command ramping through low speed slides the live AEP faster than the robot
+// walks. SwingPlanner::retarget bounds it; these measure what is left.
 //
-// **Swing skid.** Through the probe the arc *is* the touchdown ground line, so the foot's
-// velocity over the ground equals the touchdown target's own motion, one for
-// one. A command ramping through low speed slides the live AEP at half the
-// stance time times the acceleration — faster than the robot walks — and the
-// foot is by then inside the band it may meet the ground anywhere within.
-// SwingPlanner::retarget bounds it; these tests measure what is left.
-//
-// **Stance runway.** Once travel reverses, a leg that just landed on the old AEP
-// has no excursion left in the new direction: its anchor pins against the stance
-// ceiling and stops tracking the ground for the rest of its stance window. The
-// reversal ladder reflects the phase circle to hand it a fresh one — which is
-// only sound where the feet are where the schedule says they are, so the tests
-// here measure that credit directly, not just the drag it saves.
+// **Stance runway.** A leg that just landed on the old AEP has no excursion left
+// in the new direction and pins against the stance ceiling. The reversal ladder
+// reflects the phase circle to hand it a fresh one, which is only sound where the
+// feet are where the schedule says, so these measure the credit directly.
 
 #include <algorithm>
 #include <cmath>
@@ -93,12 +88,10 @@ enum class Turn {
 };
 
 // Walk along `axis` (0 = fore/aft, 1 = lateral) at the saturating command until
-// the gait is steady, then turn it. `flip_offset` shifts the turn within the
-// cycle, so a sweep covers every phase a foot can be caught in.
-//
-// The world frame comes from integrating the command, not from the feet: a turn
-// is exactly the case where stance feet stop tracking the ground, so
-// foot-derived odometry would be polluted by the very slip being measured.
+// steady, then turn it; `flip_offset` shifts the turn within the cycle so a sweep
+// covers every phase a foot can be caught in. The world frame comes from
+// integrating the command, since foot-derived odometry would be polluted by the
+// very slip being measured.
 SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
                      int axis, bool instant = false, bool ladder = false) {
   const auto cfg = g::engine_config_from_config();
@@ -275,16 +268,14 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
 
 }  // namespace
 
-// The headline regression for the touchdown-target rate bound. Sweeping the turn
-// across the cycle catches a foot at every phase of its swing, including the
-// probe, where an unbounded retarget drags it the whole way the live AEP moves.
+// The headline regression for the touchdown-target rate bound: sweeping the turn
+// across the cycle catches a foot at every swing phase, the probe included, where
+// an unbounded retarget drags it the whole way the live AEP moves.
 //
-// The landing bound is the probe band's own height: whatever the target does,
-// the foot's horizontal drag as it lands stays inside the height it may land
-// within. The probe bound is coarse by comparison — most of what is left there
-// is the ground line's own collapse under deceleration (v_target and swing_time
-// stay live by design), not the target — so it is pinned only well clear of a
-// stride, which is where the unbounded version lands.
+// The landing bound is the probe band's own height. The probe bound is coarse by
+// comparison — most of what is left there is the ground line's own collapse under
+// deceleration, not the target — so it is pinned only well clear of a stride,
+// which is where the unbounded version lands.
 TEST(Reversal, LandingDoesNotDragAcrossTheGround) {
   const auto cfg = g::engine_config_from_config();
   const float cycle =
@@ -347,17 +338,12 @@ SkidStats sweep(const std::string& gait, bool ladder) {
 
 }  // namespace
 
-// The reflection is only ever as good as the premise it rests on: that a foot is
-// where its stance progress says it is. Reflecting a walk that has been bled to
-// a standstill first breaks exactly that — below the knee the cycle time
-// saturates, the clock outruns the travel, and the feet bunch toward nominal
-// (measured 24-29 mm off at 40% of the knee speed). Every leg is then handed
-// tens of millimetres of runway it does not have and ploughs into its excursion
-// ceiling: inward, under the body, for a middle leg walking sideways.
-//
-// So this is the load-bearing test, not the drag one below. Holding the walk at
-// the knee instead of stopping it keeps the credit exact, and this asserts that
-// directly at the instant the reflection happens.
+// The reflection is only as good as its premise: that a foot is where its stance
+// progress says. Reflecting a walk bled to a standstill breaks exactly that —
+// below the knee the clock outruns the travel and the feet bunch toward nominal
+// (24-29 mm off at 40% of knee speed), so every leg is handed runway it does not
+// have. The load-bearing test, not the drag one below: it asserts the credit at
+// the instant the reflection happens.
 TEST(Reversal, MirrorNeverCreditsALegMoreRunwayThanItHas) {
   for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
     const SkidStats s = sweep(gait, /*ladder=*/true);
@@ -369,22 +355,16 @@ TEST(Reversal, MirrorNeverCreditsALegMoreRunwayThanItHas) {
   }
 }
 
-// The mechanism the test above rests on, asserted directly rather than through
-// the credit it spoils.
+// The mechanism the test above rests on, asserted directly. On a slow gait's
+// derated axis the ladder's hold is *slower* than cmd_zero_tol (ripple's lateral
+// knee is 0.0183 m/s against a 0.02 tolerance), and read as a release it would
+// decay cmd_gain_ — feet slow, clock speeds up, feet bunch toward nominal — and
+// eventually drop the engine out of GAIT mid-ladder without ever reflecting.
 //
-// cmd_zero_tol reads operator intent — has the stick been let go. The ladder's
-// hold means the opposite, and on a slow gait's derated axis it is *slower* than
-// that threshold: ripple's lateral knee is 0.0183 m/s against a 0.02 tolerance.
-// Read as a release, the hold decays cmd_gain_, which scales the applied
-// velocity down and blends the cycle toward settle_cycle_time — feet slow, clock
-// speeds up, feet bunch toward nominal — and, given long enough, takes the gain
-// to zero and drops the engine out of GAIT mid-ladder without ever reflecting.
-//
-// So: through the hold the engine keeps walking, and once the command has come
-// down onto the knee the clock runs no faster than max_cycle_time, which is the
-// rate the knee is defined by. Both bounds are read off the tuning rather than
-// written down, so a retune that moves the knee across the tolerance again fails
-// here instead of quietly bunching the feet.
+// So: through the hold the engine keeps walking, and on the knee the clock runs
+// no faster than max_cycle_time. Both bounds are read off the tuning, so a retune
+// that moves the knee across the tolerance fails here instead of quietly bunching
+// the feet.
 TEST(Reversal, TheLaddersHoldIsNotReadAsAReleasedStick) {
   const auto cfg = g::engine_config_from_config();
   for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
@@ -404,18 +384,17 @@ TEST(Reversal, TheLaddersHoldIsNotReadAsAReleasedStick) {
   }
 }
 
-// What the reflection buys, once it is sound: the legs that landed most recently
-// before the turn get their runway back instead of pinning against the ceiling.
-// Worst stance drag over 12 turn offsets on both axes, on the baked config:
+// What the reflection buys: the legs that landed most recently get their runway
+// back instead of pinning against the ceiling. Worst stance drag over 12 turn
+// offsets on both axes, on the baked config:
 //
 //   tripod    48.1 mm -> 31.9 mm
 //   tetrapod  64.5 mm -> 33.0 mm
 //   ripple    75.0 mm -> 36.7 mm
 //
-// What is left is the stopping distance from the knee (~22 mm on this tuning)
-// against the 12.5 mm of grace the stance band carries: the robot is still
-// travelling the old way as the reflection lands, and no reflection can give
-// back ground the robot has yet to stop covering.
+// What is left is the stopping distance from the knee (~22 mm here) against the
+// stance band's 12.5 mm of grace: no reflection can give back ground the robot
+// has yet to stop covering.
 TEST(Reversal, LadderHandsTheStanceLegsTheirRunwayBack) {
   for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
     const SkidStats bare = sweep(gait, /*ladder=*/false);

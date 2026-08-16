@@ -19,9 +19,8 @@ PhaseOffsets::PhaseOffsets(std::map<std::string, float> offsets)
 }
 
 namespace {
-// pymod's result is only half-open in exact arithmetic: for a tiny negative
-// argument the sum rounds up to exactly 1.0f, which every phase here must stay
-// below. Folding it back to zero is the same phase.
+// pymod is half-open only in exact arithmetic: a tiny negative argument rounds
+// up to exactly 1.0f. Folding that back to zero is the same phase.
 float wrapped(float value) {
   const float m = pymod(value, 1.0f);
   return m < 1.0f ? m : 0.0f;

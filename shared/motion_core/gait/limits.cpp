@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "config_generated.hpp"  // hexa::config::kGaits
+#include "config_generated.hpp"
 
 namespace hexa::gait {
 
@@ -26,9 +26,8 @@ float outer_stance_radius(const std::map<std::string, Vec3>& nominal_stance) {
 
 VelocityCaps load_velocity_caps_from_config(float r_outer) {
   VelocityCaps caps;
-  // The generator (gen_config.py) ports limits.cpp's derivation, so the per-gait
-  // linear_max / yaw_bias are already baked into kGaits — mirror them out keyed
-  // by gait name, and divide the linear cap by the lever arm for the angular one.
+  // linear_max / yaw_bias are baked by gen_config.py; only the angular cap is
+  // derived here, by dividing the linear one by the lever arm.
   for (const auto& g : ::hexa::config::kGaits) {
     const std::string name(g.name.data());
     caps.linear_max_by_gait[name] = g.linear_max;

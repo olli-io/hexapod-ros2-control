@@ -1,10 +1,9 @@
-// Reseat ladder: arbitrary current foot positions -> a target stance. Float fork
-// of reseat.hpp (plan part 06). Used by three engine paths (posture-height
-// change, settle cleanup, abandoned engagement) with the same ladder mechanics.
-// The pair order is FoldController's, reversed — see stand_transition.hpp.
+// Reseat ladder: arbitrary current foot positions -> a target stance. Three
+// callers (posture-height change, settle cleanup, abandoned engagement) share
+// the mechanics. The pair order is FoldController's, reversed.
 //
-// An abandoned engagement hands over feet that are still in the air, so the
-// ladder lands those before it lifts any foot that is down.
+// An abandoned engagement hands over feet still in the air, so the ladder lands
+// those before it lifts any foot that is down.
 #pragma once
 
 #include <array>
@@ -17,9 +16,8 @@
 
 namespace hexa::gait {
 
-// Frozen snapshot of the standing pose's geometry. Captures the tibia-from-
-// vertical lean and foot depth so every reseat target follows from a single
-// target_height scalar.
+// Frozen snapshot of the standing pose, so every reseat target follows from a
+// single target_height scalar.
 struct ReseatGeometry {
   float coxa_len = 0.0f;
   float femur_len = 0.0f;
@@ -28,25 +26,19 @@ struct ReseatGeometry {
   float default_foot_depth = 0.0f;
 };
 
-// One ReseatGeometry per leg, indexed by Leg (leg_index.hpp order). Legs in
-// different standing-pose groups reach out different distances, so they lean
-// their tibias differently and cannot share a snapshot.
+// Indexed by Leg. Legs in different standing-pose groups lean their tibias
+// differently, so they cannot share a snapshot.
 using ReseatGeometryByLeg = std::array<ReseatGeometry, kNumLegs>;
 
-// Derive the reseat geometry from a standing-pose joint-angle triple
-// (theta_coxa, theta_femur, theta_tibia) and a leg's segment lengths (FK).
-// theta_coxa is deliberately unused: depth and tibia lean are both invariant
-// under the leg's swivel.
+// FK from a standing-pose joint-angle triple. theta_coxa is deliberately
+// unused: depth and tibia lean are invariant under the leg's swivel.
 ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
                                           const kin::LegSpec& leg_spec);
 
 // Body-frame nominal stance per leg at a target body height. Each leg keeps the
-// swivel it currently stands at — current_stance supplies the azimuth, and only
-// the radius and depth move — so the standing splay survives a height change.
-// The radius is re-solved per leg from that leg's own geometry, so a stance whose
-// groups reach out different distances keeps those distances distinct.
-// Throws std::invalid_argument if target_height_m is outside the geometrically
-// feasible range for any leg (arcsin argument leaves [-1, 1]).
+// swivel it currently stands at and re-solves its radius from its own geometry,
+// so both the splay and the per-group reach survive a height change. Throws
+// std::invalid_argument if target_height_m is infeasible for any leg.
 std::map<std::string, Vec3> reseat_nominal_stance(
     float target_height_m, const ReseatGeometryByLeg& geometry,
     const std::map<std::string, kin::LegSpec>& leg_specs,
@@ -54,14 +46,10 @@ std::map<std::string, Vec3> reseat_nominal_stance(
 
 class ReseatController {
  public:
-  // swing shapes the pair's arc exactly as it shapes a gait swing; its width is
-  // ignored (a reseat is direction-agnostic, so the arc stays a vertical lift
-  // over a straight chord).
-  //
-  // A pair already standing on its targets is skipped outright, costing neither
-  // a swing nor a dwell: after a settle hands its leftovers over, some legs are
-  // already home, and lifting a foot to put it back where it is reads as a stray
-  // step. A height change moves all six, so nothing is skipped there.
+  // swing shapes the pair's arc as it shapes a gait swing; its width is ignored
+  // (a reseat is direction-agnostic). A pair already on its targets is skipped
+  // outright — after a settle some legs are already home, and lifting a foot to
+  // put it back where it is reads as a stray step.
   ReseatController(std::map<std::string, Vec3> current_stance,
                    std::map<std::string, Vec3> target_stance,
                    float pair_swing_time, float pair_dwell_time,
@@ -71,14 +59,13 @@ class ReseatController {
   std::map<std::string, LegOutput> update(float dt);
 
  private:
-  // Advance past any pair that is already on its targets, then latch the origins
-  // of the one that is left. Sets done_ if none is.
+  // Skip to the first pair that needs moving and latch its origins; sets done_
+  // if there is none.
   void seed_pair_origin();
   bool pair_needs_moving(std::size_t idx) const;
   bool remaining_pair_needs_moving() const;
   // Latch the origins of every foot seeded above its target. Height is the only
-  // contact signal the ladder is given, and every target sits on the same ground
-  // plane the stance does, so it is enough.
+  // contact signal the ladder has, and every target is on the same ground plane.
   void seed_landing();
   float contact_band() const;
   std::map<std::string, LegOutput> tick_landing(float dt);

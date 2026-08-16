@@ -1,15 +1,9 @@
 // The Pico face's config glue: face_policy.hpp's buildPolicyConfig() and
-// undervoltFlags().
-//
-// This is the seam that went stale while the on-Pico face was deleted — the
-// shared policy grew fields (scanning, the posture expressions and their
-// thresholds) that the builder kept leaving at their defaults, and nothing
-// noticed. src/hexa_display/test/ covers what the policy DOES with a config;
-// this covers whether the firmware hands it the right one.
-//
-// It asserts the transfer, not the values: every check is "the baked constant
-// reached the matching PolicyConfig field", so a retune in display.yaml moves
-// both sides and the test still holds.
+// undervoltFlags(). This seam went stale once before, the shared policy growing
+// fields the builder kept leaving at their defaults. src/hexa_display/test/
+// covers what the policy DOES with a config; this covers whether the firmware
+// hands it the right one — the transfer, not the values, so a retune in
+// display.yaml moves both sides and the test still holds.
 
 #include <string>
 

@@ -1,8 +1,3 @@
-// Animation stack implementations — float fork of hexa_posture/animations.
-//
-// sinf/cosf keep the phase-locked math single-precision (RP2350 has no HW
-// double). The gate order in each animation mirrors the Python `if` ladder
-// exactly so the C++ port returns IDENTITY under the same conditions.
 #include "posture/animations.hpp"
 
 #include <cmath>

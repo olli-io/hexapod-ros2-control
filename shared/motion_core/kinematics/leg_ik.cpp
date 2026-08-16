@@ -1,9 +1,5 @@
-// Per-leg FK/IK — float fork of hexa_kinematics_cpp/src/leg_ik.cpp (part 05).
-//
-// Line-for-line the double source with double->float (sinf/cosf/atan2f/acosf/
-// hypotf). The reachability throw is preserved; its message is built with
-// snprintf instead of std::ostringstream to keep <sstream>/<iomanip> off the
-// firmware, but the branch conditions are identical to the double engine.
+// The reachability message is built with snprintf rather than ostringstream, to
+// keep <sstream>/<iomanip> off the firmware.
 
 #include "kinematics/leg_ik.hpp"
 
@@ -29,13 +25,12 @@ JointAngles inverse_kinematics(const Vec3& target, const LegSpec& spec) {
   const float y = target[1];
   const float z = target[2];
 
-  // At (x, y) = (0, 0) the foot is on the coxa axis and theta_coxa is
-  // undetermined; atan2f(0, 0) returns 0. Degenerate but harmless.
+  // On the coxa axis theta_coxa is undetermined; atan2f(0, 0) returns 0.
   const float th_c = atan2f(y, x);
 
-  // r_prime < 0 means the foot lies between the coxa pivot and the body centre —
-  // the math still produces a valid solution (femur folds back under the body),
-  // but it will almost certainly violate servo limits.
+  // r_prime < 0 puts the foot between the coxa pivot and the body centre: still
+  // a valid solution (femur folded under the body), but almost certainly outside
+  // the servo limits.
   const float r_prime = hypotf(x, y) - spec.coxa_len;
   const float d = hypotf(r_prime, z);
 
@@ -53,8 +48,7 @@ JointAngles inverse_kinematics(const Vec3& target, const LegSpec& spec) {
     throw UnreachableTarget(msg);
   }
 
-  // Floating-point safety: arguments may slip outside [-1, 1] right at the
-  // workspace boundary.
+  // The arguments may slip outside [-1, 1] right at the workspace boundary.
   const float cos_beta =
       std::max(-1.0f, std::min(1.0f, (f * f + d * d - t * t) / (2.0f * f * d)));
   const float cos_gamma =

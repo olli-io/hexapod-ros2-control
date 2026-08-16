@@ -1,33 +1,24 @@
-// Velocity shaping — scale-to-envelope + constant-max-accel slew (plan part 07).
-//
-// Float fork of hexa_control's body_velocity_limiter.py + control_node.py. Sits
-// between the teleop mapping and the gait engine: every tick it cuts the
-// commanded (v_x, v_y, omega_z) to the active gait's per-leg foot-speed
-// envelope (scale_to_envelope, from the part-06 gait limits) and then rate-caps
-// the change toward that target so a stick release ramps smoothly to a stop.
-//
-// The two ROS nodes collapse into one in-process Control: it owns the limiter,
-// the active gait, and the standing foot positions, and it recomputes both
-// acceleration caps on a gait switch (so the ramp times stay constant across
-// gaits) and resets the limiter when the engine leaves the walking set
-// ({ENGAGING, GAIT}) so each STAND -> ENGAGING starts clean.
+// Velocity shaping between the teleop mapping and the gait engine: every tick
+// cuts the commanded (v_x, v_y, omega_z) to the active gait's per-leg foot-speed
+// envelope, then rate-caps the change toward that target. Recomputes both
+// acceleration caps on a gait switch, so the ramp times stay constant across
+// gaits, and resets the limiter when the engine leaves {ENGAGING, GAIT}.
 #pragma once
 
 #include <map>
 #include <string>
 #include <tuple>
 
-#include "config_generated.hpp"  // config::ControlConfig (parameterized ctor)
-#include "gait/engine.hpp"   // hexa::gait::EngineState
-#include "gait/limits.hpp"   // VelocityCaps, scale_to_envelope
+#include "config_generated.hpp"
+#include "gait/engine.hpp"
+#include "gait/limits.hpp"
 #include "vec3.hpp"
 
 namespace hexa::control {
 
-// Vectorial rate-cap slew on the published body velocity — port of
-// body_velocity_limiter.py. Each step() advances (v_x, v_y, omega_z) toward the
-// target by at most accel_linear*dt on the planar linear vector and
-// accel_angular*dt on the yaw scalar, snapping sub-tolerance dribble to zero.
+// Vectorial rate-cap slew: each step() advances (v_x, v_y, omega_z) toward the
+// target by at most accel_linear*dt on the planar vector and accel_angular*dt on
+// the yaw scalar, snapping sub-tolerance dribble to zero.
 class BodyVelocityLimiter {
  public:
   BodyVelocityLimiter(float accel_linear, float accel_angular,
@@ -44,7 +35,6 @@ class BodyVelocityLimiter {
   }
   void reset(float v_x = 0.0f, float v_y = 0.0f, float omega = 0.0f);
 
-  // Advance one tick toward `target` and return the new (v_x, v_y, omega_z).
   std::tuple<float, float, float> step(float tgt_vx, float tgt_vy,
                                        float tgt_omega, float dt);
 
@@ -58,16 +48,11 @@ class BodyVelocityLimiter {
   float omega_ = 0.0f;
 };
 
-// Full velocity-shaping stage. Build from the baked config, then call shape()
-// once per tick with the raw teleop command and the current engine state.
 class Control {
  public:
-  // Build from explicit tuning/geometry (hexa_locomotion's runtime-YAML path):
-  // control ramp times + snap tolerances, the per-gait velocity caps, the
-  // standing foot positions (the lever arms the envelope cut works through), the
-  // leg contexts and stride knobs the radial budget prices a heading against,
-  // and the starting gait. The no-arg ctor delegates here with the baked
-  // constants.
+  // Explicit tuning/geometry (hexa_locomotion's runtime-YAML path):
+  // nominal_stance supplies the lever arms the envelope cut works through, and
+  // legs + the stride knobs are what the radial budget prices a heading against.
   Control(const ::hexa::config::ControlConfig& control,
           const hexa::gait::VelocityCaps& caps,
           const std::map<std::string, hexa::Vec3>& nominal_stance,
@@ -75,17 +60,15 @@ class Control {
           float stride_length, float stride_length_radial,
           const std::string& default_gait);
 
-  // Cut to the active gait's envelope, then rate-cap toward it. Resets the
-  // limiter on the engine leaving the walking set. Returns the shaped triple to
-  // feed straight into Engine::update.
+  // Cut to the active gait's envelope, then rate-cap toward it. The result feeds
+  // straight into Engine::update.
   std::tuple<float, float, float> shape(float v_x, float v_y, float omega_z,
                                         hexa::gait::EngineState engine_state,
                                         float dt);
 
-  // Switch the active gait (recomputes both accel caps — the angular one is
-  // per-gait too, since it is the gait's linear cap over the stance radius).
-  // No-op if `gait` is already active; unknown names throw std::out_of_range via
-  // the caps.
+  // Recomputes both accel caps; the angular one is per-gait too, being the
+  // gait's linear cap over the stance radius. Unknown names throw
+  // std::out_of_range via the caps.
   void set_gait(const std::string& gait);
   const std::string& active_gait() const { return active_gait_; }
 
@@ -95,8 +78,8 @@ class Control {
   float accel_linear_for(const std::string& gait) const;
   float accel_angular_for(const std::string& gait) const;
 
-  // The heading-dependent cut on the linear cap: the share of stride_length the
-  // radial budget lets this command lay down. 1 when nothing binds.
+  // The share of stride_length the radial budget lets this heading lay down;
+  // 1 when nothing binds.
   float stride_ratio_for(float v_x, float v_y, float omega_z) const;
 
   hexa::gait::VelocityCaps caps_;

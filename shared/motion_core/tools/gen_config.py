@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
-"""Bake the repo's runtime YAML config into a constexpr C++ header (plan part 04).
+"""Bake the repo's runtime YAML config into a constexpr C++ header.
 
-The Pico firmware has no filesystem, so it cannot load hexa_description /
-hexa_gait / hexa_teleop / hexa_posture / hexa_control / hexa_hardware YAML at
-runtime the way the ROS2 nodes do. This tool reads those same YAMLs and emits
-``src/config_generated.hpp`` — one ``constexpr`` mirror per config surface — so
-hexa_description stays the single source of truth for the numbers while the
-firmware bakes them in at build time. CMake runs it pre-build (host + Pico).
+The Pico firmware has no filesystem, so it cannot load the YAMLs the ROS2 nodes
+read at runtime. This emits ``config_generated.hpp`` from those same files, so
+hexa_description stays the single source of truth. CMake runs it pre-build.
 
 The transforms here are ports of the ROS2 loaders and MUST stay in lockstep:
 
-  - leg-mount six-leg symmetry expansion + deg->rad joint conventions mirror
+  - symmetry expansion + deg->rad conventions mirror
     ``hexa_locomotion/src/pipeline_config_loader.cpp``,
-  - per-gait linear_max / yaw_bias mirror ``hexa_gait_cpp/src/limits.cpp`` (with
-    the duty_factor / unstable table from ``gaits/registry.cpp``, which is code,
-    not YAML),
-  - servo pulse calibration (deg_at_center -> urdf_rad_at_center) mirrors
-    ``hexa_hardware/src/joint_calibration.cpp``.
-
-If those sources change their math, update this generator too.
+  - per-gait linear_max / yaw_bias mirror ``gait/limits.cpp``, with the
+    duty_factor / unstable table from ``gaits/registry.cpp``,
+  - servo pulse calibration mirrors ``hexa_hardware/src/joint_calibration.cpp``.
 """
 
 from __future__ import annotations
@@ -37,14 +30,10 @@ except ImportError:  # pragma: no cover - dependency is present in the dev image
 # Canonical six-leg order — must match leg_index.hpp / the libs' LEG_NAMES.
 LEG_NAMES = ["l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear"]
 
-# Face expression names — lowercase of the Expression enum in
-# src/hexa_display/vendor/core/Expression.h (the SSoT). Used only to fail the
-# build fast on an expression-name typo in display.yaml; the name→enum mapping
-# itself happens at runtime in the firmware via face::parseExpression, so this
-# header never depends on Expression.h. Keep in sync if the enum grows.
-# Mirror of kExprNames in shared/display_core/core/ExpressionController.cpp
-# (lowercased) — the on-wire expression names. Validated here only so a typo in
-# display.yaml fails the bake instead of silently resolving to NEUTRAL at runtime.
+# Lowercased mirror of kExprNames in
+# shared/display_core/core/ExpressionController.cpp. Validated here only so a
+# typo in display.yaml fails the bake instead of resolving to NEUTRAL at runtime;
+# the name -> enum mapping itself happens in the firmware.
 EXPRESSION_NAMES = {
     "neutral", "happy", "sleepy", "dead", "greedy", "woozy", "angry", "love",
     "scanning",
@@ -60,12 +49,9 @@ DPAD_DIRECTIONS = {
     "dpad_right": ("dpad_x", 1),
 }
 
-# The functions map_joy queries, in a fixed order that also defines the C++
-# ``JoyFn`` enum. Each is (enum name, joy_mapping function name). The generator
-# pre-resolves every (mode, function) pair to a JoyKeyRef so the firmware needs
-# no runtime string handling; the resolution mirrors joy_mapping's
-# ``_resolve_function_key`` (mode bindings first, then base) + the key
-# classification in ``button_pressed_for`` / ``axis_value_for``.
+# The functions map_joy queries, in the fixed order that also defines the C++
+# ``JoyFn`` enum. Every (mode, function) pair is pre-resolved to a JoyKeyRef so
+# the firmware needs no runtime string handling; mode bindings win over base.
 JOY_FUNCTIONS = [
     ("kGaitMode", "gait_mode"),
     ("kPostureMode", "posture_mode"),
@@ -349,12 +335,10 @@ def velocity_caps(gait: dict):
     margin = gait["swing_phase_margin"]
     caps = []
     for name, duty, unstable in GAITS:
-        # The cap is stride_length covered in one stance, so it keys off the
-        # *realized* split (swing_end_phase in gaits/base.cpp), not the nominal
-        # duty factor: the phase margin lengthens stance and lowers top speed.
-        # Keep this identical to the other three copies of the formula —
-        # pipeline_config_loader.cpp, hexa_common/limits.py, gen_joy_golden.py —
-        # or the loader-vs-baked parity test fails.
+        # stride_length covered in one stance, so it keys off the *realized*
+        # split (swing_end_phase), not the nominal duty factor. Keep identical to
+        # the other three copies — pipeline_config_loader.cpp,
+        # hexa_common/limits.py, gen_joy_golden.py.
         swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
         linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
         # yaw_bias stays keyed to the gait's nominal duty: it is a feel knob for
@@ -694,10 +678,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # Posture-mode scalar limits. Shared by both teleop front ends, so they are
     # declared once in tuning.yaml's teleop_node block, not per front end.
     p = posture["teleop_node"]["ros__parameters"]["posture"]
-    # No height_{max,min}_m here: the body-height envelope is declared once, in
-    # tuning.yaml's posture_node block (body_height_{max,min}_m), and joy_mapping
-    # derives its integrator saturation from that. Only the rate — a teleop feel
-    # knob, not a limit — belongs to teleop_joy.yaml.
+    # No height_{max,min}_m here: the envelope is declared once, in tuning.yaml's
+    # posture_node block. Only the rate — a feel knob — belongs to teleop_joy.yaml.
     ph = teleop["posture"]["height"]
     # Same envelope check hexa_common.load_posture_scalar_limits makes, so the
     # firmware cannot bake a stick throw the posture stack would clamp away.
@@ -822,17 +804,13 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("swing_lift_tau", pn["swing_lift_tau"]),
         # Gait-animation crossfade (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
-        # Spring/inertia smoother on the commanded body pose. tau = 1/omega_n
-        # (s), damping_ratio = zeta; both frame-rate independent. One spring
-        # for every axis group — the two polar-eased pairs' magnitude and
-        # direction, and the lone z and yaw.
+        # Spring/inertia smoother on the commanded body pose: tau = 1/omega_n,
+        # damping_ratio = zeta, both frame-rate independent.
         ("pose_filter_tau", pn["pose_filter_tau"]),
         ("pose_filter_damping_ratio", pn["pose_filter_damping_ratio"]),
-        # Composed-pose clamp envelope, shared by the user pose and the
-        # animation layer. body_height_{max,min} are ABSOLUTE belly
-        # clearance; nominal_body_height is the same standing-pose height the
-        # gait engine solves the stance from, carried here so PostureController
-        # can turn the pair into the pose offsets BodyPose::z actually is.
+        # Composed-pose clamp envelope. body_height_{max,min} are ABSOLUTE belly
+        # clearance; nominal_body_height is carried alongside so
+        # PostureController can turn the pair into the offsets BodyPose::z is.
         ("pose_limit_x", pn["pose_limit_x"]),
         ("pose_limit_y", pn["pose_limit_y"]),
         ("body_height_max", pn["body_height_max_m"]),
@@ -897,14 +875,9 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
           f"  // {j['name']}")
     w("}};")
     w("")
-    # Chica command-index map + telemetry scales are fixed board/protocol
-    # constants (protocol.md, hexapod-servo2040-driver), not configured in
-    # hardware.yaml (the Servo2040 firmware owns the relay GPIO; voltage/current
-    # arrive in fixed protocol units). They match the firmware's own constants in
-    # pi-pico-firmware/src/servo_out.cpp, the ROS reference
-    # hexa_hardware/servo2040_protocol.hpp, and the test_config.cpp expectations.
-    # CURR (24) and VOLT (25) are consecutive; STATUS (27) is a read-only latched
-    # over-current fault register; RELAY is SET on index 26.
+    # Fixed board/protocol constants (protocol.md), not hardware.yaml: CURR (24)
+    # and VOLT (25) are consecutive, STATUS (27) is the read-only latched
+    # over-current register, RELAY is SET on 26.
     w("inline constexpr std::uint8_t kRelayPin = 26;"
       "  // SET index; high = servo rail energised")
     w("inline constexpr std::uint8_t kBatteryCurrentPin = 24;  // CURR")
@@ -919,21 +892,16 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       "  // STATUS trip current: count -> A")
     w("")
 
-    # ── Integration / failsafe (part 09) ──
-    # The RP2350 firmware fuses the ROS system's separate safety knobs into one
-    # onboard supervisor, so their sources stay authoritative:
-    #   - input_timeout_s     — hexa_webteleop safety watchdog (the gamepad has no
-    #     ROS equivalent; the webteleop timeout is the canonical "stale input"
-    #     value the firmware mirrors for its BT link),
-    #   - get_period_ticks    — the firmware's own aux GET decimation (poll every
-    #     Nth control tick). Firmware-only: hexa_hardware runs the same poll off
-    #     its control cycle entirely, paced by parser.aux_period_ms in wall
-    #     clock, because there a GET round trip inside the 200 Hz cycle overran
-    #     the controller-manager budget,
-    #   - battery thresholds  — hardware.yaml `battery:`, the undervoltage
-    #     ladder's SSoT (0.0 disables a rung; shipped disabled — the divider
-    #     scale is uncalibrated). hexa_display's battery_*_v params are the
-    #     face's expression mapping, not the safety policy.
+    # The firmware fuses the ROS system's separate safety knobs into one onboard
+    # supervisor, so their sources stay authoritative:
+    #   - input_timeout_s  — hexa_webteleop's watchdog, the canonical stale-input
+    #     value the firmware mirrors for its BT link,
+    #   - get_period_ticks — firmware-only aux GET decimation. hexa_hardware runs
+    #     the same poll off its control cycle in wall clock, because there a GET
+    #     round trip inside the 200 Hz cycle overran the manager's budget,
+    #   - battery         — hardware.yaml `battery:`, the ladder's SSoT (0.0
+    #     disables a rung; shipped disabled, the divider scale is uncalibrated).
+    #     hexa_display's battery_*_v params are the face's mapping, not policy.
     w("// ── Integration / failsafe (part 09) ──")
     safety = (webteleop.get("safety", {}) or {})
     input_timeout_s = float(safety.get("input_timeout_s", 0.5))
@@ -942,10 +910,9 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     get_period_ticks = int(hardware["parser"]["get_period_ticks"])
     w(f"inline constexpr int kGetPeriodTicks = {get_period_ticks};"
       "  // hardware.yaml parser.get_period_ticks; battery GET every Nth tick")
-    # Inrush stagger at the relay OFF->ON edge. The board drives a servo only
-    # once the host has SET it, so the host owns the energize order; bringing
-    # the legs up one at a time keeps the combined inrush below the board's
-    # over-current tiers. 0 opts out (every leg at once).
+    # Inrush stagger at the relay OFF->ON edge: the board drives a servo only once
+    # the host has SET it, so bringing the legs up one at a time keeps the
+    # combined inrush below the over-current tiers. 0 opts out.
     sweep_ms = int((hardware.get("init", {}) or {}).get("sweep_leg_interval_ms", 150))
     if sweep_ms < 0:
         raise SystemExit("hardware.yaml init.sweep_leg_interval_ms must be >= 0")
@@ -1020,16 +987,12 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       f"{fl(btn_pair_window_s)}}};")
     w("")
 
-    # ── Face expression/gaze policy + SH1122 panel (part 11) ──
-    # The eye policy runs on core0 and the SH1122 render loop on core1 (see
-    # pi-pico-firmware/src/face.cpp). Expression names resolve to the Expression
-    # enum at RUNTIME via face::parseExpression, so this header stays free of the
-    # vendored eye core; names are validated here only to fail the build on a typo.
+    # Face expression/gaze policy + SH1122 panel. Expression names resolve to the
+    # enum at runtime, so this header stays free of the eye core.
     #
-    # `pico_panel` keys are Pico-only; the ones that also have a display_node
-    # counterpart (render_hz) are read from HERE with a hard subscript, so a
-    # missing key fails the bake loudly rather than silently falling back to the
-    # Pi's value — the two targets are deliberately tuned apart.
+    # `pico_panel` keys are Pico-only. The ones with a display_node counterpart
+    # (render_hz) are read from HERE with a hard subscript, so a missing key fails
+    # the bake rather than falling back to the Pi's deliberately different value.
     pico_panel = display.get("pico_panel", {}) or {}
 
     def face_expr(param: str) -> str:
@@ -1143,10 +1106,8 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg_dir = os.path.join(args.repo_root, "src")
-    # gait / control / posture all come from hexa_description's tuning.yaml —
-    # the single source of truth the ROS nodes read. Baking from the same file
-    # keeps the firmware constants in lockstep with sim/robot with no overlay
-    # merge to mirror.
+    # gait / control / posture all come from hexa_description's tuning.yaml, the
+    # same file the ROS nodes read, so there is no overlay merge to mirror.
     tuning_yaml = f"{cfg_dir}/hexa_description/config/tuning.yaml"
     paths = {
         "geometry": f"{cfg_dir}/hexa_description/config/geometry.yaml",
@@ -1167,11 +1128,9 @@ def main() -> int:
         return 1
 
     loaded = {k: load_yaml(v) for k, v in paths.items()}
-    # tuning.yaml is a ros2 params file; unwrap control and gait to their flat
-    # knob blocks so the rest of this tool reads the same keys the nodes expose
-    # as ros params (nested initialize:/reseat: maps preserved). posture stays
-    # wrapped and is unwrapped at its own use sites. Each key loaded tuning.yaml
-    # in its own parse, so unwrapping one does not touch the others.
+    # tuning.yaml is a ros2 params file: unwrap control and gait to their flat
+    # knob blocks so the rest of this tool reads the keys the nodes expose as ros
+    # params. posture stays wrapped and is unwrapped at its own use sites.
     loaded["control"] = loaded["control"]["control_node"]["ros__parameters"]
     loaded["gait"] = loaded["gait"]["gait_node"]["ros__parameters"]
     # Dedupe the provenance list: tuning.yaml backs three logical sources.

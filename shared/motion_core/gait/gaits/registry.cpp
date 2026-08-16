@@ -6,11 +6,9 @@
 namespace hexa::gait {
 namespace {
 
-// ── Offset tables (function-local statics avoid static-init-order issues) ──
+// Offset tables; function-local statics avoid static-init-order issues.
 
 const PhaseOffsets& tripod_offsets() {
-  // Tripod A (l_front, r_middle, l_rear) lifts off at master 0.0; tripod B
-  // (r_front, l_middle, r_rear) at master 0.5.
   static const PhaseOffsets offsets({
       {"l_front", 0.0f},
       {"r_middle", 0.0f},
@@ -49,9 +47,8 @@ const PhaseOffsets& surf_offsets() {
   return offsets;
 }
 
-// Wilson's posterior->anterior protraction wave with the contralateral side half
-// a cycle out of phase. Shared by crawl and ripple (they differ only in duty
-// factor).
+// Wilson's posterior->anterior protraction wave, contralateral side half a cycle
+// out of phase. Crawl and ripple differ only in duty factor.
 const PhaseOffsets& metachronal_offsets() {
   static const PhaseOffsets offsets({
       {"r_rear", 0.0f},
@@ -64,12 +61,8 @@ const PhaseOffsets& metachronal_offsets() {
   return offsets;
 }
 
-// ── Shared foot-target evaluator (all strategies delegate here) ──
-
-// Pure (phase, stride, leg) -> body-frame target. Swing window is
-// [0, stride.swing_end); stance window is [stride.swing_end, 1). Stance is a
-// quartic Bezier from AEP toward PEP at constant tip velocity; swing is the
-// swing_arc.
+// Shared by every strategy. Swing is [0, stride.swing_end) on swing_arc; stance
+// is the rest, a quartic Bezier from AEP toward PEP at constant tip velocity.
 Vec3 phased_foot_target(float phase, const StrideParams& stride,
                         const LegContext& leg) {
   const Vec3 nominal = leg.nominal_stance;
@@ -85,9 +78,8 @@ Vec3 phased_foot_target(float phase, const StrideParams& stride,
   if (phase < swing_end) {
     const float phase_in_swing = swing_end > 0.0f ? phase / swing_end : 0.0f;
     const float swing_time = stride.cycle_time * swing_end;
-    // The foot leaves and rejoins the ground at the stance tip velocity, which
-    // is the stride covered over the *stance* time — not over the swing time.
-    // Letting swing_arc default these would overstate it by
+    // The foot leaves and rejoins the ground at the stance tip velocity — the
+    // stride over *stance* time. swing_arc's default would overstate it by
     // stance_time / swing_time, which is 1 only for an unmargined tripod.
     const Vec3 v_ground =
         stance_time > 0.0f ? (-stride_vec / stance_time) : Vec3::Zero();
@@ -99,8 +91,6 @@ Vec3 phased_foot_target(float phase, const StrideParams& stride,
   const BezierNodes stance_nodes = generate_stance_control_nodes(aep, stride_vec);
   return quartic_bezier(stance_nodes, stance_phase);
 }
-
-// ── Strategy classes (thin config holders; all share phased_foot_target) ──
 
 class Tripod : public Strategy {
  public:

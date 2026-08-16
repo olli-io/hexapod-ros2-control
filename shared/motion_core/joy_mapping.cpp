@@ -16,20 +16,16 @@ using cfgns::JoyFn;
 using cfgns::JoyInputKind;
 using cfgns::JoyKeyRef;
 
-// Raw int16 -> [-1, 1] scale (joy_node convention; see bt_teleop.hpp).
+// Raw int16 -> [-1, 1].
 constexpr float kAxisScale = 1.0f / 32767.0f;
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
 
-// Posture-mode scalar limits, converted to the units joy_mapping uses (angles
-// in radians). The baked kPostureLimits carries the raw YAML values (degrees).
+// Posture-mode scalar limits in radians; the baked kPostureLimits is in degrees.
 //
-// height_max/height_min are NOT a teleop-owned limit: they are the posture
-// stack's own envelope (tuning.yaml body_height_{max,min}_m, absolute belly
-// clearance) turned into the pose offsets pose_z is expressed in. Teleop keeps
-// them only to saturate the height integrator, so holding the button past the
-// stop cannot bank travel the pipeline will never honour — reversing has to
-// move the body on the very next tick.
+// height_max/height_min are the posture stack's own envelope, not a teleop
+// limit. Teleop keeps them only to saturate the height integrator, so holding
+// the button past the stop cannot bank travel the pipeline will never honour.
 struct PostureLimits {
   float x_max, y_max, roll_max, pitch_max, yaw_max;
   float yaw_tau, revert_tau, wiggle_pivot_forward_m;
@@ -74,7 +70,6 @@ const JoyKeyRef& binding(const BindTable& tbl, JoyFn fn) {
   return tbl[static_cast<std::size_t>(fn)];
 }
 
-// Press-state of a resolved key — port of button_pressed_for's key dispatch.
 bool pressed(const JoyKeyRef& k, const std::int16_t* axes,
              std::uint32_t buttons) {
   switch (k.kind) {
@@ -85,8 +80,7 @@ bool pressed(const JoyKeyRef& k, const std::int16_t* axes,
       return k.side > 0 ? value > 0.5f : value < -0.5f;
     }
     case JoyInputKind::kAxis:
-      // Analog trigger used as binary: raw value (no sign), joy_node convention
-      // released = +1.0, pressed = -1.0, so value < threshold reads as pressed.
+      // Analog trigger as binary: released = +1.0, pressed = -1.0.
       return static_cast<float>(axes[k.index]) * kAxisScale < cfgns::kTriggerThreshold;
     case JoyInputKind::kUnbound:
     default:
@@ -94,7 +88,6 @@ bool pressed(const JoyKeyRef& k, const std::int16_t* axes,
   }
 }
 
-// Sign-normalised, deadband-applied value of a resolved axis key.
 float axis_value(const JoyKeyRef& k, const std::int16_t* axes) {
   if (k.kind != JoyInputKind::kAxis) {
     return 0.0f;
@@ -159,8 +152,7 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   constexpr PostureLimits kP = posture_limits();
   const auto* tbl = &table_for(state.mode);
 
-  // Mode buttons: rising edges select GAIT / POSTURE / toggle GAIT<->ANIMATION.
-  // Posture wins ties; held buttons don't repeat.
+  // Rising edges only; posture wins ties.
   const bool gait_pressed = pressed(binding(*tbl, JoyFn::kGaitMode), axes, buttons);
   const bool posture_pressed =
       pressed(binding(*tbl, JoyFn::kPostureMode), axes, buttons);
@@ -214,8 +206,7 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
     }
   }
 
-  // Init button: rising-edge trigger with two-press semantics when the chassis
-  // is in a non-default posture.
+  // Two-press semantics when the chassis is in a non-default posture.
   const bool init_pressed = pressed(binding(*tbl, JoyFn::kInit), axes, buttons);
   const bool init_edge = init_pressed && !state.prev_init;
   state.prev_init = init_pressed;
@@ -237,7 +228,6 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
     }
   }
 
-  // Revert decay: ease the persistent baseline toward zero with revert_tau.
   if (state.reverting) {
     const float decay = std::exp(-dt / kP.revert_tau);
     state.height_current *= decay;
@@ -266,20 +256,20 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
     }
   }
 
-  // Record button: rising edge. Applied after live posture is computed below.
+  // Applied after the live posture is computed below.
   const bool record_pressed =
       pressed(binding(*tbl, JoyFn::kRecord), axes, buttons);
   const bool record_edge = record_pressed && !state.prev_record;
   state.prev_record = record_pressed;
 
-  // Posture-mode stick reads (always resolved against the posture bindings).
+  // Always resolved against the posture bindings.
   const auto& post_tbl = cfgns::kBindPosture;
   const float lx = axis_value(binding(post_tbl, JoyFn::kTiltRoll), axes);
   const float ly = axis_value(binding(post_tbl, JoyFn::kTiltPitch), axes);
   const float rx = axis_value(binding(post_tbl, JoyFn::kPoseY), axes);
   const float ry = axis_value(binding(post_tbl, JoyFn::kPoseX), axes);
 
-  // Body height: integrate (up - down) * rate * dt in any mode, then clamp.
+  // Integrated in any mode, then clamped.
   const bool height_up = pressed(binding(*tbl, JoyFn::kHeightUp), axes, buttons);
   const bool height_down =
       pressed(binding(*tbl, JoyFn::kHeightDown), axes, buttons);
@@ -291,7 +281,6 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
     state.height_current = kP.height_min;
   }
 
-  // Animation cycler (prev/next rising edges; active only in ANIMATION mode).
   const auto& anim_tbl = cfgns::kBindAnimation;
   const bool anim_prev_pressed =
       pressed(binding(anim_tbl, JoyFn::kAnimationPrev), axes, buttons);
@@ -318,7 +307,7 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   state.prev_animation_prev = anim_prev_pressed;
   state.prev_animation_next = anim_next_pressed;
 
-  // Gait cycler (prev/next rising edges; suppressed in ANIMATION).
+  // Suppressed in ANIMATION mode.
   bool has_gait_select = has_forced_gait;
   std::string_view gait_select = forced_gait;
   const bool gprev_pressed =
@@ -339,7 +328,7 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   state.prev_gait_prev = gprev_pressed;
   state.prev_gait_next = gnext_pressed;
 
-  // Yaw + wiggle: one shared yaw target so L1 + L2 doesn't double the yaw.
+  // One shared yaw target, so L1 + L2 does not double the yaw.
   const bool yaw_btn_left = pressed(binding(*tbl, JoyFn::kYawLeft), axes, buttons);
   const bool yaw_btn_right = pressed(binding(*tbl, JoyFn::kYawRight), axes, buttons);
   const bool wiggle_left = pressed(binding(*tbl, JoyFn::kWiggleLeft), axes, buttons);
@@ -362,7 +351,6 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   const float wx = state.wiggle_amount * px * (1.0f - std::cos(state.yaw_current));
   const float wy = -state.wiggle_amount * px * std::sin(state.yaw_current);
 
-  // Apply the deferred record press now that every live component is up to date.
   if (record_edge && state.mode == Mode::Posture) {
     state.reverting = false;
     state.recorded_x =

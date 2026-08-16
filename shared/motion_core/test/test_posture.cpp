@@ -1,19 +1,12 @@
-// Posture controller — gait-active body-animation master switch, and the
-// body-pose clamp envelope.
+// Posture controller: the gait-active body-animation master switch, the
+// body-pose clamp envelope, and the pose smoother.
 //
-// Pins the one behaviour tuning.yaml's `gait_body_animations_enabled` promises:
-// with it false the default stack holds the body still through a walk (no sway,
-// no bounce — but an explicitly selected ANIMATION-mode stack still runs), and
-// with it true the same tick moves the body. Everything else about the stack
-// (filters, engine-state gating) is exercised through test_pipeline.
-//
-// The clamp cases below pin the absolute-to-offset conversion: tuning.yaml
-// states belly clearance off the ground, BodyPose::z is a delta from the
-// stance, and the controller's constructor is the only place the two meet.
-//
-// The PosturePoseFilter cases pin the spring/inertia smoother on the commanded
-// pose — its transient shape, its independence from the tick rate, and that it
-// saturates without winding up.
+// `gait_body_animations_enabled` false holds the body still through a walk while
+// an explicitly selected ANIMATION-mode stack still runs; true moves it on the
+// same tick. The clamp cases pin the absolute-to-offset conversion, whose only
+// meeting point is the controller's constructor. The PosturePoseFilter cases pin
+// the smoother's transient shape, its independence from the tick rate, and that
+// it saturates without winding up. Everything else goes through test_pipeline.
 #include "posture/posture.hpp"
 
 #include <gtest/gtest.h>

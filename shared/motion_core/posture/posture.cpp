@@ -1,5 +1,3 @@
-// Posture controller implementation — float fork of
-// hexa_posture/posture_node.py.
 #include "posture/posture.hpp"
 
 #include <algorithm>
@@ -7,18 +5,15 @@
 #include <memory>
 #include <vector>
 
-#include "config_generated.hpp"  // hexa::config::kPosture / kEnabledAnimations
+#include "config_generated.hpp"
 
 namespace hexa::posture {
 
 namespace {
 constexpr float kDegToRad = 0.017453292519943295f;
 
-// Build one animation by name with the baked config amplitudes. Mirrors the
-// posture node's overrides dict fused into _ANIMATION_FACTORIES: known name ->
-// configured instance, unknown -> nullptr (the caller drops it, matching the
-// Python builder's rejection of unknown names — the config is trusted, so an
-// unknown name means a codegen/typo bug rather than user input).
+// Unknown name -> nullptr, which the caller drops: the config is trusted, so an
+// unknown name is a codegen/typo bug rather than user input.
 std::shared_ptr<const Animation> make_animation(std::string_view name,
                                                 const config::PostureConfig& p) {
   if (name == "still") {
@@ -58,9 +53,7 @@ std::shared_ptr<const Animation> make_animation(std::string_view name,
   return nullptr;
 }
 
-// Compose a stack from a list of animation names. Mirrors
-// _build_animation_stack (unknown names are skipped rather than raised — see
-// make_animation).
+// Unknown names are skipped rather than raised — see make_animation.
 Stack build_stack(const std::vector<std::string_view>& names,
                   const config::PostureConfig& p) {
   std::vector<std::shared_ptr<const Animation>> layers;
@@ -185,9 +178,8 @@ PostureController::PostureController()
 
 PostureController::PostureController(const config::PostureConfig& p)
     : limits_{p.pose_limit_x, p.pose_limit_y,
-              // The ONE place absolute belly clearance becomes a pose offset:
-              // BodyPose::z is a delta from the nominal stance, the config
-              // states height off the ground. Everything downstream is offsets.
+              // The one place absolute belly clearance becomes a pose offset:
+              // BodyPose::z is a delta from the nominal stance.
               p.body_height_max - p.nominal_body_height,
               p.body_height_min - p.nominal_body_height,
               p.pose_limit_roll, p.pose_limit_pitch, p.pose_limit_yaw},
@@ -202,9 +194,8 @@ PostureController::PostureController(const config::PostureConfig& p)
                                         config::kEnabledAnimations.end());
   default_stack_ = build_stack(enabled, p);
 
-  // One dedicated stack per animation-mode entry: still + the named
-  // animation(s), so gait_sway / gait_bounce don't bleed in while the user is
-  // demoing a body animation. Comma-separated entries compose into one stack.
+  // still + the named animation(s), so gait_sway / gait_bounce cannot bleed into
+  // a body animation the user is demoing. Comma-separated entries compose.
   for (std::string_view entry : config::kAnimationModeAnimations) {
     std::vector<std::string_view> names{"still"};
     std::size_t start = 0;
@@ -212,7 +203,6 @@ PostureController::PostureController(const config::PostureConfig& p)
       std::size_t comma = entry.find(',', start);
       std::size_t end = comma == std::string_view::npos ? entry.size() : comma;
       std::string_view part = entry.substr(start, end - start);
-      // Trim surrounding whitespace (mirrors the Python n.strip()).
       while (!part.empty() && part.front() == ' ') {
         part.remove_prefix(1);
       }
@@ -244,8 +234,7 @@ BodyPose PostureController::update(
     const std::map<std::string, gait::LegOutput>& legs, float master_phase,
     bool walking, gait::EngineState state, std::string_view gait_name, float dt,
     float t) {
-  // Derive the raw signals from the engine output; hold the previous raw
-  // through a degenerate frame (mirrors _on_leg_targets guarding on None).
+  // Hold the previous raw through a degenerate frame.
   if (auto raw = stance_centroid_xy(legs)) {
     latest_raw_centroid_ = raw;
   }
@@ -253,24 +242,22 @@ BodyPose PostureController::update(
     latest_raw_swing_lift_ = raw;
   }
 
-  // Advance the low-passes on the node's own cadence.
   support_centroid_xy_ =
       lpf_step_xy(support_centroid_xy_, latest_raw_centroid_, centroid_tau_, dt);
   swing_lift_z_ = lpf_step_scalar(swing_lift_z_, latest_raw_swing_lift_,
                                   swing_lift_tau_, dt);
 
   if (!posture_active(state)) {
-    // Legs aren't at nominal stance — a body-pose offset would compose against
-    // the wrong foot configuration. Hold IDENTITY and reset the crossfade so
-    // the gait animations start faded-out next time posture re-activates.
+    // The legs are not at nominal stance, so an offset would compose against the
+    // wrong foot configuration. Reset the crossfade so the gait animations start
+    // faded out when posture re-activates.
     activation_ = 0.0f;
-    // Same reason: the filter's state has to agree with the IDENTITY being
-    // emitted, or the body springs from a stale offset on the way back.
+    // The filter state has to agree with the emitted IDENTITY, or the body
+    // springs from a stale offset on the way back.
     pose_smoother_.reset();
     return IDENTITY;
   }
 
-  // Ramp the gait animations in/out instead of stepping at the walking edge.
   activation_ =
       slew_toward(activation_, walking ? 1.0f : 0.0f, activation_slew_rate_, dt);
 
@@ -284,17 +271,14 @@ BodyPose PostureController::update(
   const Stack& stack =
       animation_mode_.empty() ? default_stack_
                               : animation_stacks_.at(animation_mode_);
-  // Evaluate the stack in both regimes and crossfade by the activation, so the
-  // gait-active animations fade against the idle ones (the node owns the
-  // transition, not the animations).
+  // Both regimes, crossfaded by the activation, so the gait-active animations
+  // fade against the idle ones — the controller owns the transition, not the
+  // animations.
   ctx.walking = true;
-  // Master switch: with gait body animations off the DEFAULT stack's gait
-  // regime contributes nothing, so the crossfade fades the idle animations out
-  // to a still body instead of into the walking ones. An explicitly selected
-  // ANIMATION-mode stack is exempt — the user asked for that animation, so the
-  // switch only governs the implicit gait_sway/gait_bounce layers. The
-  // activation still tracks `walking`, so the fade itself (and its reversal on
-  // stopping) is unchanged.
+  // With gait body animations off the default stack's gait regime contributes
+  // nothing, so the crossfade fades the idle animations out to a still body. An
+  // explicitly selected animation mode is exempt: the switch only governs the
+  // implicit gait_sway/gait_bounce layers.
   const bool gait_regime_suppressed =
       !gait_body_animations_enabled_ && animation_mode_.empty();
   const BodyPose gait_out = gait_regime_suppressed ? IDENTITY : stack.eval(ctx);
@@ -302,14 +286,13 @@ BodyPose PostureController::update(
   const BodyPose idle_out = stack.eval(ctx);
   const BodyPose animated = lerp(idle_out, gait_out, activation_);
 
-  // Clamped to the envelope going in as well as out, so the filter never
-  // integrates toward — or winds up against — an unreachable value.
+  // Clamped going in as well as out, so the filter never winds up against an
+  // unreachable value.
   const BodyPose user_smoothed =
       pose_smoother_.step(clamp(user_pose_, limits_), limits_, dt);
 
   // One shared envelope: the user pose and the animation both spend it, and the
-  // sum is clamped to it. Keeping an animation's amplitude reachable is a matter
-  // of leaving room in the tuned pose limits.
+  // sum is clamped to it.
   return clamp(add(user_smoothed, animated), limits_);
 }
 

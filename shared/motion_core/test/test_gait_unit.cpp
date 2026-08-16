@@ -1,9 +1,5 @@
-// Behavioural unit tests for the float gait port (plan part 06).
-//
-// Float-only (no double reference): exercises the ported clock, trajectory,
-// strategies, and the engine state machine directly. Built through
-// hexa_host_test() so it compiles under -Wdouble-promotion — the same gate the
-// firmware build applies to the port sources.
+// Behavioural unit tests for the gait engine: the clock, the trajectory, the
+// strategies and the engine state machine.
 
 #include <algorithm>
 #include <array>
@@ -89,15 +85,11 @@ struct SwingTrace {
   // servo tracking is off by a millimetre or two, so it is the number that
   // decides whether a landing is soft.
   float near_ground_descent = 0.0f;
-  // How tall the gentle part of the landing is, in metres: the height of the
-  // highest point on the descent from which the foot is already coming down no
-  // faster than `gentle_rate`, with nothing faster below it.
-  //
-  // This is the number the whole shape exists to make large. The servos resolve
-  // the foot's height to a couple of tenths of a millimetre, so contact happens
-  // anywhere inside that much of the intended touchdown point. Unless the band
-  // that lands softly is taller than the error, the softness is never the thing
-  // that actually happens.
+  // The highest point on the descent from which the foot is already coming down
+  // no faster than `gentle_rate`, with nothing faster below it. The number the
+  // whole shape exists to make large: the servos resolve height to a couple of
+  // tenths of a millimetre, so unless the soft band is taller than that error,
+  // the softness is never what actually happens.
   float gentle_band = 0.0f;
   // Height (m) the foot still has left when it has covered 90% of its forward
   // travel. A swing is meant to put the foot down onto its touchdown point
@@ -111,13 +103,10 @@ struct SwingTrace {
   float descent_rise = 0.0f;
   // Largest sideways excursion from the straight PEP -> AEP line, in metres.
   float max_lateral = 0.0f;
-  // How far the tip has slid against the ground, in metres: the worst gap
-  // between where it is and where a planted foot would be, measured only while
-  // it is at or below `scrub_band` and so could still be in contact.
-  //
-  // Deliberately a position comparison rather than a velocity one. Differencing
-  // two ~0.12 m samples over a 0.2 ms step leaves float32 with about 1e-4 m/s of
-  // pure cancellation noise, which is the same order as the effect under test.
+  // Worst gap between where the tip is and where a planted foot would be, while
+  // it is at or below `scrub_band` and so could still be in contact. A position
+  // comparison, not a velocity one: differencing two ~0.12 m samples over a
+  // 0.2 ms step leaves float32 noise of the same order as the effect.
   float max_ground_offset = 0.0f;
 };
 
@@ -134,13 +123,9 @@ g::SwingProfile make_profile(float touchdown_velocity, float width = 0.0f,
 }
 
 // Walk the whole swing at a fine, uniform phase step and reduce it to the
-// quantities the touchdown behaviour depends on. Velocities are finite
-// differences in real time, so a genuine C1 break shows up as a single large
-// max_velocity_jump while a smooth curve stays at O(acceleration * step).
-//
-// With the apex pinned to the path midpoint there is no configured split any
-// more, so the descent is classified from the trace itself: everything after
-// the highest sample.
+// quantities touchdown depends on. Velocities are finite differences in real
+// time, so a genuine C1 break shows up as one large max_velocity_jump. The
+// descent is classified from the trace itself: everything after the peak.
 SwingTrace profile_swing(float touchdown_velocity, float width = 0.0f,
                          float scrub_band = 0.002f, float probe_fraction = 0.0f,
                          float ride_headroom = 0.0f) {
@@ -334,14 +319,10 @@ TEST(Trajectory, ApexIsCentred) {
   }
 }
 
-// The body-frame workspace guard, and the regression the schedule variant of
-// this curve failed. Mid-swing the foot may transiently leave the AEP..PEP
-// segment — trailing the lift-off ground line early, riding the touchdown
-// ground line late — but only by a small fraction of the ground the body
-// covers in one swing. A curve that finishes its horizontal travel early rides
-// the touchdown line for the rest of the swing and sweeps up to 40% of that
-// ground beyond the AEP, which at full stride pushed the front coxa ~18
-// degrees past its travel limit.
+// The body-frame workspace guard. Mid-swing the foot may transiently leave the
+// AEP..PEP segment, but only by a small fraction of the ground the body covers
+// in one swing: a curve that finished its travel early once swept 40% of that
+// ground past the AEP and pushed the front coxa ~18 degrees past its limit.
 TEST(Trajectory, SwingStaysInsideTheStrideEnvelope) {
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
   // The identity blend stays inside a quarter of the ground travel; the apex
@@ -456,12 +437,9 @@ TEST(Trajectory, SwingProgressIsMonotone) {
 
 // ── Ground track and touchdown ──
 
-// The swing is a blend between the two ground lines, weighted by a septic ease
-// whose first three derivatives vanish at both ends. So the foot leaves and
-// meets the ground travelling with the ground, and pulls away from it only as
-// the fourth power of the elapsed swing — by the time it is a couple of
-// millimetres up it has barely moved against the ground it may still be
-// touching. That is the scrub seen on the rear feet.
+// The septic blend's first three derivatives vanish at both ends, so the foot
+// leaves and meets the ground travelling with it and pulls away only as the
+// fourth power of the elapsed swing. That is the scrub seen on the rear feet.
 TEST(Trajectory, SwingLeavesAndMeetsTheGroundAlongTheGroundTrack) {
   constexpr float kBand = 0.002f;
   const SwingTrace p = profile_swing(0.01f, 0.0f, kBand);
@@ -502,14 +480,11 @@ constexpr float kProbeBand = kTouchdownV * kProbeFraction * kSwingTime;
 constexpr float kServoQuantum = 3.0e-4f;
 }  // namespace
 
-// The reason the probe exists.
-//
-// Without one the schedule eases the descent out to a zero-speed landing: soft
-// in the limit, but the stretch that is already coming down gently is only as
-// tall as the curve's own tail, and contact actually happens wherever
-// quantisation and leg-to-leg height error put it. The probe makes the gentle
-// stretch a height we choose — tall enough to beat the servos' resolution — by
-// holding exactly touchdown_velocity across the whole band.
+// Why the probe exists: without one the descent eases out to a zero-speed
+// landing, soft in the limit, but the gentle stretch is only as tall as the
+// curve's own tail while contact happens wherever quantisation and leg-to-leg
+// height error put it. Holding touchdown_velocity across the band makes that
+// stretch a height we choose.
 TEST(Trajectory, ProbeMakesTheGentleLandingTallerThanTheServoResolution) {
   const SwingTrace probed =
       profile_swing(kTouchdownV, 0.0f, 0.002f, kProbeFraction);
@@ -550,12 +525,9 @@ TEST(Trajectory, ShapedEndsPreserveTheArcInvariants) {
   }
 }
 
-// A swing puts the foot down onto its touchdown point from above. It must not
-// reach its final height early and then sweep the rest of the way in at ankle
-// level — that is a foot dragged towards its target rather than placed on it,
-// and it catches on everything the step height was chosen to clear. The
-// symmetric arc keeps most of the clearance in hand until late in the forward
-// travel by construction.
+// A swing puts the foot down from above. Reaching its final height early and
+// sweeping in at ankle level is a foot dragged to its target rather than placed
+// on it, and it catches on everything the step height was chosen to clear.
 TEST(Trajectory, SwingComesDownOntoItsTouchdownPointFromAbove) {
   const SwingTrace p = profile_swing(kTouchdownV, 0.0f, 0.002f, kProbeFraction);
   EXPECT_GT(p.height_at_90pct_forward, 0.2f * kStepHeight);
@@ -597,14 +569,11 @@ constexpr float kMatchedHeadroom = kLegSpeed * kRideProbeTime;
 constexpr float kTightHeadroom = 0.005f;
 }  // namespace
 
-// At the matched headroom the horizontal travel finishes at the probe's start
-// and the foot rides the touchdown ground line: world-frame stationary over
-// its landing point through the whole band, so an early contact anywhere
-// inside it lands without slip. Without the ride, a contact at the top of the
-// band catches the foot still travelling at several times the ground speed
-// and scrubs it millimetres along the floor until the blend runs out — the
-// vertical half of the probe promised a constant-speed landing anywhere in
-// the band, and this is the horizontal half of that promise.
+// At the matched headroom the travel finishes at the probe's start and the foot
+// rides the touchdown ground line, world-frame stationary over its landing point
+// through the whole band. Without the ride, a contact at the top of the band
+// catches the foot at several times the ground speed and scrubs it millimetres
+// along the floor: this is the horizontal half of the probe's promise.
 TEST(Trajectory, RideHoldsTheGroundTrackThroughTheWholeProbeBand) {
   const float band = kTouchdownV * kRideProbeFraction * kSwingTime;
   const SwingTrace ridden = profile_swing(kTouchdownV, 0.0f, 0.9f * band,
@@ -1077,12 +1046,10 @@ TEST(Engine, TouchdownStaysVelocityContinuousWhileCommandRamps) {
         t.last_swing_velocity = velocity;
         t.have_swing_velocity = true;
       }
-      // Second stance tick, not the first: the first straddles the seam and
-      // carries the sub-millimetre snap onto the AEP, which is a sampling
-      // artefact rather than a velocity mismatch. Comparing clean swing and
-      // stance samples isolates what a latched touchdown target would break.
-      // Z is excluded on purpose — stance holds z fixed, so touchdown_velocity
-      // is a deliberate vertical step.
+      // Second stance tick: the first straddles the seam and carries the
+      // sub-millimetre snap onto the AEP, a sampling artefact rather than a
+      // velocity mismatch. Z is excluded because stance holds z fixed, so
+      // touchdown_velocity is a deliberate vertical step.
       if (leg.stance && t.stance_streak == 2 && t.have_swing_velocity) {
         const g::Vec3 jump = velocity - t.last_swing_velocity;
         const float magnitude = std::sqrt(jump.x * jump.x + jump.y * jump.y);
@@ -1102,12 +1069,10 @@ TEST(Engine, TouchdownStaysVelocityContinuousWhileCommandRamps) {
       << "foot velocity steps at touchdown on " << worst_leg;
 }
 
-// ── Direction reversal ──
-//
-// Flicking the stick from full left to full right turns the command under six
-// planted feet. The stance target is an integral from touchdown, so without a
-// bound a leg walks back past its own touchdown point for the rest of a stance
-// window — worst on the middle legs, whose own radial reach axis *is* body y.
+// Direction reversal. Flicking the stick from stop to stop turns the command
+// under six planted feet, and the stance target is an integral from touchdown,
+// so without a bound a leg walks back past its own touchdown point for the rest
+// of its stance window — worst on the middle legs, whose radial axis is body y.
 
 namespace {
 
@@ -1420,12 +1385,9 @@ TEST(Engine, GaitKeepsRunningWhileTheCommandCrossesZero) {
   EXPECT_EQ(s.frozen_swings, 0) << "an airborne leg held its target";
 }
 
-// ── Settling to a stop ──
-//
-// Stopping is not a separate mechanism: at a zero command the stride collapses,
-// so every leg's AEP *is* its nominal stance and the gait re-plants its own feet
-// one swing at a time. SETTLING is that, run to completion — no pause ladder, no
-// reseat, no engagement pass to get back out of.
+// Settling to a stop is not a separate mechanism: at a zero command the stride
+// collapses, so every leg's AEP is its nominal stance and the gait re-plants its
+// own feet one swing at a time. SETTLING is that, run to completion.
 
 namespace {
 
@@ -1593,14 +1555,11 @@ std::tuple<float, float, float> shaped_full_stick(const char* gait) {
 
 }  // namespace
 
-// Releasing mid-engagement must re-plant the feet, not declare them home.
-//
-// The engagement integrates its stance legs at the *commanded* velocity, so a
-// zero command freezes each one where the walk had carried it — nothing brings
-// them back to nominal on their own, and a leg still waiting for its first
-// lift-off never swings at all. Assigning nominal_ at the handoff therefore
-// teleported every planted foot at once, with no lift. Worst on a ripple, whose
-// engagement is a full cycle long, so a short drive usually ends inside it.
+// Releasing mid-engagement must re-plant the feet, not declare them home. The
+// engagement integrates its stance legs at the commanded velocity, so a zero
+// freezes each one where the walk left it; assigning nominal_ at the handoff
+// teleported every planted foot at once. Worst on a ripple, whose engagement is
+// a full cycle long, so a short drive usually ends inside it.
 TEST(Engine, ReleasingMidEngagementReplantsInsteadOfTeleporting) {
   constexpr float kTickDt = 0.005f;
   const auto nominal = g::nominal_stance_from_config();
@@ -1803,14 +1762,11 @@ TEST(Engine, NoLegLiftsTwiceToSettle) {
   }
 }
 
-// ── The other gaits ──
-//
-// A tripod walks itself home in one cycle. The longer duty factors take longer
-// over it, and a crawl — whose swings run end to end, so there is never an
-// instant with all six feet down — cannot finish at all. Those hold their
-// lift-offs, let what is already in the air land, and hand the rest to the
-// reseat ladder. Which route a gait takes is a comparison the engine makes, not
-// a list of names, so the tests state the promise rather than re-derive it.
+// The other gaits. A tripod walks itself home in one cycle; the longer duty
+// factors take longer, and a crawl cannot finish at all. Those hold their
+// lift-offs, let what is airborne land, and hand the rest to the reseat ladder.
+// The route is a comparison the engine makes, not a list of names, so these
+// state the promise rather than re-derive it.
 
 namespace {
 
@@ -1992,14 +1948,10 @@ TEST(Engine, SetStrategyDefersWhileWalking) {
                   2.0f / 3.0f);
 }
 
-// ── Standing pose: per-group tip reach + splay, plus one body height ──
-//
-// The stance is configured by where the feet sit, not by joint angles:
-// standing_pose_from solves the per-leg triple. The front, middle and rear pairs
-// are configured separately and left/right mirror. These pin the splay
+// Standing pose: per-group tip reach + splay, plus one body height. The stance
+// is configured by where the feet sit, not by joint angles. These pin the splay
 // mirroring, the footprint the values describe, that the groups stay distinct,
-// and — the reason the splay is safe to use at all — that a reseat keeps each
-// leg pointing where it already points.
+// and that a reseat keeps each leg pointing where it already points.
 
 namespace {
 
@@ -2419,15 +2371,12 @@ TEST(Limits, ScaleToEnvelopeIsNoOpWhenInRange) {
   EXPECT_NEAR(wz, 0.0f, 1e-6f);
 }
 
-// The IK/FK round trip must land on the closed form hexa_common/limits.py
-// implements (standing_stance_xy): the tip sits its group's tip_reach out from
-// the coxa axis at the leg's splay, rotated into the body frame and offset by
-// the mount. Teleop derives its angular stick cap from that closed form while
-// the pipeline derives the envelope from this FK path, so a divergence here
-// would silently desynchronise the stick from the engine.
-//
-// Run on a stance whose groups differ in both reach and splay, so the check
-// covers the sign rule rather than passing on a symmetric special case.
+// The IK/FK round trip must land on hexa_common/limits.py's closed form
+// (standing_stance_xy). Teleop derives its angular stick cap from that closed
+// form while the pipeline derives the envelope from this FK path, so a
+// divergence would silently desynchronise the stick from the engine. Run on a
+// stance whose groups differ in both reach and splay, so it covers the sign rule
+// rather than passing on a symmetric special case.
 TEST(Limits, StanceMatchesTheClosedFormTeleopUses) {
   ::hexa::config::StandingPose sp =
       standing_with_group_reaches(0.130f, 0.145f, 0.155f);
@@ -2521,12 +2470,10 @@ TEST(Limits, PerLegYawVelocityUsesTheStanceRadius) {
   }
 }
 
-// ── Direction-aware stride budget ────────────────────────────────────────────
-//
-// A stride is spent along each leg's own axis differently: a middle leg walking
-// sideways travels straight out along its coxa-to-foot line and closes its whole
-// reach doing it, where the same stride forward is nearly all tangential. These
-// cover the pure budget arithmetic; the engine wiring is exercised separately.
+// Direction-aware stride budget. A middle leg walking sideways travels straight
+// out along its coxa-to-foot line and closes its whole reach doing it, where the
+// same stride forward is nearly all tangential. Pure budget arithmetic here; the
+// engine wiring is exercised separately.
 
 namespace {
 

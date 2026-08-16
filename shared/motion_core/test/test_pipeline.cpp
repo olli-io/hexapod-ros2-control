@@ -1,15 +1,8 @@
-// Integration smoke/behaviour test for the target-agnostic control brain
-// (plan part 10, Tier 2/3 seam — hexa::pipeline::Pipeline).
-//
-// Drives the WHOLE firmware pipeline — teleop mapping -> velocity shaping ->
-// gait engine -> posture -> compose/IK, plus the failsafe supervisor — natively
-// (x86, float, no Pico SDK, no ROS), exactly as it is compiled for the Pico
-// firmware (main.cpp) and the Gazebo bridge (firmware_bridge_node.cpp). This is
-// the off-target proof that the extraction composes and the full chain runs: it
-// stands up from FOLDED on the init button, walks on a stick command (legs move,
-// no unreachable targets), and safe-stops on a lost link. The per-stage numeric
-// fidelity is covered by the golden suites (test_gait / test_kinematics /
-// test_joy_mapping / test_posture); this suite pins the composition.
+// Integration test for the whole control brain: teleop mapping -> velocity
+// shaping -> gait engine -> posture -> compose/IK, plus the supervisor. It
+// stands up from FOLDED on the init button, walks on a stick command, and
+// safe-stops on a lost link. Per-stage numeric fidelity belongs to the golden
+// suites; this one pins the composition.
 
 #include <array>
 #include <cmath>
@@ -186,16 +179,11 @@ TEST(Pipeline, ForwardCommandWalks) {
   EXPECT_EQ(max_unreachable, 0) << "a foot target went unreachable while walking";
 }
 
-// Flicking the strafe stick from one stop to the other turns the command under
-// six planted feet. Composition check for that path: the whole chain — map_joy,
-// Control::shape's envelope cut and slew, the engine, IK — has to keep running
-// through a reversal at the real caps and ramp rate, with the gait never
-// dropping out and no foot going unreachable.
-//
-// Deliberately weaker than the engine-level reversal suite in test_gait_unit,
-// which samples at the 5 ms engine tick; this one runs at the 20 ms pipeline
-// tick, where a few-tick excursion window is easy to step over. Trust that suite
-// for the numbers and this one for the seam.
+// A strafe reversal through the whole chain — map_joy, Control::shape's envelope
+// cut and slew, the engine, IK — at the real caps and ramp rate, with the gait
+// never dropping out and no foot unreachable. Deliberately weaker than the
+// engine-level suite in test_gait_unit: this runs at the 20 ms pipeline tick,
+// where a few-tick excursion window is easy to step over.
 TEST(Pipeline, StrafeReversalKeepsEveryFootReachable) {
   pl::Pipeline p;
   std::uint64_t now_us = 0;

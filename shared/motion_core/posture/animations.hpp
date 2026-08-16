@@ -1,15 +1,7 @@
-// Animation stack — float fork of hexa_posture/animations (plan part 08).
-//
-// An animation is a pure function from AnimationContext to a BodyPose offset.
-// State that persists across calls lives in the animation instance (its config
-// fields); the function must not perform I/O, read clocks, or touch the engine
-// — the posture controller owns the clock and feeds `t` in via the context.
-//
-// A Stack sums its child animations via pose.add (component-wise), valid only
-// for small offsets. The Python module uses a Protocol + frozen dataclasses;
-// here each animation is a small polymorphic type deriving Animation, and a
-// Stack owns shared_ptrs to its layers (built once by the posture controller
-// from the baked config, then reused every tick).
+// Animation stack. An animation is a pure function from AnimationContext to a
+// BodyPose offset: no I/O, no clocks, no engine — the posture controller owns
+// the clock and feeds `t` in via the context. A Stack sums its layers with
+// pose.add, so it is valid only for small offsets.
 #pragma once
 
 #include <memory>
@@ -22,44 +14,36 @@
 
 namespace hexa::posture {
 
-// Read-only inputs an animation may consult. Mirrors AnimationContext; the
-// optional fields carry the Python `None` semantics (signal not yet observed).
+// Read-only inputs an animation may consult. An empty optional means the signal
+// has not been observed yet.
 struct AnimationContext {
-  // Monotonic time in seconds. Animations treat this as the only clock source.
+  // The only clock source, in seconds.
   float t = 0.0f;
-  // True iff the latest /cmd_vel was non-zero. Gates pose-mode-only animations
-  // (idle breathing) and gait-only ones (sway, rolls).
+  // Latest /cmd_vel non-zero. Gates pose-mode-only animations (idle breathing)
+  // and gait-only ones (sway, rolls).
   bool walking = false;
-  // Master gait phase in [0, 1), 0 at lift-off for the reference leg. Empty
-  // until the first engine output has been seen; phase-locked animations gate
-  // on it.
+  // Master gait phase in [0, 1), 0 at lift-off for the reference leg.
   std::optional<float> master_phase = std::nullopt;
-  // Active gait strategy name (e.g. "tripod"). Empty view means "unknown";
-  // animations only safe under a specific gait gate on it.
+  // Active gait strategy; an empty view means unknown.
   std::string_view gait_name = "";
-  // Low-pass-filtered XY centroid of the support polygon in the body frame (m).
-  // Empty until observed.
+  // Low-pass-filtered XY centroid of the support polygon, body frame (m).
   std::optional<std::pair<float, float>> support_centroid_xy = std::nullopt;
   // Max foot lift above the stance mean (m) across swing legs, clamped >= 0.
-  // Empty until observed with a usable stance polygon.
   std::optional<float> swing_lift_z = std::nullopt;
 };
 
-// Pure animation interface: (context) -> body-pose offset.
 class Animation {
  public:
   virtual ~Animation() = default;
   virtual BodyPose eval(const AnimationContext& ctx) const = 0;
 };
 
-// Identity animation — always a zero offset. Mirrors Still.
 class Still : public Animation {
  public:
   BodyPose eval(const AnimationContext& ctx) const override;
 };
 
-// Idle breathing — slow vertical bob when standing still, off during walking.
-// Mirrors Breathing.
+// Slow vertical bob when standing still, off during walking.
 class Breathing : public Animation {
  public:
   explicit Breathing(float amplitude = 0.005f, float period = 4.0f)
@@ -71,9 +55,8 @@ class Breathing : public Animation {
   float period_;     // s, one full breath cycle
 };
 
-// Gait-sensitive sway — translates the body in XY to track the support-polygon
-// centroid. Off when not walking or the centroid hasn't been observed. Mirrors
-// GaitSway.
+// Translates the body in XY to track the support-polygon centroid. Off when not
+// walking or the centroid has not been observed.
 class GaitSway : public Animation {
  public:
   explicit GaitSway(float gain = 1.0f, float strength = 0.5f)
@@ -85,8 +68,7 @@ class GaitSway : public Animation {
   float strength_;  // user-facing attenuator in [0, 1]
 };
 
-// Gait-synced vertical bounce — lifts the body in +z to match the swing arc.
-// Tripod-only. Mirrors GaitBounce.
+// Lifts the body in +z to match the swing arc. Tripod-only.
 class GaitBounce : public Animation {
  public:
   explicit GaitBounce(float arc_height = 0.02f, float step_height_ref = 0.06f)
@@ -98,8 +80,7 @@ class GaitBounce : public Animation {
   float step_height_ref_;  // reference foot swing apex (m) for normalisation
 };
 
-// Vertical body roll — heave (z) + pitch, phase-locked, tripod-only. Mirrors
-// VerticalBodyRoll.
+// Heave (z) + pitch, phase-locked, tripod-only.
 class VerticalBodyRoll : public Animation {
  public:
   explicit VerticalBodyRoll(float z_amplitude = 0.02f,
@@ -116,8 +97,7 @@ class VerticalBodyRoll : public Animation {
   float pitch_phase_offset_;
 };
 
-// Horizontal body roll — sway (y) + yaw, phase-locked, tripod-only. Mirror of
-// VerticalBodyRoll in the transverse plane. Mirrors HorizontalBodyRoll.
+// VerticalBodyRoll in the transverse plane: sway (y) + yaw.
 class HorizontalBodyRoll : public Animation {
  public:
   explicit HorizontalBodyRoll(float y_amplitude = 0.02f,
@@ -134,9 +114,8 @@ class HorizontalBodyRoll : public Animation {
   float yaw_phase_offset_;
 };
 
-// 3D body roll — vertical + horizontal rolls with a quarter-cycle offset so the
-// (y, z) translation and (pitch, yaw) rotation trace circles. Tripod-only.
-// Mirrors BodyRoll3D.
+// Vertical + horizontal rolls a quarter cycle apart, so the (y, z) translation
+// and (pitch, yaw) rotation trace circles. Tripod-only.
 class BodyRoll3D : public Animation {
  public:
   explicit BodyRoll3D(float z_amplitude = 0.02f, float pitch_amplitude = 0.1745f,
@@ -163,7 +142,7 @@ class BodyRoll3D : public Animation {
   float yaw_phase_offset_;
 };
 
-// Composition primitive — sums its layers' offsets via pose.add. Mirrors Stack.
+// Sums its layers' offsets via pose.add.
 class Stack : public Animation {
  public:
   Stack() = default;

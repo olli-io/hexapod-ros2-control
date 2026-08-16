@@ -1,20 +1,13 @@
-// Unit tests for the folded <-> standing ladders.
+// The folded <-> standing ladders. Both directions pass through the initialized
+// pose and are time-reverses of each other, their one asymmetry being the cold
+// start's init_place_clearance.
 //
-// Both directions pass through the initialized pose, and the two ladders are
-// time-reverses of each other: unfold / place feet / lift body one way, lower
-// body / lift feet / tuck the other. Their one asymmetry is the cold start's
-// init_place_clearance — see IsTheTimeReverseOfTheFoldUpToThePlaceClearance.
-//
-// The ladders sequence the ground-facing rung as three mirrored pairs
-// (PAIR_ORDER), so the thing worth pinning is coverage: every leg belongs to
-// exactly one pair, and every leg has actually left its starting pose by the
-// time the controller reports DONE. A leg that silently sat out its pair would
-// look exactly like a leg whose commands never reached the servos, so this
-// suite is what tells the two apart. On top of that it pins the mirror itself,
-// and that the pose split is real — folded genuinely tucked inside initialized,
-// both clear of the floor.
-//
-// Float-only, built through hexa_host_test() under -Wdouble-promotion.
+// The ground-facing rung is three mirrored pairs, so the thing worth pinning is
+// coverage: every leg belongs to exactly one pair and has actually left its
+// starting pose by DONE. A leg that silently sat out its pair looks exactly like
+// a leg whose commands never reached the servos, and this suite is what tells the
+// two apart. It also pins the mirror, and that folded is genuinely tucked inside
+// initialized with both clear of the floor.
 
 #include <algorithm>
 #include <cmath>
@@ -381,12 +374,9 @@ TEST(InitializeLadder, PairsSwingOneAtATime) {
 }
 
 TEST(InitializeLadder, PlaceFeetParksEveryFootOneClearanceAboveTheFloor) {
-  // Every foot must be at the same z before LIFT_BODY starts, or the body ramp
-  // would drag one leg along the floor.
-  //
-  // That z is init_place_clearance above the floor, not on it: no pair takes
-  // load while later pairs are still swinging, so belly-height error cannot be
-  // preloaded into a leg that has no way to give it back. All six meet the
+  // Every foot at the same z before LIFT_BODY, or the body ramp drags one leg
+  // along the floor. That z is init_place_clearance above the floor, not on it,
+  // so no pair takes load while later pairs are still swinging; all six meet the
   // floor together on the body ramp instead.
   const Ladder l = baked();
   auto init = make_initialize(l);
@@ -412,15 +402,12 @@ TEST(InitializeLadder, PlaceFeetParksEveryFootOneClearanceAboveTheFloor) {
 }
 
 TEST(InitializeLadder, BodyRampStartsClearAndTakesTheFloorInItsOpening) {
-  // The ramp starts place_clearance above the floor, so unlike the fold's its
-  // ground contact is an interior point. What has to hold is where that point
-  // falls: inside the opening stretch, while the septic is still accelerating
-  // and well short of its peak speed. A contact out past the peak would be the
-  // regression that made the old 12 mm cold start slip.
-  //
-  // Note what this does *not* claim: a third of peak is not slow. The absolute
-  // contact speed is set by init_lift_body_time against init_place_clearance,
-  // not by the choice of curve — see lift_ramp. This pins the shape only.
+  // The ramp starts place_clearance above the floor, so its ground contact is an
+  // interior point, and what has to hold is where that point falls: inside the
+  // opening stretch, while the septic is still accelerating and well short of its
+  // peak. A contact past the peak is the regression that made the old 12 mm cold
+  // start slip. This pins the shape only — the absolute contact speed is
+  // init_lift_body_time against init_place_clearance, not the choice of curve.
   const Ladder l = baked();
   auto init = make_initialize(l);
 
@@ -469,16 +456,13 @@ TEST(InitializeLadder, BodyRampIsMonotonicAndFinishesOnTime) {
 }
 
 TEST(InitializeLadder, IsTheTimeReverseOfTheFoldUpToThePlaceClearance) {
-  // Rung for rung: the fold's TUCK starts where the initialize's UNFOLD ends
-  // (the initialized pose), and the fold's LOWER_BODY ends where the
-  // initialize's LIFT_BODY starts — at standing XY, and at the same z but for
-  // the cold start's place_clearance.
+  // Rung for rung: TUCK starts where UNFOLD ends, and LOWER_BODY ends where
+  // LIFT_BODY starts — same XY, same z but for the cold start's place_clearance.
   //
-  // That clearance is the one asymmetry between the ladders, and it is not an
-  // oversight. The fold's feet leave from where they were actually standing:
-  // they are carrying the robot until the belly takes over, so there is nothing
-  // to hold clear of. Only the cold start has pairs arriving one at a time with
-  // nothing yet to bear.
+  // That clearance is the ladders' one asymmetry, and deliberate: the fold's feet
+  // leave from where they were standing, carrying the robot until the belly takes
+  // over, so there is nothing to hold clear of. Only the cold start has pairs
+  // arriving one at a time with nothing yet to bear.
   const Ladder l = baked();
   auto init = make_initialize(l);
   auto fold = make_fold(l);

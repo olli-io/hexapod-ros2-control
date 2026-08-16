@@ -1,16 +1,9 @@
-// Host invariant checks for the generated config (plan part 04).
-//
-// Guards the *transformations* tools/gen_config.py performs — the symmetry
-// expansion, the deg->rad conventions, the per-gait velocity-cap derivation, the
-// servo wiring integrity — never the tuned values themselves. Nothing here
-// restates a number that also lives in a YAML under src/*/config/, so a retune
-// cannot break this suite.
-//
-// Value-level parity between the YAMLs and the baked config is proved instead by
-// hexa_locomotion/test/test_config_loader.cpp, which diffs the runtime yaml-cpp
-// loader against PipelineConfig::baked() field-by-field off the same files. That
-// is the test to reach for when the question is "did the generator read the right
-// key"; this one asks "did it do the right arithmetic with whatever it read".
+// Host invariant checks for the generated config: the *transformations*
+// gen_config.py performs — symmetry expansion, deg->rad conventions, velocity-cap
+// derivation, servo wiring integrity — never the tuned values, so a retune cannot
+// break this suite. Value-level parity is
+// hexa_locomotion/test/test_config_loader.cpp's job; this asks whether the
+// generator did the right arithmetic with whatever it read.
 
 #include <algorithm>
 #include <array>
@@ -125,15 +118,12 @@ TEST(JointLimits, BracketBothRestPoses) {
         << "joint " << j;
   }
 
-  // Each joint type applies its own deg->rad convention (coxa plain, femur
-  // negated, tibia pi - x). A dropped negation or a missing `pi -` throws a
-  // rest pose outside its own travel window, which is what this catches —
-  // without naming a single YAML number. Bounds are inclusive: the femur tuck is
-  // allowed to sit exactly on its stop.
+  // Each joint applies its own deg->rad convention (coxa plain, femur negated,
+  // tibia pi - x), and a dropped negation throws the rest pose outside its own
+  // travel window. Bounds are inclusive: the femur tuck may sit on its stop.
   //
-  // Femur and tibia only. The shipped geometry.yaml deliberately tucks the coxa
-  // past its travel window at rest (coxa.l_front_deg exceeds
-  // joints.coxa.upper_limit_deg), so a coxa bracket would not hold.
+  // Femur and tibia only — the shipped geometry.yaml deliberately tucks the coxa
+  // past its travel window at rest.
   for (const auto& [name, pose] : kRestPoses) {
     for (std::size_t i = 0; i < pose->size(); ++i) {
       for (std::size_t j = 1; j < 3; ++j) {
