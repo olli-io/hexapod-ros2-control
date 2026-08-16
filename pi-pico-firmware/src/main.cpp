@@ -29,13 +29,18 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 
+#include "pico/multicore.h"
 #include "pico/stdlib.h"
 
 #include "bt_teleop.hpp"
+#include "button.hpp"
 #include "config_generated.hpp"
 #include "dbg.hpp"
 #include "energize_sweep.hpp"
+#include "face.hpp"
+#include "face_policy.hpp"  // undervoltFlags: supervisor rung -> face battery flags
 #include "gait/engine.hpp"
 #include "leg_index.hpp"
 #include "pipeline.hpp"
@@ -91,6 +96,81 @@ bool led_level(hexa::supervisor::LedPattern p, uint64_t now_us) {
   return false;
 }
 
+// ── core1 ───────────────────────────────────────────────────────────────────
+// main.cpp owns BOTH core schedulers. core1 is shared between cyw43/BTstack and
+// the face render loop, and neither subsystem should be scheduling the other, so
+// the composition point schedules both. Neither module includes the other.
+//
+// Its own stack: multicore_launch_core1's default is __StackOneBottom..Top in
+// SCRATCH_X — only 2048 bytes, and it already carries BTstack's IRQ frames. The
+// render call chain (EyeAnim -> drawEye -> u8g2_DrawPixel -> present -> the u8x8
+// cad/byte chain) adds several hundred bytes of thread-mode frame underneath
+// them. 8 KB in main SRAM, painted so the heartbeat can report the high-water
+// mark, beats finding the overflow as a boot-time HardFault.
+constexpr uint32_t kStackPaint = 0xC0FFEE00u;
+uint32_t g_core1_stack[2048];  // 8 KB
+
+void paint_core1_stack() {
+    for (uint32_t& w : g_core1_stack) w = kStackPaint;
+}
+
+// Bytes of g_core1_stack ever touched (the stack grows down from the top).
+uint32_t core1_stack_used_bytes() {
+    std::size_t clean = 0;
+    while (clean < std::size(g_core1_stack) && g_core1_stack[clean] == kStackPaint) {
+        ++clean;
+    }
+    return static_cast<uint32_t>((std::size(g_core1_stack) - clean) * sizeof(uint32_t));
+}
+
+// Two independent deadlines, one sleep. The LED wants a 5 ms cadence; the face
+// wants 1/kFaceRenderHz (33.3 ms at 30 Hz). Running both off one 5 ms grid would
+// quantize the render to 35 ms, and the SCANNING spinner steps every 33 ms
+// (EyeAnim.cpp), so the phase would double-step roughly every 16 frames — a
+// visible hitch about twice a second, in the state the robot idles in.
+//
+// Do NOT move this work into an async_context worker: those run inside the cyw43
+// context's IRQ handler holding the context lock, so a ~2.4 ms panel flush would
+// block BTstack's own work items, and mutex_enter_blocking is illegal from IRQ
+// context. A blocking flush HERE is free: spi_write_blocking polls with
+// interrupts enabled, so the BT IRQ preempts it and servicing is unaffected.
+void core1_loop() {
+    const uint64_t render_period_us =
+        static_cast<uint64_t>(1.0e6f / hexa::config::kFaceRenderHz);
+    absolute_time_t next_led = get_absolute_time();
+    absolute_time_t next_render = get_absolute_time();
+
+    while (true) {
+        if (time_reached(next_led)) {
+            bt_teleop::core1_poll_led();
+            next_led = delayed_by_us(next_led, 5000);
+        }
+        if (time_reached(next_render)) {
+            face::render_tick();
+            next_render = delayed_by_us(next_render, render_period_us);
+        }
+
+        // Catch-up guard: delayed_by_us advances from the previous TARGET, so a
+        // body that overran its period would leave the deadline permanently in
+        // the past and sleep_until would return immediately forever.
+        const absolute_time_t now = get_absolute_time();
+        if (absolute_time_diff_us(now, next_led) < 0) next_led = now;
+        if (absolute_time_diff_us(now, next_render) < 0) next_render = now;
+
+        sleep_until(absolute_time_min(next_led, next_render));
+    }
+}
+
+void core1_entry() {
+    if (!bt_teleop::core1_init()) {
+        bt_teleop::core1_signal(false);
+        while (true) sleep_ms(1000);  // core0's wait_ready() returns false and halts
+    }
+    face::core1_init();  // panel SPI/GPIO belong to the core that renders
+    bt_teleop::core1_signal(true);
+    core1_loop();
+}
+
 void dump_joy(bool connected, const int16_t axes[bt_teleop::kNumAxes], uint32_t buttons) {
     HEXA_DBG("[joy] %s LX=%6d LY=%6d L2=%6d RX=%6d RY=%6d R2=%6d DX=%6d DY=%6d btns=0x%02lx\n",
            connected ? "conn" : "idle",
@@ -105,8 +185,17 @@ void dump_joy(bool connected, const int16_t axes[bt_teleop::kNumAxes], uint32_t 
 int main() {
     HEXA_DBG_INIT();
 
-    // bt_teleop owns cyw43_arch init (same chip the onboard LED hangs off of).
-    if (!bt_teleop::init()) {
+    // bt_teleop owns cyw43_arch init (same chip the onboard LED hangs off of),
+    // but it comes up on core1 — see core1_entry above. init() only readies the
+    // cross-core snapshot, so a read() before core1 has progressed is safe.
+    bt_teleop::init();
+    // Face config + mutex must exist before core1 starts rendering against them.
+    face::init();
+    button::init();
+    paint_core1_stack();
+    multicore_launch_core1_with_stack(&core1_entry, g_core1_stack,
+                                      sizeof(g_core1_stack));
+    if (!bt_teleop::wait_ready()) {
         while (true) {
             HEXA_DBG("[boot] bt_teleop init failed\n");
             sleep_ms(1000);
@@ -295,6 +384,39 @@ int main() {
             }
             led_pattern = res.decision.led;
 
+            // Face policy step (core0): map the pipeline state to the eye
+            // expression/gaze and hand a render target to core1. Cheap —
+            // rate-limited to kFaceUpdateRateHz inside face::tick.
+            {
+                const face::BatteryFlags batt =
+                    face::undervoltFlags(res.decision.undervolt_stage);
+                face::FaceState fs;
+                fs.engine_state = res.engine_state;
+                fs.vx = res.cmd_vx;
+                fs.vy = res.cmd_vy;
+                fs.wz = res.cmd_wz;
+                fs.x = res.pose_x;
+                fs.y = res.pose_y;
+                fs.roll = res.pose_roll;
+                fs.pitch = res.pose_pitch;
+                fs.yaw = res.pose_yaw;
+                fs.battery_low = batt.low;
+                fs.battery_critical = batt.critical;
+                // Genuinely scanning, not merely unpaired: pairing is gated
+                // behind the button now, so an idle unpaired robot is not
+                // discoverable and must not wear the spinner.
+                fs.busy = bt_teleop::scanning();
+                if (res.has_animation_name && res.animation_accepted) {
+                    fs.animation_event = true;
+                    fs.animation_name = res.animation_name;
+                }
+                face::tick(fs, static_cast<double>(now_us) * 1e-6);
+            }
+
+            // Front-panel button: press -> battery screen, hold -> pairing.
+            button::tick(static_cast<double>(now_us) * 1e-6, last_batt_ok,
+                         last_batt_v, bt_connected);
+
             // Undervoltage ladder edges. The Pico has no buzzer — the tune spool
             // is a Pi-host mechanism — so rung 1 shows up as the fast-blink LED
             // (the supervisor already faults on any rung) plus this line. Rungs 2
@@ -370,6 +492,13 @@ int main() {
             // interval spread vs the 5 ms budget + deadline overruns), and the
             // soak free-heap low-water mark (fragmentation drift).
             const auto& ts = pipeline.supervisor().tick_stats();
+            HEXA_DBG("[core1] stack %lu/%lu B used  face(spi=%lu Hz flushes=%llu "
+                   "last=%llu us)\n",
+                   (unsigned long)core1_stack_used_bytes(),
+                   (unsigned long)sizeof(g_core1_stack),
+                   (unsigned long)face::actual_spi_hz(),
+                   (unsigned long long)face::flush_count(),
+                   (unsigned long long)face::last_flush_us());
             HEXA_DBG("[safety] relay=%s bt=%s batt=%s jitter(last=%llu min=%llu "
                    "max=%llu us over=%lu/%lu) heap=%lu B (min %lu B)\n",
                    relay_state ? "on" : "off",

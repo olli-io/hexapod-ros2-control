@@ -41,6 +41,24 @@ battery:
   cutoff_v: 0.0
   hysteresis_v: 0.3 # rise above threshold+hysteresis to clear (pre-latch only)
   hold_s: 3.0
+  # Linear voltage -> percentage endpoints for the panel readout. Display only:
+  # nothing in the safety ladder above reads these. Defaults are a 2S LiPo
+  # (3.3 V/cell empty, 4.2 V/cell full), matching hexa_buttons' buttons.yaml.
+  empty_v: 6.6
+  full_v: 8.4
+
+# Front-panel button on the Pico (firmware only; read by gen_config.py).
+# hexa_buttons is the Pi's equivalent and shares none of this — it drives a Pi 5
+# through gpiozero and owns network/pairing features this board has no use for.
+pico_button:
+  pin: 22 # free: GP0/1 are the Chica UART, GP17-21 the panel, GP23-25/29 the radio
+  # Press: put the pack percentage on the panel. Hold: start Bluetooth pairing.
+  hold_s: 3.0
+  debounce_s: 0.03
+  screen_s: 5.0 # how long the battery screen holds before the face returns
+  # Pairing stays open this long, or until a pad binds. Bonded pads reconnect
+  # without it — scanning is only needed to meet a NEW controller.
+  pair_window_s: 60.0
 
 # Joint angle when the servo sits at center — a property of the assembled build,
 # not of a calibration sweep. A wrong value is a rigid offset on every command.

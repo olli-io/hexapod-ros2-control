@@ -1,20 +1,15 @@
 // Bluetooth gamepad teleop (plan part 02).
 //
-// Bluepad32 (bare Pico SDK C "platform" API, uni.h) pairs a gamepad over the
-// CYW43439 and this module adapts its state into the exact raw axes[]/buttons[]
-// layout that hexa_teleop/config/teleop_joy.yaml's `base` block expects — the
-// drop-in replacement for the ROS `joy_publisher.py`. Part 07 feeds these
-// arrays straight into the ported `map_joy` unchanged.
-//
-// BTstack runs in the cyw43 background context, so controller state arrives via
-// platform callbacks; the cooperative loop just calls read() each tick.
+// Bluepad32 pairs a gamepad over the CYW43439 and this module adapts its state
+// into the raw axes[]/buttons[] layout teleop_joy.yaml's `base` block expects,
+// which map_joy then consumes unchanged.
 #pragma once
 
 #include <cstdint>
 
 namespace bt_teleop {
 
-// Axis indices — must match teleop_joy.yaml `base.axes`.
+// Must match teleop_joy.yaml `base.axes`.
 enum Axis : int {
     kLeftStickX = 0,
     kLeftStickY = 1,
@@ -27,7 +22,7 @@ enum Axis : int {
     kNumAxes = 8,
 };
 
-// Button indices — must match teleop_joy.yaml `base.buttons`.
+// Must match teleop_joy.yaml `base.buttons`.
 enum Button : int {
     kA = 0,
     kB = 1,
@@ -40,45 +35,46 @@ enum Button : int {
     kNumButtons = 8,
 };
 
-// Axis extremes in the Linux-joystick int16 convention. map_joy applies the
-// 1/32767 scale, so these land at ±1.0 after scaling.
+// Linux-joystick int16 convention; map_joy's 1/32767 scale lands these at ±1.0.
 constexpr int16_t kAxisMax = 32767;
 constexpr int16_t kAxisMin = -32767;
 
-// Bring up cyw43_arch, BTstack and Bluepad32, and register the custom platform.
-// This OWNS cyw43_arch — do not call cyw43_arch_init() elsewhere. Launches core1
-// and brings the whole cyw43/BTstack stack up THERE (its own async context on a
-// core1 alarm pool), so all Bluetooth IRQ/servicing runs on core1 and never
-// jitters core0's 200 Hz control loop; core0 only reads the snapshot. Blocks on
-// a boot handshake and returns false if cyw43_arch init fails on core1
-// (Bluepad32/BTstack is otherwise fire and forget — it pairs on the next
-// controller).
+// This module OWNS cyw43_arch — do not call cyw43_arch_init() elsewhere. It must
+// come up on core1 so Bluetooth IRQ/servicing never jitters core0's control loop.
+// main.cpp launches core1 (it is shared with the face render loop); boot order:
+//   core0: init() -> multicore_launch_core1(...) -> wait_ready()
+//   core1: core1_init() -> other core1 subsystems -> core1_signal() -> loop
+// Call the core1_* functions from core1 only.
 bool init();
+bool core1_init();
+void core1_signal(bool ok);
+void core1_poll_led();  // call at ~5 ms
+bool wait_ready();
 
-// Set the onboard status-LED level. The actual cyw43 GPIO write happens on
-// core1 (which owns cyw43); core0 calls this each loop with the supervisor's
-// blink level. Single-writer (core0) / single-reader (core1), lock-free.
+// Open / close a pairing window. Scanning is only needed to meet a NEW pad:
+// link keys persist in flash, so a bonded controller reconnects with scanning
+// off. Nothing scans at boot — the front-panel button opens the window.
+void start_pairing();
+void stop_pairing();
+bool scanning();
+
+// Level is published by core0, written to the cyw43 GPIO by core1. Lock-free
+// single-writer / single-reader.
 void set_led(bool on);
 
-// Service hook for the cooperative loop. No-op in the background-serviced build
-// (BTstack is driven by the cyw43 async context on core1); kept for interface
-// symmetry and a possible future poll-mode build. Safe to call every tick.
+// No-op: BTstack is serviced in the background on core1. Kept so a future
+// poll-mode build has a call site.
 void pump();
 
-// Copy the latest adapted snapshot into `axes` (kNumAxes entries) and `buttons`
-// (bitmask: bit i set == button index i pressed). Returns true if a controller
-// is connected; when idle it writes the safe neutral state (sticks/dpad
-// centered, triggers released at +max, no buttons) and returns false.
+// Latest snapshot into `axes` (kNumAxes) and `buttons` (bit i = button i). False
+// and a safe neutral state (sticks centered, triggers at +max) when idle.
 bool read(int16_t axes[kNumAxes], uint32_t& buttons);
 
-// True while a controller is connected. Convenience for status LEDs / the
-// part 09 link-timeout failsafe.
 bool connected();
 
-// time_us_64() timestamp of the most recent controller-data frame (updated on
-// every store_snapshot). The part 09 input watchdog compares this against the
-// current time to catch stale-but-still-"connected" input (a pad that stopped
-// sending without a clean disconnect). Returns 0 before the first frame.
+// time_us_64() of the most recent controller frame, 0 before the first. The
+// input watchdog uses it to catch a pad that stopped sending without
+// disconnecting.
 std::uint64_t last_data_us();
 
 }  // namespace bt_teleop

@@ -100,6 +100,7 @@ if(BUILD_TESTING)
   # gtest ports of the former pytest suites plus the renderer's own suite. All
   # headless: the pure support library links without rclcpp or a device.
   set(display_tests
+    test_dirty_band
     test_expression_policy
     test_face_animation
     test_face_animation_runner

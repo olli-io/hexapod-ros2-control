@@ -92,16 +92,14 @@ display_node:
     # Run the full pipeline without touching SPI/GPIO (dev box / CI).
     headless: false
 
-# Consumed ONLY by the firmware config codegen (motion_core/tools/gen_config.py),
-# not by display_node — hence outside it. Kept here so display.yaml stays the
-# single source of truth for the face. spi0 on GP16-19 is what is left after the
-# Servo 2040 link (uart0 on GP0/1) and the CYW43 radio.
+# Consumed ONLY by the firmware config codegen used for raspberry pi pico
 pico_panel:
-  enabled: true      # false skips the core1 launch (robot comes up faceless)
-  spi_index: 0       # 0 = spi0, 1 = spi1
+  enabled: true # false skips the face render on core1 (robot is faceless)
+  spi_index: 0 # 0 = spi0, 1 = spi1
   sck: 18
   mosi: 19
-  cs: 17             # manual chip select
+  cs: 17 # manual chip select
   dc: 20
   rst: 21
-  spi_hz: 8000000    # SH1122 rated to 40 MHz
+  spi_hz: 25000000
+  render_hz: 30

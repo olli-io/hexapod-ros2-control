@@ -350,3 +350,34 @@ TEST(Hardware, LegsAreWiredRearToFront) {
         << hexa::LEG_NAMES[leg];
   }
 }
+
+TEST(FacePanel, GpiosAreDistinctAndUnclaimed) {
+  // The SH1122 face panel shares the RP2350's GPIO bank with the Servo 2040
+  // Chica link and the CYW43 radio. Which pins the panel uses is display.yaml's
+  // business; that they collide with nothing is this suite's. A silent overlap
+  // would show up as a dead panel or a dead servo link, whichever lost the
+  // gpio_set_function race — not as a build error.
+  const std::array<std::uint8_t, 5> panel = {cfg::kFacePanel.sck,
+                                             cfg::kFacePanel.mosi,
+                                             cfg::kFacePanel.cs,
+                                             cfg::kFacePanel.dc,
+                                             cfg::kFacePanel.rst};
+  for (std::size_t i = 0; i < panel.size(); ++i) {
+    for (std::size_t j = i + 1; j < panel.size(); ++j) {
+      EXPECT_NE(panel[i], panel[j])
+          << "face panel GPIO " << static_cast<int>(panel[i]) << " used twice";
+    }
+  }
+
+  // uart0 GP0/GP1 is the Chica link (servo_out.cpp); GP23/24/25/29 are the
+  // CYW43 radio's on a Pico 2 W and are not ours to drive.
+  for (const std::uint8_t pin : panel) {
+    EXPECT_NE(pin, 0) << "face panel collides with the Chica UART TX";
+    EXPECT_NE(pin, 1) << "face panel collides with the Chica UART RX";
+    for (const std::uint8_t radio : {23, 24, 25, 29}) {
+      EXPECT_NE(pin, radio) << "face panel collides with the CYW43 radio";
+    }
+  }
+
+  EXPECT_LE(cfg::kFacePanel.spi_index, 1u) << "spi_index must select spi0 or spi1";
+}

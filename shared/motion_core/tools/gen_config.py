@@ -42,8 +42,12 @@ LEG_NAMES = ["l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear"]
 # build fast on an expression-name typo in display.yaml; the name→enum mapping
 # itself happens at runtime in the firmware via face::parseExpression, so this
 # header never depends on Expression.h. Keep in sync if the enum grows.
+# Mirror of kExprNames in shared/display_core/core/ExpressionController.cpp
+# (lowercased) — the on-wire expression names. Validated here only so a typo in
+# display.yaml fails the bake instead of silently resolving to NEUTRAL at runtime.
 EXPRESSION_NAMES = {
     "neutral", "happy", "sleepy", "dead", "greedy", "woozy", "angry", "love",
+    "scanning",
 }
 
 # Virtual D-pad directions — port of joy_mapping.DPAD_DIRECTIONS. Maps the
@@ -960,11 +964,56 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       + "};  // hardware.yaml battery:")
     w("")
 
+    # Panel readout only — the safety ladder above never consults these.
+    empty_v = float(batt.get("empty_v", 6.6))
+    full_v = float(batt.get("full_v", 8.4))
+    if full_v <= empty_v:
+        raise SystemExit(
+            f"hardware.yaml battery.full_v ({full_v}) must be above "
+            f"battery.empty_v ({empty_v}) — the percentage span would be empty")
+    w("// Linear voltage -> percentage endpoints for the panel readout.")
+    w(f"inline constexpr float kBatteryEmptyV = {fl(empty_v)};")
+    w(f"inline constexpr float kBatteryFullV = {fl(full_v)};")
+    w("")
+
+    # ── Pico front-panel button (hardware.yaml pico_button:, firmware-only) ──
+    btn = (hardware.get("pico_button", {}) or {})
+    btn_pin = int(btn["pin"])
+    btn_hold_s = float(btn["hold_s"])
+    btn_debounce_s = float(btn["debounce_s"])
+    btn_screen_s = float(btn["screen_s"])
+    btn_pair_window_s = float(btn["pair_window_s"])
+    for name, value in (("hold_s", btn_hold_s), ("debounce_s", btn_debounce_s),
+                        ("screen_s", btn_screen_s),
+                        ("pair_window_s", btn_pair_window_s)):
+        if value <= 0.0:
+            raise SystemExit(f"hardware.yaml pico_button.{name} must be > 0")
+    if btn_debounce_s >= btn_hold_s:
+        raise SystemExit(
+            "hardware.yaml pico_button.debounce_s must be below hold_s — "
+            "a press could never be held long enough to register")
+    w("struct PicoButton {  // hardware.yaml pico_button:")
+    w("  std::uint8_t pin;")
+    w("  float hold_s;         // press below this = short press, at/above = hold")
+    w("  float debounce_s;")
+    w("  float screen_s;       // battery screen dwell before the face returns")
+    w("  float pair_window_s;  // pairing stays open this long, or until a pad binds")
+    w("};")
+    w(f"inline constexpr PicoButton kPicoButton = {{{btn_pin}, "
+      f"{fl(btn_hold_s)}, {fl(btn_debounce_s)}, {fl(btn_screen_s)}, "
+      f"{fl(btn_pair_window_s)}}};")
+    w("")
+
     # ── Face expression/gaze policy + SH1122 panel (part 11) ──
     # The eye policy runs on core0 and the SH1122 render loop on core1 (see
     # pi-pico-firmware/src/face.cpp). Expression names resolve to the Expression
     # enum at RUNTIME via face::parseExpression, so this header stays free of the
     # vendored eye core; names are validated here only to fail the build on a typo.
+    #
+    # `pico_panel` keys are Pico-only; the ones that also have a display_node
+    # counterpart (render_hz) are read from HERE with a hard subscript, so a
+    # missing key fails the bake loudly rather than silently falling back to the
+    # Pi's value — the two targets are deliberately tuned apart.
     pico_panel = display.get("pico_panel", {}) or {}
 
     def face_expr(param: str) -> str:
@@ -980,7 +1029,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       f"{'true' if pico_panel.get('enabled', True) else 'false'};")
     w(f"inline constexpr float kFaceUpdateRateHz = {fl(dp['update_rate_hz'])};"
       "  // policy tick (core0)")
-    w(f"inline constexpr float kFaceRenderHz = {fl(dp['render_hz'])};"
+    w(f"inline constexpr float kFaceRenderHz = {fl(pico_panel['render_hz'])};"
       "  // EyeAnim/raster (core1)")
     w("")
     w("// Gait-state -> expression. Resolve `expression` with face::parseExpression.")
@@ -999,6 +1048,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       f"{cstr(face_expr('battery_warning_expression'))};")
     w(f"inline constexpr std::string_view kFaceBatteryCriticalExpression = "
       f"{cstr(face_expr('battery_critical_expression'))};")
+    w(f"inline constexpr std::string_view kFaceScanningExpression = "
+      f"{cstr(face_expr('scanning_expression'))};")
     w("")
     w("// Pose mode, per posture stick: tilt = left (roll/pitch), shift = right (x/y).")
     w(f"inline constexpr std::string_view kFacePostureTiltExpression = "
@@ -1051,7 +1102,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       f"{int(pico_panel.get('spi_index', 0))}, {int(pico_panel.get('sck', 18))}, "
       f"{int(pico_panel.get('mosi', 19))}, {int(pico_panel.get('cs', 17))}, "
       f"{int(pico_panel.get('dc', 20))}, {int(pico_panel.get('rst', 21))}, "
-      f"{int(pico_panel.get('spi_hz', 8_000_000))}u}};")
+      f"{int(pico_panel['spi_hz'])}u}};")
     w("")
 
     w("}  // namespace hexa::config")

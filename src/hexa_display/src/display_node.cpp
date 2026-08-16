@@ -39,6 +39,7 @@
 #include "expression_policy.hpp"
 #include "face_animation.hpp"
 #include "face_animation_runner.hpp"
+#include "frame_compare.hpp"
 #include "text_screen.hpp"
 
 namespace {
@@ -53,16 +54,6 @@ uint32_t hostRand() {
 void pixelSink(void* ctx, int x, int y) {
     u8g2_DrawPixel(static_cast<u8g2_t*>(ctx),
                    static_cast<u8g2_uint_t>(x), static_cast<u8g2_uint_t>(y));
-}
-
-// Exact equality is intended: drawEye is a pure function of these fields, so
-// bit-identical frames rasterize to identical pixels. EyeAnim emits a constant
-// frame while idle (lid == 1.0f, settled integer gaze, phase 0), so this
-// reliably fires. SCANNING steps its phase in discrete jumps, so the spinner
-// redraws once per step rather than once per render tick.
-bool sameFrame(const eyes::AnimFrame& a, const eyes::AnimFrame& b) {
-    return a.expr == b.expr && a.lid == b.lid && a.gx == b.gx && a.gy == b.gy &&
-           a.phase == b.phase;
 }
 
 rcl_interfaces::msg::ParameterDescriptor readOnly(const std::string& desc) {
@@ -348,7 +339,7 @@ private:
         // Skip the float-heavy raster entirely when the animation frame is
         // unchanged — between blinks and once gaze has settled the face is
         // static, so there is nothing to redraw.
-        if (_haveFrame && sameFrame(f, _lastFrame)) return;
+        if (_haveFrame && eyes::sameFrame(f, _lastFrame)) return;
         _lastFrame = f;
         _haveFrame = true;
 

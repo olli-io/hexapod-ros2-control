@@ -62,6 +62,24 @@ endfunction()
 hexa_host_test(test_vec3 test_vec3.cpp)
 hexa_host_test(test_config test_config.cpp)
 
+# ── Pico front-panel button ──
+# Pure press/hold discrimination + screen strings; no Pico SDK.
+hexa_host_test(test_button test_button.cpp)
+target_include_directories(test_button PRIVATE ${REPO_ROOT}/pi-pico-firmware/src)
+
+# ── Pico face config glue (part 11) ──
+# face_policy.hpp lives in the firmware tree but is pure (no Pico SDK), so the
+# baked-config -> PolicyConfig transfer is host-testable here, next to the
+# gen_config step that produces the constants it reads.
+set(DISPLAY_CORE ${REPO_ROOT}/shared/display_core)
+hexa_host_test(test_face_config test_face_config.cpp
+  ${DISPLAY_CORE}/expression_policy.cpp
+  ${DISPLAY_CORE}/core/ExpressionController.cpp)
+target_include_directories(test_face_config PRIVATE
+  ${REPO_ROOT}/pi-pico-firmware/src
+  ${DISPLAY_CORE}
+  ${DISPLAY_CORE}/core)
+
 # ── Integration supervisor (part 09) ──
 # Failsafe / telemetry / status-LED policy: pure logic, no Pico SDK, so it runs
 # through hexa_host_test() under -Wdouble-promotion like the rest of the port.

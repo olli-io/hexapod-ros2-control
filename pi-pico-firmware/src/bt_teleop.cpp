@@ -146,11 +146,16 @@ void platform_init(int /*argc*/, const char** /*argv*/) {
 }
 
 void platform_on_init_complete() {
-    // Accept new controller connections and start scanning for pads in pairing
-    // mode. (_unsafe: must be called from the BT thread — this callback is.)
-    uni_bt_enable_new_connections_unsafe(true);
-    uni_bt_start_scanning_and_autoconnect_unsafe();
-    HEXA_DBG("[bt] init complete — scanning for controllers\n");
+    // Deliberately NOT scanning at boot. Scanning is only needed to meet a NEW
+    // pad: link keys live in a flash-backed TLV bank (pico_cyw43_driver wires
+    // btstack_tlv_flash_bank to hci_set_link_key_db), so a bonded controller
+    // reconnects on its own — uni_bt_allow_incoming_connections defaults to
+    // true and we leave it there. Scanning permanently, as this used to, meant
+    // any stranger's pad could bind first and become the pilot.
+    //
+    // Hold the front-panel button to open a pairing window (button.cpp).
+    HEXA_DBG("[bt] init complete — bonded pads may reconnect; hold the button "
+             "to pair a new one\n");
 }
 
 void platform_on_device_connected(uni_hid_device_t* d) {
@@ -208,14 +213,17 @@ uni_platform* get_platform() {
     return &plat;
 }
 
-// ── core1 entry: cyw43/BTstack bring-up + keep-alive ────────────────────────
-// Runs the whole Bluetooth stack on core1. cyw43_arch_init() is called HERE (not
-// on core0) and, crucially, against an async context we build on an alarm pool
-// created ON THIS CORE — so the driver's host-wake GPIO IRQ AND its timer/alarm
-// worker (BTstack timers: connection setup, retries, reconnect) are both enabled
-// on core1. Core0's control tick then never contends the cyw43 lock or takes a
-// BT IRQ.
-void core1_entry() {
+}  // namespace
+
+// ── Public interface ────────────────────────────────────────────────────────
+
+// cyw43/BTstack bring-up. Called from CORE1 by main.cpp's core1_entry.
+// cyw43_arch_init() runs HERE (not on core0) and, crucially, against an async
+// context built on an alarm pool created ON THIS CORE — so the driver's host-wake
+// GPIO IRQ AND its timer/alarm worker (BTstack timers: connection setup, retries,
+// reconnect) are both enabled on core1. Core0's control tick then never contends
+// the cyw43 lock or takes a BT IRQ.
+bool core1_init() {
     // Build cyw43's async context on a core1 alarm pool. This SDK has no
     // cyw43_arch_init_with_async_context(); instead cyw43_arch_init() reuses a
     // context previously registered with cyw43_arch_set_async_context() (default
@@ -232,57 +240,58 @@ void core1_entry() {
 
     if (!ctx_ok || cyw43_arch_init() != 0) {
         HEXA_DBG("[bt] cyw43_arch init failed (core1)\n");
-        multicore_fifo_push_blocking(kBtInitFail);
-        while (true) sleep_ms(1000);  // core0's init() returns false and halts
+        return false;
     }
 
     uni_platform_set_custom(get_platform());
     uni_init(0, nullptr);
     // No btstack_run_loop_execute(): the threadsafe_background async context on
     // this core services BTstack in the background off the core1 alarm pool.
-    multicore_fifo_push_blocking(kBtInitOk);
+    return true;
+}
 
-    // Keep-alive: stay in a light timed loop so BT IRQs keep firing and the
-    // onboard LED (a cyw43 SPI ioctl, kept off core0) tracks the level core0
-    // publishes via set_led(). A timed loop rather than a pure __wfi() so the
-    // blink still advances while the pad is idle; BT IRQs preempt the sleep. Only
-    // write on a change, so a steady blink level costs no cyw43-bus traffic
-    // against BTstack's own servicing on this core.
-    absolute_time_t next = get_absolute_time();
-    bool led_written = false;
-    bool led_last = false;
-    while (true) {
-        const bool want = g_led_on;
-        if (!led_written || want != led_last) {
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, want);
-            led_last = want;
-            led_written = true;
-        }
-        next = delayed_by_us(next, 5000);  // 5 ms poll cadence
-        sleep_until(next);
+void core1_signal(bool ok) {
+    multicore_fifo_push_blocking(ok ? kBtInitOk : kBtInitFail);
+}
+
+void core1_poll_led() {
+    // The onboard LED is a cyw43 SPI ioctl, kept off core0. Only write on a
+    // change, so a steady blink level costs no cyw43-bus traffic against
+    // BTstack's own servicing on this core.
+    static bool led_written = false;
+    static bool led_last = false;
+    const bool want = g_led_on;
+    if (!led_written || want != led_last) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, want);
+        led_last = want;
+        led_written = true;
     }
 }
 
-}  // namespace
-
-// ── Public interface ────────────────────────────────────────────────────────
-
 bool init() {
-    // The snapshot primitive + neutral state come up on core0 BEFORE the launch,
+    // The snapshot primitive + neutral state must come up BEFORE core1 launches,
     // so any read() from core0 is safe (returns neutral) no matter how far core1
-    // has progressed. cyw43/BTstack itself is brought up on core1 (core1_entry).
+    // has progressed. Core0-only; call before multicore_launch_core1.
     critical_section_init(&g_lock);
     g_locked = true;
     fill_neutral(g_axes, g_buttons);
-
     multicore_fifo_drain();
-    multicore_launch_core1(&core1_entry);
-    // Boot handshake: block until core1 reports the cyw43 bring-up result. The
-    // FIFO pop is also a memory barrier, so the cyw43/snapshot state core1 set
-    // up is visible here. Preserves the synchronous "return false on cyw43
-    // failure" contract (main.cpp then loops forever on false).
+    return true;
+}
+
+bool wait_ready() {
+    // Boot handshake: block until core1 reports the bring-up result. The FIFO pop
+    // is also a memory barrier, so the cyw43/snapshot state core1 set up is
+    // visible here. Preserves the synchronous "return false on cyw43 failure"
+    // contract (main.cpp then loops forever on false).
     return multicore_fifo_pop_blocking() == kBtInitOk;
 }
+
+void start_pairing() { uni_bt_start_scanning_and_autoconnect_safe(); }
+
+void stop_pairing() { uni_bt_stop_scanning_safe(); }
+
+bool scanning() { return uni_bt_is_scanning(); }
 
 void set_led(bool on) { g_led_on = on; }
 

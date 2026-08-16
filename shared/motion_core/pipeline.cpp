@@ -268,6 +268,8 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   r.cmd_vx = jo.linear_x;
   r.cmd_vy = jo.linear_y;
   r.cmd_wz = jo.angular_z;
+  r.pose_x = jo.pose_x;
+  r.pose_y = jo.pose_y;
   r.pose_roll = jo.pose_roll;
   r.pose_pitch = jo.pose_pitch;
   r.pose_yaw = jo.pose_yaw;

@@ -45,13 +45,43 @@ it — a link-time swap, no `#ifdef`:
 - **`src/servo_out.{hpp,cpp}`** — the Servo 2040 link: Chica protocol over the
   Pico's hardware UART. Carries servo SET frames, the rail relay, and the
   battery GET.
+- **`src/face.{hpp,cpp}`** + **`src/Sh1122PanelPico.{h,cpp}`** — the SH1122 OLED
+  eyes, from the same `shared/display_core` the Pi-side `hexa_display` node runs.
+  core0 runs the expression/gaze policy, core1 the rasterizer and SPI flush.
+- **`src/button.{hpp,cpp}`** — the front-panel button. A producer into the face
+  and into `bt_teleop`, never the reverse. Its pure halves are
+  `button_fsm.hpp` (press vs hold) and `button_screens.hpp` (screen strings).
 
 The two RP2350 cores split: **core0** runs the cooperative 200 Hz control loop;
-**core1** runs cyw43/BTstack (Bluepad32) in the background.
+**core1** runs cyw43/BTstack (Bluepad32) plus the face render loop. `main.cpp`
+owns both schedulers — core1's loop carries two independent deadlines (5 ms for
+the onboard LED, `1/render_hz` for the face) and runs on its own 8 KB stack,
+since the SDK default for core1 is 2 KB and already carries BTstack's IRQ frames.
 
-> There is no face on the Pico — the SH1122 OLED eyes run only on the Pi-side
-> `hexa_display` node. The status LED (slow blink = idle/stand, solid = walking,
-> fast blink = fault) stands in for it here.
+## Front-panel button
+
+One button on the GPIO in `hardware.yaml`'s `pico_button:` block (GP22 by
+default, wired to ground — the internal pull-up makes it active-low, so an
+unconnected pin reads released):
+
+- **Press** — puts the pack percentage and voltage on the panel for
+  `screen_s`, then the face returns.
+- **Hold `hold_s`** — opens a Bluetooth pairing window for `pair_window_s`, or
+  until a pad binds. The eyes wear the animated scanning expression throughout.
+
+Hold wins: a press that reaches `hold_s` fires the pairing action mid-press and
+the release is silent, so one long press never also shows the battery screen.
+
+**The firmware does not scan at boot.** Link keys persist in a flash-backed TLV
+bank (`pico_cyw43_driver` wires `btstack_tlv_flash_bank` to
+`hci_set_link_key_db`), so a controller that has paired before reconnects on its
+own with scanning off. Scanning is only needed to meet a *new* pad. Earlier
+firmware scanned permanently, which left the robot discoverable to anyone — and
+since it binds the first gamepad that becomes ready, a stranger's pad could take
+the pilot slot and yours would be rejected as the second controller.
+
+> A freshly flashed board has no bonded pad, so **hold the button to pair before
+> the robot will respond to anything**.
 
 ## Config codegen
 
