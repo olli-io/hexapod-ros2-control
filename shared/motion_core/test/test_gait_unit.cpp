@@ -757,8 +757,8 @@ TEST(Engine, PeakTipSpeedStaysCloseToTheAnalyticalFloor) {
 
     auto e = g::make_default_engine(
         "tripod", hexa::config::kLegSpecs, cfg, g::standing_pose_from_config(),
-        hexa::config::kInitialPose, hexa::config::kCoxaToBottom,
-        hexa::config::kFootRadius);
+        hexa::config::kFoldedPose, hexa::config::kInitializedPose,
+        hexa::config::kCoxaToBottom, hexa::config::kFootRadius);
     e->start_initialize();
     for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
       e->update(kTickDt, {0.0f, 0.0f}, 0.0f);

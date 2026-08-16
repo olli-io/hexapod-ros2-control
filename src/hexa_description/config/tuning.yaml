@@ -62,8 +62,20 @@ gait_node:
       swing_time: 0.45
 
     initialize:
+      # Shared by the cold start and the fold, which are time-reverses:
+      # unfold_time moves all six feet between the folded and initialized poses
+      # in one eased, belly-borne move; pair_swing_time is one mirrored pair's
+      # swing between the initialized pose and the floor; lift_body_time is the
+      # body ramp between the belly and standing height.
+      unfold_time: 0.5
       pair_swing_time: 0.3
       lift_body_time: 0.5
+      # Cold start only. How far above the floor the pairs park their feet, so
+      # no pair carries load until all six are down and the body lift takes them
+      # onto the floor together in its slow opening stretch. 0 lands each pair
+      # as it swings. The fold has no counterpart: its feet leave from where
+      # they were actually standing.
+      place_clearance: 0.002
       swing_clearance: 0.04
 
     reseat:

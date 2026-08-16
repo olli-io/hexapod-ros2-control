@@ -279,9 +279,13 @@ def standing_pose(gait: dict, geometry: dict) -> dict:
     return dict(body_height=body_height, groups=groups)
 
 
-def initial_pose(geometry: dict):
-    """Per-leg (coxa, femur, tibia) startup angles — port of load_initial_pose."""
-    init = geometry["initial_pose"]
+def rest_pose(geometry: dict, key: str):
+    """Per-leg (coxa, femur, tibia) angles for one of the two belly-rest poses.
+
+    `key` is "folded_pose" (power-up) or "initialized_pose" (unfold endpoint);
+    the two share a schema so this reads either.
+    """
+    init = geometry[key]
     femur = to_urdf_rad("femur", init["femur"]["above_horizontal_deg"])
     tibia = to_urdf_rad("tibia", init["tibia"]["interior_deg"])
     coxa_cfg = init["coxa"]
@@ -457,7 +461,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     specs = leg_specs(geometry)
     limits = joint_limits(geometry)
     stand = standing_pose(gait, geometry)
-    initial = initial_pose(geometry)
+    folded = rest_pose(geometry, "folded_pose")
+    initialized = rest_pose(geometry, "initialized_pose")
     caps = velocity_caps(gait)
     stance_unit = unit_stance_xy(gait, geometry)
     joints = hardware_joints(hardware, calibration, limits)
@@ -532,7 +537,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("}};")
     w("")
 
-    # ── standing / initial pose ──
+    # ── standing / rest poses ──
     w("// ── Rest / startup pose ──")
     w("// The standing pose is described by where the feet sit, not by joint")
     w("// angles: gait::standing_pose_from solves the per-leg triple from these")
@@ -556,10 +561,19 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("    }},")
     w("};")
     w("")
-    w("// Per-leg startup pose (coxa varies by symmetry), indexed by Leg.")
-    w("inline constexpr std::array<JointAngles, kNumLegs> kInitialPose = {{")
+    w("// Per-leg power-up pose (coxa varies by symmetry), indexed by Leg. Also")
+    w("// the pose a fold ends on and the baseline FOLDED/FAULT hold.")
+    w("inline constexpr std::array<JointAngles, kNumLegs> kFoldedPose = {{")
     for leg in LEG_NAMES:
-        a = initial[leg]
+        a = folded[leg]
+        w(f"    {{{fl(a[0])}, {fl(a[1])}, {fl(a[2])}}},  // {leg}")
+    w("}};")
+    w("")
+    w("// Per-leg pose the unfold ladder reaches before the reseat ladder stands")
+    w("// the robot up. Same schema, still belly-resting.")
+    w("inline constexpr std::array<JointAngles, kNumLegs> kInitializedPose = {{")
+    for leg in LEG_NAMES:
+        a = initialized[leg]
         w(f"    {{{fl(a[0])}, {fl(a[1])}, {fl(a[2])}}},  // {leg}")
     w("}};")
     w("")
@@ -581,8 +595,10 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("cmd_zero_tol", gait["cmd_zero_tol"]),
         ("settle_debounce_delay", gait["settle"]["debounce_delay"]),
         ("settle_swing_time", gait["settle"]["swing_time"]),
+        ("init_unfold_time", gait["initialize"]["unfold_time"]),
         ("init_pair_swing_time", gait["initialize"]["pair_swing_time"]),
         ("init_lift_body_time", gait["initialize"]["lift_body_time"]),
+        ("init_place_clearance", gait["initialize"]["place_clearance"]),
         ("init_swing_clearance", gait["initialize"]["swing_clearance"]),
         ("reseat_pose_settle_delay", gait["reseat"]["pose_settle_delay"]),
         ("reseat_height_change_threshold", gait["reseat"]["height_change_threshold"]),

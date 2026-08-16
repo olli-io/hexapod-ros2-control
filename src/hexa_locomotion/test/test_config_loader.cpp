@@ -51,8 +51,11 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     EXPECT_NEAR(loaded.leg_specs[i].tibia_len, baked.leg_specs[i].tibia_len, kTol)
         << leg << ".tibia_len";
     for (int j = 0; j < 3; ++j) {
-      EXPECT_NEAR(loaded.initial_pose[i][j], baked.initial_pose[i][j], kTol)
-          << leg << ".initial_pose[" << j << "]";
+      EXPECT_NEAR(loaded.folded_pose[i][j], baked.folded_pose[i][j], kTol)
+          << leg << ".folded_pose[" << j << "]";
+      EXPECT_NEAR(loaded.initialized_pose[i][j], baked.initialized_pose[i][j],
+                  kTol)
+          << leg << ".initialized_pose[" << j << "]";
     }
   }
   EXPECT_NEAR(loaded.coxa_to_bottom, baked.coxa_to_bottom, kTol);
@@ -85,8 +88,10 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.cmd_zero_tol, be.cmd_zero_tol, kTol);
   EXPECT_NEAR(le.settle_debounce_delay, be.settle_debounce_delay, kTol);
   EXPECT_NEAR(le.settle_swing_time, be.settle_swing_time, kTol);
+  EXPECT_NEAR(le.init_unfold_time, be.init_unfold_time, kTol);
   EXPECT_NEAR(le.init_pair_swing_time, be.init_pair_swing_time, kTol);
   EXPECT_NEAR(le.init_lift_body_time, be.init_lift_body_time, kTol);
+  EXPECT_NEAR(le.init_place_clearance, be.init_place_clearance, kTol);
   EXPECT_NEAR(le.init_swing_clearance, be.init_swing_clearance, kTol);
   EXPECT_NEAR(le.reseat_pose_settle_delay, be.reseat_pose_settle_delay, kTol);
   EXPECT_NEAR(le.reseat_height_change_threshold,

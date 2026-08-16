@@ -14,7 +14,7 @@ parts 05–08 and formalized as Tier 1 of part 10.
 - **`test_config`** — spot-checks of `src/config_generated.hpp` (emitted by
   `tools/gen_config.py`): the six-leg mount **symmetry expansion** (incl.
   `r_rear = (-0.083, -0.0575, -150°)`), deg→rad joint conventions, standing /
-  initial pose, gait engine knobs, the **derived** per-gait velocity caps
+  rest poses, gait engine knobs, the **derived** per-gait velocity caps
   (`tripod linear_max = 1/3 m/s`, stability flags), teleop hardware identity,
   posture stack, control ramps, and the 18 servo calibrations. These pin the
   generator against the ROS2 loaders it ports (`description_loader.cpp`,

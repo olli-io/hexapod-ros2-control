@@ -1,7 +1,7 @@
 // Reseat ladder: arbitrary current foot positions -> a target stance. Float fork
 // of reseat.hpp (plan part 06). Used by three engine paths (posture-height
 // change, settle cleanup, abandoned engagement) with the same ladder mechanics.
-// The pair order mirrors InitializeController.PLACE_FEET.
+// The pair order is FoldController's, reversed — see stand_transition.hpp.
 //
 // An abandoned engagement hands over feet that are still in the air, so the
 // ladder lands those before it lifts any foot that is down.

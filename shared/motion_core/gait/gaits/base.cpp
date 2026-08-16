@@ -156,32 +156,17 @@ namespace {
 // SwingProfile, never from the caller's velocity.
 Vec3 planar(const Vec3& v) { return Vec3(v[0], v[1], 0.0f); }
 
-// Septic smoothstep: ease5 plus a vanishing third derivative at both ends.
+// One half of the septic smoothstep; ease7 reflects it into the other.
 //
-// The swing's horizontal track is a blend between the two ground lines (see
-// swing_arc), so the blend weight's derivatives at the ends are exactly the
-// foot's departure from ground speed there. All three vanishing means the foot
-// leaves and meets the ground travelling at the ground velocity, and pulls away
-// from it only as O(t^4) — no segment to time, no height to configure.
-//
-// The blend spans the swing up to the touchdown ride (granted_ride_time
-// below). Finishing the horizontal travel early leaves the foot riding the
-// moving ground line for the rest of the swing, which in the body frame
-// carries it beyond the AEP by ground_speed x time-remaining — workspace this
-// robot's front coxa splay does not have at full stride. So the ride is
-// metered against profile.ride_headroom, and a swing granted none keeps the
-// travel spread over the full swing, where that excursion stays a few
-// millimetres.
+// Where the vanishing third derivative earns its keep in a swing: the
+// horizontal track is a blend between the two ground lines (see swing_arc), so
+// the blend weight's derivatives at the ends are exactly the foot's departure
+// from ground speed there. All three vanishing means the foot leaves and meets
+// the ground travelling at the ground velocity, and pulls away from it only as
+// O(t^4) — no segment to time, no height to configure.
 float ease7_poly(float u) {
   const float u2 = u * u;
   return u2 * u2 * (35.0f + u * (-84.0f + u * (70.0f - 20.0f * u)));
-}
-
-// Evaluate from the nearer end: near u = 1 the polynomial's order-100 terms
-// cancel down to ~1, leaving float noise big enough to jitter the foot by
-// micrometres right at the touchdown seam. Reflecting keeps both tails exact.
-float ease7(float u) {
-  return u <= 0.5f ? ease7_poly(u) : 1.0f - ease7_poly(1.0f - u);
 }
 
 // Unit-amplitude lateral profile: two halves of ease5 joined at the midpoint.
@@ -340,6 +325,13 @@ float swing_height(float t, float apex_time, float clearance, float swing_time,
          touchdown_velocity * brake_time * hermite_end_slope(w);
 }
 }  // namespace
+
+// Evaluate from the nearer end: near u = 1 the polynomial's order-100 terms
+// cancel down to ~1, leaving float noise big enough to jitter the foot by
+// micrometres right at the touchdown seam. Reflecting keeps both tails exact.
+float ease7(float u) {
+  return u <= 0.5f ? ease7_poly(u) : 1.0f - ease7_poly(1.0f - u);
+}
 
 Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
                const Vec3& target, int identity_y_sign, float swing_time,

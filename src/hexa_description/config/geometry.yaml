@@ -51,7 +51,7 @@ joints:
     velocity: 7.25
   femur:
     lower_limit_deg: -35
-    upper_limit_deg: 95
+    upper_limit_deg: 110
     effort: 3.09
     velocity: 7.25
   tibia:
@@ -60,14 +60,22 @@ joints:
     effort: 3.09
     velocity: 7.25
 
-initial_pose:
-  # Joint angles held at startup, before any commanded motion; symmetric front
-  # and rear. WARNING: these servos have no feedback — they jump here instantly
-  # on power-up.
+folded_pose:
+  # Joint angles held at power-up, before any commanded motion.
   coxa:
     l_front_deg: 60 # 30° mount + 60° coxa → leg points at body-yaw 90°
     l_middle_deg: 0 # 90° mount + 0° coxa → leg points straight outward
   femur:
-    above_horizontal_deg: 90 # femur tucked up
+    above_horizontal_deg: 110 # femur tucked up
   tibia:
-    interior_deg: 70 # knee folded tight
+    interior_deg: 50 # knee folded tight
+
+initialized_pose:
+  # The rung between folded and standing.
+  coxa:
+    l_front_deg: 60
+    l_middle_deg: 0
+  femur:
+    above_horizontal_deg: 90
+  tibia:
+    interior_deg: 70

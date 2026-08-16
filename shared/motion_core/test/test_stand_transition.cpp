@@ -1,11 +1,18 @@
-// Unit tests for the folded <-> standing ladders (InitializeController /
-// FoldController).
+// Unit tests for the folded <-> standing ladders.
 //
-// The ladders sequence legs as three mirrored pairs (PAIR_ORDER), so the thing
-// worth pinning is coverage: every leg belongs to exactly one pair, and every
-// leg has actually left the folded pose by the time the controller reports DONE.
-// A leg that silently sat out its pair would look exactly like a leg whose
-// commands never reached the servos, so this suite is what tells the two apart.
+// Both directions pass through the initialized pose, and the two ladders are
+// time-reverses of each other: unfold / place feet / lift body one way, lower
+// body / lift feet / tuck the other. Their one asymmetry is the cold start's
+// init_place_clearance — see IsTheTimeReverseOfTheFoldUpToThePlaceClearance.
+//
+// The ladders sequence the ground-facing rung as three mirrored pairs
+// (PAIR_ORDER), so the thing worth pinning is coverage: every leg belongs to
+// exactly one pair, and every leg has actually left its starting pose by the
+// time the controller reports DONE. A leg that silently sat out its pair would
+// look exactly like a leg whose commands never reached the servos, so this
+// suite is what tells the two apart. On top of that it pins the mirror itself,
+// and that the pose split is real — folded genuinely tucked inside initialized,
+// both clear of the floor.
 //
 // Float-only, built through hexa_host_test() under -Wdouble-promotion.
 
@@ -33,31 +40,38 @@ constexpr float kDt = 0.005f;  // controller_dt
 constexpr float kTol = 1e-4f;
 
 struct Ladder {
-  std::map<std::string, g::Vec3> initial;
+  std::map<std::string, g::Vec3> folded;
+  std::map<std::string, g::Vec3> initialized;
   std::map<std::string, g::Vec3> nominal;
   hexa::gait::EngineConfig cfg;
 };
 
 Ladder baked() {
-  return {g::initial_stance_from_config(), g::nominal_stance_from_config(),
-          g::engine_config_from_config()};
+  return {g::folded_stance_from_config(), g::initialized_stance_from_config(),
+          g::nominal_stance_from_config(), g::engine_config_from_config()};
+}
+
+g::RestPoseMove make_unfold(const Ladder& l) {
+  return g::RestPoseMove(l.folded, l.initialized, l.cfg.init_unfold_time);
 }
 
 g::InitializeController make_initialize(const Ladder& l) {
   return g::InitializeController(
-      l.initial, l.nominal, hexa::config::kCoxaToBottom,
+      l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
       hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
-      l.cfg.init_lift_body_time, l.cfg.init_swing_clearance, l.cfg.swing_width,
+      l.cfg.init_lift_body_time, l.cfg.init_unfold_time,
+      l.cfg.init_place_clearance, l.cfg.init_swing_clearance, l.cfg.swing_width,
       l.cfg.touchdown_velocity, l.cfg.touchdown_probe_fraction,
       l.cfg.controller_dt);
 }
 
 g::FoldController make_fold(const Ladder& l) {
-  return g::FoldController(l.initial, l.nominal, hexa::config::kCoxaToBottom,
-                           hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
-                           l.cfg.init_lift_body_time, l.cfg.init_swing_clearance,
-                           l.cfg.swing_width, l.cfg.touchdown_velocity,
-                           l.cfg.touchdown_probe_fraction, l.cfg.controller_dt);
+  return g::FoldController(
+      l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
+      hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
+      l.cfg.init_lift_body_time, l.cfg.init_unfold_time,
+      l.cfg.init_swing_clearance, l.cfg.swing_width, l.cfg.touchdown_velocity,
+      l.cfg.touchdown_probe_fraction, l.cfg.controller_dt);
 }
 
 void expect_near(const g::Vec3& got, const g::Vec3& want,
@@ -67,11 +81,13 @@ void expect_near(const g::Vec3& got, const g::Vec3& want,
   }
 }
 
-// Upper bound on ticks: three pair swings + the body ramp, with slack.
+// Upper bound on ticks for a whole ladder: the body ramp, three pair swings and
+// the rest-pose move, with slack.
 int max_ticks(const Ladder& l) {
-  return static_cast<int>(
-             (3.0f * l.cfg.init_pair_swing_time + l.cfg.init_lift_body_time) /
-             kDt) +
+  return static_cast<int>((l.cfg.init_lift_body_time +
+                           3.0f * l.cfg.init_pair_swing_time +
+                           l.cfg.init_unfold_time) /
+                          kDt) +
          50;
 }
 
@@ -81,20 +97,28 @@ constexpr const char* kProbeLeg = "l_middle";
 
 // Body-frame IK target z at which the robot meets the floor. The target is the
 // foot sphere's centre, so it sits one radius above the contact point at
-// -kCoxaToBottom — and both ladders are built so this is an *endpoint* of the
-// body ramp, never a point inside it.
+// -kCoxaToBottom — and the fold's body ramp is built so this is an *endpoint*
+// of it, never a point inside.
 float contact_z() {
   return hexa::ik_z_for_contact(-hexa::config::kCoxaToBottom,
                                 hexa::config::kFootRadius);
 }
 
-// One leg's z, sampled per tick, across a controller's body ramp. Every leg
-// shares the same ramp, so one is the whole story.
+// Where the cold start parks its feet: init_place_clearance above contact_z().
+// Unlike the fold, this *is* a point inside the body ramp — the ramp's opening
+// stretch is what spends it, which is why the initialize ramps on a septic.
+float place_z(const Ladder& l) {
+  return hexa::ik_z_for_contact(
+      -hexa::config::kCoxaToBottom + l.cfg.init_place_clearance,
+      hexa::config::kFootRadius);
+}
+
+// One leg's z, sampled per tick, across a controller's body ramp.
 std::vector<float> initialize_ramp(g::InitializeController& init, int limit) {
   std::vector<float> z;
   for (int i = 0; i < limit; ++i) {
     const auto out = init.update(kDt);
-    if (init.state() == g::InitializeState::PLACE_FEET) continue;
+    if (init.state() != g::InitializeState::LIFT_BODY) continue;
     z.push_back(out.at(kProbeLeg).foot_target[2]);
     if (init.done()) break;
   }
@@ -122,6 +146,43 @@ float peak_step(const std::vector<float>& z) {
 
 }  // namespace
 
+// ── The two rest poses ──────────────────────────────────────────────────────
+
+TEST(RestPoses, FoldedIsTuckedInsideInitialized) {
+  // The whole point of the split: the robot energizes drawn in tighter than the
+  // pose the unfold takes it to. Measured as the foot's planar reach from the
+  // coxa axis, which is what "tucked" means mechanically — comparing raw joint
+  // angles would pass on a femur that folded the wrong way.
+  const Ladder l = baked();
+  for (const auto& name : g::LEG_NAMES) {
+    const std::string leg(name);
+    const g::Vec3& folded = l.folded.at(leg);
+    const g::Vec3& initialized = l.initialized.at(leg);
+    EXPECT_LT(std::hypot(folded[0], folded[1]),
+              std::hypot(initialized[0], initialized[1]))
+        << leg << " folded reaches no further in than initialized";
+  }
+}
+
+TEST(RestPoses, BothKeepTheFeetOffTheFloor) {
+  // Both are belly-rest poses: the chassis bottom is on the ground and every
+  // foot must clear it, or the robot energizes standing on a leg tip and the
+  // unfold drags it across the floor.
+  const float floor_z = -hexa::config::kCoxaToBottom;
+  const std::array<std::pair<const char*, std::map<std::string, g::Vec3>>, 2>
+      poses = {{
+          {"folded", g::folded_stance_from_config()},
+          {"initialized", g::initialized_stance_from_config()},
+      }};
+  for (const auto& [name, stance] : poses) {
+    for (const auto& leg : g::LEG_NAMES) {
+      EXPECT_GT(stance.at(std::string(leg))[2] - hexa::config::kFootRadius,
+                floor_z)
+          << name << " " << leg << " touches the floor";
+    }
+  }
+}
+
 // ── PAIR_ORDER covers the whole robot ───────────────────────────────────────
 
 TEST(PairOrder, CoversEveryLegExactlyOnce) {
@@ -145,7 +206,93 @@ TEST(PairOrder, EachPairMirrorsAcrossTheBody) {
   }
 }
 
-// ── InitializeController: folded -> standing ────────────────────────────────
+// ── RestPoseMove: folded <-> initialized ────────────────────────────────────
+
+TEST(RestPoseMove, EveryLegReachesTheTargetPose) {
+  const Ladder l = baked();
+  auto unfold = make_unfold(l);
+
+  std::map<std::string, g::LegOutput> out;
+  int ticks = 0;
+  const int limit = max_ticks(l);
+  while (!unfold.done() && ticks < limit) {
+    out = unfold.update(kDt);
+    ++ticks;
+  }
+  ASSERT_TRUE(unfold.done()) << "move never finished in " << limit << " ticks";
+  EXPECT_NEAR(ticks, static_cast<int>(l.cfg.init_unfold_time / kDt), 2);
+
+  for (const auto& name : g::LEG_NAMES) {
+    const std::string leg(name);
+    expect_near(out.at(leg).foot_target, l.initialized.at(leg), leg);
+  }
+}
+
+TEST(RestPoseMove, MovesAllSixLegsTogetherAlongAStraightChord) {
+  // No pair sequencing and no arc: the belly is carrying the robot, so every
+  // leg travels at once, and each one stays on the segment between the two
+  // poses. A stray lift here would be a foot scuffing the floor it is parked
+  // just above.
+  const Ladder l = baked();
+  auto unfold = make_unfold(l);
+
+  std::map<std::string, bool> moved;
+  for (const auto& name : g::LEG_NAMES) moved[std::string(name)] = false;
+
+  int samples = 0;
+  for (int i = 0; i < max_ticks(l) && !unfold.done(); ++i) {
+    const auto out = unfold.update(kDt);
+    ++samples;
+    for (const auto& name : g::LEG_NAMES) {
+      const std::string leg(name);
+      const g::Vec3& from = l.folded.at(leg);
+      const g::Vec3& to = l.initialized.at(leg);
+      const g::Vec3 chord = to - from;
+      const g::Vec3 travelled = out.at(leg).foot_target - from;
+      // Distance off the chord: |travelled - (travelled.chord/|chord|^2) chord|.
+      const float t = travelled.dot(chord) / chord.dot(chord);
+      const g::Vec3 off = travelled - chord * t;
+      EXPECT_LT(off.norm(), kTol) << leg << " left the chord at tick " << i;
+      EXPECT_GE(t, -kTol) << leg << " ran backwards at tick " << i;
+      EXPECT_LE(t, 1.0f + kTol) << leg << " overshot at tick " << i;
+      if (travelled.norm() > 1e-3f) moved[leg] = true;
+      // Nothing is airborne: the belly bears the load the whole way.
+      EXPECT_TRUE(out.at(leg).stance) << leg << " reported airborne";
+    }
+  }
+  ASSERT_TRUE(unfold.done());
+  ASSERT_GT(samples, 2);
+  for (const auto& [leg, did] : moved) {
+    EXPECT_TRUE(did) << leg << " never left the folded pose";
+  }
+}
+
+TEST(RestPoseMove, StartsAndEndsStationary) {
+  // ease5 at both ends, for the same reason the body ramps use it: the servos
+  // take up and give back the motion without a jerk step.
+  const Ladder l = baked();
+  auto unfold = make_unfold(l);
+
+  std::vector<float> r;
+  for (int i = 0; i < max_ticks(l); ++i) {
+    const auto out = unfold.update(kDt);
+    const g::Vec3 p = out.at(kProbeLeg).foot_target;
+    r.push_back(std::hypot(p[0], p[1]));
+    if (unfold.done()) break;
+  }
+  ASSERT_GE(r.size(), 3u);
+
+  const float peak = peak_step(r);
+  ASSERT_GT(peak, 0.0f);
+  EXPECT_LT(std::fabs(r[1] - r[0]), 0.05f * peak)
+      << "the move leaves the folded pose at "
+      << 100.0f * std::fabs(r[1] - r[0]) / peak << "% of its peak speed";
+  const float last = std::fabs(r[r.size() - 1] - r[r.size() - 2]);
+  EXPECT_LT(last, 0.05f * peak)
+      << "the move arrives at " << 100.0f * last / peak << "% of peak speed";
+}
+
+// ── InitializeController: folded -> initialized -> standing ────────────────
 
 TEST(InitializeLadder, EveryLegReachesNominalStance) {
   const Ladder l = baked();
@@ -166,9 +313,31 @@ TEST(InitializeLadder, EveryLegReachesNominalStance) {
   }
 }
 
+TEST(InitializeLadder, PassesThroughTheInitializedPose) {
+  // Mechanically required, not cosmetic: the legs deploy to the initialized
+  // pose in one belly-borne move, and only from there does a pair reach for the
+  // floor. The mirror of the fold's TUCK handover.
+  const Ladder l = baked();
+  auto init = make_initialize(l);
+
+  std::map<std::string, g::LegOutput> handover;
+  for (int i = 0; i < max_ticks(l); ++i) {
+    const auto out = init.update(kDt);
+    if (init.state() == g::InitializeState::PLACE_FEET) {
+      handover = out;
+      break;
+    }
+  }
+  ASSERT_FALSE(handover.empty()) << "UNFOLD never handed over to PLACE_FEET";
+  for (const auto& name : g::LEG_NAMES) {
+    const std::string leg(name);
+    expect_near(handover.at(leg).foot_target, l.initialized.at(leg), leg);
+  }
+}
+
 TEST(InitializeLadder, EveryLegLeavesTheFoldedPose) {
   // The regression that matters: a leg whose pair never ran would still be
-  // sitting on its initial_stance entry at DONE. r_front is the last pair, so
+  // sitting on its initialized-pose entry at DONE. r_front is the last pair, so
   // it is the one a truncated ladder would strand.
   const Ladder l = baked();
   auto init = make_initialize(l);
@@ -181,7 +350,7 @@ TEST(InitializeLadder, EveryLegLeavesTheFoldedPose) {
     const auto out = init.update(kDt);
     for (const auto& name : g::LEG_NAMES) {
       const std::string leg(name);
-      const g::Vec3 d = out.at(leg).foot_target - l.initial.at(leg);
+      const g::Vec3 d = out.at(leg).foot_target - l.folded.at(leg);
       if (std::hypot(std::hypot(d[0], d[1]), d[2]) > 1e-3f) moved[leg] = true;
     }
   }
@@ -211,23 +380,24 @@ TEST(InitializeLadder, PairsSwingOneAtATime) {
   EXPECT_TRUE(saw_swing) << "PLACE_FEET never lifted a foot";
 }
 
-TEST(InitializeLadder, PlaceFeetLandsFeetOnTheFloor) {
-  // Every foot must be planted at the same z before LIFT_BODY starts, or the
-  // body ramp would drag one leg along the floor.
+TEST(InitializeLadder, PlaceFeetParksEveryFootOneClearanceAboveTheFloor) {
+  // Every foot must be at the same z before LIFT_BODY starts, or the body ramp
+  // would drag one leg along the floor.
   //
-  // That z is the floor itself. Placing the feet above it — the ladder used to
-  // hold them 12 mm up — does not avoid the ground contact, it only moves the
-  // contact into the middle of the LIFT_BODY ramp, where the curve is at speed
-  // and nothing is slowing down for it. Here the swing arc does the landing,
-  // and it already arrives with zero vertical velocity.
+  // That z is init_place_clearance above the floor, not on it: no pair takes
+  // load while later pairs are still swinging, so belly-height error cannot be
+  // preloaded into a leg that has no way to give it back. All six meet the
+  // floor together on the body ramp instead.
   const Ladder l = baked();
   auto init = make_initialize(l);
 
-  const float want_z = contact_z();
+  const float want_z = place_z(l);
+  ASSERT_GT(l.cfg.init_place_clearance, 0.0f) << "clearance configured away";
+  ASSERT_GT(want_z, contact_z()) << "place target is not above the floor";
   std::map<std::string, g::LegOutput> last;
   for (int i = 0; i < max_ticks(l); ++i) {
     const auto out = init.update(kDt);
-    if (init.state() != g::InitializeState::PLACE_FEET) {
+    if (init.state() == g::InitializeState::LIFT_BODY) {
       last = out;
       break;
     }
@@ -241,11 +411,16 @@ TEST(InitializeLadder, PlaceFeetLandsFeetOnTheFloor) {
   }
 }
 
-TEST(InitializeLadder, BodyRampStartsOnTheFloorAndLeavesItStationary) {
-  // The regression this pins is the one that made the cold start slip: ground
-  // contact anywhere but an endpoint of the ramp. It belongs at tau = 0 here,
-  // where the ramp is not yet moving — the feet are already down when the legs
-  // start taking the body's weight, and they never come back up.
+TEST(InitializeLadder, BodyRampStartsClearAndTakesTheFloorInItsOpening) {
+  // The ramp starts place_clearance above the floor, so unlike the fold's its
+  // ground contact is an interior point. What has to hold is where that point
+  // falls: inside the opening stretch, while the septic is still accelerating
+  // and well short of its peak speed. A contact out past the peak would be the
+  // regression that made the old 12 mm cold start slip.
+  //
+  // Note what this does *not* claim: a third of peak is not slow. The absolute
+  // contact speed is set by init_lift_body_time against init_place_clearance,
+  // not by the choice of curve — see lift_ramp. This pins the shape only.
   const Ladder l = baked();
   auto init = make_initialize(l);
 
@@ -253,20 +428,33 @@ TEST(InitializeLadder, BodyRampStartsOnTheFloorAndLeavesItStationary) {
   ASSERT_TRUE(init.done());
   ASSERT_GE(z.size(), 3u);
 
-  EXPECT_NEAR(z.front(), contact_z(), kTol) << "LIFT_BODY did not start on the floor";
+  EXPECT_NEAR(z.front(), place_z(l), kTol)
+      << "LIFT_BODY did not start one clearance above the floor";
+  EXPECT_LT(z.back(), contact_z()) << "the ramp never reached the floor";
+
+  // The sample the ramp crosses the floor on, and its speed there.
   const float peak = peak_step(z);
   ASSERT_GT(peak, 0.0f);
-  EXPECT_LT(std::fabs(z[1] - z[0]), 0.05f * peak)
-      << "the ramp leaves the floor at " << 100.0f * std::fabs(z[1] - z[0]) / peak
-      << "% of its peak speed";
-  for (std::size_t i = 0; i < z.size(); ++i) {
-    EXPECT_LE(z[i], contact_z() + kTol) << "foot rose off the floor at sample " << i;
-  }
+  std::size_t cross = 0;
+  while (cross + 1 < z.size() && z[cross] > contact_z()) ++cross;
+  ASSERT_GT(cross, 0u) << "the ramp started below the floor";
+  ASSERT_LT(cross, z.size() - 1) << "the ramp never crossed the floor";
+
+  const float cross_step = std::fabs(z[cross] - z[cross - 1]);
+  EXPECT_LT(cross_step, 0.5f * peak)
+      << "the feet take the floor at " << 100.0f * cross_step / peak
+      << "% of the ramp's peak speed";
+  // Still accelerating there: the crossing is in the ramp's first half, before
+  // the septic's midpoint peak.
+  EXPECT_LT(cross, z.size() / 2)
+      << "the floor contact fell past the middle of the ramp";
 }
 
 TEST(InitializeLadder, BodyRampIsMonotonicAndFinishesOnTime) {
-  // A quintic must not become a reversal, and must not lengthen the ladder —
-  // it is still three pair swings plus init_lift_body_time.
+  // A septic must not become a reversal, and must not lengthen the ladder —
+  // the ramp itself is still exactly init_lift_body_time. Swapping ease5 for
+  // ease7 changes the schedule along the travel, never the travel or its
+  // duration.
   const Ladder l = baked();
   auto init = make_initialize(l);
 
@@ -280,9 +468,55 @@ TEST(InitializeLadder, BodyRampIsMonotonicAndFinishesOnTime) {
   EXPECT_NEAR(static_cast<int>(z.size()), want_ticks + 1, 2);
 }
 
-// ── FoldController: standing -> folded ──────────────────────────────────────
+TEST(InitializeLadder, IsTheTimeReverseOfTheFoldUpToThePlaceClearance) {
+  // Rung for rung: the fold's TUCK starts where the initialize's UNFOLD ends
+  // (the initialized pose), and the fold's LOWER_BODY ends where the
+  // initialize's LIFT_BODY starts — at standing XY, and at the same z but for
+  // the cold start's place_clearance.
+  //
+  // That clearance is the one asymmetry between the ladders, and it is not an
+  // oversight. The fold's feet leave from where they were actually standing:
+  // they are carrying the robot until the belly takes over, so there is nothing
+  // to hold clear of. Only the cold start has pairs arriving one at a time with
+  // nothing yet to bear.
+  const Ladder l = baked();
+  auto init = make_initialize(l);
+  auto fold = make_fold(l);
 
-TEST(FoldLadder, EveryLegReachesInitialStance) {
+  std::map<std::string, g::LegOutput> init_lift_start;
+  for (int i = 0; i < max_ticks(l); ++i) {
+    const auto out = init.update(kDt);
+    if (init.state() == g::InitializeState::LIFT_BODY) {
+      init_lift_start = out;
+      break;
+    }
+  }
+  std::map<std::string, g::LegOutput> fold_lower_end;
+  for (int i = 0; i < max_ticks(l); ++i) {
+    const auto out = fold.update(kDt);
+    if (fold.state() == g::FoldState::LIFT_FEET) {
+      fold_lower_end = out;
+      break;
+    }
+  }
+  ASSERT_FALSE(init_lift_start.empty());
+  ASSERT_FALSE(fold_lower_end.empty());
+  for (const auto& name : g::LEG_NAMES) {
+    const std::string leg(name);
+    const g::Vec3& down = fold_lower_end.at(leg).foot_target;
+    const g::Vec3& up = init_lift_start.at(leg).foot_target;
+    // Same footprint either way round.
+    EXPECT_NEAR(down[0], up[0], kTol) << leg;
+    EXPECT_NEAR(down[1], up[1], kTol) << leg;
+    // Same floor, offset by exactly the clearance the cold start holds.
+    EXPECT_NEAR(up[2] - down[2], l.cfg.init_place_clearance, kTol) << leg;
+    EXPECT_NEAR(down[2], contact_z(), kTol) << leg << " fold left the floor";
+  }
+}
+
+// ── FoldController: standing -> initialized -> folded ───────────────────────
+
+TEST(FoldLadder, EveryLegReachesTheFoldedPose) {
   const Ladder l = baked();
   auto fold = make_fold(l);
 
@@ -297,13 +531,36 @@ TEST(FoldLadder, EveryLegReachesInitialStance) {
 
   for (const auto& name : g::LEG_NAMES) {
     const std::string leg(name);
-    expect_near(out.at(leg).foot_target, l.initial.at(leg), leg);
+    expect_near(out.at(leg).foot_target, l.folded.at(leg), leg);
   }
 }
 
-TEST(FoldLadder, ReversesTheInitializePairOrder) {
-  // Fold lifts feet in the mirror of the cold-start order, so the last leg down
-  // is the first leg back up.
+TEST(FoldLadder, PassesThroughTheInitializedPose) {
+  // Mechanically required, not cosmetic: the pairs come off the floor to the
+  // initialized pose and only then draw in to folded. Going straight to folded
+  // would take a leg through the tuck while its own pair is the only thing off
+  // the ground.
+  const Ladder l = baked();
+  auto fold = make_fold(l);
+
+  std::map<std::string, g::LegOutput> handover;
+  for (int i = 0; i < max_ticks(l); ++i) {
+    const auto out = fold.update(kDt);
+    if (fold.state() == g::FoldState::TUCK) {
+      handover = out;
+      break;
+    }
+  }
+  ASSERT_FALSE(handover.empty()) << "LIFT_FEET never handed over to TUCK";
+  for (const auto& name : g::LEG_NAMES) {
+    const std::string leg(name);
+    expect_near(handover.at(leg).foot_target, l.initialized.at(leg), leg);
+  }
+}
+
+TEST(FoldLadder, LiftsPairsInReversePairOrder) {
+  // Fold lifts feet in the mirror of the order a reseat plants them, so the
+  // last leg down is the first leg back up.
   const Ladder l = baked();
   auto fold = make_fold(l);
 
@@ -330,10 +587,31 @@ TEST(FoldLadder, ReversesTheInitializePairOrder) {
   }
 }
 
+TEST(FoldLadder, OnlyOnePairIsAirborneAtATime) {
+  // The other four hold the body up until the belly is down. This is the
+  // opposite requirement to the cold start's all-six landing, and the reason
+  // the two directions cannot share a ladder.
+  const Ladder l = baked();
+  auto fold = make_fold(l);
+
+  bool saw_swing = false;
+  for (int i = 0; i < max_ticks(l) && !fold.done(); ++i) {
+    const auto out = fold.update(kDt);
+    if (fold.state() != g::FoldState::LIFT_FEET) continue;
+    int swinging = 0;
+    for (const auto& name : g::LEG_NAMES) {
+      if (!out.at(std::string(name)).stance) ++swinging;
+    }
+    EXPECT_LE(swinging, 2) << "more than one pair airborne at tick " << i;
+    if (swinging > 0) saw_swing = true;
+  }
+  EXPECT_TRUE(saw_swing) << "LIFT_FEET never lifted a foot";
+}
+
 TEST(FoldLadder, BodyRampMeetsTheFloorStationaryAtItsEnd) {
-  // The mirror: the belly arrives exactly as LOWER_BODY runs out, so the ramp
-  // is already stopped when it lands rather than still descending into it. The
-  // fold used to overshoot the contact and put the landing mid-ramp.
+  // The belly arrives exactly as LOWER_BODY runs out, so the ramp is already
+  // stopped when it lands rather than still descending into it. The fold used
+  // to overshoot the contact and put the landing mid-ramp.
   const Ladder l = baked();
   auto fold = make_fold(l);
 
@@ -351,80 +629,4 @@ TEST(FoldLadder, BodyRampMeetsTheFloorStationaryAtItsEnd) {
   for (std::size_t i = 0; i < z.size(); ++i) {
     EXPECT_LE(z[i], contact_z() + kTol) << "body dipped past the floor at " << i;
   }
-}
-
-TEST(FoldLadder, IsTheTimeReverseOfInitialize) {
-  // Both ladders visit the same belly-height footprint, from opposite ends.
-  const Ladder l = baked();
-  auto init = make_initialize(l);
-  auto fold = make_fold(l);
-
-  std::map<std::string, g::LegOutput> init_end;
-  for (int i = 0; i < max_ticks(l); ++i) {
-    const auto out = init.update(kDt);
-    if (init.state() != g::InitializeState::PLACE_FEET) {
-      init_end = out;
-      break;
-    }
-  }
-  std::map<std::string, g::LegOutput> fold_mid;
-  for (int i = 0; i < max_ticks(l); ++i) {
-    const auto out = fold.update(kDt);
-    if (fold.state() == g::FoldState::LIFT_FEET) {
-      fold_mid = out;
-      break;
-    }
-  }
-  ASSERT_FALSE(init_end.empty());
-  ASSERT_FALSE(fold_mid.empty());
-  for (const auto& name : g::LEG_NAMES) {
-    const std::string leg(name);
-    expect_near(fold_mid.at(leg).foot_target, init_end.at(leg).foot_target, leg);
-  }
-}
-
-// ── eased_ramp ──────────────────────────────────────────────────────────────
-
-TEST(RampCurve, PinsBothEndsAndIsMonotonic) {
-  EXPECT_NEAR(g::eased_ramp(-0.5f), 0.0f, kTol);
-  EXPECT_NEAR(g::eased_ramp(0.0f), 0.0f, kTol);
-  EXPECT_NEAR(g::eased_ramp(1.0f), 1.0f, kTol);
-  EXPECT_NEAR(g::eased_ramp(1.5f), 1.0f, kTol);
-  EXPECT_NEAR(g::eased_ramp(0.5f), 0.5f, kTol);
-
-  constexpr int kSamples = 1000;
-  float prev = g::eased_ramp(0.0f);
-  for (int i = 1; i <= kSamples; ++i) {
-    const float cur = g::eased_ramp(static_cast<float>(i) / kSamples);
-    // On the value, not the slope: dividing float noise at 1.0 by the sample
-    // step turns an epsilon into a visibly negative slope.
-    EXPECT_GE(cur, prev - 1e-6f) << "not monotonic at sample " << i;
-    prev = cur;
-  }
-}
-
-TEST(RampCurve, LeavesTheFloorWithVanishingAcceleration) {
-  // What separates the quintic from the cubic smoothstep it replaced. Both
-  // start at zero velocity, so velocity alone cannot tell them apart; the
-  // cubic's curvature at tau = 0 is its maximum, which is a jerk step exactly
-  // where the legs begin taking the body's weight. The quintic's is zero.
-  //
-  // Measured at the tau = 0 end only: the curve is symmetric, and near tau = 1
-  // the values sit at 1.0 where float spacing (1.2e-7) swamps a second
-  // difference this small.
-  constexpr float h = 1e-3f;
-  const float d2_at_zero = std::fabs(g::eased_ramp(2.0f * h) -
-                                     2.0f * g::eased_ramp(h) + g::eased_ramp(0.0f));
-
-  float d2_peak = 0.0f;
-  for (int i = 1; i < 999; ++i) {
-    const float t = static_cast<float>(i) / 1000.0f;
-    d2_peak = std::max(d2_peak, std::fabs(g::eased_ramp(t + h) -
-                                          2.0f * g::eased_ramp(t) +
-                                          g::eased_ramp(t - h)));
-  }
-  ASSERT_GT(d2_peak, 0.0f);
-  EXPECT_LT(d2_at_zero, 0.05f * d2_peak)
-      << "curvature at the floor is " << 100.0f * d2_at_zero / d2_peak
-      << "% of the ramp's peak; a cubic smoothstep scores ~100%";
 }

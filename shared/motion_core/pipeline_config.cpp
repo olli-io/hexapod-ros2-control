@@ -16,7 +16,8 @@ PipelineConfig PipelineConfig::baked() {
   c.coxa_to_bottom = cfg::kCoxaToBottom;
   c.foot_radius = cfg::kFootRadius;
   c.standing_pose = cfg::kStandingPose;
-  c.initial_pose = cfg::kInitialPose;
+  c.folded_pose = cfg::kFoldedPose;
+  c.initialized_pose = cfg::kInitializedPose;
   // tuning.yaml
   c.engine = ::hexa::gait::engine_config_from_config();  // config::kEngine -> gait::EngineConfig
   // The angular cap is the linear one over the lever arm a yaw rate acts

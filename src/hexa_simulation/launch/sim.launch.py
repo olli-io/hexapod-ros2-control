@@ -39,8 +39,8 @@ def generate_launch_description():
     pkg_ros_gz_sim = FindPackageShare("ros_gz_sim")
 
     # Spawn z defaults to the chassis's coxa-to-bottom half-thickness so
-    # the hexapod lands belly-flush on the ground at the folded
-    # initial_pose. Resolved eagerly (not via Substitution) because
+    # the hexapod lands belly-flush on the ground at the folded_pose the
+    # URDF spawns it in. Resolved eagerly (not via Substitution) because
     # DeclareLaunchArgument needs a concrete string for its default and
     # for its -h help text. Override on the CLI when debugging.
     _geom_path = Path(get_package_share_directory("hexa_description")) / "config" / "geometry.yaml"
@@ -130,7 +130,7 @@ def generate_launch_description():
             description="Initial z-height (m) at which the model is spawned. "
                         "Defaults to body.coxa_to_bottom from "
                         "hexa_description/config/geometry.yaml so the model "
-                        "spawns belly-flush at the folded initial_pose.",
+                        "spawns belly-flush at the folded_pose.",
         ),
         DeclareLaunchArgument(
             "headless", default_value="false",

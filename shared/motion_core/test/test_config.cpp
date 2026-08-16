@@ -41,9 +41,15 @@ std::string_view gait_name(const cfg::GaitSpec& g) {
   return std::string_view(g.name.data());
 }
 
-float initial_angle(Leg leg, std::size_t joint) {
-  return cfg::kInitialPose[static_cast<std::size_t>(leg)][joint];
-}
+// The two belly-rest poses share a schema and every invariant below, so the
+// suite runs each check over both rather than picking one.
+const std::array<std::pair<const char*,
+                           const std::array<hexa::JointAngles, hexa::kNumLegs>*>,
+                 2>
+    kRestPoses = {{
+        {"folded_pose", &cfg::kFoldedPose},
+        {"initialized_pose", &cfg::kInitializedPose},
+    }};
 }  // namespace
 
 TEST(LegIndex, NameRoundTrip) {
@@ -113,48 +119,55 @@ TEST(LegSpecs, SegmentsAreUniform) {
   EXPECT_GT(cfg::kCoxaToBottom, 0.0f);
 }
 
-TEST(JointLimits, BracketTheInitialPose) {
+TEST(JointLimits, BracketBothRestPoses) {
   for (std::size_t j = 0; j < cfg::kJointLimits.size(); ++j) {
     EXPECT_LT(cfg::kJointLimits[j].lower, cfg::kJointLimits[j].upper)
         << "joint " << j;
   }
 
   // Each joint type applies its own deg->rad convention (coxa plain, femur
-  // negated, tibia pi - x). A dropped negation or a missing `pi -` throws the
-  // startup tuck outside its own travel window, which is what this catches —
+  // negated, tibia pi - x). A dropped negation or a missing `pi -` throws a
+  // rest pose outside its own travel window, which is what this catches —
   // without naming a single YAML number. Bounds are inclusive: the femur tuck is
   // allowed to sit exactly on its stop.
   //
   // Femur and tibia only. The shipped geometry.yaml deliberately tucks the coxa
-  // past its travel window at startup (initial_pose.coxa.l_front_deg exceeds
+  // past its travel window at rest (coxa.l_front_deg exceeds
   // joints.coxa.upper_limit_deg), so a coxa bracket would not hold.
-  for (std::size_t i = 0; i < cfg::kInitialPose.size(); ++i) {
-    for (std::size_t j = 1; j < 3; ++j) {
-      const float angle = cfg::kInitialPose[i][j];
-      EXPECT_GE(angle, cfg::kJointLimits[j].lower - kTol)
-          << hexa::LEG_NAMES[i] << " joint " << j;
-      EXPECT_LE(angle, cfg::kJointLimits[j].upper + kTol)
-          << hexa::LEG_NAMES[i] << " joint " << j;
+  for (const auto& [name, pose] : kRestPoses) {
+    for (std::size_t i = 0; i < pose->size(); ++i) {
+      for (std::size_t j = 1; j < 3; ++j) {
+        const float angle = (*pose)[i][j];
+        EXPECT_GE(angle, cfg::kJointLimits[j].lower - kTol)
+            << name << " " << hexa::LEG_NAMES[i] << " joint " << j;
+        EXPECT_LE(angle, cfg::kJointLimits[j].upper + kTol)
+            << name << " " << hexa::LEG_NAMES[i] << " joint " << j;
+      }
     }
   }
 }
 
-TEST(Pose, InitialPerLegSymmetry) {
+TEST(Pose, RestPosesArePerLegSymmetric) {
   // geometry.yaml gives the coxa tuck for l_front and l_middle only; the rest
   // are mirrored. femur/tibia are uniform across the hexapod.
-  const float front = initial_angle(Leg::L_FRONT, 0);
-  EXPECT_NE(front, 0.0f) << "a zero front tuck makes the mirrors vacuous";
-  EXPECT_NEAR(initial_angle(Leg::L_REAR, 0), -front, kTol);
-  EXPECT_NEAR(initial_angle(Leg::R_FRONT, 0), -front, kTol);
-  EXPECT_NEAR(initial_angle(Leg::R_REAR, 0), front, kTol);
-  EXPECT_NEAR(initial_angle(Leg::L_MIDDLE, 0), initial_angle(Leg::R_MIDDLE, 0),
-              kTol);
+  for (const auto& [name, pose] : kRestPoses) {
+    const auto angle = [&](Leg leg, std::size_t joint) {
+      return (*pose)[static_cast<std::size_t>(leg)][joint];
+    };
+    const float front = angle(Leg::L_FRONT, 0);
+    EXPECT_NE(front, 0.0f) << name << ": a zero front tuck makes the mirrors "
+                                      "vacuous";
+    EXPECT_NEAR(angle(Leg::L_REAR, 0), -front, kTol) << name;
+    EXPECT_NEAR(angle(Leg::R_FRONT, 0), -front, kTol) << name;
+    EXPECT_NEAR(angle(Leg::R_REAR, 0), front, kTol) << name;
+    EXPECT_NEAR(angle(Leg::L_MIDDLE, 0), angle(Leg::R_MIDDLE, 0), kTol) << name;
 
-  for (std::size_t i = 0; i < cfg::kInitialPose.size(); ++i) {
-    EXPECT_NEAR(cfg::kInitialPose[i][1], cfg::kInitialPose[0][1], kTol)
-        << hexa::LEG_NAMES[i] << " femur differs from leg 0";
-    EXPECT_NEAR(cfg::kInitialPose[i][2], cfg::kInitialPose[0][2], kTol)
-        << hexa::LEG_NAMES[i] << " tibia differs from leg 0";
+    for (std::size_t i = 0; i < pose->size(); ++i) {
+      EXPECT_NEAR((*pose)[i][1], (*pose)[0][1], kTol)
+          << name << " " << hexa::LEG_NAMES[i] << " femur differs from leg 0";
+      EXPECT_NEAR((*pose)[i][2], (*pose)[0][2], kTol)
+          << name << " " << hexa::LEG_NAMES[i] << " tibia differs from leg 0";
+    }
   }
 }
 

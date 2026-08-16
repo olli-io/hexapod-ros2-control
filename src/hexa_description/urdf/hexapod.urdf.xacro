@@ -75,17 +75,19 @@
   <xacro:property name="tibia_upper_rad"
                   value="${pi - geom['joints']['tibia']['lower_limit_deg'] * pi / 180}"/>
 
-  <!-- Initial pose used by ros2_control's <initial_value>: same deg→rad
-       conversion as the <limit> window above. In sim, gz_ros2_control
-       applies it on spawn; on the real robot, the hardware plugin uses it
-       as the assumed pose for servos that cannot report position. Femur
-       and tibia are uniform across all six legs; the per-leg coxa value
-       lives inside the leg_joints_iface macro so it can apply the same
-       x/y mirror as mount_leg. -->
-  <xacro:property name="initial_femur_rad"
-                  value="${-geom['initial_pose']['femur']['above_horizontal_deg'] * pi / 180}"/>
-  <xacro:property name="initial_tibia_rad"
-                  value="${pi - geom['initial_pose']['tibia']['interior_deg'] * pi / 180}"/>
+  <!-- Folded pose, fed to ros2_control's <initial_value>: same deg→rad
+       conversion as the <limit> window above. This is the pose the robot
+       energizes into. In sim, gz_ros2_control applies it on spawn; on the
+       real robot, the hardware plugin uses it as the assumed pose for
+       servos that cannot report position. The initialized pose the unfold
+       ladder moves on to is a gait-engine matter and never reaches the
+       URDF. Femur and tibia are uniform across all six legs; the per-leg
+       coxa value lives inside the leg_joints_iface macro so it can apply
+       the same x/y mirror as mount_leg. -->
+  <xacro:property name="folded_femur_rad"
+                  value="${-geom['folded_pose']['femur']['above_horizontal_deg'] * pi / 180}"/>
+  <xacro:property name="folded_tibia_rad"
+                  value="${pi - geom['folded_pose']['tibia']['interior_deg'] * pi / 180}"/>
 
   <!-- Body length and width are derived from the front and middle mounts.
        Length extends 10% past the front hips; width is 80% of the middle
@@ -431,17 +433,17 @@
        ===================================================================== -->
   <xacro:macro name="leg_joints_iface" params="side name">
     <!-- Per-leg coxa initial angle, derived from
-         initial_pose.coxa.l_{front,middle}_deg by the same x/y mirror as
+         folded_pose.coxa.l_{front,middle}_deg by the same x/y mirror as
          mount_leg above:
            - rear  : negate (front/rear mirror)
            - r_*   : negate (left/right mirror)
          Applying both leaves r_rear with the same sign as l_front. -->
-    <xacro:property name="ref_initial_coxa_deg"
-                    value="${geom['initial_pose']['coxa']['l_middle_deg' if name == 'middle' else 'l_front_deg']}"/>
-    <xacro:property name="initial_coxa_deg_after_fr"
-                    value="${-ref_initial_coxa_deg if name == 'rear' else ref_initial_coxa_deg}"/>
-    <xacro:property name="initial_coxa_rad"
-                    value="${(-initial_coxa_deg_after_fr if side == 'r' else initial_coxa_deg_after_fr) * pi / 180}"/>
+    <xacro:property name="ref_folded_coxa_deg"
+                    value="${geom['folded_pose']['coxa']['l_middle_deg' if name == 'middle' else 'l_front_deg']}"/>
+    <xacro:property name="folded_coxa_deg_after_fr"
+                    value="${-ref_folded_coxa_deg if name == 'rear' else ref_folded_coxa_deg}"/>
+    <xacro:property name="folded_coxa_rad"
+                    value="${(-folded_coxa_deg_after_fr if side == 'r' else folded_coxa_deg_after_fr) * pi / 180}"/>
 
     <joint name="${side}_${name}_coxa_joint">
       <command_interface name="position">
@@ -449,7 +451,7 @@
         <param name="max">${coxa_upper_rad}</param>
       </command_interface>
       <state_interface name="position">
-        <param name="initial_value">${initial_coxa_rad}</param>
+        <param name="initial_value">${folded_coxa_rad}</param>
       </state_interface>
       <state_interface name="velocity"/>
     </joint>
@@ -459,7 +461,7 @@
         <param name="max">${femur_upper_rad}</param>
       </command_interface>
       <state_interface name="position">
-        <param name="initial_value">${initial_femur_rad}</param>
+        <param name="initial_value">${folded_femur_rad}</param>
       </state_interface>
       <state_interface name="velocity"/>
     </joint>
@@ -469,7 +471,7 @@
         <param name="max">${tibia_upper_rad}</param>
       </command_interface>
       <state_interface name="position">
-        <param name="initial_value">${initial_tibia_rad}</param>
+        <param name="initial_value">${folded_tibia_rad}</param>
       </state_interface>
       <state_interface name="velocity"/>
     </joint>

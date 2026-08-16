@@ -35,7 +35,11 @@ struct PipelineConfig {
   // gait::standing_pose_from solves the per-leg triple from these plus the leg
   // specs.
   hexa::config::StandingPose standing_pose{};
-  std::array<hexa::JointAngles, hexa::kNumLegs> initial_pose{};
+  // ── geometry.yaml, the two belly-rest poses ──
+  // folded is where the robot energizes and where a fold ends; initialized is
+  // the unfold ladder's endpoint, from which the reseat ladder stands it up.
+  std::array<hexa::JointAngles, hexa::kNumLegs> folded_pose{};
+  std::array<hexa::JointAngles, hexa::kNumLegs> initialized_pose{};
 
   // ── tuning.yaml ──
   hexa::gait::EngineConfig engine{};      // already converted from config::kEngine

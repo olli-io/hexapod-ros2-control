@@ -225,8 +225,9 @@ void SwingPlanner::reset() {
 Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
                std::string strategy_name,
                std::map<std::string, Vec3> nominal_stance,
-               std::map<std::string, Vec3> initial_stance, float coxa_to_bottom,
-               float foot_radius,
+               std::map<std::string, Vec3> folded_stance,
+               std::map<std::string, Vec3> initialized_stance,
+               float coxa_to_bottom, float foot_radius,
                std::map<std::string, LegContext> leg_contexts,
                std::optional<std::map<std::string, kin::LegSpec>> leg_specs,
                std::optional<ReseatGeometryByLeg> reseat_geometry)
@@ -239,7 +240,8 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
       leg_specs_(std::move(leg_specs)),
       reseat_geometry_(std::move(reseat_geometry)) {
   require_all_legs(nominal_stance, "nominal_stance");
-  require_all_legs(initial_stance, "initial_stance");
+  require_all_legs(folded_stance, "folded_stance");
+  require_all_legs(initialized_stance, "initialized_stance");
   require_all_legs(legs_, "leg_contexts");
   if (leg_specs_.has_value() != reseat_geometry_.has_value()) {
     throw std::invalid_argument(
@@ -248,7 +250,8 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
 
   for (const auto& n : LEG_NAMES) {
     nominal_[n] = nominal_stance.at(n);
-    initial_[n] = initial_stance.at(n);
+    folded_[n] = folded_stance.at(n);
+    initialized_[n] = initialized_stance.at(n);
   }
 
   clock_.emplace(strategy_->phase_offsets());
@@ -256,7 +259,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
   initialize_ = build_initialize();
 
   state_ = EngineState::FOLDED;
-  last_targets_ = initial_;
+  last_targets_ = folded_;
   for (const auto& n : LEG_NAMES) {
     last_stance_[n] = true;
     held_down_[n] = false;
@@ -348,8 +351,8 @@ bool Engine::set_strategy(const std::string& name) {
 
 bool Engine::start_initialize() {
   // Valid from a cold-start FOLDED or a latched FAULT — recovery reuses the exact
-  // same INITIALIZE ladder (initial_ -> nominal_), so "press Start after a fault"
-  // is byte-for-byte the startup + initialize path.
+  // same cold start (folded_ -> initialized_ -> nominal_), so "press Start after
+  // a fault" is byte-for-byte the startup path.
   if (state_ != EngineState::FOLDED && state_ != EngineState::FAULT) {
     return false;
   }
@@ -365,7 +368,7 @@ void Engine::enter_fault() {
   // Reset to the same clean baseline the constructor establishes for FOLDED so a
   // subsequent start_initialize() runs the ladder from a pristine folded state.
   state_ = EngineState::FAULT;
-  last_targets_ = initial_;
+  last_targets_ = folded_;
   for (const auto& n : LEG_NAMES) {
     last_stance_[n] = true;
     held_down_[n] = false;
@@ -402,20 +405,22 @@ void Engine::set_target_height(float target_height) {
 
 std::unique_ptr<InitializeController> Engine::build_initialize() {
   return std::make_unique<InitializeController>(
-      initial_, nominal_, coxa_to_bottom_, foot_radius_,
+      folded_, initialized_, nominal_, coxa_to_bottom_, foot_radius_,
       config_.init_pair_swing_time, config_.init_lift_body_time,
+      config_.init_unfold_time, config_.init_place_clearance,
       config_.init_swing_clearance, config_.swing_width,
       config_.touchdown_velocity, config_.touchdown_probe_fraction,
       config_.controller_dt);
 }
 
 std::unique_ptr<FoldController> Engine::build_fold() {
+  // The tuck is the unfold run backwards, so it takes the same time.
   return std::make_unique<FoldController>(
-      initial_, nominal_, coxa_to_bottom_, foot_radius_,
+      folded_, initialized_, nominal_, coxa_to_bottom_, foot_radius_,
       config_.init_pair_swing_time, config_.init_lift_body_time,
-      config_.init_swing_clearance, config_.swing_width,
-      config_.touchdown_velocity, config_.touchdown_probe_fraction,
-      config_.controller_dt);
+      config_.init_unfold_time, config_.init_swing_clearance,
+      config_.swing_width, config_.touchdown_velocity,
+      config_.touchdown_probe_fraction, config_.controller_dt);
 }
 
 std::unique_ptr<EngagementController> Engine::build_engagement() {
@@ -514,7 +519,7 @@ std::map<std::string, LegOutput> Engine::update(
     // start_initialize(), routed from the FAULT branch of pipeline::tick.
     std::map<std::string, LegOutput> out;
     for (const auto& n : LEG_NAMES) {
-      out[n] = LegOutput{initial_.at(n), 0.0f, true};
+      out[n] = LegOutput{folded_.at(n), 0.0f, true};
     }
     return out;
   }
@@ -535,7 +540,7 @@ std::map<std::string, LegOutput> Engine::update(
     capture_state(out);
     if (fold_->done()) {
       state_ = EngineState::FOLDED;
-      last_targets_ = initial_;
+      last_targets_ = folded_;
       for (const auto& n : LEG_NAMES) last_stance_[n] = true;
     }
     return out;
@@ -933,7 +938,7 @@ std::map<std::string, LegOutput> Engine::tick_fold(float dt) {
   capture_state(out);
   if (fold_->done()) {
     state_ = EngineState::FOLDED;
-    last_targets_ = initial_;
+    last_targets_ = folded_;
     for (const auto& n : LEG_NAMES) last_stance_[n] = true;
   }
   return out;
@@ -971,8 +976,10 @@ EngineConfig engine_config_from_config() {
   cfg.cmd_zero_tol = c.cmd_zero_tol;
   cfg.settle_debounce_delay = c.settle_debounce_delay;
   cfg.settle_swing_time = c.settle_swing_time;
+  cfg.init_unfold_time = c.init_unfold_time;
   cfg.init_pair_swing_time = c.init_pair_swing_time;
   cfg.init_lift_body_time = c.init_lift_body_time;
+  cfg.init_place_clearance = c.init_place_clearance;
   cfg.init_swing_clearance = c.init_swing_clearance;
   cfg.reseat_pose_settle_delay = c.reseat_pose_settle_delay;
   cfg.reseat_height_change_threshold = c.reseat_height_change_threshold;
@@ -1066,10 +1073,10 @@ std::map<std::string, Vec3> nominal_stance_from(
   return stance_from(specs, standing_pose);
 }
 
-std::map<std::string, Vec3> initial_stance_from(
+std::map<std::string, Vec3> rest_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const std::array<JointAngles, kNumLegs>& initial_pose) {
-  return stance_from(specs, initial_pose);
+    const std::array<JointAngles, kNumLegs>& rest_pose) {
+  return stance_from(specs, rest_pose);
 }
 
 std::map<std::string, kin::LegSpec> leg_specs_from(
@@ -1123,8 +1130,13 @@ std::map<std::string, Vec3> nominal_stance_from_config() {
   return nominal_stance_from(baked_leg_specs(), standing_pose_from_config());
 }
 
-std::map<std::string, Vec3> initial_stance_from_config() {
-  return initial_stance_from(baked_leg_specs(), ::hexa::config::kInitialPose);
+std::map<std::string, Vec3> folded_stance_from_config() {
+  return rest_stance_from(baked_leg_specs(), ::hexa::config::kFoldedPose);
+}
+
+std::map<std::string, Vec3> initialized_stance_from_config() {
+  return rest_stance_from(baked_leg_specs(),
+                          ::hexa::config::kInitializedPose);
 }
 
 std::map<std::string, kin::LegSpec> leg_specs_from_config() {
@@ -1144,7 +1156,8 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const EngineConfig& engine_cfg,
     const std::array<JointAngles, kNumLegs>& standing_pose,
-    const std::array<JointAngles, kNumLegs>& initial_pose,
+    const std::array<JointAngles, kNumLegs>& folded_pose,
+    const std::array<JointAngles, kNumLegs>& initialized_pose,
     float coxa_to_bottom, float foot_radius) {
   auto factory = strategies().find(strategy_name);
   if (factory == strategies().end()) {
@@ -1153,7 +1166,8 @@ std::unique_ptr<Engine> make_default_engine(
   return std::make_unique<Engine>(
       engine_cfg, factory->second(), strategy_name,
       nominal_stance_from(specs, standing_pose),
-      initial_stance_from(specs, initial_pose), coxa_to_bottom, foot_radius,
+      rest_stance_from(specs, folded_pose),
+      rest_stance_from(specs, initialized_pose), coxa_to_bottom, foot_radius,
       build_leg_contexts_from(specs, standing_pose), leg_specs_from(specs),
       reseat_geometry_from(specs, standing_pose));
 }
@@ -1161,8 +1175,9 @@ std::unique_ptr<Engine> make_default_engine(
 std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
   return make_default_engine(
       strategy_name, baked_leg_specs(), engine_config_from_config(),
-      standing_pose_from_config(), ::hexa::config::kInitialPose,
-      ::hexa::config::kCoxaToBottom, ::hexa::config::kFootRadius);
+      standing_pose_from_config(), ::hexa::config::kFoldedPose,
+      ::hexa::config::kInitializedPose, ::hexa::config::kCoxaToBottom,
+      ::hexa::config::kFootRadius);
 }
 
 std::string state_value(EngineState s) {

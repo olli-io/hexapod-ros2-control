@@ -62,7 +62,8 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
           hexa::gait::nominal_stance_from(cfg.leg_specs, standing_pose_)),
       engine_(hexa::gait::make_default_engine(
           cfg.default_gait, cfg.leg_specs, cfg.engine, standing_pose_,
-          cfg.initial_pose, cfg.coxa_to_bottom, cfg.foot_radius)),
+          cfg.folded_pose, cfg.initialized_pose, cfg.coxa_to_bottom,
+          cfg.foot_radius)),
       caps_(cfg.caps),
       control_(cfg.control, cfg.caps, nominal_stance_,
                hexa::gait::build_leg_contexts_from(cfg.leg_specs,

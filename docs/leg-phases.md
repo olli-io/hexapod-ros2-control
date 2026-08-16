@@ -195,30 +195,64 @@ other two gaits.
 
 Terminology specific to the cold-start sequence the gait engine runs
 once at power-on, bridging the folded shipping pose to the standing
-pose:
+pose. There are **two** belly-rest poses, and both the way up and the
+way down pass through the second one:
 
-- **initial pose** — the per-joint angles assumed at startup, before
-  any commanded motion. Defined in `hexa_description/config/geometry.yaml`
-  under `initial_pose:` and applied to ros2_control's
-  `<state_interface name="position">` as `<param name="initial_value">`.
-  In sim, gz_ros2_control spawns the model in this pose; on the real
-  robot, the hardware plugin uses it as the assumed pose for servos
-  that cannot report their own angle (the operator is responsible for
-  placing the chassis in roughly this pose at power-on).
+- **folded pose** — the per-joint angles the robot energizes into,
+  before any commanded motion, and the pose a fold ends on. Defined in
+  `hexa_description/config/geometry.yaml` under `folded_pose:` and
+  applied to ros2_control's `<state_interface name="position">` as
+  `<param name="initial_value">`. In sim, gz_ros2_control spawns the
+  model in this pose; on the real robot, the hardware plugin uses it as
+  the assumed pose for servos that cannot report their own angle (the
+  operator is responsible for placing the chassis in roughly this pose
+  at power-on). Tucked in tighter than the initialized pose.
+- **initialized pose** — `geometry.yaml`'s `initialized_pose:`, the
+  same schema. Still belly-resting, feet still clear of the floor, but
+  the legs are deployed: every foot is in the air above its standing
+  target. Sits between folded and standing in both directions, for
+  mechanical reasons — nothing goes straight between folded and
+  standing.
 - **folded** — pre-INITIALIZE engine state. The engine emits the
-  initial-pose foot positions and ignores `cmd_vel`; an operator
+  folded-pose foot positions and ignores `cmd_vel`; an operator
   trigger (`/gait/initialize` on rising edge of the joystick start
   button) advances to INITIALIZE.
-- **initialize** — engine state covering the cold-start sequence from
-  the initial pose to standing.
+- **initialize** — engine state covering the whole cold-start sequence,
+  folded pose to standing. Its three rungs are unfold, place feet and
+  lift body.
+- **unfold** — folded pose to initialized pose: one eased move of all
+  six feet at once, straight along the chord between the two poses.
+  Both ends are airborne and the belly carries the robot the whole way,
+  so there is nothing to sequence, nothing to land, and no arc to climb.
+  Runs over `initialize.unfold_time`.
 - **place feet** — INITIALIZE sub-phase: pair-wise foot placement from
-  the folded initial-pose footprint to the standing footprint, landing
-  each foot on the floor the belly is already resting on. The swing arc
-  probes down the last stretch at the gait's touchdown speed, so this is
-  where the ground contact belongs — putting the feet down short of the
-  floor only moves the contact into the middle of the lift-body ramp.
+  the initialized-pose footprint to the standing footprint, parking each
+  foot `initialize.place_clearance` above the floor the belly is already
+  resting on rather than landing it. No pair takes load while later pairs
+  are still swinging, so belly-height error cannot be preloaded into a
+  leg that has no way to give it back; all six meet the floor together
+  on the lift-body ramp. The swing arc still descends the last stretch at
+  the gait's touchdown speed, which is the slack absorbing a floor higher
+  than the belly says it is.
 - **lift body** — INITIALIZE sub-phase that follows place feet: ramp
-  foot z in the body frame from the place-feet endpoint (the floor)
-  down to nominal standing z, raising the body to standing height as
-  the legs extend. A quintic, so the legs take up the body's weight
-  with zero velocity *and* zero acceleration at the contact end.
+  foot z in the body frame from the place-feet endpoint (one clearance
+  above the floor) down to nominal standing z, raising the body to
+  standing height as the legs extend. The first `place_clearance` of that
+  travel is the feet reaching the floor and taking the load. A septic,
+  not the fold's quintic: the contact is an interior point of this ramp
+  rather than an endpoint, and the septic's flatter opening puts it at a
+  smaller share of the ramp's peak speed. Only a smaller share — the
+  absolute contact speed is `place_clearance` against
+  `initialize.lift_body_time`, not the choice of curve.
+- **lower body** — first FOLDING sub-phase, the time-reverse of lift
+  body: all six feet hold their standing XY while body-frame z ramps up
+  to the belly height, so the belly reaches the floor exactly as the
+  ramp runs out of speed.
+- **lift feet** — FOLDING sub-phase, the time-reverse of place feet:
+  pair-wise lift of the feet off the floor to the initialized pose,
+  three mirroring pairs in reverse PAIR_ORDER. No counterpart to place
+  feet's clearance — these feet leave from where they were actually
+  standing, carrying the robot until the belly takes over, so there is
+  nothing to hold clear of.
+- **tuck** — the unfold run backwards, initialized pose to folded pose.
+  The last rung of a fold.

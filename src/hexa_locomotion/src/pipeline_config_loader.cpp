@@ -98,33 +98,41 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
         static_cast<float>(to_urdf_rad("coxa", grp["coxa_deg"].as<double>()))};
   }
 
-  // ── initial pose (geometry.yaml initial_pose, port of initial_pose) ──
+  // ── the two belly-rest poses (geometry.yaml folded_pose /
+  // initialized_pose, port of gen_config.rest_pose) ──
   // femur/tibia uniform; coxa front/rear/middle by symmetry in degrees, then
-  // rear negates and right negates before the deg->rad conversion.
-  const YAML::Node init = geo["initial_pose"];
-  const float femur_init = static_cast<float>(
-      to_urdf_rad("femur", init["femur"]["above_horizontal_deg"].as<double>()));
-  const float tibia_init = static_cast<float>(
-      to_urdf_rad("tibia", init["tibia"]["interior_deg"].as<double>()));
-  const YAML::Node coxa_cfg = init["coxa"];
-  std::map<std::string, hexa::JointAngles> initial;
-  for (const std::string side : {"l", "r"}) {
-    for (const std::string name : {"front", "middle", "rear"}) {
-      const double ref_deg =
-          coxa_cfg[(name == "middle") ? "l_middle_deg" : "l_front_deg"]
-              .as<double>();
-      const double after_fr = (name == "rear") ? -ref_deg : ref_deg;
-      const double after_lr = (side == "r") ? -after_fr : after_fr;
-      const float coxa_init = static_cast<float>(to_urdf_rad("coxa", after_lr));
-      initial[side + "_" + name] = {coxa_init, femur_init, tibia_init};
+  // rear negates and right negates before the deg->rad conversion. Both poses
+  // share the schema, so one lambda reads either.
+  const auto rest_pose = [&](const char* key) {
+    const YAML::Node p = geo[key];
+    const float femur = static_cast<float>(
+        to_urdf_rad("femur", p["femur"]["above_horizontal_deg"].as<double>()));
+    const float tibia = static_cast<float>(
+        to_urdf_rad("tibia", p["tibia"]["interior_deg"].as<double>()));
+    const YAML::Node coxa_cfg = p["coxa"];
+    std::map<std::string, hexa::JointAngles> out;
+    for (const std::string side : {"l", "r"}) {
+      for (const std::string name : {"front", "middle", "rear"}) {
+        const double ref_deg =
+            coxa_cfg[(name == "middle") ? "l_middle_deg" : "l_front_deg"]
+                .as<double>();
+        const double after_fr = (name == "rear") ? -ref_deg : ref_deg;
+        const double after_lr = (side == "r") ? -after_fr : after_fr;
+        const float coxa = static_cast<float>(to_urdf_rad("coxa", after_lr));
+        out[side + "_" + name] = {coxa, femur, tibia};
+      }
     }
-  }
+    return out;
+  };
+  const auto folded = rest_pose("folded_pose");
+  const auto initialized = rest_pose("initialized_pose");
 
   // Fill the by-leg arrays in canonical LEG_NAMES order.
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
     const std::string& nm = hexa::gait::LEG_NAMES[i];
     cfg.leg_specs[i] = specs.at(nm);
-    cfg.initial_pose[i] = initial.at(nm);
+    cfg.folded_pose[i] = folded.at(nm);
+    cfg.initialized_pose[i] = initialized.at(nm);
   }
   cfg.coxa_to_bottom = f(geo["body"]["coxa_to_bottom"]);
   cfg.foot_radius = f(geo["foot"]["radius"]);
@@ -144,8 +152,10 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
   e.settle_debounce_delay = f(g["settle"]["debounce_delay"]);
   e.settle_swing_time = f(g["settle"]["swing_time"]);
+  e.init_unfold_time = f(g["initialize"]["unfold_time"]);
   e.init_pair_swing_time = f(g["initialize"]["pair_swing_time"]);
   e.init_lift_body_time = f(g["initialize"]["lift_body_time"]);
+  e.init_place_clearance = f(g["initialize"]["place_clearance"]);
   e.init_swing_clearance = f(g["initialize"]["swing_clearance"]);
   e.reseat_pose_settle_delay = f(g["reseat"]["pose_settle_delay"]);
   e.reseat_height_change_threshold = f(g["reseat"]["height_change_threshold"]);

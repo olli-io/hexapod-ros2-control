@@ -249,6 +249,12 @@ inline float ease5(float u) {
   return u * u * u * (10.0f + u * (-15.0f + 6.0f * u));
 }
 
+// Septic smoothstep: ease5 plus a vanishing third derivative at both ends, so
+// the curve stays near-stationary for longer either side of the travel and only
+// departs as O(t^4). swing_arc blends the two ground lines with it; the cold
+// start's body lift ramps on it. Undefined outside [0, 1] — callers clamp.
+float ease7(float u);
+
 // Evaluate the swing trajectory at phase_in_swing in [0, 1).
 //
 // One curve, not a chain of segments. The horizontal track is a septic-eased

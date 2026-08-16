@@ -65,8 +65,10 @@ struct EngineConfig {
   float cmd_zero_tol = 0.0f;
   float settle_debounce_delay = 0.0f;
   float settle_swing_time = 0.0f;
-  float init_pair_swing_time = 0.0f;
+  float init_unfold_time = 0.0f;
   float init_lift_body_time = 0.0f;
+  float init_pair_swing_time = 0.0f;
+  float init_place_clearance = 0.0f;
   float init_swing_clearance = 0.0f;
   float reseat_pose_settle_delay = 0.0f;
   float reseat_height_change_threshold = 0.0f;
@@ -212,7 +214,8 @@ class Engine {
   // the supplied strategy.
   Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
          std::string strategy_name, std::map<std::string, Vec3> nominal_stance,
-         std::map<std::string, Vec3> initial_stance, float coxa_to_bottom,
+         std::map<std::string, Vec3> folded_stance,
+         std::map<std::string, Vec3> initialized_stance, float coxa_to_bottom,
          float foot_radius, std::map<std::string, LegContext> leg_contexts,
          std::optional<std::map<std::string, kin::LegSpec>> leg_specs =
              std::nullopt,
@@ -304,7 +307,8 @@ class Engine {
   std::unique_ptr<Strategy> strategy_;
   std::string strategy_name_;
   std::map<std::string, Vec3> nominal_;
-  std::map<std::string, Vec3> initial_;
+  std::map<std::string, Vec3> folded_;
+  std::map<std::string, Vec3> initialized_;
   float coxa_to_bottom_;
   float foot_radius_;
   std::map<std::string, LegContext> legs_;
@@ -362,7 +366,8 @@ class Engine {
 EngineConfig engine_config_from_config();
 std::array<JointAngles, kNumLegs> standing_pose_from_config();
 std::map<std::string, Vec3> nominal_stance_from_config();
-std::map<std::string, Vec3> initial_stance_from_config();
+std::map<std::string, Vec3> folded_stance_from_config();
+std::map<std::string, Vec3> initialized_stance_from_config();
 std::map<std::string, kin::LegSpec> leg_specs_from_config();
 ReseatGeometryByLeg reseat_geometry_from_config();
 std::map<std::string, LegContext> build_leg_contexts_from_config();
@@ -375,7 +380,8 @@ std::unique_ptr<Engine> make_default_engine(
 // ── Parameterized builders (runtime geometry, e.g. hexa_locomotion's YAML) ──
 //
 // Same construction as the *_from_config() versions but from explicit leg specs,
-// standing/initial pose, and engine config instead of the baked constexpr, so a
+// standing pose, both rest poses, and engine config instead of the baked
+// constexpr, so a
 // ROS caller can supply runtime-loaded values. The no-arg versions above delegate
 // to these with the config_generated.hpp constants (so the Pico is unchanged).
 
@@ -395,9 +401,11 @@ std::array<JointAngles, kNumLegs> standing_pose_from(
 std::map<std::string, Vec3> nominal_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& standing_pose);
-std::map<std::string, Vec3> initial_stance_from(
+// Both belly-rest poses go through the same FK; the two names exist so callers
+// cannot mix up which one they are handing over.
+std::map<std::string, Vec3> rest_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
-    const std::array<JointAngles, kNumLegs>& initial_pose);
+    const std::array<JointAngles, kNumLegs>& rest_pose);
 std::map<std::string, kin::LegSpec> leg_specs_from(
     const std::array<kin::LegSpec, kNumLegs>& specs);
 ReseatGeometryByLeg reseat_geometry_from(
@@ -412,8 +420,9 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const EngineConfig& engine_cfg,
     const std::array<JointAngles, kNumLegs>& standing_pose,
-    const std::array<JointAngles, kNumLegs>& initial_pose, float coxa_to_bottom,
-    float foot_radius);
+    const std::array<JointAngles, kNumLegs>& folded_pose,
+    const std::array<JointAngles, kNumLegs>& initialized_pose,
+    float coxa_to_bottom, float foot_radius);
 
 // Wire string for /gait/state (folded, initialize, stand, ...).
 std::string state_value(EngineState s);
