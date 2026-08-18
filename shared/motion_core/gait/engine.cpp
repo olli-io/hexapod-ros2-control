@@ -529,7 +529,8 @@ std::unique_ptr<ReseatController> Engine::build_reseat(
   return std::make_unique<ReseatController>(
       last_targets_, target_stance, config_.reseat_pair_swing_time,
       config_.reseat_pair_dwell_time, config_.reseat_profile(),
-      config_.controller_dt, reseat_rungs(leg_set_), ladder_shift_time());
+      config_.controller_dt, reseat_rungs(leg_set_), ladder_shift_time(),
+      config_.support_shift_lead);
 }
 
 void Engine::commit_new_nominal(const std::map<std::string, Vec3>& new_nominal,
@@ -1035,6 +1036,7 @@ EngineConfig engine_config_from_config() {
   cfg.swing_phase_margin = c.swing_phase_margin;
   cfg.quadruped_swing_phase_margin = c.quadruped_swing_phase_margin;
   cfg.quadruped_shift_time = c.quadruped_shift_time;
+  cfg.support_shift_lead = ::hexa::config::kPosture.support_shift_lead;
   cfg.controller_dt = c.controller_dt;
   cfg.cmd_zero_tol = c.cmd_zero_tol;
   cfg.settle_debounce_delay = c.settle_debounce_delay;

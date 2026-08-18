@@ -65,6 +65,10 @@ struct EngineConfig {
   // other three make. The walk buys the same thing with the phase margin; a
   // ladder has no phase circle to buy it from, so it waits instead.
   float quadruped_shift_time = 0.0f;
+  // posture's support_shift_lead. The reseat ladder writes the phases the
+  // support shift reads, and only the last `lead` of a phase moves a foot's
+  // weight, so a handover between rungs has to be written inside that window.
+  float support_shift_lead = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
   float settle_debounce_delay = 0.0f;

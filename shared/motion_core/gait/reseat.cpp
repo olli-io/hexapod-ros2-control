@@ -92,12 +92,13 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
                                    float pair_swing_time, float pair_dwell_time,
                                    const SwingProfile& swing,
                                    float controller_dt, RungList rung_order,
-                                   float pre_lift_shift_time)
+                                   float pre_lift_shift_time, float shift_lead)
     : pair_order_(rung_order.empty() ? pair_list(LegSet::HEXAPOD)
                                      : std::move(rung_order)),
       pair_swing_time_(pair_swing_time),
       pair_dwell_time_(pair_dwell_time),
       pre_lift_shift_time_(pre_lift_shift_time),
+      shift_lead_(shift_lead),
       swing_(swing),
       controller_dt_(controller_dt) {
   // Direction-agnostic, so the lateral arch is dropped; the rest of the shape is
@@ -175,6 +176,7 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     for (const auto& name : active) {
       positions_[name] = target_[name];
     }
+    begin_restore(active);
     pair_idx_ += 1;
     t_in_pair_ = 0.0f;
     // The dwell lets this pair land before the next one lifts, so it is only
@@ -215,9 +217,13 @@ std::map<std::string, LegOutput> ReseatController::tick_landing(float dt) {
   const float phase = t_in_pair_ / pair_swing_time_;
 
   if (phase >= 1.0f) {
+    Rung landed;
     for (const auto& entry : landing_origin_) {
       positions_[entry.first] = target_[entry.first];
+      landed.push_back(entry.first);
     }
+    // An airborne foot carried nothing either, so it comes back on the same ramp.
+    begin_restore(landed);
     landing_origin_.clear();
     landing_ = false;
     t_in_pair_ = 0.0f;
@@ -257,7 +263,20 @@ float ReseatController::contact_band() const {
 
 LegOutput ReseatController::held(const std::string& name) const {
   const Vec3& p = positions_.at(name);
-  return LegOutput{p, 0.0f, p[2] <= target_.at(name)[2] + contact_band()};
+  const bool restoring =
+      std::find(restoring_.begin(), restoring_.end(), name) != restoring_.end();
+  return LegOutput{p, restoring ? restoring_phase_ : 0.0f,
+                   p[2] <= target_.at(name)[2] + contact_band()};
+}
+
+void ReseatController::begin_restore(const Rung& landed) {
+  // Without a hold there is no ramp to run it back down, and a foot left
+  // announcing a lift-off it will not make is dropped from the support for good.
+  if (pre_lift_shift_time_ <= 0.0f || shift_lead_ <= 0.0f) {
+    return;
+  }
+  restoring_ = landed;
+  restoring_phase_ = 1.0f;
 }
 
 std::map<std::string, LegOutput> ReseatController::emit_held() const {
@@ -317,15 +336,20 @@ void ReseatController::seed_pair_origin() {
   t_in_shift_ = pre_lift_shift_time_ > 0.0f ? 0.0f : -1.0f;
 }
 
-// Every foot stays exactly where it is; only the rung's phase moves. It runs up
-// to lift-off over the ramp and sits there for the rest, which is what tells the
-// support shift to stop counting these feet and carry the body onto the ones
-// that will still be down.
+// Every foot stays exactly where it is; only the phases move. The rung about to
+// lift runs up to lift-off over the ramp and sits there for the rest, which is
+// what tells the support shift to stop counting these feet and carry the body
+// onto the ones that will still be down; the rung that landed last takes back
+// exactly the weight this one gives up, which slides the anticipated support
+// from one triangle straight into the next instead of through the centroid.
 std::map<std::string, LegOutput> ReseatController::tick_shift(float dt) {
   t_in_shift_ += dt;
   const float ramp = kShiftRampFraction * pre_lift_shift_time_;
   const float phase =
       ramp > 0.0f ? std::min(1.0f, t_in_shift_ / ramp) : 1.0f;
+  // Inverts posture's clamp((1 - phase) / lead): the phase whose weight is one
+  // minus the lifting rung's. Pinned at 1 until that weight starts to move.
+  restoring_phase_ = std::min(1.0f, 2.0f - shift_lead_ - phase);
 
   std::map<std::string, LegOutput> out = emit_held();
   for (const auto& name : pair_order_[pair_idx_]) {
@@ -333,6 +357,7 @@ std::map<std::string, LegOutput> ReseatController::tick_shift(float dt) {
   }
   if (t_in_shift_ >= pre_lift_shift_time_) {
     t_in_shift_ = -1.0f;
+    restoring_.clear();
   }
   return out;
 }
