@@ -17,13 +17,28 @@ float smoothstep_env(float tau) {
   }
   return tau * tau * (3.0f - 2.0f * tau);
 }
+
+// How far back down the phase circle the SHIFTING lead-in starts the master
+// clock. Half a cycle is runway for any support-shift lead worth having, and
+// every leg's phase reaches the lead-in the same way it does mid-walk: by the
+// clock coming round to it.
+constexpr float kShiftSpan = 0.5f;
+
+// Share of shift_time spent winding the clock up to the first lift-off; the rest
+// holds it there while the body arrives. Same split, and the same reason, as the
+// reseat ladder's pre-lift hold.
+constexpr float kShiftRampFraction = 0.5f;
+
+// The master the wind-up stops at: a whisker short of the lift-off it is walking
+// toward, so no leg reads as airborne while every foot is still planted.
+constexpr float kShiftMasterEpsilon = 1e-4f;
 }  // namespace
 
 EngagementController::EngagementController(
     std::map<std::string, Vec3> nominal_stance, float stride_length,
     float stride_length_radial, float min_cycle_time, float max_cycle_time,
     float duty_factor, float swing_phase_margin, const SwingProfile& swing,
-    float controller_dt)
+    float controller_dt, float shift_time)
     : stride_length_(stride_length),
       stride_length_radial_(stride_length_radial),
       min_cycle_time_(min_cycle_time),
@@ -31,7 +46,8 @@ EngagementController::EngagementController(
       duty_factor_(duty_factor),
       swing_end_(swing_end_phase(duty_factor, swing_phase_margin)),
       swing_(swing),
-      controller_dt_(controller_dt) {
+      controller_dt_(controller_dt),
+      shift_time_(shift_time) {
   require_all_legs(nominal_stance, "nominal_stance");
   for (const auto& name : LEG_NAMES) {
     nominal_[name] = nominal_stance.at(name);
@@ -47,7 +63,12 @@ EngagementController::EngagementController(
 void EngagementController::begin(
     const Strategy& strategy,
     const std::map<std::string, LegContext>& leg_contexts) {
-  require_all_legs(leg_contexts, "leg_contexts");
+  // Deliberately NOT require_all_legs: the caller passes only the legs that
+  // walk, so a parked pair is simply absent and every loop below skips it. The
+  // engine overlays those legs onto the output.
+  if (leg_contexts.empty()) {
+    throw std::invalid_argument("leg_contexts must not be empty");
+  }
   if (strategy.duty_factor() != duty_factor_) {
     throw std::invalid_argument(
         "strategy duty_factor does not match controller duty_factor");
@@ -61,7 +82,11 @@ void EngagementController::begin(
   // common irrational (crawl's r_middle at 1/3 vs 1 - 2/3) at a zero margin.
   const float boundary = swing_end_ - 1e-9f;
   float min_first_touchdown = std::numeric_limits<float>::infinity();
+  float max_first_lift_off = 0.0f;
   for (const auto& name : LEG_NAMES) {
+    if (!walks(name)) {
+      continue;
+    }
     const float o = offsets.at(name);
     if (o < boundary) {
       // Lift off at master = 0 from nominal.
@@ -76,11 +101,33 @@ void EngagementController::begin(
     }
     min_first_touchdown =
         std::min(min_first_touchdown, first_touchdown_master_[name]);
+    max_first_lift_off =
+        std::max(max_first_lift_off, first_lift_off_master_[name]);
   }
 
-  smoothstep_window_ = min_first_touchdown;
+  // The body may not run out from under a leg that has not stepped yet. Before
+  // its first lift-off a waiting foot does nothing but integrate the body
+  // velocity — there is no swing coming to put it back — so the distance it
+  // drags is the envelope's integral times one cycle of travel. Hold that to the
+  // half stride the walk's own stance band rides, and the ramp takes whatever
+  // window that needs.
+  //
+  // Travel over a cycle is stride / (1 - swing_end), so in units of the master
+  // the budget is 0.5 * (1 - swing_end). Below the smoothstep's own window the
+  // integral to L is L - W/2, which gives W directly. The other branch is
+  // unreachable: W > L needs L > 1 - swing_end, and the last leg to lift is the
+  // one with the smallest offset at or past swing_end, so L never exceeds it.
+  //
+  // Tripod lands exactly on min_first_touchdown here, which is why a walk that
+  // swings its legs in two halves never needed this. A creep waits three
+  // quarters of a cycle for its last leg and drags it most of a stride past the
+  // band, which on four feet is the polygon the body is standing in.
+  const float band_cycles = 0.5f * (1.0f - swing_end_);
+  const float drift_window = 2.0f * (max_first_lift_off - band_cycles);
+  smoothstep_window_ = std::max(min_first_touchdown, drift_window);
 
   master_ = 0.0f;
+  t_in_shift_ = 0.0f;
   v_body_x_ = 0.0f;
   v_body_y_ = 0.0f;
   omega_ = 0.0f;
@@ -91,13 +138,46 @@ void EngagementController::begin(
     has_lifted_off_[name] = is_initial_swing_[name];
   }
 
-  state_ = EngagementState::ENGAGING;
+  state_ = shift_time_ > 0.0f ? EngagementState::SHIFTING
+                              : EngagementState::ENGAGING;
+}
+
+// The lead-in. Every walking foot stays on its nominal stance and the master
+// clock winds from -kShiftSpan up to the first lift-off, so the phases the
+// posture stack reads are the ones the walk itself is about to produce — a leg
+// approaching lift-off, and the support shift carrying the body off it. Feet do
+// not move: the body-velocity envelope has not opened yet, so there is nothing
+// to integrate.
+std::map<std::string, LegOutput> EngagementController::tick_shift(float dt) {
+  t_in_shift_ += dt;
+  const float ramp = kShiftRampFraction * shift_time_;
+  const float wound = ramp > 0.0f ? std::min(1.0f, t_in_shift_ / ramp) : 1.0f;
+  master_ = -kShiftSpan * (1.0f - wound) - kShiftMasterEpsilon;
+
+  const auto& offsets = strategy_->phase_offsets().offsets();
+  std::map<std::string, LegOutput> out;
+  for (const auto& name : LEG_NAMES) {
+    if (!walks(name)) {
+      continue;
+    }
+    out[name] = LegOutput{foot_position_.at(name),
+                          pymod(master_ + offsets.at(name), 1.0f), true};
+  }
+
+  if (t_in_shift_ >= shift_time_) {
+    master_ = 0.0f;
+    state_ = EngagementState::ENGAGING;
+  }
+  return out;
 }
 
 std::map<std::string, LegOutput> EngagementController::update(
     float dt, std::pair<float, float> v_cmd_xy, float omega_cmd) {
   if (state_ == EngagementState::IDLE) {
     return emit_nominal_stance();
+  }
+  if (state_ == EngagementState::SHIFTING) {
+    return tick_shift(dt);
   }
 
   const auto cmd_leg_v =
@@ -149,6 +229,9 @@ std::map<std::string, LegOutput> EngagementController::update(
   const auto& offsets = strategy_->phase_offsets().offsets();
   std::map<std::string, LegOutput> out;
   for (const auto& name : LEG_NAMES) {
+    if (!walks(name)) {
+      continue;
+    }
     const float phase = pymod(master_ + offsets.at(name), 1.0f);
     const float first_lift_off = first_lift_off_master_[name];
     const float first_touchdown = first_touchdown_master_[name];
@@ -228,6 +311,10 @@ std::map<std::string, LegOutput> EngagementController::emit_nominal_stance()
     out[name] = LegOutput{nominal_.at(name), 0.0f, true};
   }
   return out;
+}
+
+bool EngagementController::walks(const std::string& name) const {
+  return leg_contexts_.find(name) != leg_contexts_.end();
 }
 
 }  // namespace hexa::gait

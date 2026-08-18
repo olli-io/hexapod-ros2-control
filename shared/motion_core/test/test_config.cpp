@@ -168,8 +168,13 @@ TEST(VelocityCaps, DerivedFromEngineKnobs) {
   // derivation that gen_config.py ports out of pipeline_config_loader.cpp,
   // for every gait rather than just tripod.
   for (const auto& g : cfg::kGaits) {
-    const float swing_end =
-        (1.0f - g.duty_factor) * (1.0f - cfg::kEngine.swing_phase_margin);
+    // The margin is per LEG SET, and the baked table carries no leg set, so the
+    // one quadruped gait is named here. A new one would have to be added — which
+    // is the point: its cap must not silently come out on the six-leg margin.
+    const float margin = gait_name(g) == "quadruped_wave"
+                             ? cfg::kEngine.quadruped_swing_phase_margin
+                             : cfg::kEngine.swing_phase_margin;
+    const float swing_end = (1.0f - g.duty_factor) * (1.0f - margin);
     const float want = cfg::kEngine.stride_length * swing_end /
                        (cfg::kEngine.min_swing_time * (1.0f - swing_end));
     EXPECT_NEAR(g.linear_max, want, 1e-6f) << gait_name(g);
@@ -384,3 +389,23 @@ TEST(FacePanel, GpiosAreDistinctAndUnclaimed) {
 
   EXPECT_LE(cfg::kFacePanel.spi_index, 1u) << "spi_index must select spi0 or spi1";
 }
+
+// ── Quadruped mode's stance ──
+// There is no parked pose here: the middle pair parks at kFoldedPose, which the
+// rest-pose suite above already pins.
+
+// The whole static-margin analysis rests on the four corners forming a
+// rectangle centred on the body origin, which needs the front and rear groups
+// to share a reach and a splay: standing_pose_from negates the rear splay, and
+// cos(150 deg - t) = -cos(30 deg + t) makes the two cancel exactly.
+TEST(QuadStance, FrontAndRearAreSymmetric) {
+  const auto& front = cfg::kQuadStandingPose.front;
+  const auto& rear = cfg::kQuadStandingPose.rear;
+  EXPECT_NEAR(front.tip_reach, rear.tip_reach, kTol);
+  EXPECT_NEAR(front.coxa, rear.coxa, kTol);
+  // Pulled in from the six-leg stance to buy leg reach for the support shift.
+  EXPECT_LT(front.tip_reach, cfg::kStandingPose.groups[0].tip_reach);
+  EXPECT_NEAR(cfg::kQuadStandingPose.body_height,
+              cfg::kStandingPose.body_height, kTol);
+}
+

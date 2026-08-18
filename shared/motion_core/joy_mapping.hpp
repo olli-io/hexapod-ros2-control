@@ -2,6 +2,11 @@
 // high-level commands: the mode FSM, eased yaw / wiggle, persistent height,
 // two-press init/revert, record folding, and the gait / animation cyclers.
 //
+// Start and select are one button with a leg set attached: start stands the
+// robot up on six legs, select on four. Off the belly both mean the same thing,
+// a fold — which is also the only way between the two leg sets, since the
+// middle pair moves between folded and standing on the stand ladder alone.
+//
 // The per-mode function->key bindings are pre-resolved into JoyKeyRef tables in
 // config_generated.hpp, so there is no runtime string handling. There is no
 // /teleop/owner arbitration: the firmware always owns the sole gamepad.
@@ -16,6 +21,11 @@
 namespace hexa::teleop {
 
 enum class Mode : std::uint8_t { Posture, Gait, Animation };
+
+// The gait quadruped mode rides on. Deliberately absent from every gait_cycle:
+// the select init is the only way in, so the cycler can never land on a leg set
+// the operator did not ask for.
+inline constexpr std::string_view kQuadrupedGait = "quadruped_wave";
 
 // Runtime-mutable stick scaling: the velocity ceiling is per-gait, so the caller
 // rewrites these on every accepted gait switch.
@@ -53,6 +63,13 @@ struct JoyState {
   bool prev_animation_next = false;
   int current_animation_idx = 0;
   std::string_view animation_name = "";
+  // Quadruped mode: the middle pair folded, the four corners creeping. A
+  // property of the selected gait on the wire, so this only tracks which of the
+  // two init buttons was pressed last. current_gait_idx needs no shadow copy —
+  // kQuadrupedGait is not in the cycle, so entering quadruped mode never
+  // overwrites the slot the operator was on.
+  bool quadruped = false;
+  bool prev_quad_init = false;
 };
 
 // One tick's high-level command. The two optional outputs carry a has_* flag,
@@ -68,7 +85,13 @@ struct JoyOutput {
   float pose_roll = 0.0f;
   float pose_pitch = 0.0f;
   bool mode_changed = false;
+  // Start or select: stand up from the belly, else fold. The caller is what
+  // knows which — map_joy cannot see the engine.
   bool init_request = false;
+  // The init request asked for the quadruped leg set (select rather than start).
+  // It rides `gait_select` on the wire; this is the same fact for a caller that
+  // wants to log or gate on it without matching gait names.
+  bool init_quadruped = false;
   bool has_gait_select = false;
   std::string_view gait_select = "";
   bool has_animation_name = false;

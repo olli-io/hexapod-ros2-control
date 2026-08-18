@@ -56,7 +56,7 @@ BodyPose walk_until_settled(PostureController& posture) {
   float t = 0.0f;
   for (int i = 0; i < 400; ++i) {
     out = posture.update(legs, 0.25f, /*walking=*/true, EngineState::GAIT,
-                         "tripod", kDt, t);
+                         "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t);
     t += kDt;
   }
   return out;
@@ -132,7 +132,7 @@ BodyPose idle_pose(PostureController& posture, const BodyPose& user) {
   float t = 0.0f;
   for (int i = 0; i < 1000; ++i) {
     out = posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND,
-                         "tripod", kDt, t);
+                         "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t);
     t += kDt;
   }
   return out;
@@ -229,7 +229,7 @@ float step_response_z_at(float horizon_s, float dt) {
   float t = 0.0f;
   for (int i = 0; i < ticks; ++i) {
     out = posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND,
-                         "tripod", dt, t);
+                         "tripod", hexa::gait::LegSet::HEXAPOD, dt, t);
     t += dt;
   }
   return out.z;
@@ -243,7 +243,7 @@ TEST(PosturePoseFilter, StepResponseOvershootsThenSettles) {
   const auto legs = tripod_legs();
 
   const BodyPose first = posture.update(legs, 0.0f, /*walking=*/false,
-                                        EngineState::STAND, "tripod", kDt, 0.0f);
+                                        EngineState::STAND, "tripod", hexa::gait::LegSet::HEXAPOD, kDt, 0.0f);
   EXPECT_LT(first.z, 0.1f * kStepZ)
       << "a stepped /body/pose must not arrive at the servos in one tick";
 
@@ -251,7 +251,7 @@ TEST(PosturePoseFilter, StepResponseOvershootsThenSettles) {
   float t = kDt;
   for (int i = 1; i < 200; ++i) {  // 1 s covers the first overshoot
     peak = std::max(peak, posture.update(legs, 0.0f, /*walking=*/false,
-                                         EngineState::STAND, "tripod", kDt, t)
+                                         EngineState::STAND, "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t)
                               .z);
     t += kDt;
   }
@@ -267,11 +267,11 @@ TEST(PosturePoseFilter, StepResponseOvershootsThenSettles) {
 
   for (int i = 0; i < 800; ++i) {  // out to 5 s
     posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND, "tripod",
-                   kDt, t);
+                   hexa::gait::LegSet::HEXAPOD, kDt, t);
     t += kDt;
   }
   EXPECT_NEAR(posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND,
-                             "tripod", kDt, t)
+                             "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t)
                   .z,
               kStepZ, 1e-5f);
 }
@@ -303,7 +303,7 @@ TEST(PosturePoseFilter, SaturatedAxisDoesNotWindUp) {
   float t = 0.0f;
   for (int i = 0; i < 400; ++i) {  // 2 s hard against the ceiling
     out = posture.update(legs, 0.0f, /*walking=*/false, EngineState::STAND,
-                         "tripod", kDt, t);
+                         "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t);
     highest = std::max(highest, out.z);
     t += kDt;
   }
@@ -313,7 +313,7 @@ TEST(PosturePoseFilter, SaturatedAxisDoesNotWindUp) {
 
   posture.set_user_pose(BodyPose{});
   const BodyPose next = posture.update(legs, 0.0f, /*walking=*/false,
-                                       EngineState::STAND, "tripod", kDt, t);
+                                       EngineState::STAND, "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t);
   EXPECT_LT(next.z, kCeiling) << "withdrawing the command must move the body on "
                                  "the very next tick";
 }
@@ -328,12 +328,12 @@ TEST(PosturePoseFilter, InactiveStateResetsTheFilter) {
   ASSERT_NEAR(idle_pose(posture, kStepUp).z, kStepZ, 1e-5f);
 
   const BodyPose folded = posture.update(legs, 0.0f, /*walking=*/false,
-                                         EngineState::FOLDED, "tripod", kDt, 0.0f);
+                                         EngineState::FOLDED, "tripod", hexa::gait::LegSet::HEXAPOD, kDt, 0.0f);
   EXPECT_TRUE(is_identity(folded));
 
   // Same command still held; the ramp must start over from the stance.
   const BodyPose first = posture.update(legs, 0.0f, /*walking=*/false,
-                                        EngineState::STAND, "tripod", kDt, 0.0f);
+                                        EngineState::STAND, "tripod", hexa::gait::LegSet::HEXAPOD, kDt, 0.0f);
   EXPECT_LT(first.z, 0.1f * kStepZ);
 }
 
@@ -346,7 +346,7 @@ TEST(PosturePoseFilter, ZeroTauBypassesTheFilter) {
   posture.set_user_pose(BodyPose{0.03f, 0.0f, kStepZ, 0.2f, 0.0f, 0.0f});
 
   const BodyPose first = posture.update(tripod_legs(), 0.0f, /*walking=*/false,
-                                        EngineState::STAND, "tripod", kDt, 0.0f);
+                                        EngineState::STAND, "tripod", hexa::gait::LegSet::HEXAPOD, kDt, 0.0f);
   EXPECT_NEAR(first.z, kStepZ, 1e-6f);
   EXPECT_NEAR(first.x, 0.03f, 1e-6f);
   EXPECT_NEAR(first.roll, 0.2f, 1e-6f);
@@ -572,3 +572,231 @@ TEST(PosturePolarFilter, ResetSeedsThePolarStateFromThePose) {
 }
 
 }  // namespace
+
+// ── Quadruped support shift ──
+
+namespace {
+
+// A convex quadrilateral of four corner feet plus a parked middle pair, with
+// each corner's phase supplied so the anticipation weights can be exercised.
+std::map<std::string, LegOutput> quad_legs(
+    const std::map<std::string, float>& phases,
+    const std::map<std::string, bool>& swing = {}) {
+  const std::map<std::string, std::pair<float, float>> xy = {
+      {"l_front", {0.16f, 0.17f}},
+      {"r_front", {0.16f, -0.17f}},
+      {"l_rear", {-0.16f, 0.17f}},
+      {"r_rear", {-0.16f, -0.17f}},
+  };
+  std::map<std::string, LegOutput> legs;
+  for (const auto& name : hexa::gait::LEG_NAMES) {
+    LegOutput leg;
+    if (hexa::gait::leg_is_parked(hexa::gait::LegSet::QUADRUPED, name)) {
+      leg.parked = true;
+      leg.stance = false;
+      // Where the parked pose actually puts it: high, and outboard.
+      leg.foot_target = hexa::Vec3{0.0f, name == "l_middle" ? 0.17f : -0.17f,
+                                   0.19f};
+      legs[name] = leg;
+      continue;
+    }
+    const auto it = swing.find(name);
+    leg.stance = (it == swing.end() || !it->second);
+    leg.phase = phases.count(name) ? phases.at(name) : 0.5f;
+    leg.foot_target =
+        hexa::Vec3{xy.at(name).first, xy.at(name).second,
+                   leg.stance ? -0.08f : -0.04f};
+    legs[name] = leg;
+  }
+  return legs;
+}
+
+// Signed area test: is p strictly inside the convex hull of the stance feet,
+// taken in the fixed corner order that traces the quadrilateral.
+bool inside_stance_polygon(const std::map<std::string, LegOutput>& legs,
+                           float px, float py, float margin) {
+  std::vector<std::pair<float, float>> hull;
+  for (const char* name : {"l_front", "r_front", "r_rear", "l_rear"}) {
+    const auto& leg = legs.at(name);
+    if (leg.parked || !leg.stance) {
+      continue;
+    }
+    hull.push_back({leg.foot_target.x, leg.foot_target.y});
+  }
+  if (hull.size() < 3) {
+    return false;
+  }
+  // The corner order above traces the quadrilateral clockwise in the REP-103
+  // body frame, so every interior cross product is negative. Taking the sign off
+  // the first edge keeps the test honest if that order is ever reversed.
+  float sign = 0.0f;
+  for (std::size_t i = 0; i < hull.size(); ++i) {
+    const auto& a = hull[i];
+    const auto& b = hull[(i + 1) % hull.size()];
+    const float ex = b.first - a.first;
+    const float ey = b.second - a.second;
+    const float len = std::hypot(ex, ey);
+    if (len <= 0.0f) {
+      return false;
+    }
+    const float d = (ex * (py - a.second) - ey * (px - a.first)) / len;
+    if (sign == 0.0f) {
+      sign = d < 0.0f ? -1.0f : 1.0f;
+    }
+    if (sign * d < margin) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+// The property the whole creep rests on: every weight is non-negative and at
+// least one is positive, so the target is a convex combination of grounded feet
+// and can never leave the polygon they enclose. Swept over which leg is
+// airborne and where the remaining three are in their cycles.
+TEST(SupportShift, AnticipatedSupportStaysInsideTheStancePolygon) {
+  for (const char* airborne :
+       {"l_front", "r_front", "l_rear", "r_rear", ""}) {
+    for (int a = 0; a < 5; ++a) {
+      for (int b = 0; b < 5; ++b) {
+        std::map<std::string, float> phases;
+        std::map<std::string, bool> swing;
+        int i = 0;
+        for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+          phases[name] = static_cast<float>((a + i * b) % 5) / 5.0f;
+          swing[name] = (std::string(name) == airborne);
+          ++i;
+        }
+        const auto legs = quad_legs(phases, swing);
+        const auto p = hexa::posture::anticipated_support_xy(legs, 0.05f);
+        ASSERT_TRUE(p.has_value());
+        EXPECT_TRUE(inside_stance_polygon(legs, p->first, p->second, 1e-4f))
+            << "airborne='" << airborne << "' a=" << a << " b=" << b
+            << " target (" << p->first << ", " << p->second << ")";
+      }
+    }
+  }
+}
+
+// The reason the support shift is filtered in polar. Given a quarter turn to
+// track, the per-axis lag collapses the magnitude on the way through (the two
+// axes cross their midpoints together), which on this signal means the body
+// cutting the corner INTO the polygon edge it is trying to stay away from. The
+// polar lag holds the radius and sweeps the angle.
+TEST(SupportShift, PolarLagArcsWhereThePerAxisLagCutsTheChord) {
+  constexpr float kR = 0.04f;
+  constexpr float kTau = 0.14f;
+  constexpr float kDt = 0.005f;
+  const std::pair<float, float> start{kR, 0.0f};
+  const std::pair<float, float> target{0.0f, kR};
+
+  std::optional<std::pair<float, float>> cartesian = start;
+  std::optional<std::pair<float, float>> polar = start;
+  float worst_cartesian = kR;
+  float worst_polar = kR;
+  for (int i = 0; i < 400; ++i) {
+    cartesian = hexa::posture::lpf_step_xy(cartesian, target, kTau, kDt);
+    polar = hexa::posture::lpf_step_polar_xy(polar, target, kTau, kDt);
+    worst_cartesian =
+        std::min(worst_cartesian, std::hypot(cartesian->first, cartesian->second));
+    worst_polar = std::min(worst_polar, std::hypot(polar->first, polar->second));
+  }
+  // The chord of a quarter turn sits at 1/sqrt(2) of the radius.
+  EXPECT_NEAR(worst_cartesian, kR * 0.7071f, 0.01f * kR);
+  EXPECT_NEAR(worst_polar, kR, 1e-4f * kR);
+  // Both still get there: the path differs, the destination does not.
+  EXPECT_NEAR(polar->first, target.first, 1e-4f);
+  EXPECT_NEAR(polar->second, target.second, 1e-4f);
+}
+
+// Round the back of the circle the short way, not the long one: the raw target
+// crosses +/-pi whenever the creep's handover passes straight behind the robot.
+TEST(SupportShift, PolarLagTakesTheShortWayAcrossTheWrap) {
+  constexpr float kR = 0.04f;
+  const float a0 = 3.0f;  // just short of +pi
+  std::optional<std::pair<float, float>> v =
+      std::make_pair(kR * std::cos(a0), kR * std::sin(a0));
+  const std::pair<float, float> target{kR * std::cos(-a0), kR * std::sin(-a0)};
+  for (int i = 0; i < 400; ++i) {
+    v = hexa::posture::lpf_step_polar_xy(v, target, 0.14f, 0.005f);
+    // The short way keeps y's sign or crosses through the far side; it never
+    // sweeps back down through y = 0 on the +x half, which is the long way.
+    EXPECT_LE(v->first, kR * std::cos(a0) + 1e-6f);
+  }
+  EXPECT_NEAR(v->first, target.first, 1e-4f);
+  EXPECT_NEAR(v->second, target.second, 1e-4f);
+}
+
+// A zero lead makes every weight 1, which is the plain centroid — the degenerate
+// case the knob has to reach so it can be turned off.
+TEST(SupportShift, ZeroLeadReproducesTheStanceCentroid) {
+  const auto legs = quad_legs({{"l_front", 0.1f},
+                               {"r_front", 0.35f},
+                               {"l_rear", 0.6f},
+                               {"r_rear", 0.85f}});
+  const auto anticipated = hexa::posture::anticipated_support_xy(legs, 0.0f);
+  const auto centroid = hexa::posture::stance_centroid_xy(legs);
+  ASSERT_TRUE(anticipated.has_value());
+  ASSERT_TRUE(centroid.has_value());
+  EXPECT_NEAR(anticipated->first, centroid->first, 1e-6f);
+  EXPECT_NEAR(anticipated->second, centroid->second, 1e-6f);
+}
+
+// The dangerous one: a parked foot sits ~0.19 m above the stance plane. Read as
+// a swing leg it would peg max_swing every tick and heave the body with it.
+TEST(SupportShift, MaxSwingLiftIgnoresParkedLegs) {
+  const auto legs = quad_legs({{"l_front", 0.5f}});
+  const auto lift = hexa::posture::max_swing_lift_z(legs);
+  ASSERT_TRUE(lift.has_value());
+  EXPECT_NEAR(*lift, 0.0f, 1e-6f) << "a parked foot counted as a swing";
+}
+
+// A parked foot carries no weight, so it is not a vertex of the support polygon.
+TEST(SupportShift, StanceCentroidIgnoresParkedLegs) {
+  const auto legs = quad_legs({});
+  const auto c = hexa::posture::stance_centroid_xy(legs);
+  ASSERT_TRUE(c.has_value());
+  // The four corners are symmetric about the origin; the parked pair is not on
+  // the same plane, but is symmetric in y, so only x would betray it.
+  EXPECT_NEAR(c->first, 0.0f, 1e-6f);
+  EXPECT_NEAR(c->second, 0.0f, 1e-6f);
+}
+
+// The quadruped stack is exempt from gait_body_animations_enabled: what holds
+// the robot up is not an embellishment the operator may decline.
+TEST(SupportShift, QuadrupedStackRunsWithGaitAnimationsDisabled) {
+  auto cfg = hexa::config::kPosture;
+  cfg.gait_body_animations_enabled = false;
+  PostureController posture(cfg);
+
+  // l_front is inside the 0.05-cycle lead, so its weight is down to 0.2 and the
+  // target has already moved off centre — which a running stack will report and
+  // a suppressed one will not.
+  const auto legs = quad_legs({{"l_front", 0.99f},
+                               {"r_front", 0.2f},
+                               {"l_rear", 0.4f},
+                               {"r_rear", 0.6f}});
+  BodyPose quad;
+  BodyPose hexa;
+  float t = 0.0f;
+  for (int i = 0; i < 400; ++i) {
+    quad = posture.update(legs, 0.25f, /*walking=*/true, EngineState::GAIT,
+                          "quadruped_wave", hexa::gait::LegSet::QUADRUPED, kDt,
+                          t);
+    t += kDt;
+  }
+  PostureController hexa_posture(cfg);
+  t = 0.0f;
+  for (int i = 0; i < 400; ++i) {
+    hexa = hexa_posture.update(legs, 0.25f, /*walking=*/true,
+                               EngineState::GAIT, "quadruped_wave",
+                               hexa::gait::LegSet::HEXAPOD, kDt, t);
+    t += kDt;
+  }
+  EXPECT_GT(std::hypot(quad.x, quad.y), 1e-3f)
+      << "the support shift was suppressed by the master switch";
+  EXPECT_NEAR(std::hypot(hexa.x, hexa.y), 0.0f, 1e-6f)
+      << "the default stack must still be suppressed";
+}

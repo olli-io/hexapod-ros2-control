@@ -1,5 +1,6 @@
 #include "gait/stand_transition.hpp"
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 
@@ -54,14 +55,16 @@ std::map<std::string, LegOutput> RestPoseMove::update(float dt) {
 }
 
 InitializeController::InitializeController(
-    std::map<std::string, Vec3> folded_stance,
+    LegSet leg_set, std::map<std::string, Vec3> folded_stance,
     std::map<std::string, Vec3> initialized_stance,
     std::map<std::string, Vec3> nominal_stance, float coxa_to_bottom,
     float foot_radius, float pair_swing_time, float lift_body_time,
     float unfold_time, float place_clearance, float swing_clearance,
     float swing_width, float touchdown_velocity,
     float touchdown_probe_fraction, float controller_dt)
-    : pair_swing_time_(pair_swing_time),
+    : leg_set_(leg_set),
+      rungs_(pair_list(leg_set)),
+      pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
       swing_{.clearance = swing_clearance,
              .width = swing_width,
@@ -82,6 +85,7 @@ InitializeController::InitializeController(
     throw std::invalid_argument("place_clearance must not be negative");
   }
   for (const auto& name : LEG_NAMES) {
+    folded_[name] = folded_stance.at(name);
     initialized_[name] = initialized_stance.at(name);
     nominal_[name] = nominal_stance.at(name);
   }
@@ -100,21 +104,30 @@ InitializeController::InitializeController(
 }
 
 std::map<std::string, LegOutput> InitializeController::update(float dt) {
+  std::map<std::string, LegOutput> out;
   if (state_ == InitializeState::UNFOLD) {
-    return tick_unfold(dt);
+    out = tick_unfold(dt);
+  } else if (state_ == InitializeState::PLACE_FEET) {
+    out = tick_place_feet(dt);
+  } else if (state_ == InitializeState::LIFT_BODY) {
+    out = tick_lift_body(dt);
+  } else {
+    out = emit_nominal();
   }
-  if (state_ == InitializeState::PLACE_FEET) {
-    return tick_place_feet(dt);
-  }
-  if (state_ == InitializeState::LIFT_BODY) {
-    return tick_lift_body(dt);
-  }
-  return emit_nominal();
+  // The rungs already skip the parked pair; the unfold's chord does not, so the
+  // pin is what holds those two legs at the pose they powered up in.
+  pin_parked(leg_set_, folded_, out);
+  return out;
 }
 
 std::map<std::string, LegOutput> InitializeController::tick_unfold(float dt) {
   auto out = unfold_.update(dt);
   for (const auto& name : LEG_NAMES) {
+    // The chord is not a parked leg's to walk: positions_ starts it at folded
+    // and nothing here moves it off, which is what the pin then emits.
+    if (leg_is_parked(leg_set_, name)) {
+      continue;
+    }
     positions_[name] = out.at(name).foot_target;
   }
   if (unfold_.done()) {
@@ -127,7 +140,7 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
     float dt) {
   t_in_pair_ += dt;
   const float phase = t_in_pair_ / pair_swing_time_;
-  const std::array<std::string, 2>& active = PAIR_ORDER[pair_idx_];
+  const Rung& active = rungs_[pair_idx_];
 
   std::map<std::string, LegOutput> out;
   if (phase >= 1.0f) {
@@ -136,7 +149,7 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
     }
     pair_idx_ += 1;
     t_in_pair_ = 0.0f;
-    if (pair_idx_ >= PAIR_ORDER.size()) {
+    if (pair_idx_ >= rungs_.size()) {
       state_ = InitializeState::LIFT_BODY;
     }
     for (const auto& name : LEG_NAMES) {
@@ -202,17 +215,15 @@ std::map<std::string, LegOutput> InitializeController::emit_nominal() const {
 namespace {
 // Belly-resting throughout LIFT_FEET, so weight-bearing is not the constraint;
 // reversing just unwinds the order a reseat would have planted the feet in.
-const std::array<std::array<std::string, 2>, 3>& pair_order_reversed() {
-  static const std::array<std::array<std::string, 2>, 3> reversed = {{
-      PAIR_ORDER[2],
-      PAIR_ORDER[1],
-      PAIR_ORDER[0],
-  }};
-  return reversed;
+RungList rungs_reversed(LegSet set) {
+  RungList out = pair_list(set);
+  std::reverse(out.begin(), out.end());
+  return out;
 }
 }  // namespace
 
-FoldController::FoldController(std::map<std::string, Vec3> folded_stance,
+FoldController::FoldController(LegSet leg_set,
+                               std::map<std::string, Vec3> folded_stance,
                                std::map<std::string, Vec3> initialized_stance,
                                std::map<std::string, Vec3> nominal_stance,
                                float coxa_to_bottom, float foot_radius,
@@ -221,7 +232,9 @@ FoldController::FoldController(std::map<std::string, Vec3> folded_stance,
                                float swing_width, float touchdown_velocity,
                                float touchdown_probe_fraction,
                                float controller_dt)
-    : pair_swing_time_(pair_swing_time),
+    : leg_set_(leg_set),
+      rungs_(rungs_reversed(leg_set)),
+      pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
       tuck_time_(tuck_time),
       swing_{.clearance = swing_clearance,
@@ -254,19 +267,27 @@ FoldController::FoldController(std::map<std::string, Vec3> folded_stance,
         Vec3(nominal_[name][0], nominal_[name][1], lower_end_z_);
   }
   positions_ = nominal_;
+  // A parked leg is already folded, and TUCK builds its chord out of positions_.
+  for (const auto& name : PARKED_LEGS) {
+    if (leg_is_parked(leg_set_, name)) {
+      positions_[name] = folded_[name];
+    }
+  }
 }
 
 std::map<std::string, LegOutput> FoldController::update(float dt) {
+  std::map<std::string, LegOutput> out;
   if (state_ == FoldState::LOWER_BODY) {
-    return tick_lower_body(dt);
+    out = tick_lower_body(dt);
+  } else if (state_ == FoldState::LIFT_FEET) {
+    out = tick_lift_feet(dt);
+  } else if (state_ == FoldState::TUCK) {
+    out = tick_tuck(dt);
+  } else {
+    out = emit_folded();
   }
-  if (state_ == FoldState::LIFT_FEET) {
-    return tick_lift_feet(dt);
-  }
-  if (state_ == FoldState::TUCK) {
-    return tick_tuck(dt);
-  }
-  return emit_folded();
+  pin_parked(leg_set_, folded_, out);
+  return out;
 }
 
 std::map<std::string, LegOutput> FoldController::tick_lower_body(float dt) {
@@ -296,7 +317,7 @@ std::map<std::string, LegOutput> FoldController::tick_lower_body(float dt) {
 std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
   t_in_pair_ += dt;
   const float phase = t_in_pair_ / pair_swing_time_;
-  const std::array<std::string, 2>& active = pair_order_reversed()[pair_idx_];
+  const Rung& active = rungs_[pair_idx_];
 
   std::map<std::string, LegOutput> out;
   if (phase >= 1.0f) {
@@ -305,7 +326,7 @@ std::map<std::string, LegOutput> FoldController::tick_lift_feet(float dt) {
     }
     pair_idx_ += 1;
     t_in_pair_ = 0.0f;
-    if (pair_idx_ >= pair_order_reversed().size()) {
+    if (pair_idx_ >= rungs_.size()) {
       tuck_.emplace(positions_, folded_, tuck_time_);
       state_ = FoldState::TUCK;
     }

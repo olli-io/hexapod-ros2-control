@@ -16,6 +16,11 @@ POSTURE = "posture"
 GAIT = "gait"
 ANIMATION = "animation"
 
+# The gait quadruped mode rides on. Deliberately absent from every
+# ``gait_cycle``: the select init is the only way in, so the cycler can
+# never land on a leg set the operator did not ask for.
+QUADRUPED_GAIT = "quadruped_wave"
+
 # Function namespace. The loader validates every YAML binding value
 # against these sets; runtime helpers trust well-formed configs.
 BASE_FUNCTIONS: frozenset[str] = frozenset({
@@ -36,6 +41,10 @@ BUTTON_CLASS_FUNCTIONS: frozenset[str] = frozenset({
     "gait_next",
     "animation_prev",
     "animation_next",
+    # Stand up in quadruped mode — the select half of the init button.
+    # Bound only in the GAIT section, which is what confines it to gait
+    # mode: elsewhere the same key keeps its base binding.
+    "quadruped_mode",
 })
 AXIS_CLASS_FUNCTIONS: frozenset[str] = frozenset({
     "drive_x",
@@ -186,6 +195,14 @@ class JoyState:
     # Active animation-mode selection. ``""`` when ANIMATION mode is
     # not in effect; otherwise the name of the selected animation.
     animation_name: str = ""
+    # Quadruped mode: the middle pair folded, the four corners creeping.
+    # A property of the selected gait on the wire, so this flag only
+    # tracks which of the two init buttons was pressed last.
+    # ``current_gait_idx`` needs no shadow copy — QUADRUPED_GAIT is not
+    # in the cycle, so entering quadruped mode never overwrites the slot
+    # the operator was on.
+    quadruped: bool = False
+    prev_quad_init: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,6 +217,8 @@ class JoyOutput:
     pose_roll: float
     pose_pitch: float
     mode_changed: bool
+    # Start or select: stand up from the belly, else fold. The ROS layer
+    # is what knows which — the mapping cannot see the engine.
     init_request: bool
     # Populated with the freshly-cycled gait name on a ``gait_prev`` /
     # ``gait_next`` rising edge; ``None`` on every other tick. The
@@ -209,6 +228,11 @@ class JoyOutput:
     # Populated with the desired ``/animation/mode`` value on the tick
     # the selection changes; ``None`` on every other tick.
     animation_name: str | None = None
+    # The init request asked for the quadruped leg set (select rather
+    # than start). It rides ``gait_select`` on the wire; this is the same
+    # fact for a caller that wants to log or gate on it without matching
+    # gait names.
+    init_quadruped: bool = False
 
 
 def apply_deadband(value: float, deadband: float) -> float:
@@ -571,9 +595,13 @@ def map_joy(
     elif gait_edge and state.mode != GAIT:
         state.mode = GAIT
         mode_changed = True
-    elif animation_edge:
+    elif animation_edge and not state.quadruped:
         # Rising-edge toggle between GAIT and ANIMATION. From POSTURE,
-        # animation_mode hops directly into ANIMATION.
+        # animation_mode hops directly into ANIMATION. Inert in
+        # quadruped mode: every animation is written for six legs, and
+        # the four-corner stance is cut for the support shift rather
+        # than for a body the operator swings around on it. Gait and
+        # posture stay available; the way out is the fold that got in.
         state.mode = GAIT if state.mode == ANIMATION else ANIMATION
         mode_changed = True
 
@@ -601,13 +629,35 @@ def map_joy(
         if cfg.gait_cycle and "tripod" in cfg.gait_cycle:
             state.current_gait_idx = cfg.gait_cycle.index("tripod")
 
-    # Init button: one-shot rising-edge trigger with two-press
-    # semantics when the chassis is in a non-default posture.
+    # The two init buttons, with the two-press revert they share when
+    # the chassis is in a non-default posture. Start asks for the
+    # six-leg stand, select for the four-corner one; off the belly
+    # either is a fold, which the ROS layer resolves because the
+    # mapping cannot see the engine.
     init_pressed = button_pressed_for("init", base, mode_cfg, buttons, axes)
     init_edge = init_pressed and not state.prev_init
     state.prev_init = init_pressed
+    # Resolved against the GAIT section in EVERY mode, not the active
+    # one: the key is bound only there, so reading the active mode's
+    # table would leave ``prev_quad_init`` False while the button was
+    # held in posture mode and fire a spurious edge the instant gait
+    # mode was entered.
+    quad_pressed = button_pressed_for(
+        "quadruped_mode", base, cfg.gait, buttons, axes
+    )
+    # Confined to GAIT mode, which is where the key is bound:
+    # everywhere else ``select`` keeps its base binding (``record``),
+    # and firing both off one press would record a posture on the way to
+    # standing up. The teleop boots into gait mode, so the cold start is
+    # covered. The tracker still advances in the other modes, so
+    # returning to gait with the button held fires nothing.
+    quad_edge = (
+        quad_pressed and not state.prev_quad_init and state.mode == GAIT
+    )
+    state.prev_quad_init = quad_pressed
     init_request = False
-    if init_edge:
+    init_quadruped = False
+    if init_edge or quad_edge:
         # Tolerance well below the integration step so a stale tiny
         # value doesn't trap the user in a "revert-then-revert" loop.
         posture_modified = (
@@ -624,6 +674,21 @@ def map_joy(
             state.reverting = True
         else:
             init_request = True
+            # Start wins a tie: six legs is the stand to land on when
+            # both edges arrive in one tick.
+            init_quadruped = quad_edge and not init_edge
+            state.quadruped = init_quadruped
+            # The leg set rides the gait, so every init edge republishes
+            # the gait that walks the set it asked for. Idempotent when
+            # nothing changed, and it is what keeps the engine's strategy
+            # and this flag from drifting apart when the request lands as
+            # a fold instead of a stand.
+            if init_quadruped:
+                forced_gait = QUADRUPED_GAIT
+            elif cfg.gait_cycle:
+                forced_gait = cfg.gait_cycle[
+                    state.current_gait_idx % len(cfg.gait_cycle)
+                ]
 
     # Revert decay: while ``state.reverting`` is set, ease the
     # persistent baseline toward zero with ``posture.revert_tau``.
@@ -722,11 +787,14 @@ def map_joy(
 
     # Gait cycler: ``gait_prev`` / ``gait_next`` rising edges. Cycling
     # is mode-agnostic for the resolution itself but suppressed in
-    # ANIMATION (tripod was forced on entry).
+    # ANIMATION (tripod was forced on entry) and in quadruped mode,
+    # where there is exactly one gait and the engine would refuse a
+    # switch to any other anyway — the leg set is fixed until the next
+    # fold.
     gait_select: str | None = forced_gait
     prev_pressed = button_pressed_for("gait_prev", base, mode_cfg, buttons, axes)
     next_pressed = button_pressed_for("gait_next", base, mode_cfg, buttons, axes)
-    if cfg.gait_cycle and state.mode != ANIMATION:
+    if cfg.gait_cycle and state.mode != ANIMATION and not state.quadruped:
         delta = 0
         if next_pressed and not state.prev_gait_next:
             delta += 1
@@ -858,6 +926,7 @@ def map_joy(
             init_request=init_request,
             gait_select=gait_select,
             animation_name=animation_name_out,
+            init_quadruped=init_quadruped,
         )
     # GAIT or ANIMATION mode: sticks drive linear/angular velocity;
     # recorded posture baseline bleeds through on every posture axis
@@ -898,4 +967,5 @@ def map_joy(
         init_request=init_request,
         gait_select=gait_select,
         animation_name=animation_name_out,
+        init_quadruped=init_quadruped,
     )

@@ -144,6 +144,9 @@ class Pipeline {
   // The lever arms a yaw command acts through, which Control shapes the envelope
   // against. Declared before control_ so it is initialized first.
   std::map<std::string, hexa::Vec3> nominal_stance_;
+  // Joint angles compose_gait writes straight out for a parked leg. Declared
+  // before engine_ so it is initialized first.
+  std::array<hexa::JointAngles, hexa::kNumLegs> folded_pose_;
   std::unique_ptr<hexa::gait::Engine> engine_;
   hexa::gait::VelocityCaps caps_;
   hexa::control::Control control_;

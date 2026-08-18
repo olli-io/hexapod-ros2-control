@@ -1,6 +1,8 @@
 // Folded <-> standing body transitions, via the initialized pose in between. The
 // two controllers are exact time-reverses of each other, rung for rung, and
-// share the same pair-swing + eased-ramp machinery:
+// share the same pair-swing + eased-ramp machinery. Both take the leg set they
+// are standing up (or folding) — the same ladder either way, minus the middle
+// pair, which quadruped mode leaves folded where it already is:
 //
 //   InitializeController (cold start): UNFOLD out to the initialized pose,
 //   PLACE_FEET swings three mirroring pairs onto the standing footprint while
@@ -18,6 +20,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "gait/gaits/base.hpp"
 #include "gait/types.hpp"
@@ -31,6 +34,61 @@ inline const std::array<std::array<std::string, 2>, 3> PAIR_ORDER = {{
     {"l_front", "r_rear"},
     {"r_front", "l_rear"},
 }};
+
+// The same diagonals in the same order, with the middle pair dropped: the rungs
+// quadruped mode's ladders climb. It must never name a middle — that pair is
+// folded and has no ground to re-plant on.
+inline const std::array<std::array<std::string, 2>, 2> QUAD_PAIR_ORDER = {{
+    {"l_front", "r_rear"},
+    {"r_front", "l_rear"},
+}};
+
+// One rung of a ladder: the legs it lifts together. A runtime value, since the
+// tables differ in both length and rung size. Its flattened legs are also the
+// set the ladder manages.
+using Rung = std::vector<std::string>;
+using RungList = std::vector<Rung>;
+
+// Mirrored pairs. Safe wherever the legs outside the rung still make a support
+// polygon around the body — six feet lifting two, or (on the belly, where the
+// stand ladders swing them) four.
+inline RungList pair_list(LegSet set) {
+  RungList out;
+  if (set == LegSet::QUADRUPED) {
+    for (const auto& p : QUAD_PAIR_ORDER) {
+      out.push_back({p[0], p[1]});
+    }
+    return out;
+  }
+  for (const auto& p : PAIR_ORDER) {
+    out.push_back({p[0], p[1]});
+  }
+  return out;
+}
+
+// Quadruped mode's middle pair never leaves the folded pose: it powers up there
+// and both ladders drive the four corners around it. Applied to whatever a rung
+// emitted, so no rung has to know which legs it is not moving.
+inline void pin_parked(LegSet set, const std::map<std::string, Vec3>& folded,
+                       std::map<std::string, LegOutput>& out) {
+  if (set != LegSet::QUADRUPED) {
+    return;
+  }
+  for (const auto& name : PARKED_LEGS) {
+    out[name] = LegOutput{folded.at(name), 0.0f, false, true};
+  }
+}
+
+// The reseat ladder's rungs, which are the whole support while it runs. On four
+// feet a mirrored pair is half of that, so the quadruped set goes one leg at a
+// time — in the creep's own lateral order, so the body's shift walks the circle
+// it already walks when the gait is running.
+inline RungList reseat_rungs(LegSet set) {
+  if (set == LegSet::QUADRUPED) {
+    return RungList{{"l_rear"}, {"l_front"}, {"r_rear"}, {"r_front"}};
+  }
+  return pair_list(set);
+}
 
 // Eased ramp for the fold and the rest-pose moves. The fold's LOWER_BODY ends on
 // the belly arriving, so the ramp's own endpoint is where it has to be
@@ -89,7 +147,8 @@ enum class InitializeState { UNFOLD, PLACE_FEET, LIFT_BODY, DONE };
 
 class InitializeController {
  public:
-  InitializeController(std::map<std::string, Vec3> folded_stance,
+  InitializeController(LegSet leg_set,
+                       std::map<std::string, Vec3> folded_stance,
                        std::map<std::string, Vec3> initialized_stance,
                        std::map<std::string, Vec3> nominal_stance,
                        float coxa_to_bottom, float foot_radius,
@@ -110,6 +169,9 @@ class InitializeController {
   std::map<std::string, LegOutput> tick_lift_body(float dt);
   std::map<std::string, LegOutput> emit_nominal() const;
 
+  LegSet leg_set_;
+  RungList rungs_;
+  std::map<std::string, Vec3> folded_;
   std::map<std::string, Vec3> initialized_;
   std::map<std::string, Vec3> nominal_;
   // Where PLACE_FEET parks the feet: place_clearance above the floor, not on it.
@@ -132,7 +194,7 @@ enum class FoldState { LOWER_BODY, LIFT_FEET, TUCK, DONE };
 
 class FoldController {
  public:
-  FoldController(std::map<std::string, Vec3> folded_stance,
+  FoldController(LegSet leg_set, std::map<std::string, Vec3> folded_stance,
                  std::map<std::string, Vec3> initialized_stance,
                  std::map<std::string, Vec3> nominal_stance,
                  float coxa_to_bottom, float foot_radius,
@@ -152,6 +214,8 @@ class FoldController {
   std::map<std::string, LegOutput> tick_tuck(float dt);
   std::map<std::string, LegOutput> emit_folded() const;
 
+  LegSet leg_set_;
+  RungList rungs_;
   std::map<std::string, Vec3> folded_;
   std::map<std::string, Vec3> initialized_;
   std::map<std::string, Vec3> nominal_;

@@ -96,6 +96,8 @@ Control::Control(const ::hexa::config::ControlConfig& control,
                  float stride_length, float stride_length_radial,
                  const std::string& default_gait)
     : caps_(caps),
+      stance_xy_all_(nominal_stance),
+      legs_all_(legs),
       stance_xy_(nominal_stance),
       legs_(legs),
       stride_length_(stride_length),
@@ -122,6 +124,25 @@ void Control::set_gait(const std::string& gait) {
   active_gait_ = gait;
   limiter_.set_accel_linear(accel_linear_for(gait));
   limiter_.set_accel_angular(accel_angular_for(gait));
+}
+
+void Control::set_leg_set(hexa::gait::LegSet set) {
+  if (set == leg_set_) {
+    return;
+  }
+  leg_set_ = set;
+  stance_xy_.clear();
+  legs_.clear();
+  for (const auto& [name, p] : stance_xy_all_) {
+    if (!hexa::gait::leg_is_parked(leg_set_, name)) {
+      stance_xy_[name] = p;
+    }
+  }
+  for (const auto& [name, leg] : legs_all_) {
+    if (!hexa::gait::leg_is_parked(leg_set_, name)) {
+      legs_[name] = leg;
+    }
+  }
 }
 
 std::tuple<float, float, float> Control::shape(

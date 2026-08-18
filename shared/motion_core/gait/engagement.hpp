@@ -13,15 +13,22 @@
 
 namespace hexa::gait {
 
-enum class EngagementState { IDLE, ENGAGING, DONE };
+// SHIFTING is the lead-in: every foot planted while the master clock winds up to
+// the first lift-off, so the body has left the foot before it goes.
+enum class EngagementState { IDLE, SHIFTING, ENGAGING, DONE };
 
 class EngagementController {
  public:
+  // `shift_time` is the SHIFTING lead-in; zero skips it and the first leg lifts
+  // on the first tick. Only the quadruped leg set owes one — a tripod's initial
+  // swing leaves a tripod standing, which the body is already inside, and any
+  // delay there is a walk that does not start when the stick moves.
   EngagementController(std::map<std::string, Vec3> nominal_stance,
                        float stride_length, float stride_length_radial,
                        float min_cycle_time, float max_cycle_time,
                        float duty_factor, float swing_phase_margin,
-                       const SwingProfile& swing, float controller_dt);
+                       const SwingProfile& swing, float controller_dt,
+                       float shift_time = 0.0f);
 
   EngagementState state() const { return state_; }
 
@@ -34,6 +41,10 @@ class EngagementController {
   // Master horizon the body-velocity smoothstep ramps over. Tests only.
   float smoothstep_window() const { return smoothstep_window_; }
 
+  // `leg_contexts` is the set of legs that WALK, not necessarily all six: a
+  // parked pair is simply absent, and the output map omits it for the engine to
+  // overlay. Passing the middles in while they are parked would price the walk
+  // against the longest lever arms on the chassis.
   void begin(const Strategy& strategy,
              const std::map<std::string, LegContext>& leg_contexts);
 
@@ -43,6 +54,8 @@ class EngagementController {
 
  private:
   std::map<std::string, LegOutput> emit_nominal_stance() const;
+  std::map<std::string, LegOutput> tick_shift(float dt);
+  bool walks(const std::string& name) const;
 
   std::map<std::string, Vec3> nominal_;
   float stride_length_;
@@ -54,6 +67,7 @@ class EngagementController {
   float swing_end_;
   SwingProfile swing_;
   float controller_dt_;
+  float shift_time_;
 
   EngagementState state_ = EngagementState::IDLE;
   const Strategy* strategy_ = nullptr;
@@ -63,6 +77,7 @@ class EngagementController {
   std::map<std::string, float> first_touchdown_master_;
   float smoothstep_window_ = 1.0f;
 
+  float t_in_shift_ = 0.0f;
   float master_ = 0.0f;
   float v_body_x_ = 0.0f;
   float v_body_y_ = 0.0f;

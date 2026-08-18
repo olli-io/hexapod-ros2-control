@@ -71,6 +71,17 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
                 baked.standing_pose.groups[gi].coxa, kTol)
         << group << ".coxa";
   }
+  // The quadruped stance is the corners alone — no middle group to compare.
+  EXPECT_NEAR(loaded.quad_standing_pose.front.tip_reach,
+              baked.quad_standing_pose.front.tip_reach, kTol);
+  EXPECT_NEAR(loaded.quad_standing_pose.front.coxa,
+              baked.quad_standing_pose.front.coxa, kTol);
+  EXPECT_NEAR(loaded.quad_standing_pose.rear.tip_reach,
+              baked.quad_standing_pose.rear.tip_reach, kTol);
+  EXPECT_NEAR(loaded.quad_standing_pose.rear.coxa,
+              baked.quad_standing_pose.rear.coxa, kTol);
+  EXPECT_NEAR(loaded.quad_standing_pose.body_height,
+              baked.quad_standing_pose.body_height, kTol);
 
   // ── gait engine ──
   const auto& le = loaded.engine;
@@ -84,6 +95,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.touchdown_velocity, be.touchdown_velocity, kTol);
   EXPECT_NEAR(le.touchdown_probe_fraction, be.touchdown_probe_fraction, kTol);
   EXPECT_NEAR(le.swing_phase_margin, be.swing_phase_margin, kTol);
+  EXPECT_NEAR(le.quadruped_swing_phase_margin, be.quadruped_swing_phase_margin,
+              kTol);
   EXPECT_NEAR(le.controller_dt, be.controller_dt, kTol);
   EXPECT_NEAR(le.cmd_zero_tol, be.cmd_zero_tol, kTol);
   EXPECT_NEAR(le.settle_debounce_delay, be.settle_debounce_delay, kTol);
@@ -99,6 +112,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.reseat_pair_swing_time, be.reseat_pair_swing_time, kTol);
   EXPECT_NEAR(le.reseat_pair_dwell_time, be.reseat_pair_dwell_time, kTol);
   EXPECT_NEAR(le.reseat_swing_clearance, be.reseat_swing_clearance, kTol);
+  EXPECT_NEAR(le.quadruped_shift_time, be.quadruped_shift_time, kTol);
 
   // ── velocity caps (per-gait, keyed by the registry names) ──
   // angular_max is derived, not read from YAML: the loader solves the standing
@@ -167,6 +181,9 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
               kTol);
   EXPECT_NEAR(lp.support_centroid_tau, bp.support_centroid_tau, kTol);
   EXPECT_NEAR(lp.swing_lift_tau, bp.swing_lift_tau, kTol);
+  EXPECT_NEAR(lp.support_shift_gain, bp.support_shift_gain, kTol);
+  EXPECT_NEAR(lp.support_shift_lead, bp.support_shift_lead, kTol);
+  EXPECT_NEAR(lp.support_shift_tau, bp.support_shift_tau, kTol);
   EXPECT_NEAR(lp.gait_activation_slew_rate, bp.gait_activation_slew_rate, kTol);
   EXPECT_NEAR(lp.pose_filter_tau, bp.pose_filter_tau, kTol);
   EXPECT_NEAR(lp.pose_filter_damping_ratio, bp.pose_filter_damping_ratio, kTol);

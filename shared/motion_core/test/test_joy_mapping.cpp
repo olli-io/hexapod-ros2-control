@@ -77,6 +77,7 @@ TEST(JoyMappingGolden, MatchesPythonReference) {
     if (e.has_animation_name) {
       EXPECT_EQ(o.animation_name, e.animation_name);
     }
+    EXPECT_EQ(o.init_quadruped, e.init_quadruped);
   }
 }
 

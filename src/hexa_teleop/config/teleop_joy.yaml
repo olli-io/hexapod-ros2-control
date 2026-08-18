@@ -59,6 +59,13 @@ gait:
     dpad_down: height_down
     dpad_left: gait_prev
     dpad_right: gait_next
+    # Stand up in quadruped mode: the middle pair stays folded and the
+    # four corners creep one leg at a time. The select half of the init
+    # button — `start` stands the robot up on six legs, this on four, and
+    # off the belly either one folds it. Bound here only, so it does
+    # nothing in the other two modes, where `select` keeps its base
+    # binding (`record`, itself inert outside posture mode).
+    select: quadruped_mode
     left_stick_x: drive_yaw
     left_stick_y: drive_x_aux
     right_stick_x: drive_y

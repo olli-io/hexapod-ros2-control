@@ -9,9 +9,11 @@
 #include <array>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "gait/gaits/base.hpp"
 #include "gait/kinematics.hpp"
+#include "gait/stand_transition.hpp"
 #include "gait/types.hpp"
 
 namespace hexa::gait {
@@ -46,24 +48,37 @@ std::map<std::string, Vec3> reseat_nominal_stance(
 
 class ReseatController {
  public:
-  // swing shapes the pair's arc as it shapes a gait swing; its width is ignored
-  // (a reseat is direction-agnostic). A pair already on its targets is skipped
+  // swing shapes the rung's arc as it shapes a gait swing; its width is ignored
+  // (a reseat is direction-agnostic). A rung already on its targets is skipped
   // outright — after a settle some legs are already home, and lifting a foot to
   // put it back where it is reads as a stray step.
+  // `rung_order` is both the sequence and the ladder's leg set: the flattened
+  // rungs are the only legs it reads, moves or reports. An empty list takes the
+  // six-leg PAIR_ORDER. Legs outside it (a parked middle) are left to the
+  // caller, which is what keeps a foot 0.27 m up out of the landing stage.
+  //
+  // `pre_lift_shift_time` holds every foot planted for that long before each
+  // rung lifts, announcing the coming lift-off through the rung's emitted phase
+  // so the support shift carries the body off it first. Zero — the six-leg
+  // case, where a mirrored pair leaves the body inside what is left — skips the
+  // hold entirely.
   ReseatController(std::map<std::string, Vec3> current_stance,
                    std::map<std::string, Vec3> target_stance,
                    float pair_swing_time, float pair_dwell_time,
-                   const SwingProfile& swing, float controller_dt);
+                   const SwingProfile& swing, float controller_dt,
+                   RungList rung_order = {},
+                   float pre_lift_shift_time = 0.0f);
 
   bool done() const { return done_; }
   std::map<std::string, LegOutput> update(float dt);
 
  private:
-  // Skip to the first pair that needs moving and latch its origins; sets done_
-  // if there is none.
+  // Skip to the first rung that needs moving and latch its origins; sets done_
+  // if there is none, and arms the pre-lift shift hold if one is owed.
   void seed_pair_origin();
   bool pair_needs_moving(std::size_t idx) const;
   bool remaining_pair_needs_moving() const;
+  std::map<std::string, LegOutput> tick_shift(float dt);
   // Latch the origins of every foot seeded above its target. Height is the only
   // contact signal the ladder has, and every target is on the same ground plane.
   void seed_landing();
@@ -72,9 +87,13 @@ class ReseatController {
   LegOutput held(const std::string& name) const;
   std::map<std::string, LegOutput> emit_held() const;
 
+  RungList pair_order_;
+  // pair_order_ flattened: every leg this ladder owns.
+  std::vector<std::string> legs_;
   std::map<std::string, Vec3> target_;
   float pair_swing_time_;
   float pair_dwell_time_;
+  float pre_lift_shift_time_;
   SwingProfile swing_;
   // swing_ with the climb taken out: a landing foot must never rise.
   SwingProfile landing_swing_;
@@ -87,6 +106,9 @@ class ReseatController {
   // Shared by the landing stage and the pair swings; they never overlap.
   float t_in_pair_ = 0.0f;
   float dwell_remaining_ = 0.0f;
+  // Counts up through the pre-lift shift hold; -1 when no hold is running, so a
+  // zero-length one is still distinguishable from none at all.
+  float t_in_shift_ = -1.0f;
   bool landing_ = false;
   bool done_ = false;
 };

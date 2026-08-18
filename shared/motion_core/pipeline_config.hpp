@@ -27,8 +27,13 @@ struct PipelineConfig {
   // reach and splay, not joint angles — gait::standing_pose_from solves the
   // per-leg triple from these and the leg specs.
   hexa::config::StandingPose standing_pose{};
-  // The two belly-rest poses: folded is where the robot energizes and where a
-  // fold ends, initialized is the unfold ladder's endpoint.
+  // Quadruped mode's stance: where the four corners stand once the middle pair
+  // is parked. No middle entry — that pair does not stand, it is held at
+  // folded_pose.
+  hexa::config::CornerStandingPose quad_standing_pose{};
+  // The two belly-rest poses: folded is where the robot energizes, where a fold
+  // ends and where quadruped mode parks the middle pair; initialized is the
+  // unfold ladder's endpoint, and the rung the middles climb through either way.
   std::array<hexa::JointAngles, hexa::kNumLegs> folded_pose{};
   std::array<hexa::JointAngles, hexa::kNumLegs> initialized_pose{};
 

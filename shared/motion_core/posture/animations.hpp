@@ -30,6 +30,10 @@ struct AnimationContext {
   std::optional<std::pair<float, float>> support_centroid_xy = std::nullopt;
   // Max foot lift above the stance mean (m) across swing legs, clamped >= 0.
   std::optional<float> swing_lift_z = std::nullopt;
+  // Low-pass-filtered XY point the body should be standing over, body frame (m):
+  // the stance feet weighted by how long each has left before lift-off. Always
+  // strictly inside the current support polygon (see anticipated_support_xy).
+  std::optional<std::pair<float, float>> anticipated_support_xy = std::nullopt;
 };
 
 class Animation {
@@ -66,6 +70,20 @@ class GaitSway : public Animation {
  private:
   float gain_;      // feedforward gain on the centroid
   float strength_;  // user-facing attenuator in [0, 1]
+};
+
+// Carries the body into the next support triangle before the foot leaves it.
+// Structurally GaitSway, on the anticipated centroid rather than the plain one —
+// and load-bearing rather than decorative: a four-foot creep has no static body
+// position that is inside every "lift one leg" triangle, so without this the
+// gait falls over.
+class SupportShift : public Animation {
+ public:
+  explicit SupportShift(float gain = 0.5f) : gain_(gain) {}
+  BodyPose eval(const AnimationContext& ctx) const override;
+
+ private:
+  float gain_;
 };
 
 // Lifts the body in +z to match the swing arc. Tripod-only.

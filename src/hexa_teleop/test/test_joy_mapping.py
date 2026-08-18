@@ -1730,3 +1730,124 @@ def test_resolve_gait_cycle_rejects_all_unstable_result():
             unstable_gaits={"surf", "crawl"},
             allow_unstable=False,
         )
+
+
+# ── quadruped init ────────────────────────────────────────────────────────
+
+# The GAIT section's own binding; `select` keeps its base `record` binding
+# everywhere else, which is what makes the quadruped init a gait-mode
+# affordance.
+_QUAD_GAIT_BINDINGS = {"select": "quadruped_mode"}
+
+
+def _quad_cfg(**overrides):
+    gait = dict(_QUAD_GAIT_BINDINGS)
+    gait.update(overrides.pop("gait_bindings", {}))
+    return _cfg(gait_bindings=gait, **overrides)
+
+
+def _press_select(cfg, state, held: bool):
+    """One tick with `select` held or released. Returns the JoyOutput."""
+    return map_joy(_axes(), _buttons(record=held), cfg, state, DT)
+
+
+def test_select_asks_for_a_quadruped_init():
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)  # "tripod"
+
+    out = _press_select(cfg, state, True)
+    assert out.init_request is True
+    assert out.init_quadruped is True
+    # The leg set rides the gait, so the request carries the gait that walks it.
+    assert out.gait_select == "quadruped_wave"
+    assert state.quadruped is True
+    _press_select(cfg, state, False)
+
+    # And start asks for the six-leg one, off the gait the cycler is parked on.
+    out = map_joy(_axes(), _buttons(init=True), cfg, state, DT)
+    assert out.init_request is True
+    assert out.init_quadruped is False
+    assert out.gait_select == "tripod"
+    assert state.quadruped is False
+    assert state.current_gait_idx == 2
+
+
+def test_quadruped_mode_locks_the_gait_cycler():
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+    assert state.quadruped is True
+
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select is None, "the D-pad must not cycle out of quadruped"
+    assert state.current_gait_idx == 2, "the index must not drift either"
+
+
+def test_posture_mode_stays_available_in_quadruped_mode():
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+    assert state.quadruped is True
+
+    # The leg set is not the mode's to change any more — it is fixed until the
+    # next fold — so posing the body on four feet is the operator's call.
+    map_joy(_axes(), _buttons(posture_mode=True), cfg, state, DT)
+    assert state.mode == POSTURE
+    assert state.quadruped is True
+
+
+def test_animation_mode_is_refused_in_quadruped_mode():
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+
+    buttons = list(_buttons())
+    buttons[1] = 1  # animation_mode
+    # Every animation is written for six legs, and there is no unpark to fall
+    # back on: the button is inert until the robot folds.
+    map_joy(_axes(), tuple(buttons), cfg, state, DT)
+    assert state.mode == GAIT
+
+
+def test_quadruped_init_is_unbound_outside_gait_mode():
+    cfg = _quad_cfg()
+    for mode in (POSTURE, ANIMATION):
+        state = JoyState(mode=mode, current_gait_idx=2)
+        out = _press_select(cfg, state, True)
+        assert state.quadruped is False, mode
+        assert out.init_quadruped is False, mode
+        # `select` is `record` there, and recording is not an init.
+        assert out.init_request is False, mode
+
+
+def test_select_held_across_a_mode_change_does_not_fire():
+    cfg = _quad_cfg()
+    state = JoyState(mode=POSTURE, current_gait_idx=2)
+    # Held down in POSTURE, where it is `record` and inert for the toggle.
+    _press_select(cfg, state, True)
+    assert state.quadruped is False
+
+    # Switch into GAIT with it still held: no rising edge, so nothing fires.
+    buttons = list(_buttons(record=True))
+    buttons[0] = 1  # gait_mode
+    out = map_joy(_axes(), tuple(buttons), cfg, state, DT)
+    assert state.mode == GAIT
+    assert state.quadruped is False
+    assert out.init_quadruped is False
+
+
+def test_quadruped_wave_is_not_in_the_shipped_gait_cycle():
+    import pathlib
+
+    import yaml
+
+    from hexa_teleop.joy_mapping import QUADRUPED_GAIT
+
+    # The select init is the only way in, so the D-pad rotation must never be
+    # able to land on it.
+    here = pathlib.Path(__file__).resolve().parents[1]
+    raw = yaml.safe_load((here / "config" / "teleop_joy.yaml").read_text())
+    assert QUADRUPED_GAIT not in raw["gait_cycle"]

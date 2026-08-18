@@ -60,7 +60,7 @@ base:
 gait:
   bindings:
     btn_3: init
-    btn_4: record
+    btn_4: quadruped_mode
     btn_5: gait_prev
     btn_6: gait_next
     btn_7: height_up
@@ -250,6 +250,16 @@ def test_load_config_gait_cycle_filtered(cfg):
     assert "crawl" not in loaded_cfg.gait_cycle
 
 
+def test_quadruped_wave_stays_out_of_the_web_gait_cycle(cfg):
+    # The quad init is the only way in, exactly as on the gamepad, so the
+    # cycler must never be able to land on the gait: prev/next would otherwise
+    # ask a standing robot for a leg set it cannot reach without folding.
+    # resolve_gait_cycle filters against the yaml list, so this holds as long
+    # as webteleop.yaml does not name it.
+    loaded_cfg, _, _ = cfg
+    assert "quadruped_wave" not in loaded_cfg.gait_cycle
+
+
 def test_load_config_animation_list(cfg):
     loaded_cfg, _, _ = cfg
     assert loaded_cfg.animation_list == (
@@ -264,7 +274,7 @@ def test_button_labels_gait_mode(cfg):
     labels = button_labels_for_mode(loaded_cfg, GAIT)
     assert labels == (
         "gait_mode", "posture_mode", "animation_mode",
-        "init", "record", "gait_prev", "gait_next",
+        "init", "quadruped_mode", "gait_prev", "gait_next",
         "height_up", "height_down",
     )
 
@@ -438,6 +448,74 @@ def test_gait_prev_cycles_backward(cfg):
     assert out.gait_select is not None
     # wraps to last
     assert out.gait_select == "ripple"
+
+
+# ─── map_web: quadruped init (btn_4 in gait mode) ───────────────────
+
+def test_quadruped_init_asks_for_the_quadruped_gait(cfg):
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=1)
+    out = map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    # The leg set rides the gait, and the init that goes with it is what
+    # stands the robot up on that set.
+    assert out.gait_select == "quadruped_wave"
+    assert out.init_request is True
+    assert out.init_quadruped is True
+    assert state.quadruped is True
+
+
+def test_hexapod_init_asks_for_the_cycler_gait(cfg):
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=1)
+    six_leg = loaded_cfg.gait_cycle[1]
+    map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _buttons(), loaded_cfg, state, DT)
+    # btn_3 = init, the six-leg half of the same button.
+    out = map_web((0, 0), (0, 0), _buttons(3), loaded_cfg, state, DT)
+    assert state.quadruped is False
+    assert out.init_quadruped is False
+    assert out.gait_select == six_leg
+
+
+def test_quadruped_button_is_record_in_posture_mode(cfg):
+    """btn_4 is `quadruped_mode` only in the gait section.
+
+    The shared mapping resolves that function against the gait bindings in
+    every mode to keep its edge tracker honest, but only acts on it in gait
+    mode — so a posture-mode press of the same button must record the pose
+    and leave the leg set alone.
+    """
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=POSTURE)
+    # Hold a pose offset on the left stick, then record it.
+    map_web((0.0, 0.5), (0, 0), _buttons(), loaded_cfg, state, DT)
+    out = map_web((0.0, 0.5), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    assert out.gait_select is None
+    assert out.init_request is False
+    assert out.init_quadruped is False
+    assert state.quadruped is False
+    assert state.recorded_x != 0.0
+
+
+def test_quadruped_button_held_across_a_mode_switch_does_not_fire(cfg):
+    """No spurious init when the button enters gait mode already held.
+
+    The press starts in posture mode (where it means `record`); the edge
+    tracker sees it there, so arriving in gait mode is not a rising edge.
+    """
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=POSTURE)
+    map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    # btn_0 = gait_mode, with btn_4 still held.
+    map_web((0, 0), (0, 0), _buttons(0, 4), loaded_cfg, state, DT)
+    assert state.mode == GAIT
+    out = map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    assert out.init_quadruped is False
+    assert state.quadruped is False
 
 
 # ─── resync_gait: external /cmd_gait switches ───────────────────────

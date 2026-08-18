@@ -229,6 +229,20 @@ target_compile_options(test_posture PRIVATE -fexceptions)
 # the port. This is the off-target proof that the extraction composes and the
 # full chain stands, walks, and safe-stops; per-stage fidelity is the golden
 # suites' job.
+# Quadruped support-shift knob sweep (not a test): the numbers behind the two
+# Quadruped.* tripwires in test_pipeline.cpp. Same sources as the pipeline test.
+add_executable(probe_quad probe_quad.cpp
+  ${FW_SRC}/pipeline.cpp
+  ${FW_SRC}/pipeline_config.cpp
+  ${FW_SRC}/control.cpp
+  ${FW_SRC}/joy_mapping.cpp
+  ${FW_SRC}/supervisor.cpp
+  ${FW_POSTURE_SOURCES}
+  ${FW_GAIT_SOURCES})
+add_dependencies(probe_quad gen_config)
+target_include_directories(probe_quad PRIVATE ${FW_SRC})
+target_compile_options(probe_quad PRIVATE -Wall -Wextra -fexceptions)
+
 hexa_host_test(test_pipeline test_pipeline.cpp
   ${FW_SRC}/pipeline.cpp
   ${FW_SRC}/pipeline_config.cpp

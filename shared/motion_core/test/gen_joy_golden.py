@@ -104,6 +104,13 @@ def build_trace():
     f.append(frame())
     f.append(frame(buttons=1 << 1))                    # toggle back to GAIT
     f.append(frame())
+    # ── quadruped init (select, idx 6 — bound to quadruped_mode in GAIT) ──
+    f.append(frame(buttons=1 << 6))                    # ask for the quad stand
+    f.append(frame())
+    f.append(frame(dx=-32767))                         # gait_next, LOCKED OUT
+    f.append(frame())
+    f.append(frame(buttons=1 << 7))                    # start: back to six legs
+    f.append(frame())
     return f
 
 
@@ -147,6 +154,7 @@ def emit(frames, expected, caps) -> str:
     w("  std::string_view gait_select;")
     w("  bool has_animation_name;")
     w("  std::string_view animation_name;")
+    w("  bool init_quadruped;")
     w("};")
     w("")
     w(f"inline constexpr Frame kFrames[] = {{")
@@ -165,7 +173,8 @@ def emit(frames, expected, caps) -> str:
           + f", {'true' if o.mode_changed else 'false'}"
           + f", {'true' if o.init_request else 'false'}"
           + f", {'true' if o.gait_select is not None else 'false'}, {gs}"
-          + f", {'true' if o.animation_name is not None else 'false'}, {an}}},")
+          + f", {'true' if o.animation_name is not None else 'false'}, {an}"
+          + f", {'true' if o.init_quadruped else 'false'}}},")
     w("};")
     w("")
     w("inline constexpr int kNumFrames = "
@@ -247,6 +256,9 @@ def main() -> int:
     duty = {n: d for n, d, _ in GAITS}[default_gait]
     stride = float(gait["stride_length"])
     min_swing = float(gait["min_swing_time"])
+    # The hexapod margin unconditionally: quadruped_wave is deliberately absent
+    # from GAITS above, so the default gait is always a six-leg one and the
+    # quadruped margin can never be the one in play here.
     margin = float(gait["swing_phase_margin"])
     # Realized swing/stance split, not the nominal duty factor — same formula as
     # gen_config.py velocity_caps(), pipeline_config_loader.cpp and limits.py.

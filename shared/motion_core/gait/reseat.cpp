@@ -14,6 +14,13 @@ namespace {
 // How close to its target a foot counts as already in place. A settle leaves the
 // legs it got to exactly on nominal; everything else is millimetres out.
 constexpr float kInPlaceEpsilon = 1e-5f;
+
+// Share of the pre-lift shift hold spent running the rung's phase up to
+// lift-off. The rest is the body arriving: the support shift only starts moving
+// once the phase enters its own lead window, and what it tracks is low-passed,
+// so a hold that ended with the announcement would lift on a body still in
+// transit. Announce over the first half, settle over the second.
+constexpr float kShiftRampFraction = 0.5f;
 }  // namespace
 
 ReseatGeometry default_geometry_from_pose(const JointAngles& standing_angles,
@@ -84,9 +91,13 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
                                    std::map<std::string, Vec3> target_stance,
                                    float pair_swing_time, float pair_dwell_time,
                                    const SwingProfile& swing,
-                                   float controller_dt)
-    : pair_swing_time_(pair_swing_time),
+                                   float controller_dt, RungList rung_order,
+                                   float pre_lift_shift_time)
+    : pair_order_(rung_order.empty() ? pair_list(LegSet::HEXAPOD)
+                                     : std::move(rung_order)),
+      pair_swing_time_(pair_swing_time),
       pair_dwell_time_(pair_dwell_time),
+      pre_lift_shift_time_(pre_lift_shift_time),
       swing_(swing),
       controller_dt_(controller_dt) {
   // Direction-agnostic, so the lateral arch is dropped; the rest of the shape is
@@ -97,15 +108,29 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
   // forgoes the probe with it: endpoint-soft rather than probe-gentle.
   landing_swing_ = swing_;
   landing_swing_.clearance = 0.0f;
-  require_all_legs(current_stance, "current_stance");
-  require_all_legs(target_stance, "target_stance");
+  for (const auto& pair : pair_order_) {
+    for (const auto& name : pair) {
+      legs_.push_back(name);
+    }
+  }
+  for (const auto& name : legs_) {
+    if (current_stance.find(name) == current_stance.end()) {
+      throw std::invalid_argument("current_stance missing leg: " + name);
+    }
+    if (target_stance.find(name) == target_stance.end()) {
+      throw std::invalid_argument("target_stance missing leg: " + name);
+    }
+  }
   if (pair_swing_time <= 0.0f) {
     throw std::invalid_argument("pair_swing_time must be positive");
   }
   if (pair_dwell_time < 0.0f) {
     throw std::invalid_argument("pair_dwell_time must be non-negative");
   }
-  for (const auto& name : LEG_NAMES) {
+  if (pre_lift_shift_time < 0.0f) {
+    throw std::invalid_argument("pre_lift_shift_time must be non-negative");
+  }
+  for (const auto& name : legs_) {
     target_[name] = target_stance.at(name);
     positions_[name] = current_stance.at(name);
   }
@@ -118,7 +143,7 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
 std::map<std::string, LegOutput> ReseatController::update(float dt) {
   if (done_) {
     std::map<std::string, LegOutput> out;
-    for (const auto& name : LEG_NAMES) {
+    for (const auto& name : legs_) {
       out[name] = LegOutput{target_[name], 0.0f, true};
     }
     return out;
@@ -138,9 +163,13 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     return emit_held();
   }
 
+  if (t_in_shift_ >= 0.0f) {
+    return tick_shift(dt);
+  }
+
   t_in_pair_ += dt;
   const float phase = t_in_pair_ / pair_swing_time_;
-  const std::array<std::string, 2>& active = PAIR_ORDER[pair_idx_];
+  const Rung& active = pair_order_[pair_idx_];
 
   if (phase >= 1.0f) {
     for (const auto& name : active) {
@@ -158,12 +187,13 @@ std::map<std::string, LegOutput> ReseatController::update(float dt) {
     return emit_held();
   }
 
-  // Mid-pair: a rest-to-rest swing arc from the pair-start origin to the target.
-  // A leg already standing on its target stays down — the pair is mirrored to
-  // keep the body balanced, and lifting fewer feet only helps that.
+  // Mid-rung: a rest-to-rest swing arc from the rung-start origin to the target.
+  // A leg already standing on its target stays down — a mirrored pair is
+  // mirrored to keep the body balanced, and lifting fewer feet only helps that.
   std::map<std::string, LegOutput> out;
-  for (const auto& name : LEG_NAMES) {
-    const bool is_active = (name == active[0] || name == active[1]);
+  for (const auto& name : legs_) {
+    const bool is_active =
+        std::find(active.begin(), active.end(), name) != active.end();
     if (is_active && (pair_origin_.at(name) - target_.at(name)).norm() >
                          kInPlaceEpsilon) {
       const Vec3 origin = pair_origin_[name];
@@ -200,7 +230,7 @@ std::map<std::string, LegOutput> ReseatController::tick_landing(float dt) {
   }
 
   std::map<std::string, LegOutput> out;
-  for (const auto& name : LEG_NAMES) {
+  for (const auto& name : legs_) {
     auto it = landing_origin_.find(name);
     if (it == landing_origin_.end()) {
       out[name] = held(name);
@@ -232,14 +262,14 @@ LegOutput ReseatController::held(const std::string& name) const {
 
 std::map<std::string, LegOutput> ReseatController::emit_held() const {
   std::map<std::string, LegOutput> out;
-  for (const auto& name : LEG_NAMES) {
+  for (const auto& name : legs_) {
     out[name] = held(name);
   }
   return out;
 }
 
 void ReseatController::seed_landing() {
-  for (const auto& name : LEG_NAMES) {
+  for (const auto& name : legs_) {
     if (positions_[name][2] > target_[name][2] + contact_band()) {
       landing_origin_[name] = positions_[name];
     }
@@ -248,7 +278,7 @@ void ReseatController::seed_landing() {
 }
 
 bool ReseatController::remaining_pair_needs_moving() const {
-  for (std::size_t i = pair_idx_; i < PAIR_ORDER.size(); ++i) {
+  for (std::size_t i = pair_idx_; i < pair_order_.size(); ++i) {
     if (pair_needs_moving(i)) {
       return true;
     }
@@ -257,7 +287,7 @@ bool ReseatController::remaining_pair_needs_moving() const {
 }
 
 bool ReseatController::pair_needs_moving(std::size_t idx) const {
-  for (const auto& name : PAIR_ORDER[idx]) {
+  for (const auto& name : pair_order_[idx]) {
     if ((positions_.at(name) - target_.at(name)).norm() > kInPlaceEpsilon) {
       return true;
     }
@@ -266,22 +296,45 @@ bool ReseatController::pair_needs_moving(std::size_t idx) const {
 }
 
 void ReseatController::seed_pair_origin() {
-  while (pair_idx_ < PAIR_ORDER.size() && !pair_needs_moving(pair_idx_)) {
-    // Already there: snap out the float dust, no swing and no dwell.
-    for (const auto& name : PAIR_ORDER[pair_idx_]) {
+  while (pair_idx_ < pair_order_.size() && !pair_needs_moving(pair_idx_)) {
+    // Already there: snap out the float dust, no swing, no dwell and no shift.
+    for (const auto& name : pair_order_[pair_idx_]) {
       positions_[name] = target_[name];
     }
     pair_idx_ += 1;
   }
-  if (pair_idx_ >= PAIR_ORDER.size()) {
+  if (pair_idx_ >= pair_order_.size()) {
     done_ = true;
     return;
   }
-  const std::array<std::string, 2>& active = PAIR_ORDER[pair_idx_];
+  const Rung& active = pair_order_[pair_idx_];
   pair_origin_.clear();
   for (const auto& name : active) {
     pair_origin_[name] = positions_[name];
   }
+  // Armed here rather than at the swing, so the origins are already latched when
+  // the hold starts emitting the rung's phase.
+  t_in_shift_ = pre_lift_shift_time_ > 0.0f ? 0.0f : -1.0f;
+}
+
+// Every foot stays exactly where it is; only the rung's phase moves. It runs up
+// to lift-off over the ramp and sits there for the rest, which is what tells the
+// support shift to stop counting these feet and carry the body onto the ones
+// that will still be down.
+std::map<std::string, LegOutput> ReseatController::tick_shift(float dt) {
+  t_in_shift_ += dt;
+  const float ramp = kShiftRampFraction * pre_lift_shift_time_;
+  const float phase =
+      ramp > 0.0f ? std::min(1.0f, t_in_shift_ / ramp) : 1.0f;
+
+  std::map<std::string, LegOutput> out = emit_held();
+  for (const auto& name : pair_order_[pair_idx_]) {
+    out[name].phase = phase;
+  }
+  if (t_in_shift_ >= pre_lift_shift_time_) {
+    t_in_shift_ = -1.0f;
+  }
+  return out;
 }
 
 }  // namespace hexa::gait
