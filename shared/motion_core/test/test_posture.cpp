@@ -800,3 +800,34 @@ TEST(SupportShift, QuadrupedStackRunsWithGaitAnimationsDisabled) {
   EXPECT_NEAR(std::hypot(hexa.x, hexa.y), 0.0f, 1e-6f)
       << "the default stack must still be suppressed";
 }
+
+// Posture mode is live on four feet: the user pose reaches the output as it
+// does on six. The support shift is not entitled to the whole envelope — what
+// keeps its travel intact is upstream, the teleop refusing a posture RECORD
+// while quadruped, so no offset rides into the creep.
+TEST(SupportShift, QuadrupedAppliesTheUserPose) {
+  PostureController posture(hexa::config::kPosture);
+  const BodyPose user{0.02f, -0.015f, 0.01f, 0.1f, -0.05f, 0.3f};
+  posture.set_user_pose(user);
+
+  // Equal phases put every anticipation weight at 1, so the support shift
+  // target is the symmetric centroid and what comes out is the user pose alone.
+  const auto legs = quad_legs({{"l_front", 0.5f},
+                               {"r_front", 0.5f},
+                               {"l_rear", 0.5f},
+                               {"r_rear", 0.5f}});
+  BodyPose out;
+  float t = 0.0f;
+  for (int i = 0; i < 1000; ++i) {
+    out = posture.update(legs, 0.25f, /*walking=*/false, EngineState::GAIT,
+                         "quadruped_wave", hexa::gait::LegSet::QUADRUPED, kDt,
+                         t);
+    t += kDt;
+  }
+  EXPECT_NEAR(out.x, user.x, 1e-3f);
+  EXPECT_NEAR(out.y, user.y, 1e-3f);
+  EXPECT_NEAR(out.z, user.z, 1e-3f);
+  EXPECT_NEAR(out.roll, user.roll, 1e-3f);
+  EXPECT_NEAR(out.pitch, user.pitch, 1e-3f);
+  EXPECT_NEAR(out.yaw, user.yaw, 1e-3f);
+}

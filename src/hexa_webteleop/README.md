@@ -59,7 +59,9 @@ It takes gait mode's second slot because `record` only does anything in
 posture mode, and it is bound in the gait section alone, which is what
 confines it to gait mode. It selects `quadruped_wave`, which stays out of
 `gait_cycle` — that init is the only way in, so prev/next can never ask a
-standing robot for a leg set it cannot reach without folding.
+standing robot for a leg set it cannot reach without folding. Posture mode
+still poses the body on four feet; only `record` goes inert there, for the
+reason `hexa_teleop`'s README gives.
 
 ## Safety
 
