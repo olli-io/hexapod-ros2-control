@@ -13,7 +13,7 @@ const LABELS = {
   gait_mode: "Gait",
   posture_mode: "Posture",
   animation_mode: "Anim",
-  init: "Init",
+  init: "Stand\n(Hexa)",
   record: "Rec",
   gait_prev: "Gait \u25C0",
   gait_next: "Gait \u25B6",
@@ -23,7 +23,7 @@ const LABELS = {
   height_down: "\u25BC",
   yaw_left: "Yaw \u25C0",
   yaw_right: "Yaw \u25B6",
-  quadruped_mode: "Quad",
+  quadruped_mode: "Stand\nQuad",
   "": "",
 };
 

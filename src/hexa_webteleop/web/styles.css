@@ -243,8 +243,10 @@ button.nav-icon:active {
   cursor: pointer;
   touch-action: none;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Labels may carry a newline (\n) to break onto a second line. */
+  white-space: pre-line;
+  text-align: center;
+  line-height: 1.15;
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
