@@ -169,11 +169,12 @@ TEST(VelocityCaps, DerivedFromEngineKnobs) {
   // for every gait rather than just tripod.
   for (const auto& g : cfg::kGaits) {
     // The margin is per LEG SET, and the baked table carries no leg set, so the
-    // one quadruped gait is named here. A new one would have to be added — which
+    // quadruped gaits are named here. A new one would have to be added — which
     // is the point: its cap must not silently come out on the six-leg margin.
-    const float margin = gait_name(g) == "quadruped_wave"
-                             ? cfg::kEngine.quadruped_swing_phase_margin
-                             : cfg::kEngine.swing_phase_margin;
+    const bool quadruped =
+        gait_name(g) == "quad_walk" || gait_name(g) == "quad_gallop";
+    const float margin = quadruped ? cfg::kEngine.quadruped_swing_phase_margin
+                                   : cfg::kEngine.swing_phase_margin;
     const float swing_end = (1.0f - g.duty_factor) * (1.0f - margin);
     const float want = cfg::kEngine.stride_length * swing_end /
                        (cfg::kEngine.min_swing_time * (1.0f - swing_end));

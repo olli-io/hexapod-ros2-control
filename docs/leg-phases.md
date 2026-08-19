@@ -201,7 +201,8 @@ other two gaits.
 walks the four corner legs one at a time. The vocabulary:
 
 - **leg set** — which legs the strategy walks. A property of the strategy, so
-  selecting the `quadruped_wave` gait *is* selecting the mode.
+  selecting one of the four-corner gaits (`quad_walk`, `quad_gallop`) *is*
+  selecting the mode.
 - **park** — a leg held clear of the walk. Neither stance nor swing: it carries
   no weight and takes no phase. The parked pose is the **folded** pose
   (`geometry.yaml folded_pose`) — the same angles the robot powers up in — and
@@ -215,14 +216,25 @@ walks the four corner legs one at a time. The vocabulary:
   from the one it is standing on, so nothing downstream has to guard against a
   middle pair that is in the wrong place.
 
-The gait is a lateral-sequence creep at duty factor 3/4. Lift-offs are a quarter
-cycle apart and the swing window is
+Both gaits are creeps at duty factor 3/4. Lift-offs are a quarter cycle apart
+and the swing window is
 `0.25 * (1 - quadruped_swing_phase_margin) = 0.1875`, so exactly one foot is ever
-airborne and every handover has a 0.0625-cycle window with all four down. Because a leg lifts at master phase `pymod(-offset, 1)`, the
-lateral order (left rear, left front, right rear, right front) needs the offsets
-run the other way: `l_rear 0, r_front 1/4, r_rear 1/2, l_front 3/4`. The naive
-reading gives the diagonal order, whose worst static margin is negative on this
-chassis.
+airborne and every handover has a 0.0625-cycle window with all four down. They
+differ only in footfall order, and because a leg lifts at master phase
+`pymod(-offset, 1)` each table runs the mirror of the order it walks:
+
+- **`quad_walk`** — the lateral sequence (left rear, left front, right rear,
+  right front), each hind followed by the fore on its own side. Offsets
+  `l_rear 0, r_front 1/4, r_rear 1/2, l_front 3/4`. Reading that table as the
+  lift order instead gives the diagonal sequence, whose worst static margin is
+  negative on this chassis.
+- **`quad_gallop`** — the perimeter sequence (right front, left front, left
+  rear, right rear), round the chassis rather than up one side, so the two fores
+  lift back to back. Offsets `r_front 0, r_rear 1/4, l_rear 1/2, l_front 3/4`.
+
+The operator rotates between them on the teleop D-pad, which walks
+`quadruped_gait_cycle` while the robot stands on four legs; `select` always
+stands up on `default_quadruped_gait`.
 
 **Why the body has to move.** With four feet down the support polygon is a convex
 quadrilateral, and lifting one leg leaves one of its four "drop a vertex"

@@ -91,8 +91,22 @@ def load_web_config(
     unstable_gaits = frozenset(
         name for name, descriptor in GAIT_DESCRIPTORS.items() if descriptor.unstable
     )
+    # The two rotations are partitioned by leg set: each one's validator is
+    # handed the other set as foreign, so a quadruped gait in gait_cycle (or a
+    # six-leg gait in the quadruped rotation) is a load-time error rather than a
+    # cycler press the engine silently refuses.
+    quadruped_gaits = frozenset(
+        name
+        for name, descriptor in GAIT_DESCRIPTORS.items()
+        if descriptor.leg_set == "quadruped"
+    )
+    hexapod_gaits = frozenset(GAIT_DESCRIPTORS) - quadruped_gaits
     gait_cycle = resolve_gait_cycle(
-        gait_cycle_raw, set(GAIT_DESCRIPTORS), unstable_gaits, allow_unstable
+        gait_cycle_raw,
+        set(GAIT_DESCRIPTORS),
+        unstable_gaits,
+        allow_unstable,
+        foreign_gaits=quadruped_gaits,
     )
     default_gait = str(raw["default_gait"])
     if default_gait not in gait_cycle:
@@ -102,6 +116,26 @@ def load_web_config(
             else f"must be in gait_cycle={list(gait_cycle_raw)}"
         )
         raise ValueError(f"default_gait={default_gait!r} {detail}")
+
+    quad_cycle_raw = tuple(str(n) for n in raw["quadruped_gait_cycle"])
+    quadruped_gait_cycle = resolve_gait_cycle(
+        quad_cycle_raw,
+        set(GAIT_DESCRIPTORS),
+        unstable_gaits,
+        allow_unstable,
+        foreign_gaits=hexapod_gaits,
+        key="quadruped_gait_cycle",
+    )
+    default_quadruped_gait = str(raw["default_quadruped_gait"])
+    if default_quadruped_gait not in quadruped_gait_cycle:
+        detail = (
+            "is excluded by allow_unstable_gaits: false"
+            if default_quadruped_gait in quad_cycle_raw
+            else f"must be in quadruped_gait_cycle={list(quad_cycle_raw)}"
+        )
+        raise ValueError(
+            f"default_quadruped_gait={default_quadruped_gait!r} {detail}"
+        )
 
     base_raw = raw["base"]
     button_index = {str(k): int(v) for k, v in base_raw["buttons"].items()}
@@ -163,6 +197,8 @@ def load_web_config(
         posture=posture_cfg,
         animation=ModeConfig(bindings=animation_bindings),
         gait_cycle=gait_cycle,
+        quadruped_gait_cycle=quadruped_gait_cycle,
+        default_quadruped_gait=default_quadruped_gait,
         gait_linear_max=caps.linear_max(default_gait),
         gait_angular_z_max=caps.angular_max(default_gait),
         stance_unit=unit_stance_xy(geometry_yaml, gait_yaml),
@@ -242,6 +278,8 @@ def resync_gait(
         return None
     if name in cfg.gait_cycle:
         state.current_gait_idx = cfg.gait_cycle.index(name)
+    elif name in cfg.quadruped_gait_cycle:
+        state.current_quadruped_gait_idx = cfg.quadruped_gait_cycle.index(name)
     return dataclasses.replace(
         cfg, gait_linear_max=new_linear, gait_angular_z_max=new_angular
     )

@@ -56,8 +56,11 @@ which is the only way between the two leg sets.
 - **select** is bound only in the `gait` section, so it does nothing in posture
   or animation mode, where it keeps its base `record` binding. Gait is the mode
   the teleop boots into, so the cold start is covered.
-- The D-pad gait cycler is locked while quadruped: there is exactly one gait for
-  this leg set, and the engine refuses a switch to any other until the next fold.
+- The D-pad gait cycler walks the four-leg rotation while quadruped
+  (`quadruped_gait_cycle`), not the six-leg one. The two lists are disjoint by
+  load-time validation, so a press can never ask for a leg set the engine would
+  refuse — and the six-leg slot the operator was on is kept in its own index,
+  waiting for the next fold.
 - Animation mode is unavailable while quadruped — every animation is written for
   six legs. Gait and posture stay available.
 - Posture mode poses the body on four feet exactly as it does on six; what it
@@ -67,10 +70,20 @@ which is the only way between the two leg sets.
   into the next support triangle — and that margin is millimetres. Body height
   is unaffected either way: it rides its own integrator, not the record.
 
-The mode rides `/cmd_gait` as the gait name `quadruped_wave`, which is
-deliberately absent from `gait_cycle` — the select init is the only way in. The
-engine reads the leg set off the strategy applied when `/gait/initialize`
-arrives, so the gait publish leads the init publish by design.
+The mode rides `/cmd_gait` as one of the four-corner gait names, which are
+deliberately absent from `gait_cycle` — the select init is the only way in, and
+it always enters on `default_quadruped_gait`. The engine reads the leg set off
+the strategy applied when `/gait/initialize` arrives, so the gait publish leads
+the init publish by design.
+
+The two footfall orders, both duty factor 3/4 with one foot airborne at a time:
+
+- **`quad_walk`** — lateral sequence, `l_rear → l_front → r_rear → r_front`.
+  Each hind is followed by the fore on its own side, so the body works up one
+  side and then the other.
+- **`quad_gallop`** — perimeter sequence, `r_front → l_front → l_rear → r_rear`.
+  Round the chassis rather than up one side, so the two fores lift back to back
+  and the handovers carry the body across it.
 
 ## Drive sticks (gait / animation mode)
 

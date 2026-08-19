@@ -16,11 +16,6 @@ POSTURE = "posture"
 GAIT = "gait"
 ANIMATION = "animation"
 
-# The gait quadruped mode rides on. Deliberately absent from every
-# ``gait_cycle``: the select init is the only way in, so the cycler can
-# never land on a leg set the operator did not ask for.
-QUADRUPED_GAIT = "quadruped_wave"
-
 # Function namespace. The loader validates every YAML binding value
 # against these sets; runtime helpers trust well-formed configs.
 BASE_FUNCTIONS: frozenset[str] = frozenset({
@@ -135,6 +130,11 @@ class JoyConfig:
     # filtered by ``allow_unstable_gaits`` at load time. Index
     # ``current_gait_idx`` on ``JoyState`` tracks the user's selection.
     gait_cycle: tuple[str, ...]
+    # The rotation walked while standing on four legs, and the entry the
+    # select init stands up on. Disjoint from ``gait_cycle`` by load-time
+    # validation, so neither cycler can land on the other leg set.
+    quadruped_gait_cycle: tuple[str, ...]
+    default_quadruped_gait: str
     # Per-gait stick scaling. Updated at runtime from /cmd_gait via
     # ``dataclasses.replace`` whenever the active gait changes.
     gait_linear_max: float
@@ -198,11 +198,13 @@ class JoyState:
     # Quadruped mode: the middle pair folded, the four corners creeping.
     # A property of the selected gait on the wire, so this flag only
     # tracks which of the two init buttons was pressed last.
-    # ``current_gait_idx`` needs no shadow copy — QUADRUPED_GAIT is not
-    # in the cycle, so entering quadruped mode never overwrites the slot
-    # the operator was on.
+    # The two rotations keep separate slots, so cycling on four legs
+    # never overwrites the six-leg gait the operator was on (and back).
     quadruped: bool = False
     prev_quad_init: bool = False
+    # Index into ``cfg.quadruped_gait_cycle``. Reset to
+    # ``default_quadruped_gait`` on every accepted quad init.
+    current_quadruped_gait_idx: int = 0
 
 
 @dataclass(frozen=True)
@@ -532,27 +534,37 @@ def resolve_gait_cycle(
     known_gaits: Collection[str],
     unstable_gaits: Collection[str],
     allow_unstable: bool,
+    foreign_gaits: Collection[str] = (),
+    key: str = "gait_cycle",
 ) -> tuple[str, ...]:
-    """Validate ``gait_cycle`` and apply the ``allow_unstable_gaits`` filter.
+    """Validate one gait rotation and apply the ``allow_unstable_gaits`` filter.
 
-    Every name must be in ``known_gaits``. With ``allow_unstable``
-    False, names in ``unstable_gaits`` are dropped (order preserved);
-    an all-unstable cycle raises rather than silently disabling the
-    cycler. The caller passes the gait-knowledge sets so this stays a
-    pure validator like ``validate_bindings``.
+    Every name must be in ``known_gaits`` and none may be in
+    ``foreign_gaits`` — the gaits of the *other* leg set, which is what
+    keeps the six-leg and four-leg rotations from crossing. With
+    ``allow_unstable`` False, names in ``unstable_gaits`` are dropped
+    (order preserved); an all-unstable cycle raises rather than silently
+    disabling the cycler. The caller passes the gait-knowledge sets so
+    this stays a pure validator like ``validate_bindings``.
     """
     unknown = [n for n in raw_cycle if n not in known_gaits]
     if unknown:
         raise ValueError(
-            f"gait_cycle: unknown gait(s) {unknown} "
+            f"{key}: unknown gait(s) {unknown} "
             f"(known: {sorted(known_gaits)})"
+        )
+    foreign = [n for n in raw_cycle if n in foreign_gaits]
+    if foreign:
+        raise ValueError(
+            f"{key}: {foreign} walk the other leg set — the six-leg and "
+            f"four-leg rotations stay disjoint"
         )
     if allow_unstable:
         return tuple(raw_cycle)
     filtered = tuple(n for n in raw_cycle if n not in unstable_gaits)
     if raw_cycle and not filtered:
         raise ValueError(
-            f"gait_cycle: every entry in {list(raw_cycle)} is unstable "
+            f"{key}: every entry in {list(raw_cycle)} is unstable "
             f"and allow_unstable_gaits is false — nothing left to cycle"
         )
     return filtered
@@ -684,7 +696,11 @@ def map_joy(
             # and this flag from drifting apart when the request lands as
             # a fold instead of a stand.
             if init_quadruped:
-                forced_gait = QUADRUPED_GAIT
+                forced_gait = cfg.default_quadruped_gait
+                if forced_gait in cfg.quadruped_gait_cycle:
+                    state.current_quadruped_gait_idx = (
+                        cfg.quadruped_gait_cycle.index(forced_gait)
+                    )
             elif cfg.gait_cycle:
                 forced_gait = cfg.gait_cycle[
                     state.current_gait_idx % len(cfg.gait_cycle)
@@ -787,24 +803,30 @@ def map_joy(
 
     # Gait cycler: ``gait_prev`` / ``gait_next`` rising edges. Cycling
     # is mode-agnostic for the resolution itself but suppressed in
-    # ANIMATION (tripod was forced on entry) and in quadruped mode,
-    # where there is exactly one gait and the engine would refuse a
-    # switch to any other anyway — the leg set is fixed until the next
-    # fold.
+    # ANIMATION (tripod was forced on entry). Which rotation it walks
+    # follows the leg set the robot is standing on: the two are disjoint,
+    # so the cycler can never ask for a gait the engine would refuse.
     gait_select: str | None = forced_gait
+    cycle = cfg.quadruped_gait_cycle if state.quadruped else cfg.gait_cycle
     prev_pressed = button_pressed_for("gait_prev", base, mode_cfg, buttons, axes)
     next_pressed = button_pressed_for("gait_next", base, mode_cfg, buttons, axes)
-    if cfg.gait_cycle and state.mode != ANIMATION and not state.quadruped:
+    if cycle and state.mode != ANIMATION:
         delta = 0
         if next_pressed and not state.prev_gait_next:
             delta += 1
         if prev_pressed and not state.prev_gait_prev:
             delta -= 1
         if delta != 0:
-            state.current_gait_idx = (
-                state.current_gait_idx + delta
-            ) % len(cfg.gait_cycle)
-            gait_select = cfg.gait_cycle[state.current_gait_idx]
+            if state.quadruped:
+                state.current_quadruped_gait_idx = (
+                    state.current_quadruped_gait_idx + delta
+                ) % len(cycle)
+                gait_select = cycle[state.current_quadruped_gait_idx]
+            else:
+                state.current_gait_idx = (
+                    state.current_gait_idx + delta
+                ) % len(cycle)
+                gait_select = cycle[state.current_gait_idx]
     state.prev_gait_prev = prev_pressed
     state.prev_gait_next = next_pressed
 

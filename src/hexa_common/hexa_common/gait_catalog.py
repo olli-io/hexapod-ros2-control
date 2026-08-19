@@ -48,7 +48,10 @@ GAIT_DESCRIPTORS: dict[str, GaitDescriptor] = {
     "ripple": GaitDescriptor("ripple", 5.0 / 6.0, False),
     # Quadruped leg set: the four corners creep one leg at a time while the
     # middle pair is parked. Deliberately absent from every gait_cycle — the
-    # teleop select toggle is the only way in. Not the six-leg "tetrapod" above.
-    "quadruped_wave": GaitDescriptor("quadruped_wave", 3.0 / 4.0, False,
-                                     "quadruped"),
+    # teleop select toggle is the only way in, and once there the operator
+    # rotates among these two through quadruped_gait_cycle. They differ only in
+    # footfall order (lateral sequence vs the perimeter one); neither is the
+    # six-leg "tetrapod" above.
+    "quad_walk": GaitDescriptor("quad_walk", 3.0 / 4.0, False, "quadruped"),
+    "quad_gallop": GaitDescriptor("quad_gallop", 3.0 / 4.0, False, "quadruped"),
 }

@@ -57,11 +57,13 @@ four-legged half of the init button: from the belly it stands the robot up
 with the middle pair left folded, and off the belly it folds like init does.
 It takes gait mode's second slot because `record` only does anything in
 posture mode, and it is bound in the gait section alone, which is what
-confines it to gait mode. It selects `quadruped_wave`, which stays out of
-`gait_cycle` — that init is the only way in, so prev/next can never ask a
-standing robot for a leg set it cannot reach without folding. Posture mode
-still poses the body on four feet; only `record` goes inert there, for the
-reason `hexa_teleop`'s README gives.
+confines it to gait mode. It selects `default_quadruped_gait`, which stays
+out of `gait_cycle` — that init is the only way in, so prev/next can never
+ask a standing robot for a leg set it cannot reach without folding. Once on
+four legs, prev/next walks `quadruped_gait_cycle` instead, the four-corner
+rotation; the six-leg selection keeps its own slot and is waiting after the
+next fold. Posture mode still poses the body on four feet; only `record`
+goes inert there, for the reason `hexa_teleop`'s README gives.
 
 ## Safety
 

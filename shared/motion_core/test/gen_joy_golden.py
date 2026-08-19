@@ -34,6 +34,14 @@ GAITS = [
     ("ripple", 5.0 / 6.0, False),
 ]
 
+# The four-corner rotation, kept separate because resolve_gait_cycle is handed
+# the other leg set's names as foreign. The default gait is always a six-leg
+# one, so no duty factor here feeds the stick caps.
+QUAD_GAITS = [
+    ("quad_walk", 3.0 / 4.0, False),
+    ("quad_gallop", 3.0 / 4.0, False),
+]
+
 DT = 0.02  # matches the firmware tick / teleop_joy PUBLISH_RATE_HZ
 
 NEUTRAL = [0, 0, 32767, 0, 0, 32767, 0, 0]  # l2 (2) / r2 (5) rest = +max
@@ -56,13 +64,17 @@ def frame(**changes):
 def build_trace():
     """A scripted trace exercising drive, cyclers, posture, init/revert, anim."""
     f = []
-    # ── quadruped: the stand, its locked cycler, and posture on four feet ──
+    # ── quadruped: the stand, its own gait rotation, and posture on four feet ──
     # First, while nothing is recorded and no height integrated: an init off a
     # modified posture arms the revert instead of standing, so anywhere later in
     # this trace `select` would never reach the leg set at all.
     f.append(frame(buttons=1 << 6))                    # select: the quad stand
     f.append(frame())
-    f.append(frame(dx=-32767))                         # gait_next, LOCKED OUT
+    f.append(frame(dx=-32767))                         # gait_next: the QUAD cycle
+    f.append(frame())
+    f.append(frame(dx=32767))                          # gait_prev: back again
+    f.append(frame())
+    f.append(frame(dx=32767))                          # and past the wrap
     f.append(frame())
     f.append(frame(buttons=1 << 3))                    # to POSTURE, still quad
     f.append(frame(lx=22000, ry=-12000))               # live tilt + pose
@@ -257,18 +269,26 @@ def main() -> int:
         height_rate=float(height["rate_m_per_s"]),
     )
 
-    known = {n for n, _, _ in GAITS}
-    unstable = {n for n, _, u in GAITS if u}
+    hexapod_names = {n for n, _, _ in GAITS}
+    quad_names = {n for n, _, _ in QUAD_GAITS}
+    known = hexapod_names | quad_names
+    unstable = {n for n, _, u in GAITS + QUAD_GAITS if u}
+    allow_unstable = bool(teleop.get("allow_unstable_gaits", False))
     gait_cycle = jm.resolve_gait_cycle(
         tuple(str(n) for n in teleop["gait_cycle"]), known, unstable,
-        bool(teleop.get("allow_unstable_gaits", False)))
+        allow_unstable, foreign_gaits=quad_names)
+    quadruped_gait_cycle = jm.resolve_gait_cycle(
+        tuple(str(n) for n in teleop["quadruped_gait_cycle"]), known, unstable,
+        allow_unstable, foreign_gaits=hexapod_names,
+        key="quadruped_gait_cycle")
+    default_quadruped_gait = str(teleop["default_quadruped_gait"])
     default_gait = str(teleop["default_gait"])
     duty = {n: d for n, d, _ in GAITS}[default_gait]
     stride = float(gait["stride_length"])
     min_swing = float(gait["min_swing_time"])
-    # The hexapod margin unconditionally: quadruped_wave is deliberately absent
-    # from GAITS above, so the default gait is always a six-leg one and the
-    # quadruped margin can never be the one in play here.
+    # The hexapod margin unconditionally: the quadruped gaits are deliberately
+    # kept out of GAITS above, so the default gait is always a six-leg one and
+    # the quadruped margin can never be the one in play here.
     margin = float(gait["swing_phase_margin"])
     # Realized swing/stance split, not the nominal duty factor — same formula as
     # gen_config.py velocity_caps(), pipeline_config_loader.cpp and limits.py.
@@ -292,6 +312,8 @@ def main() -> int:
             bindings={str(k): str(v)
                       for k, v in teleop["animation"]["bindings"].items()}),
         gait_cycle=gait_cycle,
+        quadruped_gait_cycle=quadruped_gait_cycle,
+        default_quadruped_gait=default_quadruped_gait,
         gait_linear_max=gait_linear_max,
         gait_angular_z_max=gait_angular_z_max,
         stance_unit=unit_stance_xy(geometry_path, tuning_path),
@@ -301,6 +323,8 @@ def main() -> int:
     initial_mode = str(teleop.get("initial_mode", jm.GAIT))
     state = jm.JoyState(mode=initial_mode)
     state.current_gait_idx = gait_cycle.index(default_gait)
+    state.current_quadruped_gait_idx = quadruped_gait_cycle.index(
+        default_quadruped_gait)
 
     frames = build_trace()
     expected = []

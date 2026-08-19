@@ -121,11 +121,13 @@ GAITS = [
     ("tetrapod",        2.0 / 3.0,   False,    "hexapod"),
     ("crawl",           2.0 / 3.0,   True,     "hexapod"),
     ("ripple",          5.0 / 6.0,   False,    "hexapod"),
-    # Quadruped leg set — reachable only through the teleop select toggle, never
-    # through gait_cycle. The leg set is carried here (as in the Python catalog)
-    # because the swing phase margin, and so the derived velocity cap, is per
-    # leg set; the strategy class stays its source of truth for the engine.
-    ("quadruped_wave",  3.0 / 4.0,   False,    "quadruped"),
+    # Quadruped leg set — reachable only through the teleop select toggle, and
+    # rotated among themselves by quadruped_gait_cycle, never by gait_cycle. The
+    # leg set is carried here (as in the Python catalog) because the swing phase
+    # margin, and so the derived velocity cap, is per leg set; the strategy class
+    # stays its source of truth for the engine.
+    ("quad_walk",       3.0 / 4.0,   False,    "quadruped"),
+    ("quad_gallop",     3.0 / 4.0,   False,    "quadruped"),
 ]
 
 # NUL-padded width of GaitSpec::name. Must exceed the longest name above.
@@ -761,15 +763,41 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       f"{'true' if teleop['allow_unstable_gaits'] else 'false'};")
     # kGaitCycle is the runtime rotation the teleop cycler walks — already
     # filtered by allow_unstable_gaits (port of joy_mapping.resolve_gait_cycle),
-    # so the firmware cycler matches the ROS node's accepted set.
+    # so the firmware cycler matches the ROS node's accepted set. The quadruped
+    # rotation is the second one, walked while the robot stands on four legs;
+    # keeping them apart is what stops the cycler landing on a leg set the
+    # operator did not ask for.
     unstable_names = {name for name, _, u, _ls in GAITS if u}
-    cycle_raw = [str(g) for g in teleop["gait_cycle"]]
-    if teleop["allow_unstable_gaits"]:
-        cycle = cycle_raw
-    else:
-        cycle = [g for g in cycle_raw if g not in unstable_names]
+    leg_sets = {name: ls for name, _d, _u, ls in GAITS}
+
+    def resolve_cycle(raw, leg_set, key):
+        """Port of joy_mapping.resolve_gait_cycle: validate, then filter."""
+        names = [str(g) for g in raw]
+        for g in names:
+            if g not in leg_sets:
+                raise ValueError(f"{key}: unknown gait {g!r}")
+            if leg_sets[g] != leg_set:
+                raise ValueError(
+                    f"{key}: {g!r} walks the {leg_sets[g]} leg set, not "
+                    f"{leg_set}")
+        if teleop["allow_unstable_gaits"]:
+            return names
+        return [g for g in names if g not in unstable_names]
+
+    cycle = resolve_cycle(teleop["gait_cycle"], "hexapod", "gait_cycle")
+    quad_cycle = resolve_cycle(teleop["quadruped_gait_cycle"], "quadruped",
+                               "quadruped_gait_cycle")
+    quad_default = str(teleop["default_quadruped_gait"])
+    if quad_default not in quad_cycle:
+        raise ValueError(
+            f"default_quadruped_gait: {quad_default!r} must be in "
+            f"quadruped_gait_cycle={quad_cycle}")
     w(f"inline constexpr std::array<std::string_view, {len(cycle)}> kGaitCycle = {{"
       + ", ".join(cstr(g) for g in cycle) + "};")
+    w(f"inline constexpr std::string_view kDefaultQuadrupedGait = "
+      f"{cstr(quad_default)};")
+    w(f"inline constexpr std::array<std::string_view, {len(quad_cycle)}> "
+      f"kQuadrupedGaitCycle = {{" + ", ".join(cstr(g) for g in quad_cycle) + "};")
     w("")
 
     # ── teleop binding resolution (pre-resolved per mode) ──

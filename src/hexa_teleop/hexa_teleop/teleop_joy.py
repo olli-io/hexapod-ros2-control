@@ -125,8 +125,22 @@ def _load_config(
     unstable_gaits = frozenset(
         name for name, descriptor in GAIT_DESCRIPTORS.items() if descriptor.unstable
     )
+    # The two rotations are partitioned by leg set: each one's validator is
+    # handed the other set as foreign, so a quadruped gait in gait_cycle (or a
+    # six-leg gait in the quadruped rotation) is a load-time error rather than a
+    # cycler press the engine silently refuses.
+    quadruped_gaits = frozenset(
+        name
+        for name, descriptor in GAIT_DESCRIPTORS.items()
+        if descriptor.leg_set == "quadruped"
+    )
+    hexapod_gaits = frozenset(GAIT_DESCRIPTORS) - quadruped_gaits
     gait_cycle = resolve_gait_cycle(
-        gait_cycle_raw, set(GAIT_DESCRIPTORS), unstable_gaits, allow_unstable
+        gait_cycle_raw,
+        set(GAIT_DESCRIPTORS),
+        unstable_gaits,
+        allow_unstable,
+        foreign_gaits=quadruped_gaits,
     )
     default_gait = str(raw["default_gait"])
     if default_gait not in gait_cycle:
@@ -136,6 +150,26 @@ def _load_config(
             else f"must be in gait_cycle={list(gait_cycle_raw)}"
         )
         raise ValueError(f"default_gait={default_gait!r} {detail}")
+
+    quad_cycle_raw = tuple(str(n) for n in raw["quadruped_gait_cycle"])
+    quadruped_gait_cycle = resolve_gait_cycle(
+        quad_cycle_raw,
+        set(GAIT_DESCRIPTORS),
+        unstable_gaits,
+        allow_unstable,
+        foreign_gaits=hexapod_gaits,
+        key="quadruped_gait_cycle",
+    )
+    default_quadruped_gait = str(raw["default_quadruped_gait"])
+    if default_quadruped_gait not in quadruped_gait_cycle:
+        detail = (
+            "is excluded by allow_unstable_gaits: false"
+            if default_quadruped_gait in quad_cycle_raw
+            else f"must be in quadruped_gait_cycle={list(quad_cycle_raw)}"
+        )
+        raise ValueError(
+            f"default_quadruped_gait={default_quadruped_gait!r} {detail}"
+        )
 
     base = _parse_base(raw)
     gait_bindings = _parse_mode_bindings("gait", raw["gait"], base)
@@ -166,6 +200,8 @@ def _load_config(
         posture=posture_cfg,
         animation=ModeConfig(bindings=animation_bindings),
         gait_cycle=gait_cycle,
+        quadruped_gait_cycle=quadruped_gait_cycle,
+        default_quadruped_gait=default_quadruped_gait,
         # Seed with the default gait's caps; the node swaps these in via
         # dataclasses.replace whenever a /cmd_gait publish lands. Both are
         # per-gait — the angular cap is the linear one over the stance radius.
@@ -217,6 +253,9 @@ class TeleopJoyNode(Node):
             prev_gait_mode=False,
             prev_posture_mode=False,
             current_gait_idx=self._cfg.gait_cycle.index(default_gait),
+            current_quadruped_gait_idx=self._cfg.quadruped_gait_cycle.index(
+                self._cfg.default_quadruped_gait
+            ),
         )
         # Most-recently-published-and-accepted gait. Stick scaling cap
         # in ``self._cfg.gait_linear_max`` is rebuilt on every change
@@ -228,7 +267,8 @@ class TeleopJoyNode(Node):
 
         self.get_logger().info(f"loaded teleop config from {cfg_path}")
         self.get_logger().info(
-            f"gait rotation: {list(self._cfg.gait_cycle)}"
+            f"gait rotation: {list(self._cfg.gait_cycle)}; "
+            f"quadruped rotation: {list(self._cfg.quadruped_gait_cycle)}"
         )
         cap_summary = ", ".join(
             f"{n}={v:.2f}" for n, v in sorted(self._caps.linear_max_by_gait.items())

@@ -29,6 +29,8 @@ initial_mode: gait
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple]
 default_gait: tripod
 allow_unstable_gaits: false
+quadruped_gait_cycle: [quad_gallop, quad_walk]
+default_quadruped_gait: quad_gallop
 
 server:
   port: 8080
@@ -250,14 +252,16 @@ def test_load_config_gait_cycle_filtered(cfg):
     assert "crawl" not in loaded_cfg.gait_cycle
 
 
-def test_quadruped_wave_stays_out_of_the_web_gait_cycle(cfg):
-    # The quad init is the only way in, exactly as on the gamepad, so the
-    # cycler must never be able to land on the gait: prev/next would otherwise
-    # ask a standing robot for a leg set it cannot reach without folding.
-    # resolve_gait_cycle filters against the yaml list, so this holds as long
-    # as webteleop.yaml does not name it.
+def test_the_two_rotations_stay_partitioned_by_leg_set(cfg):
+    # The quad init is the only way onto four legs, exactly as on the gamepad,
+    # and once there the cycler walks the four-leg rotation. A name in the
+    # wrong list would be a prev/next the engine refuses, so load_web_config
+    # rejects it — here we pin that the shipped lists are on the right sides.
     loaded_cfg, _, _ = cfg
-    assert "quadruped_wave" not in loaded_cfg.gait_cycle
+    assert "quad_walk" not in loaded_cfg.gait_cycle
+    assert "quad_gallop" not in loaded_cfg.gait_cycle
+    assert loaded_cfg.quadruped_gait_cycle == ("quad_gallop", "quad_walk")
+    assert loaded_cfg.default_quadruped_gait == "quad_gallop"
 
 
 def test_load_config_animation_list(cfg):
@@ -459,10 +463,24 @@ def test_quadruped_init_asks_for_the_quadruped_gait(cfg):
     out = map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
     # The leg set rides the gait, and the init that goes with it is what
     # stands the robot up on that set.
-    assert out.gait_select == "quadruped_wave"
+    assert out.gait_select == "quad_gallop"
     assert out.init_request is True
     assert out.init_quadruped is True
     assert state.quadruped is True
+
+
+def test_quadruped_mode_cycles_its_own_rotation(cfg):
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState
+    state = JoyState(mode=GAIT, current_gait_idx=1)
+    map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _buttons(), loaded_cfg, state, DT)
+    assert state.quadruped is True
+
+    # btn_6 = gait_next, rising edge — inside the four-leg rotation.
+    out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)
+    assert out.gait_select == "quad_walk"
+    assert state.current_gait_idx == 1, "the six-leg slot must not drift"
 
 
 def test_hexapod_init_asks_for_the_cycler_gait(cfg):

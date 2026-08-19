@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -439,11 +440,12 @@ int grounded_corners(const std::array<hexa::Vec3, hexa::kNumLegs>& feet) {
 // ride one tick, the way the ROS node publishes them: the gait is what carries
 // the leg set, and the init that follows it is what climbs the ladder for it.
 // Fails the calling test if the engine never reaches a parked stand.
-void enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us) {
+void enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us,
+                     std::string_view gait = "quad_walk") {
   ASSERT_EQ(p.engine().state(), EngineState::FOLDED);
   pl::CommandIntent select;
   select.has_gait_select = true;
-  select.gait_select = "quadruped_wave";
+  select.gait_select = gait;
   select.init_request = true;
   select.init_quadruped = true;
   const pl::TickResult first = tick_cmd(p, select, now_us);
@@ -474,28 +476,32 @@ TEST(Quadruped, CreepKeepsTheBodyInsideTheSupportTriangle) {
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
-  for (int h = 0; h < 8; ++h) {
-    const float theta = 2.0f * 3.14159265f * static_cast<float>(h) / 8.0f;
-    pl::Pipeline p;
-    std::uint64_t now_us = 0;
-    ASSERT_NO_FATAL_FAILURE(enter_quadruped(p, now_us));
+  // Every footfall order in the rotation: they hand the body over differently,
+  // so the margin is not one gait's property.
+  for (const auto& gait : hexa::config::kQuadrupedGaitCycle) {
+    for (int h = 0; h < 8; ++h) {
+      const float theta = 2.0f * 3.14159265f * static_cast<float>(h) / 8.0f;
+      pl::Pipeline p;
+      std::uint64_t now_us = 0;
+      ASSERT_NO_FATAL_FAILURE(enter_quadruped(p, now_us, gait));
 
-    float worst = 1.0f;
-    int walked = 0;
-    for (int i = 0; i < 3000; ++i) {
-      const pl::TickResult r = tick_cmd(
-          p, drive(speed * std::cos(theta), speed * std::sin(theta), 0.0f),
-          now_us);
-      if (r.engine_state != EngineState::GAIT) {
-        continue;
+      float worst = 1.0f;
+      int walked = 0;
+      for (int i = 0; i < 3000; ++i) {
+        const pl::TickResult r = tick_cmd(
+            p, drive(speed * std::cos(theta), speed * std::sin(theta), 0.0f),
+            now_us);
+        if (r.engine_state != EngineState::GAIT) {
+          continue;
+        }
+        ++walked;
+        worst = std::min(worst, support_margin(feet_from_theta(r)));
       }
-      ++walked;
-      worst = std::min(worst, support_margin(feet_from_theta(r)));
+      ASSERT_GT(walked, 500) << gait << " heading " << h << " never got walking";
+      EXPECT_GT(worst, 0.008f)
+          << gait << " heading " << h << " left only " << worst * 1000.0f
+          << " mm of static margin";
     }
-    ASSERT_GT(walked, 500) << "heading " << h << " never got walking";
-    EXPECT_GT(worst, 0.008f)
-        << "heading " << h << " left only " << worst * 1000.0f
-        << " mm of static margin";
   }
 }
 
@@ -509,16 +515,18 @@ TEST(Quadruped, CreepNeverAsksForAnUnreachableFoot) {
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
-  for (int h = 0; h < 8; ++h) {
-    const float theta = 2.0f * 3.14159265f * static_cast<float>(h) / 8.0f;
-    pl::Pipeline p;
-    std::uint64_t now_us = 0;
-    ASSERT_NO_FATAL_FAILURE(enter_quadruped(p, now_us));
-    for (int i = 0; i < 2000; ++i) {
-      const pl::TickResult r = tick_cmd(
-          p, drive(speed * std::cos(theta), speed * std::sin(theta), 0.0f),
-          now_us);
-      ASSERT_EQ(r.unreachable, 0) << "heading " << h << " tick " << i;
+  for (const auto& gait : hexa::config::kQuadrupedGaitCycle) {
+    for (int h = 0; h < 8; ++h) {
+      const float theta = 2.0f * 3.14159265f * static_cast<float>(h) / 8.0f;
+      pl::Pipeline p;
+      std::uint64_t now_us = 0;
+      ASSERT_NO_FATAL_FAILURE(enter_quadruped(p, now_us, gait));
+      for (int i = 0; i < 2000; ++i) {
+        const pl::TickResult r = tick_cmd(
+            p, drive(speed * std::cos(theta), speed * std::sin(theta), 0.0f),
+            now_us);
+        ASSERT_EQ(r.unreachable, 0) << gait << " heading " << h << " tick " << i;
+      }
     }
   }
 }
@@ -702,7 +710,7 @@ TEST(Quadruped, SelectStandsUpOnFourLegsAndFoldsBack) {
   select.buttons = 1u << bt_teleop::kSelect;
   const pl::TickResult pressed = run(p, select, 1, now_us);
   EXPECT_TRUE(pressed.has_gait_select);
-  EXPECT_EQ(pressed.gait_select, "quadruped_wave");
+  EXPECT_EQ(pressed.gait_select, hexa::config::kDefaultQuadrupedGait);
   EXPECT_TRUE(pressed.init_request);
   EXPECT_EQ(pressed.init_action, pl::InitAction::kInitialized);
   run(p, neutral, 1, now_us);
@@ -733,7 +741,8 @@ TEST(Quadruped, SelectStandsUpOnFourLegsAndFoldsBack) {
   start.buttons = 1u << bt_teleop::kStart;
   const pl::TickResult back = run(p, start, 1, now_us);
   EXPECT_TRUE(back.has_gait_select);
-  EXPECT_NE(back.gait_select, "quadruped_wave");
+  EXPECT_NE(back.gait_select, "quad_walk");
+  EXPECT_NE(back.gait_select, "quad_gallop");
   EXPECT_EQ(back.init_action, pl::InitAction::kInitialized);
   run(p, neutral, 1, now_us);
 

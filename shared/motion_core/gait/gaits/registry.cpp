@@ -63,16 +63,35 @@ const PhaseOffsets& metachronal_offsets() {
 
 // Lateral-sequence creep on the four corner legs; the middle pair is parked.
 // A leg lifts at master pymod(-offset, 1), so the offsets run the mirror of the
-// lift order: left rear, left front, right rear, right front. Reading the table
-// as the lift order instead gives the diagonal sequence, whose static margin is
-// negative on this chassis. The middles are present at 0 only because
-// PhaseOffsets insists on all six — colliding with l_rear makes a missed
-// parked-leg filter fail loudly instead of walking a tucked leg.
-const PhaseOffsets& quadruped_wave_offsets() {
+// lift order: left rear, left front, right rear, right front — each hind
+// followed by the fore on its own side. Reading the table as the lift order
+// instead gives the diagonal sequence, whose static margin is negative on this
+// chassis. The middles are present at 0 only because PhaseOffsets insists on
+// all six — colliding with l_rear makes a missed parked-leg filter fail loudly
+// instead of walking a tucked leg.
+const PhaseOffsets& quad_walk_offsets() {
   static const PhaseOffsets offsets({
       {"l_rear", 0.0f},
       {"r_front", 1.0f / 4.0f},
       {"r_rear", 1.0f / 2.0f},
+      {"l_front", 3.0f / 4.0f},
+      {"l_middle", 0.0f},
+      {"r_middle", 0.0f},
+  });
+  return offsets;
+}
+
+// The other one-leg-at-a-time order for the same four corners: a perimeter
+// sequence walking round the chassis, right front, left front, left rear, right
+// rear. Same mirror as quad_walk — that lift order needs the offsets r_front 0,
+// r_rear 1/4, l_rear 1/2, l_front 3/4 — and the middles are at 0 for the same
+// fail-loudly reason. Unlike quad_walk it lifts the two fores back to back, so
+// its handovers hand the body across the chassis rather than up one side.
+const PhaseOffsets& quad_gallop_offsets() {
+  static const PhaseOffsets offsets({
+      {"r_front", 0.0f},
+      {"r_rear", 1.0f / 4.0f},
+      {"l_rear", 1.0f / 2.0f},
       {"l_front", 3.0f / 4.0f},
       {"l_middle", 0.0f},
       {"r_middle", 0.0f},
@@ -177,10 +196,27 @@ class Ripple : public Strategy {
 // foot is ever airborne and every handover has all four down for 0.03 of a
 // cycle. Not the six-leg `tetrapod` gait, which is a different animal: there
 // "tetrapod" counts feet on the ground, here it counts legs.
-class QuadrupedWave : public Strategy {
+class QuadWalk : public Strategy {
  public:
   const PhaseOffsets& phase_offsets() const override {
-    return quadruped_wave_offsets();
+    return quad_walk_offsets();
+  }
+  float duty_factor() const override { return 3.0f / 4.0f; }
+  bool unstable() const override { return false; }
+  LegSet leg_set() const override { return LegSet::QUADRUPED; }
+  Vec3 foot_target(float phase, const StrideParams& stride,
+                   const LegContext& leg) const override {
+    return phased_foot_target(phase, stride, leg);
+  }
+};
+
+// The same creep on the perimeter order. Everything but the offsets is
+// quad_walk's: same leg set, same duty factor, so the same swing window, the
+// same velocity cap and the same support-shift machinery carry it.
+class QuadGallop : public Strategy {
+ public:
+  const PhaseOffsets& phase_offsets() const override {
+    return quad_gallop_offsets();
   }
   float duty_factor() const override { return 3.0f / 4.0f; }
   bool unstable() const override { return false; }
@@ -200,7 +236,8 @@ const std::map<std::string, StrategyFactory>& strategies() {
       {"tetrapod", [] { return std::make_unique<Tetrapod>(); }},
       {"crawl", [] { return std::make_unique<Crawl>(); }},
       {"ripple", [] { return std::make_unique<Ripple>(); }},
-      {"quadruped_wave", [] { return std::make_unique<QuadrupedWave>(); }},
+      {"quad_walk", [] { return std::make_unique<QuadWalk>(); }},
+      {"quad_gallop", [] { return std::make_unique<QuadGallop>(); }},
   };
   return registry;
 }

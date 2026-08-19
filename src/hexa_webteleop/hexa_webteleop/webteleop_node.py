@@ -114,6 +114,9 @@ class WebTeleopNode(Node):
         self._state = JoyState(
             mode=initial_mode,
             current_gait_idx=self._cfg.gait_cycle.index(default_gait),
+            current_quadruped_gait_idx=self._cfg.quadruped_gait_cycle.index(
+                self._cfg.default_quadruped_gait
+            ),
         )
         self._active_gait: str = default_gait
         self._latest_gait_state: str = ""

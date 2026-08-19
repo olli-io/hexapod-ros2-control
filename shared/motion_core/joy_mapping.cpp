@@ -257,7 +257,13 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
       // the request lands as a fold instead of a stand.
       if (init_quadruped) {
         has_forced_gait = true;
-        forced_gait = kQuadrupedGait;
+        forced_gait = cfgns::kDefaultQuadrupedGait;
+        for (std::size_t i = 0; i < cfgns::kQuadrupedGaitCycle.size(); ++i) {
+          if (cfgns::kQuadrupedGaitCycle[i] == cfgns::kDefaultQuadrupedGait) {
+            state.current_quadruped_gait_idx = static_cast<int>(i);
+            break;
+          }
+        }
       } else if (!cfgns::kGaitCycle.empty()) {
         has_forced_gait = true;
         forced_gait =
@@ -345,24 +351,31 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   state.prev_animation_prev = anim_prev_pressed;
   state.prev_animation_next = anim_next_pressed;
 
-  // Suppressed in ANIMATION mode, and in quadruped mode where there is exactly
-  // one gait and the engine would refuse a switch to any other anyway — the leg
-  // set is fixed until the next fold.
+  // Suppressed in ANIMATION mode only. Which rotation it walks follows the leg
+  // set the robot is standing on; the two are disjoint, so the cycler can never
+  // ask for a gait the engine would refuse.
   bool has_gait_select = has_forced_gait;
   std::string_view gait_select = forced_gait;
   const bool gprev_pressed =
       pressed(binding(*tbl, JoyFn::kGaitPrev), axes, buttons);
   const bool gnext_pressed =
       pressed(binding(*tbl, JoyFn::kGaitNext), axes, buttons);
-  if (!cfgns::kGaitCycle.empty() && state.mode != Mode::Animation &&
-      !state.quadruped) {
+  const std::string_view* cycle = state.quadruped
+                                       ? cfgns::kQuadrupedGaitCycle.data()
+                                       : cfgns::kGaitCycle.data();
+  const std::size_t cycle_size = state.quadruped
+                                     ? cfgns::kQuadrupedGaitCycle.size()
+                                     : cfgns::kGaitCycle.size();
+  int& cycle_idx = state.quadruped ? state.current_quadruped_gait_idx
+                                   : state.current_gait_idx;
+  if (cycle_size > 0 && state.mode != Mode::Animation) {
     int delta = 0;
     if (gnext_pressed && !state.prev_gait_next) delta += 1;
     if (gprev_pressed && !state.prev_gait_prev) delta -= 1;
     if (delta != 0) {
-      const int n = static_cast<int>(cfgns::kGaitCycle.size());
-      state.current_gait_idx = ((state.current_gait_idx + delta) % n + n) % n;
-      gait_select = cfgns::kGaitCycle[static_cast<std::size_t>(state.current_gait_idx)];
+      const int n = static_cast<int>(cycle_size);
+      cycle_idx = ((cycle_idx + delta) % n + n) % n;
+      gait_select = cycle[static_cast<std::size_t>(cycle_idx)];
       has_gait_select = true;
     }
   }

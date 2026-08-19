@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <string_view>
 #include <vector>
 
 #include "config_generated.hpp"
@@ -119,10 +120,11 @@ float reach_headroom(const pl::TickResult& r) {
 
 // Stand up on four legs from the belly: the gait carries the leg set, the init
 // that rides with it climbs the ladder for that set.
-bool enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us) {
+bool enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us,
+                     std::string_view gait) {
   pl::CommandIntent select;
   select.has_gait_select = true;
-  select.gait_select = "quadruped_wave";
+  select.gait_select = gait;
   select.init_request = true;
   select.init_quadruped = true;
   tick_cmd(p, select, now_us);
@@ -151,7 +153,7 @@ struct Result {
   int worst_margin_heading = -1;
 };
 
-Result sweep(const pl::PipelineConfig& cfg) {
+Result sweep(const pl::PipelineConfig& cfg, std::string_view gait) {
   Result out;
   out.margin_mm = 1000.0f;
   out.headroom_mm = 1000.0f;
@@ -167,7 +169,7 @@ Result sweep(const pl::PipelineConfig& cfg) {
     const float vy = speed * std::sin(theta);
     pl::Pipeline p(cfg);
     std::uint64_t now_us = 0;
-    if (!enter_quadruped(p, now_us)) {
+    if (!enter_quadruped(p, now_us, gait)) {
       std::printf("  heading %d: never parked\n", h);
       continue;
     }
@@ -220,8 +222,9 @@ Result sweep(const pl::PipelineConfig& cfg) {
   return out;
 }
 
-void report(const char* label, const pl::PipelineConfig& cfg) {
-  const Result r = sweep(cfg);
+void report(const char* label, const pl::PipelineConfig& cfg,
+            std::string_view gait) {
+  const Result r = sweep(cfg, gait);
   std::printf(
       "%-42s margin %7.2f mm (h%d)  headroom %6.2f mm  body %6.1f mm/s "
       "%8.1f mm/s^2  unreachable %d\n",
@@ -264,7 +267,7 @@ int grounded_corners(const std::array<hexa::Vec3, hexa::kNumLegs>& feet) {
   return n;
 }
 
-void ladders(const pl::PipelineConfig& cfg, bool verbose,
+void ladders(const pl::PipelineConfig& cfg, std::string_view gait, bool verbose,
              int trace_heading = 0, float trace_below = 0.001f) {
   const float swing_end = hexa::gait::swing_end_phase(
       3.0f / 4.0f, cfg.engine.quadruped_swing_phase_margin);
@@ -298,7 +301,7 @@ void ladders(const pl::PipelineConfig& cfg, bool verbose,
     for (int rel = 0; rel < 2 * kReleases; ++rel) {
     pl::Pipeline p(cfg);
     std::uint64_t now_us = 0;
-    if (!enter_quadruped(p, now_us)) {
+    if (!enter_quadruped(p, now_us, gait)) {
       std::printf("  heading %d: never parked\n", h);
       continue;
     }
@@ -363,18 +366,21 @@ int main() {
               static_cast<double>(baked.posture.support_shift_lead),
               static_cast<double>(baked.posture.support_shift_tau),
               static_cast<double>(baked.engine.quadruped_swing_phase_margin));
-  report("baked", baked);
-
   char label[128];
 
-  std::printf("\nladders (shift_time %.2f s):\n",
-              static_cast<double>(baked.engine.quadruped_shift_time));
-  ladders(baked, false);
-  for (const float settle : {0.45f, 0.6f, 0.8f}) {
-    pl::PipelineConfig cfg = baked;
-    cfg.engine.settle_swing_time = settle;
-    std::printf("settle_swing %.2f:\n", static_cast<double>(settle));
-    ladders(cfg, false);
+  // Every footfall order in the shipped rotation, at the shipped knobs: the
+  // orders hand the body over differently, so the margin is per gait.
+  for (const auto& gait : hexa::config::kQuadrupedGaitCycle) {
+    std::snprintf(label, sizeof(label), "baked / %.*s",
+                  static_cast<int>(gait.size()), gait.data());
+    report(label, baked, gait);
+  }
+
+  for (const auto& gait : hexa::config::kQuadrupedGaitCycle) {
+    std::printf("\nladders, %.*s (shift_time %.2f s):\n",
+                static_cast<int>(gait.size()), gait.data(),
+                static_cast<double>(baked.engine.quadruped_shift_time));
+    ladders(baked, gait, false);
   }
   return 0;
   // The values this replaced, on the six-leg margin: the "before" row.
@@ -384,7 +390,8 @@ int main() {
     cfg.posture.support_shift_gain = 0.60f;
     cfg.posture.support_shift_lead = 0.05f;
     cfg.posture.support_shift_tau = 0.04f;
-    report("BEFORE margin 0.12 gain 0.60 lead 0.05 tau 0.04", cfg);
+    report("BEFORE margin 0.12 gain 0.60 lead 0.05 tau 0.04", cfg,
+               "quad_walk");
   }
 
   static constexpr float kGains[] = {0.40f, 0.45f, 0.50f};
@@ -401,7 +408,7 @@ int main() {
         std::snprintf(label, sizeof(label), "gain %.2f lead %.2f tau %.2f",
                       static_cast<double>(gain), static_cast<double>(lead),
                       static_cast<double>(tau));
-        report(label, cfg);
+        report(label, cfg, "quad_walk");
       }
     }
   }

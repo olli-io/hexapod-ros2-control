@@ -168,6 +168,8 @@ def _cfg(**overrides) -> JoyConfig:
     animation_bindings = dict(_DEFAULT_ANIMATION_BINDINGS)
     top_level = {
         "gait_cycle": ("ripple", "crawl", "tripod"),
+        "quadruped_gait_cycle": ("quad_gallop", "quad_walk"),
+        "default_quadruped_gait": "quad_gallop",
         "gait_linear_max": 0.4,
         "gait_angular_z_max": 1.0,
         "stance_unit": _DEFAULT_STANCE_UNIT,
@@ -1759,8 +1761,9 @@ def test_select_asks_for_a_quadruped_init():
     assert out.init_request is True
     assert out.init_quadruped is True
     # The leg set rides the gait, so the request carries the gait that walks it.
-    assert out.gait_select == "quadruped_wave"
+    assert out.gait_select == "quad_gallop"
     assert state.quadruped is True
+    assert state.current_quadruped_gait_idx == 0
     _press_select(cfg, state, False)
 
     # And start asks for the six-leg one, off the gait the cycler is parked on.
@@ -1772,7 +1775,7 @@ def test_select_asks_for_a_quadruped_init():
     assert state.current_gait_idx == 2
 
 
-def test_quadruped_mode_locks_the_gait_cycler():
+def test_quadruped_mode_cycles_its_own_rotation():
     cfg = _quad_cfg()
     state = JoyState(mode=GAIT, current_gait_idx=2)
     _press_select(cfg, state, True)
@@ -1780,8 +1783,34 @@ def test_quadruped_mode_locks_the_gait_cycler():
     assert state.quadruped is True
 
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select is None, "the D-pad must not cycle out of quadruped"
-    assert state.current_gait_idx == 2, "the index must not drift either"
+    assert out.gait_select == "quad_walk", "the D-pad must walk the quad cycle"
+    assert state.current_quadruped_gait_idx == 1
+    # The six-leg slot is untouched: the two rotations keep separate indices.
+    assert state.current_gait_idx == 2
+
+    # And it wraps inside the leg set rather than out of it.
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
+    assert out.gait_select == "quad_gallop"
+    assert state.current_gait_idx == 2
+
+
+def test_select_re_enters_on_the_default_quadruped_gait():
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+    map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)  # cycle away
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert state.current_quadruped_gait_idx == 1
+
+    # Off the belly select is a fold; the next one stands up again, and the
+    # rotation is re-seated on the configured entry rather than resumed.
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+    out = _press_select(cfg, state, True)
+    assert out.gait_select == "quad_gallop"
+    assert state.current_quadruped_gait_idx == 0
 
 
 def test_posture_mode_stays_available_in_quadruped_mode():
@@ -1880,15 +1909,19 @@ def test_select_held_across_a_mode_change_does_not_fire():
     assert out.init_quadruped is False
 
 
-def test_quadruped_wave_is_not_in_the_shipped_gait_cycle():
+def test_the_shipped_cycles_are_partitioned_by_leg_set():
     import pathlib
 
     import yaml
 
-    from hexa_teleop.joy_mapping import QUADRUPED_GAIT
+    from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 
-    # The select init is the only way in, so the D-pad rotation must never be
-    # able to land on it.
+    # The cycler picks its rotation off the leg set it is standing on, so a
+    # name in the wrong list is a press the engine would refuse.
     here = pathlib.Path(__file__).resolve().parents[1]
     raw = yaml.safe_load((here / "config" / "teleop_joy.yaml").read_text())
-    assert QUADRUPED_GAIT not in raw["gait_cycle"]
+    for name in raw["gait_cycle"]:
+        assert GAIT_DESCRIPTORS[name].leg_set == "hexapod", name
+    for name in raw["quadruped_gait_cycle"]:
+        assert GAIT_DESCRIPTORS[name].leg_set == "quadruped", name
+    assert raw["default_quadruped_gait"] in raw["quadruped_gait_cycle"]

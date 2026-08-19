@@ -22,11 +22,6 @@ namespace hexa::teleop {
 
 enum class Mode : std::uint8_t { Posture, Gait, Animation };
 
-// The gait quadruped mode rides on. Deliberately absent from every gait_cycle:
-// the select init is the only way in, so the cycler can never land on a leg set
-// the operator did not ask for.
-inline constexpr std::string_view kQuadrupedGait = "quadruped_wave";
-
 // Runtime-mutable stick scaling: the velocity ceiling is per-gait, so the caller
 // rewrites these on every accepted gait switch.
 struct JoyConfig {
@@ -65,11 +60,14 @@ struct JoyState {
   std::string_view animation_name = "";
   // Quadruped mode: the middle pair folded, the four corners creeping. A
   // property of the selected gait on the wire, so this only tracks which of the
-  // two init buttons was pressed last. current_gait_idx needs no shadow copy —
-  // kQuadrupedGait is not in the cycle, so entering quadruped mode never
-  // overwrites the slot the operator was on.
+  // two init buttons was pressed last. The four-leg rotation keeps its own slot
+  // below, so cycling there never overwrites the six-leg gait the operator was
+  // on (and back).
   bool quadruped = false;
   bool prev_quad_init = false;
+  // Index into kQuadrupedGaitCycle; re-seeded from kDefaultQuadrupedGait on
+  // every accepted quad init.
+  int current_quadruped_gait_idx = 0;
 };
 
 // One tick's high-level command. The two optional outputs carry a has_* flag,

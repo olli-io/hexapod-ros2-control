@@ -783,7 +783,7 @@ TEST(SupportShift, QuadrupedStackRunsWithGaitAnimationsDisabled) {
   float t = 0.0f;
   for (int i = 0; i < 400; ++i) {
     quad = posture.update(legs, 0.25f, /*walking=*/true, EngineState::GAIT,
-                          "quadruped_wave", hexa::gait::LegSet::QUADRUPED, kDt,
+                          "quad_walk", hexa::gait::LegSet::QUADRUPED, kDt,
                           t);
     t += kDt;
   }
@@ -791,7 +791,7 @@ TEST(SupportShift, QuadrupedStackRunsWithGaitAnimationsDisabled) {
   t = 0.0f;
   for (int i = 0; i < 400; ++i) {
     hexa = hexa_posture.update(legs, 0.25f, /*walking=*/true,
-                               EngineState::GAIT, "quadruped_wave",
+                               EngineState::GAIT, "quad_walk",
                                hexa::gait::LegSet::HEXAPOD, kDt, t);
     t += kDt;
   }
@@ -820,7 +820,7 @@ TEST(SupportShift, QuadrupedAppliesTheUserPose) {
   float t = 0.0f;
   for (int i = 0; i < 1000; ++i) {
     out = posture.update(legs, 0.25f, /*walking=*/false, EngineState::GAIT,
-                         "quadruped_wave", hexa::gait::LegSet::QUADRUPED, kDt,
+                         "quad_walk", hexa::gait::LegSet::QUADRUPED, kDt,
                          t);
     t += kDt;
   }
