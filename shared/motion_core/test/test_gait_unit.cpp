@@ -3031,3 +3031,71 @@ TEST(Quadruped, ReseatsOntoTheQuadrupedFootprintWhenTheBodyIsRaised) {
         << name << ": the two snapshots agree, so this test proves nothing";
   }
 }
+
+// The anticipated support — weighted here as posture::anticipated_support_xy
+// weights it — goes from one rung's triangle straight into the next one's. Both
+// halves of that are under test: the rung order, which keeps consecutive
+// triangles adjacent, and the hold's crossfade, which hands one to the other.
+TEST(Quadruped, TheReseatLadderNeverSendsTheBodyBackToCentre) {
+  const auto cfg = g::engine_config_from_config();
+  const float lead = hexa::config::kPosture.support_shift_lead;
+  const float dt = cfg.controller_dt;
+
+  // Square, so the four-foot centroid is the origin and every triangle centroid
+  // is the same distance out.
+  constexpr float kX = 0.13f;
+  constexpr float kY = 0.11f;
+  constexpr float kZ = -0.06f;
+  const std::map<std::string, g::Vec3> target = {{"l_front", {kX, kY, kZ}},
+                                                 {"r_front", {kX, -kY, kZ}},
+                                                 {"l_rear", {-kX, kY, kZ}},
+                                                 {"r_rear", {-kX, -kY, kZ}}};
+  std::map<std::string, g::Vec3> current;
+  for (const auto& entry : target) {
+    current[entry.first] = entry.second + g::Vec3(0.01f, 0.01f, 0.0f);
+  }
+
+  g::ReseatController r(current, target, cfg.reseat_pair_swing_time,
+                        cfg.reseat_pair_dwell_time, cfg.reseat_profile(), dt,
+                        g::reseat_rungs(g::LegSet::QUADRUPED),
+                        cfg.quadruped_shift_time, cfg.support_shift_lead);
+
+  const auto anticipated = [&](const std::map<std::string, g::LegOutput>& out) {
+    float sx = 0.0f, sy = 0.0f, total = 0.0f;
+    for (const auto& entry : out) {
+      if (!entry.second.stance) {
+        continue;
+      }
+      const float w =
+          std::clamp((1.0f - entry.second.phase) / lead, 0.0f, 1.0f);
+      sx += w * entry.second.foot_target.x;
+      sy += w * entry.second.foot_target.y;
+      total += w;
+    }
+    return total > 0.0f ? std::hypot(sx / total, sy / total) : 0.0f;
+  };
+
+  float peak = 0.0f;
+  float worst = 1.0f;
+  bool left_the_centre = false;
+  int ticks = 0;
+  for (; ticks < 4000 && !r.done(); ++ticks) {
+    const float radius = anticipated(r.update(dt));
+    peak = std::max(peak, radius);
+    if (radius > 0.03f) {
+      left_the_centre = true;
+    }
+    if (left_the_centre) {
+      worst = std::min(worst, radius);
+    }
+  }
+  ASSERT_TRUE(r.done()) << "the ladder never finished";
+  ASSERT_TRUE(left_the_centre) << "the ladder never shifted the body at all";
+  // The floor is the origin's distance to the chord between two adjacent
+  // triangle centroids, min(kX, kY) / 3 = 37 mm, less what the still-unplanted
+  // feet pull it around by; it measures 29 mm here against 0.6 mm for a ladder
+  // that hands the landed foot its weight back on its own.
+  EXPECT_GT(worst, 0.020f) << "the body came back within " << worst * 1000.0f
+                           << " mm of the four-foot centroid; peak was "
+                           << peak * 1000.0f << " mm";
+}

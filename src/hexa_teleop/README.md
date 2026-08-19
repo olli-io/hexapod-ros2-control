@@ -60,6 +60,12 @@ which is the only way between the two leg sets.
   this leg set, and the engine refuses a switch to any other until the next fold.
 - Animation mode is unavailable while quadruped — every animation is written for
   six legs. Gait and posture stay available.
+- Posture mode poses the body on four feet exactly as it does on six; what it
+  will not do there is **record**. `select` is inert in posture mode while
+  quadruped, because a recorded pose bleeds through into gait mode, where it
+  would spend the same x-y envelope the support shift needs to carry the body
+  into the next support triangle — and that margin is millimetres. Body height
+  is unaffected either way: it rides its own integrator, not the record.
 
 The mode rides `/cmd_gait` as the gait name `quadruped_wave`, which is
 deliberately absent from `gait_cycle` — the select init is the only way in. The

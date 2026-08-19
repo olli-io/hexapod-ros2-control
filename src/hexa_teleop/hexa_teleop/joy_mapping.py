@@ -848,8 +848,14 @@ def map_joy(
     wy = -state.wiggle_amount * px * math.sin(state.yaw_current)
 
     # Apply the deferred record press now that every live posture
-    # component is up to date.
-    if record_edge and state.mode == POSTURE:
+    # component is up to date. Inert in quadruped mode: the live
+    # posture is welcome on four feet — posture mode is not walking —
+    # but a RECORDED one bleeds through into gait mode, where it would
+    # spend the same x-y envelope the support shift needs to carry the
+    # body into the next support triangle, and that margin is
+    # millimetres. Height is exempt by construction: it rides
+    # ``height_current``, not the record.
+    if record_edge and state.mode == POSTURE and not state.quadruped:
         # A new baseline trumps any in-flight revert.
         state.reverting = False
         state.recorded_x = _clip(

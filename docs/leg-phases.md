@@ -247,6 +247,14 @@ sweeps, so the body arcs through the handover — which is what makes a lag slow
 enough to be smooth usable at all. `PoseSmoother` eases the commanded body pose
 the same way and for the same reason.
 
+The operator's own body pose shares that envelope, and is welcome to: posture
+mode is not walking, so the support shift is not spending its travel while a
+pose is being held. What the teleop refuses on four feet is the posture
+**record** — a recorded pose bleeds through into gait mode, where the same x-y
+budget is what carries the body into the next triangle, and the static margin
+there is millimetres. Body height is exempt; it never competed for the x-y
+budget in the first place.
+
 ## 5. Cold start
 
 Terminology specific to the cold-start sequence the gait engine runs

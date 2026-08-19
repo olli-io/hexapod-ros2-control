@@ -56,6 +56,23 @@ def frame(**changes):
 def build_trace():
     """A scripted trace exercising drive, cyclers, posture, init/revert, anim."""
     f = []
+    # ── quadruped: the stand, its locked cycler, and posture on four feet ──
+    # First, while nothing is recorded and no height integrated: an init off a
+    # modified posture arms the revert instead of standing, so anywhere later in
+    # this trace `select` would never reach the leg set at all.
+    f.append(frame(buttons=1 << 6))                    # select: the quad stand
+    f.append(frame())
+    f.append(frame(dx=-32767))                         # gait_next, LOCKED OUT
+    f.append(frame())
+    f.append(frame(buttons=1 << 3))                    # to POSTURE, still quad
+    f.append(frame(lx=22000, ry=-12000))               # live tilt + pose
+    f.append(frame(lx=22000, ry=-12000, buttons=1 << 6))  # record: inert here
+    f.append(frame(lx=22000, ry=-12000))               # release the button
+    f.append(frame())                                  # release the sticks
+    f.append(frame(buttons=1 << 0))                    # to GAIT: nothing rode in
+    f.append(frame())
+    f.append(frame(buttons=1 << 7))                    # start: back to six legs
+    f.append(frame())
     # ── GAIT mode (initial) ──
     f.append(frame())                                  # idle
     f.append(frame(ry=-32767))                         # drive forward
@@ -103,13 +120,6 @@ def build_trace():
     f.append(frame(dx=-32767))                         # animation_next again
     f.append(frame())
     f.append(frame(buttons=1 << 1))                    # toggle back to GAIT
-    f.append(frame())
-    # ── quadruped init (select, idx 6 — bound to quadruped_mode in GAIT) ──
-    f.append(frame(buttons=1 << 6))                    # ask for the quad stand
-    f.append(frame())
-    f.append(frame(dx=-32767))                         # gait_next, LOCKED OUT
-    f.append(frame())
-    f.append(frame(buttons=1 << 7))                    # start: back to six legs
     f.append(frame())
     return f
 

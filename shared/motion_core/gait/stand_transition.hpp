@@ -81,11 +81,12 @@ inline void pin_parked(LegSet set, const std::map<std::string, Vec3>& folded,
 
 // The reseat ladder's rungs, which are the whole support while it runs. On four
 // feet a mirrored pair is half of that, so the quadruped set goes one leg at a
-// time — in the creep's own lateral order, so the body's shift walks the circle
-// it already walks when the gait is running.
+// time, around the perimeter. The body stands at the centroid of the three that
+// are down, opposite the one that is up, so adjacent corners hand it a quarter
+// turn where a diagonal step would send it across the middle.
 inline RungList reseat_rungs(LegSet set) {
   if (set == LegSet::QUADRUPED) {
-    return RungList{{"l_rear"}, {"l_front"}, {"r_rear"}, {"r_front"}};
+    return RungList{{"l_rear"}, {"l_front"}, {"r_front"}, {"r_rear"}};
   }
   return pair_list(set);
 }

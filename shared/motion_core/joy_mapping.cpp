@@ -392,7 +392,12 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   const float wx = state.wiggle_amount * px * (1.0f - std::cos(state.yaw_current));
   const float wy = -state.wiggle_amount * px * std::sin(state.yaw_current);
 
-  if (record_edge && state.mode == Mode::Posture) {
+  // Inert in quadruped mode. The live posture is welcome on four feet — posture
+  // mode is not walking — but a RECORDED one bleeds through into gait mode,
+  // where it would spend the same x-y envelope the support shift needs to carry
+  // the body into the next support triangle, and that margin is millimetres.
+  // Height is exempt by construction: it rides height_current, not the record.
+  if (record_edge && state.mode == Mode::Posture && !state.quadruped) {
     state.reverting = false;
     state.recorded_x =
         clipf(state.recorded_x + ry * kP.x_max + wx, -kP.x_max, kP.x_max);

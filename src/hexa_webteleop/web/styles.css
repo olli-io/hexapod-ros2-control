@@ -5,9 +5,9 @@
   --bg-dim:    #1d2021; /* bg_dim, status bar */
   --surface:   #32302f; /* bg1, panels/buttons */
   --surface-2: #3c3836; /* bg2, raised/active */
-  --border:    #45403d; /* bg4, hairline borders */
+  --border:    #5a524c; /* bg5, borders */
   --fg:        #d4be98; /* fg */
-  --muted:     #7c6f64; /* grey0 */
+  --muted:     #928374; /* grey1, idle icons */
   --accent:    #89b482; /* aqua — active/control */
   --green:     #a9b665; /* green — connected */
   --red:       #ea6962; /* red — disconnected */
@@ -50,8 +50,8 @@ html, body {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.6rem;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
   background: var(--bg-dim);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -60,7 +60,7 @@ html, body {
 @media (orientation: landscape) {
   #navbar {
     flex-direction: column;
-    padding: 0.6rem 0.3rem;
+    padding: 0.9rem 0.55rem;
     border-bottom: none;
     border-right: 1px solid var(--border);
   }
@@ -77,14 +77,14 @@ html, body {
   background: none;
   border: none;
   color: var(--muted);
-  padding: 0.35rem;
+  padding: 0.5rem;
   border-radius: var(--radius);
   cursor: pointer;
 }
 
 .nav-icon svg {
-  width: 26px;
-  height: 26px;
+  width: 38px;
+  height: 38px;
   display: block;
 }
 
@@ -243,8 +243,10 @@ button.nav-icon:active {
   cursor: pointer;
   touch-action: none;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Labels may carry a newline (\n) to break onto a second line. */
+  white-space: pre-line;
+  text-align: center;
+  line-height: 1.15;
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 

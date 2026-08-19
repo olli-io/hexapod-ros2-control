@@ -59,15 +59,18 @@ class ReseatController {
   //
   // `pre_lift_shift_time` holds every foot planted for that long before each
   // rung lifts, announcing the coming lift-off through the rung's emitted phase
-  // so the support shift carries the body off it first. Zero — the six-leg
-  // case, where a mirrored pair leaves the body inside what is left — skips the
-  // hold entirely.
+  // so the support shift carries the body off it first. The rung that just
+  // landed takes back exactly the weight over the same ramp, so the body crosses
+  // straight from one rung's support to the next one's; `shift_lead` is
+  // posture's support_shift_lead, which is what makes that exact. Zero — the
+  // six-leg case, where a mirrored pair leaves the body inside what is left —
+  // skips both.
   ReseatController(std::map<std::string, Vec3> current_stance,
                    std::map<std::string, Vec3> target_stance,
                    float pair_swing_time, float pair_dwell_time,
                    const SwingProfile& swing, float controller_dt,
                    RungList rung_order = {},
-                   float pre_lift_shift_time = 0.0f);
+                   float pre_lift_shift_time = 0.0f, float shift_lead = 0.0f);
 
   bool done() const { return done_; }
   std::map<std::string, LegOutput> update(float dt);
@@ -79,6 +82,7 @@ class ReseatController {
   bool pair_needs_moving(std::size_t idx) const;
   bool remaining_pair_needs_moving() const;
   std::map<std::string, LegOutput> tick_shift(float dt);
+  void begin_restore(const Rung& landed);
   // Latch the origins of every foot seeded above its target. Height is the only
   // contact signal the ladder has, and every target is on the same ground plane.
   void seed_landing();
@@ -94,6 +98,7 @@ class ReseatController {
   float pair_swing_time_;
   float pair_dwell_time_;
   float pre_lift_shift_time_;
+  float shift_lead_;
   SwingProfile swing_;
   // swing_ with the climb taken out: a landing foot must never rise.
   SwingProfile landing_swing_;
@@ -109,6 +114,11 @@ class ReseatController {
   // Counts up through the pre-lift shift hold; -1 when no hold is running, so a
   // zero-length one is still distinguishable from none at all.
   float t_in_shift_ = -1.0f;
+  // The rung that landed last, and the phase it is still emitted at: it holds
+  // the body where its own lift-off put it until the next rung takes it on.
+  // Empty outside a hold.
+  Rung restoring_;
+  float restoring_phase_ = 0.0f;
   bool landing_ = false;
   bool done_ = false;
 };

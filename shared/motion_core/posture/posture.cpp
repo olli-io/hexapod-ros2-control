@@ -384,15 +384,15 @@ BodyPose PostureController::update(
   const BodyPose idle_out = stack.eval(ctx);
   const BodyPose animated = lerp(idle_out, gait_out, activation_);
 
-  // On four feet the whole pose envelope belongs to the support shift: a manual
-  // offset would come off the same clamp and eat into the travel that keeps the
-  // body over its feet. The smoother still runs, so entering quadruped mode
-  // eases an existing pose out and leaving it eases the pose back in.
-  const BodyPose user_target = quadruped ? IDENTITY : user_pose_;
+  // The user pose applies on four feet exactly as it does on six. It comes off
+  // the same envelope as the support shift, so what keeps the creep's travel
+  // intact is upstream: the teleop refuses a posture RECORD while quadruped, so
+  // nothing but body height rides into gait mode and the live pose is only ever
+  // held in posture mode, where the robot is not walking.
   // Clamped going in as well as out, so the filter never winds up against an
   // unreachable value.
   const BodyPose user_smoothed =
-      pose_smoother_.step(clamp(user_target, limits_), limits_, dt);
+      pose_smoother_.step(clamp(user_pose_, limits_), limits_, dt);
 
   // One shared envelope: the user pose and the animation both spend it, and the
   // sum is clamped to it.

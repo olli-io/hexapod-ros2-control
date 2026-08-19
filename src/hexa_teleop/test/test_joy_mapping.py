@@ -1798,6 +1798,47 @@ def test_posture_mode_stays_available_in_quadruped_mode():
     assert state.quadruped is True
 
 
+def test_quadruped_posture_is_live_but_not_recordable():
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+    map_joy(_axes(), _buttons(posture_mode=True), cfg, state, DT)
+    assert state.mode == POSTURE
+
+    # Live posing is the operator's on four feet as on six: posture mode is
+    # not walking, so the support shift is not spending its travel yet.
+    out = map_joy(_axes(left_x=1.0), _buttons(), cfg, state, DT)
+    assert math.isclose(out.pose_roll, -cfg.posture.roll_max)
+
+    # `select` is `record` in posture mode, and there it is inert while
+    # quadruped: a recorded offset bleeds through into gait mode, where it
+    # would spend the x-y envelope the creep needs to carry the body into the
+    # next support triangle.
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    assert state.recorded_roll == 0.0
+    out = map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert out.pose_roll == 0.0, "the stick let go, and nothing was recorded"
+
+
+def test_quadruped_height_still_rides_into_gait_mode():
+    # Height is not the record's to carry — it rides `height_current` — so the
+    # one posture axis that never competes with the support shift keeps working
+    # on four feet.
+    cfg = _quad_cfg()
+    state = JoyState(mode=GAIT, current_gait_idx=2)
+    _press_select(cfg, state, True)
+    _press_select(cfg, state, False)
+    map_joy(_axes(), _buttons(posture_mode=True), cfg, state, DT)
+    map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    lifted = state.height_current
+    assert lifted > 0.0
+
+    out = map_joy(_axes(), _buttons(gait_mode=True), cfg, state, DT)
+    assert state.mode == GAIT
+    assert math.isclose(out.pose_z, lifted)
+
+
 def test_animation_mode_is_refused_in_quadruped_mode():
     cfg = _quad_cfg()
     state = JoyState(mode=GAIT, current_gait_idx=2)

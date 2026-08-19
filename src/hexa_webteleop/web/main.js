@@ -13,17 +13,17 @@ const LABELS = {
   gait_mode: "Gait",
   posture_mode: "Posture",
   animation_mode: "Anim",
-  init: "Init",
+  init: "Stand\n(Hexa)",
   record: "Rec",
-  gait_prev: "Gait \u25C0",
-  gait_next: "Gait \u25B6",
-  animation_prev: "Anim \u25C0",
-  animation_next: "Anim \u25B6",
-  height_up: "\u25B2",
-  height_down: "\u25BC",
-  yaw_left: "Yaw \u25C0",
-  yaw_right: "Yaw \u25B6",
-  quadruped_mode: "Quad",
+  gait_prev: "Prev\nGait",
+  gait_next: "Next\nGait",
+  animation_prev: "Prev\nAnim",
+  animation_next: "Next\nAnim",
+  height_up: "Body\nup",
+  height_down: "Body\ndown",
+  yaw_left: "Yaw\nleft",
+  yaw_right: "Yaw\nright",
+  quadruped_mode: "Stand\n(Quad)",
   "": "",
 };
 
@@ -463,16 +463,16 @@ class TouchJoystick {
     const r = this.radius;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // Outer ring — gruvbox material border
-    ctx.strokeStyle = "#45403d";
-    ctx.lineWidth = 1.5;
+    // Outer ring — grey1, bright enough to read on a phone outdoors.
+    ctx.strokeStyle = "#928374";
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(this.centerX, this.centerY, r, 0, Math.PI * 2);
     ctx.stroke();
 
     // Crosshair
-    ctx.strokeStyle = "#3c3836";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#5a524c";
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(this.centerX - r, this.centerY);
     ctx.lineTo(this.centerX + r, this.centerY);
@@ -482,7 +482,7 @@ class TouchJoystick {
 
     // Knob — aqua accent when active
     const knobR = Math.max(r * 0.3, 12);
-    ctx.fillStyle = this.active ? "#89b482" : "#504945";
+    ctx.fillStyle = this.active ? "#89b482" : "#665c54";
     ctx.beginPath();
     ctx.arc(
       this.centerX + this.knobX,
