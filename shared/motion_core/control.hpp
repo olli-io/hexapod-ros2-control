@@ -72,6 +72,12 @@ class Control {
   void set_gait(const std::string& gait);
   const std::string& active_gait() const { return active_gait_; }
 
+  // Drop the parked pair from the lever arms and the radial budget. Those legs
+  // lay nothing down, and theirs are the longest arms on the chassis, so pricing
+  // a yaw command against them would cut the stick for a foot that is in the
+  // air. Cheap to call every tick: a no-op unless the set actually changed.
+  void set_leg_set(hexa::gait::LegSet set);
+
   const BodyVelocityLimiter& limiter() const { return limiter_; }
 
  private:
@@ -83,8 +89,19 @@ class Control {
   float stride_ratio_for(float v_x, float v_y, float omega_z) const;
 
   hexa::gait::VelocityCaps caps_;
+  // The full six-leg stance, and the walking subset shape() actually prices
+  // against. The full one is kept so a leg-set change can rebuild the subset.
+  //
+  // Both are frozen at construction: a reseat that moves the nominal stance (a
+  // body-height change) is not reflected here. Quadruped mode's stance was
+  // chosen to have the same outer radius as the hexapod one so the derived caps
+  // do not drift, but a future footprint change would need a setter before it
+  // could be trusted.
+  std::map<std::string, hexa::Vec3> stance_xy_all_;
+  std::map<std::string, hexa::gait::LegContext> legs_all_;
   std::map<std::string, hexa::Vec3> stance_xy_;
   std::map<std::string, hexa::gait::LegContext> legs_;
+  hexa::gait::LegSet leg_set_ = hexa::gait::LegSet::HEXAPOD;
   float stride_length_;
   float stride_length_radial_;
   float vmax_ramp_time_linear_;

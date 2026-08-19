@@ -727,7 +727,8 @@ TEST(Engine, PeakTipSpeedStaysCloseToTheAnalyticalFloor) {
     auto e = g::make_default_engine(
         "tripod", hexa::config::kLegSpecs, cfg, g::standing_pose_from_config(),
         hexa::config::kFoldedPose, hexa::config::kInitializedPose,
-        hexa::config::kCoxaToBottom, hexa::config::kFootRadius);
+        hexa::config::kCoxaToBottom, hexa::config::kFootRadius,
+        g::quad_standing_pose_from_config());
     e->start_initialize();
     for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
       e->update(kTickDt, {0.0f, 0.0f}, 0.0f);
@@ -1793,6 +1794,11 @@ TEST(Engine, EveryGaitSettlesOntoTheNominalStance) {
   const float budget = stop_budget(cfg);
 
   for (const auto& [name, factory] : g::strategies()) {
+    // A quadruped gait is never constructed on: it is chosen from the belly
+    // and stood up on, which its own suite drives.
+    if (factory()->leg_set() != g::LegSet::HEXAPOD) {
+      continue;
+    }
     const float duty = factory()->duty_factor();
     const SettleStats s = drive_settle(saturating_speed(cfg, duty), 0.0f, name);
 
@@ -2663,5 +2669,365 @@ TEST(RadialStride, DeratedCapLandsOnTheCycleTimeFloor) {
                                      max_cycle),
                 min_cycle, 1e-4f)
         << "heading (" << d_x << ", " << d_y << ")";
+  }
+}
+
+// ── Quadruped mode ──
+//
+// The four corners creep one leg at a time while the middle pair is parked at
+// the folded pose it powered up in. The mode is chosen from the belly — the
+// strategy carries the leg set, start_initialize() climbs the ladder for it —
+// so every test here selects quadruped_wave while FOLDED and then stands up.
+
+namespace {
+
+constexpr float kQuadDt = 0.005f;
+
+// Stand, select quadruped_wave, and run until the engine settles back onto a
+// stand with the middles parked. Returns false if it never gets there.
+// The cold start into quadruped mode: the leg set rides the strategy, and the
+// stand ladder is the only thing that applies it — so the gait goes on from the
+// belly, before the ladder is asked to climb.
+bool run_to_parked_stand(g::Engine& e, int max_ticks = 4000) {
+  if (!e.set_strategy("quadruped_wave")) {
+    return false;
+  }
+  if (!e.start_initialize()) {
+    return false;
+  }
+  for (int i = 0; i < max_ticks; ++i) {
+    e.update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    if (e.state() == g::EngineState::STAND &&
+        e.leg_set() == g::LegSet::QUADRUPED) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The gait's own saturating command, so the walk runs at the cap.
+float quad_saturating_speed(const g::EngineConfig& cfg) {
+  const float swing_end =
+      g::swing_end_phase(3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+  return cfg.stride_length * swing_end /
+         (cfg.min_swing_time * (1.0f - swing_end));
+}
+
+}  // namespace
+
+// Requirement 1, pinned: with the margin taken off, the swing window is shorter
+// than the quarter cycle between lift-offs, so no two corner feet are ever
+// airborne together.
+TEST(Quadruped, WaveLiftsOneLegAtATime) {
+  const auto cfg = g::engine_config_from_config();
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+
+  const float speed = quad_saturating_speed(cfg);
+  int worst = 0;
+  bool saw_a_swing = false;
+  for (int i = 0; i < 3000; ++i) {
+    const auto out = e->update(kQuadDt, {speed, 0.0f}, 0.0f);
+    if (e->state() != g::EngineState::GAIT) {
+      continue;  // the engagement schedules its own first cycle
+    }
+    int airborne = 0;
+    for (const auto& [name, leg] : out) {
+      (void)name;
+      if (!leg.parked && !leg.stance) {
+        ++airborne;
+      }
+    }
+    saw_a_swing = saw_a_swing || airborne > 0;
+    worst = std::max(worst, airborne);
+  }
+  EXPECT_TRUE(saw_a_swing) << "the creep never lifted a foot";
+  EXPECT_EQ(worst, 1) << "two corner feet were airborne at once";
+}
+
+// The offsets are the MIRROR of the lift order, so reading the table as the
+// order gives the diagonal sequence — which does not stand up on this chassis.
+// This pins the lateral one against a well-meaning "fix".
+TEST(Quadruped, WaveLiftsInLateralSequence) {
+  const auto offsets =
+      g::strategies().at("quadruped_wave")()->phase_offsets().offsets();
+  // A leg lifts at master pymod(-offset, 1).
+  const auto lift_at = [&](const char* leg) {
+    return g::pymod(-offsets.at(leg), 1.0f);
+  };
+  EXPECT_NEAR(lift_at("l_rear"), 0.0f, 1e-6f);
+  EXPECT_NEAR(lift_at("l_front"), 0.25f, 1e-6f);
+  EXPECT_NEAR(lift_at("r_rear"), 0.5f, 1e-6f);
+  EXPECT_NEAR(lift_at("r_front"), 0.75f, 1e-6f);
+}
+
+// Reachable only through the teleop toggle, never through the D-pad rotation.
+TEST(Quadruped, WaveIsNotInTheGaitCycle) {
+  for (const auto& entry : hexa::config::kGaitCycle) {
+    EXPECT_NE(entry, "quadruped_wave");
+  }
+}
+
+// The invariant every collective predicate rests on: a parked leg is emitted,
+// never omitted, so nothing downstream has to guard an .at() lookup.
+TEST(Quadruped, ParkedLegsAreEmittedNotOmitted) {
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+  const auto out = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  ASSERT_EQ(out.size(), static_cast<std::size_t>(hexa::kNumLegs));
+  for (const auto& n : g::LEG_NAMES) {
+    ASSERT_NE(out.find(n), out.end()) << n;
+  }
+  for (const auto& n : g::PARKED_LEGS) {
+    EXPECT_TRUE(out.at(n).parked) << n;
+    EXPECT_FALSE(out.at(n).stance) << n << " must not read as a loaded foot";
+  }
+  EXPECT_FALSE(out.at("l_front").parked);
+}
+
+// A parked foot sits still whatever the walk is doing. This is what proves the
+// leg is genuinely out of the pipeline rather than merely flagged.
+TEST(Quadruped, ParkedFeetDoNotMoveWhileTheCornersWalk) {
+  const auto cfg = g::engine_config_from_config();
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+
+  const auto first = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  std::map<std::string, g::Vec3> parked_at;
+  for (const auto& n : g::PARKED_LEGS) {
+    parked_at[n] = first.at(n).foot_target;
+  }
+
+  const float speed = quad_saturating_speed(cfg);
+  for (int i = 0; i < 2000; ++i) {
+    const auto out = e->update(kQuadDt, {speed, 0.3f * speed}, 0.4f);
+    for (const auto& n : g::PARKED_LEGS) {
+      EXPECT_LT((out.at(n).foot_target - parked_at.at(n)).norm(), 1e-6f)
+          << n << " drifted on tick " << i;
+    }
+  }
+}
+
+// The middles' lever arms are the longest on the chassis, so counting them
+// would cut the stride for a foot that is in the air.
+TEST(Quadruped, ParkedLegsDoNotConstrainTheStride) {
+  const auto cfg = g::engine_config_from_config();
+  const auto legs = g::build_leg_contexts_from(
+      hexa::config::kLegSpecs, g::quad_standing_pose_from_config());
+  std::map<std::string, g::LegContext> corners;
+  for (const auto& [name, ctx] : legs) {
+    if (!g::leg_is_parked(g::LegSet::QUADRUPED, name)) {
+      corners[name] = ctx;
+    }
+  }
+  // A pure yaw is the case where the middles bind hardest.
+  const float all_six = g::effective_stride_length(
+      legs, {0.0f, 0.0f}, 0.5f, cfg.stride_length, cfg.stride_length_radial);
+  const float four = g::effective_stride_length(
+      corners, {0.0f, 0.0f}, 0.5f, cfg.stride_length, cfg.stride_length_radial);
+  EXPECT_GE(four, all_six);
+}
+
+// The leg set is chosen from the belly and nowhere else: the middle pair moves
+// between folded and standing on the stand ladder alone, so off the belly there
+// is no ladder to run and the switch is refused outright.
+TEST(Quadruped, SelectingItOffTheBellyIsRefused) {
+  const auto cfg = g::engine_config_from_config();
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  EXPECT_FALSE(e->set_strategy("quadruped_wave"));
+  EXPECT_EQ(e->strategy_name(), "tripod");
+
+  const float speed = saturating_speed(cfg);
+  for (int i = 0; i < 600; ++i) {
+    e->update(kQuadDt, {speed, 0.0f}, 0.0f);
+  }
+  ASSERT_EQ(e->state(), g::EngineState::GAIT);
+  EXPECT_FALSE(e->set_strategy("quadruped_wave"));
+  EXPECT_EQ(e->strategy_name(), "tripod");
+  EXPECT_FALSE(e->pending_strategy_name().has_value());
+
+  // And the same the other way: a six-leg gait is refused from a quadruped
+  // stand, since it would ask four planted corners to walk on six feet.
+  auto q = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*q));
+  EXPECT_FALSE(q->set_strategy("tripod"));
+  EXPECT_EQ(q->strategy_name(), "quadruped_wave");
+}
+
+// Leaving is the fold, and it is the plain fold ladder: the corners come down
+// and tuck while the middles stay exactly where they have been all along.
+TEST(Quadruped, FoldingFromAQuadrupedStandLeavesTheMiddlesAlone) {
+  const auto folded = g::folded_stance_from_config();
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+  ASSERT_TRUE(e->request_fold());
+
+  bool saw_folding = false;
+  for (int i = 0; i < 6000; ++i) {
+    const auto out = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    saw_folding = saw_folding || e->state() == g::EngineState::FOLDING;
+    for (const auto& n : g::PARKED_LEGS) {
+      ASSERT_LT((out.at(n).foot_target - folded.at(n)).norm(), 1e-5f)
+          << n << " moved on tick " << i;
+    }
+    if (e->state() == g::EngineState::FOLDED) {
+      break;
+    }
+  }
+  EXPECT_TRUE(saw_folding);
+  EXPECT_EQ(e->state(), g::EngineState::FOLDED);
+  // Folded is one pose whichever set walked into it, so the leg set comes back
+  // with it and the next start_initialize() is free to read the strategy.
+  EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+}
+
+// A fault drops to the folded baseline, which is a six-leg pose: recovering
+// through start_initialize() must not stand the robot up on a quadruped set.
+TEST(Quadruped, FaultResetsTheLegSet) {
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+  e->enter_fault();
+  EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+  EXPECT_EQ(e->strategy_name(), "tripod");
+
+  ASSERT_TRUE(e->start_initialize());
+  for (int i = 0; i < 2000 && e->state() != g::EngineState::STAND; ++i) {
+    e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  }
+  ASSERT_EQ(e->state(), g::EngineState::STAND);
+  const auto out = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  const auto nominal = g::nominal_stance_from_config();
+  for (const auto& n : g::LEG_NAMES) {
+    EXPECT_FALSE(out.at(n).parked) << n;
+    EXPECT_LT((out.at(n).foot_target - nominal.at(n)).norm(), 1e-5f) << n;
+  }
+}
+
+// The mode's whole premise: the middle pair is never placed and never lifted,
+// because it starts folded and is simply left there. Pinned across the ladder
+// tick by tick — a pair that briefly tracked the unfold's chord would look like
+// a working robot right up until the legs hit the floor.
+TEST(Quadruped, MiddlesNeverLeaveTheFoldedPoseStandingUp) {
+  const auto folded = g::folded_stance_from_config();
+
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(e->set_strategy("quadruped_wave"));
+  ASSERT_TRUE(e->start_initialize());
+
+  for (int i = 0; i < 4000; ++i) {
+    const auto out = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    for (const auto& n : g::PARKED_LEGS) {
+      ASSERT_TRUE(out.at(n).parked) << n << " on tick " << i;
+      ASSERT_LT((out.at(n).foot_target - folded.at(n)).norm(), 1e-5f)
+          << n << " moved on tick " << i;
+    }
+    if (e->state() == g::EngineState::STAND) {
+      break;
+    }
+  }
+  ASSERT_EQ(e->leg_set(), g::LegSet::QUADRUPED);
+
+  // And the corners land on the quadruped footprint, not the hexapod one.
+  const auto quad_nominal = g::nominal_stance_from(
+      hexa::config::kLegSpecs, g::quad_standing_pose_from_config());
+  const auto out = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+    EXPECT_LT((out.at(name).foot_target - quad_nominal.at(name)).norm(), 1e-5f)
+        << name;
+  }
+}
+
+// A gait switch mid-ladder is refused: the robot is between the belly and a
+// stand, and the leg set the ladder is climbing for is already chosen.
+TEST(Quadruped, AGaitSwitchIsRefusedMidLadder) {
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(e->set_strategy("quadruped_wave"));
+  ASSERT_TRUE(e->start_initialize());
+  e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  ASSERT_EQ(e->state(), g::EngineState::INITIALIZE);
+  EXPECT_FALSE(e->set_strategy("ripple"));
+  EXPECT_EQ(e->strategy_name(), "quadruped_wave");
+}
+
+// A parked foot must end up clear of the floor, and clear fore/aft of the
+// corners it now shares the robot with — it hangs there for the whole mode, so
+// a corner swing must not be able to reach it. The folded pose it parks at is a
+// belly-rest pose, so it reaches further out sideways than the corner
+// footprint does; that is legal, the corners never travel that far out.
+TEST(QuadParkedPose, MiddleFeetClearTheFloorAndTheCornerSwings) {
+  const auto cfg = g::engine_config_from_config();
+  const auto quad_nominal = g::nominal_stance_from(
+      hexa::config::kLegSpecs, g::quad_standing_pose_from_config());
+  // How far fore/aft a corner foot ever gets: its nominal x plus the half
+  // stride the walk lays down on either side of it.
+  float corner_x_reach = 0.0f;
+  for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+    corner_x_reach = std::max(
+        corner_x_reach,
+        std::fabs(quad_nominal.at(name)[0]) - 0.5f * cfg.stride_length);
+  }
+  ASSERT_GT(corner_x_reach, 0.0f);
+
+  const auto parked =
+      g::rest_stance_from(hexa::config::kLegSpecs, hexa::config::kFoldedPose);
+  // Standing height of the body bottom above the floor, so a body-frame z turns
+  // into a real clearance.
+  const float floor_z = -(hexa::config::kCoxaToBottom +
+                          hexa::config::kQuadStandingPose.body_height);
+  for (const auto& name : g::PARKED_LEGS) {
+    const auto& p = parked.at(name);
+    EXPECT_LT(std::fabs(p[0]), corner_x_reach)
+        << name << " parks where a corner foot can swing through it";
+    // Comfortably more than a step height: a parked foot must never be able to
+    // touch, whatever the body is doing.
+    EXPECT_GT(p[2] - floor_z, 2.0f * cfg.step_height)
+        << name << " is not parked clear of the floor";
+  }
+}
+
+// A height change on four feet has to land the corners on the QUADRUPED
+// footprint at the new height, which needs that stance's own frozen geometry:
+// the two stances reach out different distances, so sharing the hexapod
+// snapshot re-solves the corners onto the wrong radius.
+TEST(Quadruped, ReseatsOntoTheQuadrupedFootprintWhenTheBodyIsRaised) {
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+
+  constexpr float kLift = 0.02f;
+  e->set_target_height(kLift);
+  for (int i = 0; i < 8000; ++i) {
+    e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    if (std::fabs(e->applied_height() - kLift) < 1e-4f &&
+        e->state() == g::EngineState::STAND) {
+      break;
+    }
+  }
+  ASSERT_NEAR(e->applied_height(), kLift, 1e-4f)
+      << "never reseated onto the lift";
+  ASSERT_EQ(e->leg_set(), g::LegSet::QUADRUPED);
+
+  const auto specs = hexa::config::kLegSpecs;
+  const auto leg_specs = g::leg_specs_from(specs);
+  const auto quad_flat =
+      g::nominal_stance_from(specs, g::quad_standing_pose_from_config());
+  // What the corners SHOULD stand on: the quadruped stance re-solved to the
+  // raised height through its own snapshot.
+  const auto want = g::reseat_nominal_stance(
+      kLift, g::reseat_geometry_from(specs, g::quad_standing_pose_from_config()),
+      leg_specs, quad_flat);
+  // What sharing the hexapod snapshot would have given — a different radius,
+  // which is what makes this test able to fail.
+  const auto wrong = g::reseat_nominal_stance(
+      kLift, g::reseat_geometry_from(specs, g::standing_pose_from_config()),
+      leg_specs, quad_flat);
+
+  const auto out = e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+  for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+    const auto& foot = out.at(name).foot_target;
+    EXPECT_LT((foot - want.at(name)).norm(), 1e-4f)
+        << name << " did not land on the quadruped footprint";
+    EXPECT_GT((want.at(name) - wrong.at(name)).norm(), 5e-3f)
+        << name << ": the two snapshots agree, so this test proves nothing";
   }
 }

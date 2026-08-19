@@ -23,6 +23,7 @@ const LABELS = {
   height_down: "\u25BC",
   yaw_left: "Yaw \u25C0",
   yaw_right: "Yaw \u25B6",
+  quadruped_mode: "Quad",
   "": "",
 };
 

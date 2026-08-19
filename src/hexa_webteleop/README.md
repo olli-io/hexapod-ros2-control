@@ -50,9 +50,16 @@ pad alone is a complete drive control (gait), or roll/pitch (posture). The
 two forward sources sum, and the resulting velocity triple is fitted to the
 reachable envelope by the shared `hexa_teleop` mapping — see that package's
 README for what that does to the feel.
-Default bottom-6 buttons: init, record, then per mode — gait prev/next
-(gait) / yaw left/right (posture) / animation prev/next (animation) — and
-height up/down.
+Default bottom-6 buttons: init, then per mode — quadruped init + gait
+prev/next (gait) / record + yaw left/right (posture) / record + animation
+prev/next (animation) — and height up/down. The quadruped init is the
+four-legged half of the init button: from the belly it stands the robot up
+with the middle pair left folded, and off the belly it folds like init does.
+It takes gait mode's second slot because `record` only does anything in
+posture mode, and it is bound in the gait section alone, which is what
+confines it to gait mode. It selects `quadruped_wave`, which stays out of
+`gait_cycle` — that init is the only way in, so prev/next can never ask a
+standing robot for a leg set it cannot reach without folding.
 
 ## Safety
 

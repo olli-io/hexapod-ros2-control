@@ -172,7 +172,11 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   } else if (gait_edge && state.mode != Mode::Gait) {
     state.mode = Mode::Gait;
     mode_changed = true;
-  } else if (animation_edge) {
+  } else if (animation_edge && !state.quadruped) {
+    // Every animation is written for six legs, and the four-corner stance is cut
+    // for the support shift rather than for a body the operator swings around on
+    // it. Gait and posture stay available; the way out of quadruped mode is the
+    // fold that got into it.
     state.mode = state.mode == Mode::Animation ? Mode::Gait : Mode::Animation;
     mode_changed = true;
   }
@@ -206,12 +210,30 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
     }
   }
 
-  // Two-press semantics when the chassis is in a non-default posture.
+  // The two init buttons, with the two-press revert they share when the chassis
+  // is in a non-default posture. Start asks for the six-leg stand, select for
+  // the four-corner one; off the belly either is a fold, which the caller
+  // resolves because map_joy cannot see the engine.
   const bool init_pressed = pressed(binding(*tbl, JoyFn::kInit), axes, buttons);
   const bool init_edge = init_pressed && !state.prev_init;
   state.prev_init = init_pressed;
+  // Resolved against the GAIT table in EVERY mode, not the active one: the key
+  // is bound only there, so reading the active mode's table would leave
+  // prev_quad_init false while the button was held in posture mode and fire a
+  // spurious edge the instant gait mode was entered.
+  const bool quad_pressed = pressed(
+      binding(table_for(Mode::Gait), JoyFn::kQuadrupedMode), axes, buttons);
+  // Confined to GAIT mode, which is where the key is bound: everywhere else
+  // `select` keeps its base binding (`record`), and firing both off one press
+  // would record a posture on the way to standing up. The teleop boots into gait
+  // mode, so the cold start is covered. The tracker still advances in the other
+  // modes, so returning to gait with the button held fires nothing.
+  const bool quad_edge =
+      quad_pressed && !state.prev_quad_init && state.mode == Mode::Gait;
+  state.prev_quad_init = quad_pressed;
   bool init_request = false;
-  if (init_edge) {
+  bool init_quadruped = false;
+  if (init_edge || quad_edge) {
     const bool posture_modified =
         std::fabs(state.height_current) > 1e-4f ||
         std::fabs(state.yaw_current) > 1e-4f ||
@@ -225,6 +247,22 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
       state.reverting = true;
     } else {
       init_request = true;
+      // Start wins a tie: six legs is the stand to land on when both edges
+      // arrive in one tick.
+      init_quadruped = quad_edge && !init_edge;
+      state.quadruped = init_quadruped;
+      // The leg set rides the gait, so every init edge republishes the gait that
+      // walks the set it asked for. Idempotent when nothing changed, and it is
+      // what keeps the engine's strategy and this flag from drifting apart when
+      // the request lands as a fold instead of a stand.
+      if (init_quadruped) {
+        has_forced_gait = true;
+        forced_gait = kQuadrupedGait;
+      } else if (!cfgns::kGaitCycle.empty()) {
+        has_forced_gait = true;
+        forced_gait =
+            cfgns::kGaitCycle[static_cast<std::size_t>(state.current_gait_idx)];
+      }
     }
   }
 
@@ -307,14 +345,17 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   state.prev_animation_prev = anim_prev_pressed;
   state.prev_animation_next = anim_next_pressed;
 
-  // Suppressed in ANIMATION mode.
+  // Suppressed in ANIMATION mode, and in quadruped mode where there is exactly
+  // one gait and the engine would refuse a switch to any other anyway — the leg
+  // set is fixed until the next fold.
   bool has_gait_select = has_forced_gait;
   std::string_view gait_select = forced_gait;
   const bool gprev_pressed =
       pressed(binding(*tbl, JoyFn::kGaitPrev), axes, buttons);
   const bool gnext_pressed =
       pressed(binding(*tbl, JoyFn::kGaitNext), axes, buttons);
-  if (!cfgns::kGaitCycle.empty() && state.mode != Mode::Animation) {
+  if (!cfgns::kGaitCycle.empty() && state.mode != Mode::Animation &&
+      !state.quadruped) {
     int delta = 0;
     if (gnext_pressed && !state.prev_gait_next) delta += 1;
     if (gprev_pressed && !state.prev_gait_prev) delta -= 1;
@@ -372,6 +413,7 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   JoyOutput out;
   out.mode_changed = mode_changed;
   out.init_request = init_request;
+  out.init_quadruped = init_quadruped;
   out.has_gait_select = has_gait_select;
   out.gait_select = gait_select;
   out.has_animation_name = has_animation_name;

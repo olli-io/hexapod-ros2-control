@@ -29,11 +29,38 @@ inline const std::array<std::string, 6> LEG_NAMES = {
     "l_front", "l_middle", "l_rear", "r_front", "r_middle", "r_rear",
 };
 
+// Which legs a strategy walks. A property of the strategy, so selecting a
+// quadruped gait is what enters quadruped mode — no second command channel.
+enum class LegSet {
+  HEXAPOD,    // all six
+  QUADRUPED,  // the four corners; the middle pair is parked
+};
+
+// The pair the quadruped set drops. Named once so no predicate has to spell out
+// which legs "the middles" are.
+inline const std::array<std::string, 2> PARKED_LEGS = {"l_middle", "r_middle"};
+
+inline bool leg_is_parked(LegSet set, const std::string& name) {
+  if (set != LegSet::QUADRUPED) {
+    return false;
+  }
+  for (const auto& parked : PARKED_LEGS) {
+    if (parked == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // One leg's contribution to a LegTargets message.
 struct LegOutput {
   Vec3 foot_target = Vec3::Zero();
   float phase = 0.0f;
   bool stance = true;
+  // Lifted out of the walk entirely: neither stance nor swing, carrying no
+  // weight and taking no phase. `stance` is meaningless while this is set, so
+  // every collective predicate tests this one first.
+  bool parked = false;
 };
 
 template <typename Value>

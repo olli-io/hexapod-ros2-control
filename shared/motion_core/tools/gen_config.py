@@ -68,6 +68,7 @@ JOY_FUNCTIONS = [
     ("kGaitNext", "gait_next"),
     ("kAnimationPrev", "animation_prev"),
     ("kAnimationNext", "animation_next"),
+    ("kQuadrupedMode", "quadruped_mode"),
     ("kDriveX", "drive_x"),
     ("kDriveXAux", "drive_x_aux"),
     ("kDriveY", "drive_y"),
@@ -114,13 +115,21 @@ def resolve_joy_keyref(function, base_bindings, mode_bindings, btn, ax, signs):
 # classes in hexa_gait_cpp/src/gaits/registry.cpp (the single source of truth).
 # Keep in sync with that file. Order is the teleop gait_cycle order.
 GAITS = [
-    # name,       duty_factor, unstable
-    ("tripod",    0.5,         False),
-    ("surf",      5.0 / 8.0,   True),
-    ("tetrapod",  2.0 / 3.0,   False),
-    ("crawl",     2.0 / 3.0,   True),
-    ("ripple",    5.0 / 6.0,   False),
+    # name,             duty_factor, unstable, leg_set
+    ("tripod",          0.5,         False,    "hexapod"),
+    ("surf",            5.0 / 8.0,   True,     "hexapod"),
+    ("tetrapod",        2.0 / 3.0,   False,    "hexapod"),
+    ("crawl",           2.0 / 3.0,   True,     "hexapod"),
+    ("ripple",          5.0 / 6.0,   False,    "hexapod"),
+    # Quadruped leg set — reachable only through the teleop select toggle, never
+    # through gait_cycle. The leg set is carried here (as in the Python catalog)
+    # because the swing phase margin, and so the derived velocity cap, is per
+    # leg set; the strategy class stays its source of truth for the engine.
+    ("quadruped_wave",  3.0 / 4.0,   False,    "quadruped"),
 ]
+
+# NUL-padded width of GaitSpec::name. Must exceed the longest name above.
+GAIT_NAME_LEN = 16
 
 
 # ── formatting helpers ──────────────────────────────────────────────────────
@@ -203,6 +212,8 @@ def joint_limits(geometry: dict):
 
 
 LEG_GROUPS = ("front", "middle", "rear")
+# Quadruped mode stands on the corners alone, so its stance block has no middle.
+QUAD_GROUPS = ("front", "rear")
 
 
 def group_splay(group: str, side: str, coxa_deg: float) -> float:
@@ -220,8 +231,14 @@ def group_splay(group: str, side: str, coxa_deg: float) -> float:
     return sign * math.radians(coxa_deg)
 
 
-def standing_pose(gait: dict, geometry: dict) -> dict:
-    """At-rest stance from tuning.yaml's gait_node default_standing_pose block.
+def standing_pose(gait: dict, geometry: dict,
+                  key: str = "default_standing_pose",
+                  groups: tuple = LEG_GROUPS) -> dict:
+    """At-rest stance from one of tuning.yaml's gait_node standing-pose blocks.
+
+    `key` is "default_standing_pose" (the six-leg stance) or
+    "quad_standing_pose" (quadruped mode's four corners, whose middle pair does
+    not stand at all — pass groups=("front", "rear") for it).
 
     The stance is described by where the feet sit, not by joint angles: one
     belly clearance for the body, plus a tip reach and a splay for each of the
@@ -229,7 +246,7 @@ def standing_pose(gait: dict, geometry: dict) -> dict:
     motion_core owns (gait::standing_pose_from) — deliberately not duplicated
     here, so there is exactly one copy of that math.
     """
-    sp = gait["default_standing_pose"]
+    sp = gait[key]
     body_height = sp["body_height"]
 
     # Reachability guard so a bad edit fails at build time rather than throwing
@@ -243,33 +260,34 @@ def standing_pose(gait: dict, geometry: dict) -> dict:
     depth = (geometry["body"]["coxa_to_bottom"] + body_height
              - geometry["foot"]["radius"])
 
-    groups = []
-    for group in LEG_GROUPS:
+    out_groups = []
+    for group in groups:
         cfg = sp[group]
         tip_reach = cfg["tip_reach"]
         if tip_reach <= coxa_len:
             raise ValueError(
-                f"tuning.yaml default_standing_pose.{group}.tip_reach = "
+                f"tuning.yaml {key}.{group}.tip_reach = "
                 f"{tip_reach} m must exceed the coxa length ({coxa_len} m)")
         reach = math.hypot(tip_reach - coxa_len, depth)
         if not (abs(femur_len - tibia_len) <= reach <= femur_len + tibia_len):
             raise ValueError(
-                f"tuning.yaml default_standing_pose.{group}.tip_reach = "
+                f"tuning.yaml {key}.{group}.tip_reach = "
                 f"{tip_reach} m / body_height = {body_height} m puts the foot "
                 f"{reach:.4f} m from the femur joint; reach annulus is "
                 f"[{abs(femur_len - tibia_len):.4f}, "
                 f"{femur_len + tibia_len:.4f}] m")
-        groups.append(dict(tip_reach=tip_reach,
-                           coxa=to_urdf_rad("coxa", cfg["coxa_deg"])))
+        out_groups.append(dict(tip_reach=tip_reach,
+                               coxa=to_urdf_rad("coxa", cfg["coxa_deg"])))
 
-    return dict(body_height=body_height, groups=groups)
+    return dict(body_height=body_height, groups=out_groups)
 
 
 def rest_pose(geometry: dict, key: str):
     """Per-leg (coxa, femur, tibia) angles for one of the two belly-rest poses.
 
-    `key` is "folded_pose" (power-up) or "initialized_pose" (unfold endpoint);
-    the two share a schema so this reads either.
+    `key` is "folded_pose" (power-up, and where quadruped mode parks the middle
+    pair) or "initialized_pose" (unfold endpoint); the two share a schema so
+    this reads either.
     """
     init = geometry[key]
     femur = to_urdf_rad("femur", init["femur"]["above_horizontal_deg"])
@@ -332,13 +350,16 @@ def velocity_caps(gait: dict):
     stride = gait["stride_length"]
     min_swing = gait["min_swing_time"]
     yaw_bias = gait["yaw_bias"]
-    margin = gait["swing_phase_margin"]
+    margins = {"hexapod": gait["swing_phase_margin"],
+               "quadruped": gait["quadruped_swing_phase_margin"]}
     caps = []
-    for name, duty, unstable in GAITS:
+    for name, duty, unstable, leg_set in GAITS:
         # stride_length covered in one stance, so it keys off the *realized*
-        # split (swing_end_phase), not the nominal duty factor. Keep identical to
-        # the other three copies — pipeline_config_loader.cpp,
+        # split (swing_end_phase), not the nominal duty factor — and off the
+        # margin the gait's own LEG SET walks on (swing_phase_margin_for). Keep
+        # identical to the other three copies — pipeline_config_loader.cpp,
         # hexa_common/limits.py, gen_joy_golden.py.
+        margin = margins[leg_set]
         swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
         linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
         # yaw_bias stays keyed to the gait's nominal duty: it is a feel knob for
@@ -445,6 +466,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     specs = leg_specs(geometry)
     limits = joint_limits(geometry)
     stand = standing_pose(gait, geometry)
+    quad_stand = standing_pose(gait, geometry, "quad_standing_pose",
+                               QUAD_GROUPS)
     folded = rest_pose(geometry, "folded_pose")
     initialized = rest_pose(geometry, "initialized_pose")
     caps = velocity_caps(gait)
@@ -545,8 +568,24 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("    }},")
     w("};")
     w("")
+    w("// Quadruped mode's stance: the four corners on a symmetric rectangle.")
+    w("// The middle pair is not part of it — it is parked at kFoldedPose — so")
+    w("// the schema has no middle entry.")
+    w("struct CornerStandingPose {")
+    w("  float body_height;  // m, body bottom -> ground")
+    w("  LegGroupStance front;")
+    w("  LegGroupStance rear;")
+    w("};")
+    w("")
+    w("inline constexpr CornerStandingPose kQuadStandingPose = {")
+    w(f"    {fl(quad_stand['body_height'])},")
+    for name, grp in zip(QUAD_GROUPS, quad_stand["groups"]):
+        w(f"    {{{fl(grp['tip_reach'])}, {fl(grp['coxa'])}}},  // {name}")
+    w("};")
+    w("")
     w("// Per-leg power-up pose (coxa varies by symmetry), indexed by Leg. Also")
-    w("// the pose a fold ends on and the baseline FOLDED/FAULT hold.")
+    w("// the pose a fold ends on, the baseline FOLDED/FAULT hold, and where")
+    w("// quadruped mode parks the middle pair.")
     w("inline constexpr std::array<JointAngles, kNumLegs> kFoldedPose = {{")
     for leg in LEG_NAMES:
         a = folded[leg]
@@ -575,6 +614,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("touchdown_velocity", gait["touchdown_velocity"]),
         ("touchdown_probe_fraction", gait["touchdown_probe_fraction"]),
         ("swing_phase_margin", gait["swing_phase_margin"]),
+        ("quadruped_swing_phase_margin",
+         gait["quadruped_swing_phase_margin"]),
         ("controller_dt", gait["controller_dt"]),
         ("cmd_zero_tol", gait["cmd_zero_tol"]),
         ("settle_debounce_delay", gait["settle"]["debounce_delay"]),
@@ -589,6 +630,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("reseat_pair_swing_time", gait["reseat"]["pair_swing_time"]),
         ("reseat_pair_dwell_time", gait["reseat"]["pair_dwell_time"]),
         ("reseat_swing_clearance", gait["reseat"]["swing_clearance"]),
+        ("quadruped_shift_time", gait["quadruped"]["shift_time"]),
     ]
     for fname, _ in fields:
         w(f"  float {fname};")
@@ -603,7 +645,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # ── velocity caps / gaits ──
     w("// ── Per-gait velocity caps (derived; mirror hexa_gait_cpp limits.cpp) ──")
     w("struct GaitSpec {")
-    w("  std::array<char, 12> name;  // NUL-padded; use gait_name() to compare")
+    w(f"  std::array<char, {GAIT_NAME_LEN}> name;"
+      "  // NUL-padded; use gait_name() to compare")
     w("  float duty_factor;")
     w("  bool unstable;")
     w("  float linear_max;  // m/s")
@@ -613,7 +656,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
 
     def name_arr(name: str) -> str:
         chars = list(name.encode())
-        chars += [0] * (12 - len(chars))
+        if len(chars) >= GAIT_NAME_LEN:
+            raise ValueError(
+                f"gait name {name!r} needs {len(chars) + 1} bytes; GAIT_NAME_LEN "
+                f"is {GAIT_NAME_LEN} — widen it and regenerate")
+        chars += [0] * (GAIT_NAME_LEN - len(chars))
         return "{" + ", ".join(str(c) for c in chars) + "}"
 
     w("inline constexpr std::array<GaitSpec, "
@@ -715,7 +762,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # kGaitCycle is the runtime rotation the teleop cycler walks — already
     # filtered by allow_unstable_gaits (port of joy_mapping.resolve_gait_cycle),
     # so the firmware cycler matches the ROS node's accepted set.
-    unstable_names = {name for name, _, u in GAITS if u}
+    unstable_names = {name for name, _, u, _ls in GAITS if u}
     cycle_raw = [str(g) for g in teleop["gait_cycle"]]
     if teleop["allow_unstable_gaits"]:
         cycle = cycle_raw
@@ -802,6 +849,12 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("gait_bounce_step_height_ref", pn["gait_bounce_step_height_ref"]),
         ("support_centroid_tau", pn["support_centroid_tau"]),
         ("swing_lift_tau", pn["swing_lift_tau"]),
+        # SupportShift: gain on the lift-off-weighted stance centroid, the
+        # lookahead in cycles, and that signal's own filter — taken in polar,
+        # so a handover arcs instead of cornering.
+        ("support_shift_gain", pn["support_shift_gain"]),
+        ("support_shift_lead", pn["support_shift_lead"]),
+        ("support_shift_tau", pn["support_shift_tau"]),
         # Gait-animation crossfade (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
         # Spring/inertia smoother on the commanded body pose: tau = 1/omega_n,

@@ -57,13 +57,14 @@ from .teleop_arbitration import GAMEPAD, ArbitrationState, on_owner_msg, should_
 PUBLISH_RATE_HZ = 250.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
-# Engine states in which a gait switch may be published. STAND swaps
-# immediately; the others latch a pending change that the engine
-# commits once it has settled back to a stand. The gait is locked during
-# engaging, and a switch is meaningless during initialize / folding /
-# folded. The empty pre-first-publish state stays refused for free.
+# Engine states in which a gait switch may be published. "folded" and
+# "fault" swap the strategy the next stand comes up on, leg set included;
+# "stand" swaps immediately; the others latch a pending change that the
+# engine commits once it has settled back to a stand. The gait is locked
+# during engaging, and a switch is meaningless mid-ladder (initialize /
+# folding). The empty pre-first-publish state stays refused for free.
 _GAIT_SWITCH_STATES: frozenset[str] = frozenset(
-    {"stand", "gait", "settling", "reseating"}
+    {"folded", "fault", "stand", "gait", "settling", "reseating"}
 )
 
 
@@ -271,9 +272,11 @@ class TeleopJoyNode(Node):
         )
         self._pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
         self._pub_body_pose = self.create_publisher(BodyPoseMsg, "/body/pose", 10)
-        # One-shot trigger on rising-edge of the init binding.
-        # hexa_gait routes this to start_initialize (FOLDED → STAND) or
-        # start_fold (STAND → FOLDED); a stray press elsewhere is a no-op.
+        # One-shot trigger on a rising edge of either init binding (start
+        # for six legs, select for four). hexa_locomotion routes it to
+        # start_initialize (FOLDED → STAND, on the leg set the latched
+        # /cmd_gait asks for) or to a fold request; a stray press
+        # mid-ladder is a no-op.
         self._pub_init = self.create_publisher(Empty, "/gait/initialize", 10)
         # transient_local so a late-starting control node still picks
         # up the latest gait selection; depth 1 because the value
@@ -330,9 +333,6 @@ class TeleopJoyNode(Node):
         if self._was_dormant:
             self._was_dormant = False
             self.get_logger().info("gamepad regained /cmd_vel ownership")
-        if out.init_request:
-            self.get_logger().info("start button pressed — publishing /gait/initialize")
-            self._pub_init.publish(Empty())
         if out.animation_name is not None:
             self.get_logger().info(
                 f"publishing /animation/mode={out.animation_name!r}"
@@ -369,6 +369,15 @@ class TeleopJoyNode(Node):
                     f"gait switch to {out.gait_select!r} dropped — "
                     f"engine in {self._latest_gait_state!r} (gait locked)"
                 )
+        # After the gait publish, not before: an init request carries its leg
+        # set as the gait it publishes, and hexa_locomotion reads the leg set
+        # off the strategy that is applied by the time it starts the ladder.
+        if out.init_request:
+            which = "select" if out.init_quadruped else "start"
+            self.get_logger().info(
+                f"{which} button pressed — publishing /gait/initialize"
+            )
+            self._pub_init.publish(Empty())
 
         stamp = self.get_clock().now().to_msg()
 

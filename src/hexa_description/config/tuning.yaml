@@ -28,6 +28,19 @@ gait_node:
         tip_reach: 0.135
         coxa_deg: 0
 
+    # Stance for quadruped mode — the four corners only. The middle pair does
+    # not stand in this mode: it is held at geometry.yaml's folded_pose, so
+    # there is no middle entry here.
+
+    quad_standing_pose:
+      body_height: 0.06
+      front:
+        tip_reach: 0.119
+        coxa_deg: 25
+      rear:
+        tip_reach: 0.119
+        coxa_deg: 25
+
     stride_length: 0.105
     # Most a leg's own coxa-to-foot reach may close over one half stride. Every
     # direction is priced against the worst-placed leg. Set equal to
@@ -52,6 +65,12 @@ gait_node:
     # Share of each gait's swing window handed back to the ground at the
     # touchdown end, so legs overlap. Costs top speed.
     swing_phase_margin: 0.12
+    # The same for the quadruped leg set, which buys something different with
+    # it: on four feet the overlap is the window the support shift has to carry
+    # the body across into the next triangle, so it is worth far more of the top
+    # speed. Applied on the leg set, not the gait name — every derived velocity
+    # cap keys off it too.
+    quadruped_swing_phase_margin: 0.25
 
     # Split of an over-limit command between turning and moving. 0.5 = equal.
     yaw_bias: 0.6
@@ -77,6 +96,19 @@ gait_node:
       # they were actually standing.
       place_clearance: 0.002
       swing_clearance: 0.04
+
+    quadruped:
+      # What the engagement and reseat ladders wait before lifting a corner, on
+      # four feet only. The walk buys its window from quadruped_swing_phase_margin
+      # above; a ladder has no phase circle to buy one from, so it holds all four
+      # feet planted for this long instead while the support shift carries the
+      # body into the triangle the other three make.
+      #
+      # The first half announces the coming lift-off through the leg's phase —
+      # which is what support_shift_lead reads — and the second half is the body
+      # arriving through support_shift_tau. Both halves have to be there: end it
+      # at the announcement and the corner leaves under a body still in transit.
+      shift_time: 1.2
 
     reseat:
       # How long a new target height must hold before re-planting.
@@ -114,6 +146,11 @@ posture_node:
     # physical strength (1.0 = balanced); strength is a [0, 1] dial on top.
     gait_sway_gain: 1.0
     gait_sway_strength: 0.4
+
+    #quad mode support centroid body movement tuning
+    support_shift_gain: 0.45
+    support_shift_lead: 0.28
+    support_shift_tau: 0.14
 
     # Selectable in ANIMATION mode. Comma-separated entries combine several.
     animation_mode_animations:
@@ -155,7 +192,7 @@ posture_node:
     # past centre — exp(-pi*z/sqrt(1-z^2)) of the reach given up, so ~35% at
     # 0.32 and ~2% at 0.7.
     pose_filter_tau: 0.15
-    pose_filter_damping_ratio: 0.35
+    pose_filter_damping_ratio: 0.5
 
     # Posing limits. Body height is ground to underside; the other five axes are
     # symmetric (± the value). Manual pose and animation share this envelope and

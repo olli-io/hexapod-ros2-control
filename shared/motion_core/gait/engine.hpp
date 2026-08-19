@@ -54,6 +54,17 @@ struct EngineConfig {
   // Share of the nominal swing window handed back to stance at the touchdown
   // end, so every handover has a stretch with all six feet planted.
   float swing_phase_margin = 0.0f;
+  // The same, for the quadruped leg set. Its own knob because the two leg sets
+  // buy different things with it: on six feet the overlap is insurance and costs
+  // top speed, on four it is the window the support shift has to carry the body
+  // across into the next triangle. Selected on the APPLIED leg set — see
+  // swing_phase_margin_for.
+  float quadruped_swing_phase_margin = 0.0f;
+  // Quadruped mode only: how long a ladder holds all four feet planted before it
+  // lifts one, while the support shift carries the body into the triangle the
+  // other three make. The walk buys the same thing with the phase margin; a
+  // ladder has no phase circle to buy it from, so it waits instead.
+  float quadruped_shift_time = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
   float settle_debounce_delay = 0.0f;
@@ -175,6 +186,20 @@ class SwingPlanner {
   std::map<std::string, bool> is_swing_;
 };
 
+// Everything the quadruped leg set needs, supplied together or not at all.
+// Absent leaves the mode unavailable and set_strategy refuses a quadruped gait.
+// The parked middle pair is not in here: it is held at the folded pose the
+// engine already carries, which is also where it powered up.
+struct QuadrupedSetup {
+  // Where the four corners stand while the middle pair is parked, at a zero
+  // height offset.
+  std::map<std::string, Vec3> nominal_stance;
+  // Solved from the QUADRUPED standing pose, not the hexapod one: the two
+  // stances reach out different distances, so sharing a snapshot would re-solve
+  // a raised body onto the wrong footprint.
+  ReseatGeometryByLeg reseat_geometry{};
+};
+
 class Engine {
  public:
   // leg_specs and reseat_geometry must be supplied together (both empty disables
@@ -186,17 +211,27 @@ class Engine {
          float foot_radius, std::map<std::string, LegContext> leg_contexts,
          std::optional<std::map<std::string, kin::LegSpec>> leg_specs =
              std::nullopt,
-         std::optional<ReseatGeometryByLeg> reseat_geometry = std::nullopt);
+         std::optional<ReseatGeometryByLeg> reseat_geometry = std::nullopt,
+         std::optional<QuadrupedSetup> quadruped = std::nullopt);
 
   EngineState state() const { return state_; }
   float master_phase() const;
+  // The leg set the robot is standing on. Equal to strategy_->leg_set() off the
+  // belly; while FOLDED the strategy may already name the set the next
+  // start_initialize() will stand up on.
+  LegSet leg_set() const { return leg_set_; }
   const std::string& strategy_name() const { return strategy_name_; }
   std::optional<std::string> pending_strategy_name() const {
     return pending_strategy_name_;
   }
   float applied_height() const { return applied_height_; }
 
+  // Accepted from FOLDED / FAULT, where it also fixes the leg set the next
+  // stand comes up on, and from a stand or a walk as long as the leg set does
+  // not change — that one is settled by the ladder that stands the robot up.
   bool set_strategy(const std::string& name);
+  // Stands up on the leg set the applied strategy asks for: hexapod on all six,
+  // quadruped on the four corners with the middle pair left folded where it is.
   bool start_initialize();
   bool start_fold();
   bool request_fold();
@@ -219,6 +254,10 @@ class Engine {
 
  private:
   void apply_strategy(const std::string& name);
+  // Swap the walking leg set and the nominal stance that goes with it. Only the
+  // two ends of the stand ladder call it: the leg set is fixed for as long as
+  // the robot is off its belly.
+  void apply_leg_set(LegSet set);
   std::unique_ptr<InitializeController> build_initialize();
   std::unique_ptr<FoldController> build_fold();
   std::unique_ptr<EngagementController> build_engagement();
@@ -226,6 +265,43 @@ class Engine {
       const std::map<std::string, Vec3>& target_stance);
   void commit_new_nominal(const std::map<std::string, Vec3>& new_nominal,
                           float applied_height);
+  bool quadruped_available() const { return quadruped_.has_value(); }
+  // The frozen standing-pose snapshot the reseat solve reads. Per leg set: the
+  // two stances lean their tibias differently, so one snapshot would drag a
+  // height change onto the other footprint's radius.
+  const ReseatGeometryByLeg& geometry_for(LegSet set) const {
+    return (set == LegSet::QUADRUPED && quadruped_.has_value())
+               ? quadruped_->reseat_geometry
+               : *reseat_geometry_;
+  }
+  bool is_parked(const std::string& name) const {
+    return leg_is_parked(leg_set_, name);
+  }
+  // Off the applied leg set: the swing window has to match the feet that are
+  // actually walking.
+  float swing_margin() const {
+    return swing_phase_margin_for(leg_set_, config_.swing_phase_margin,
+                                  config_.quadruped_swing_phase_margin);
+  }
+  // What a ladder waits before lifting, off the APPLIED leg set for the same
+  // reason the margin is: on six feet a mirrored pair leaves the body inside
+  // what is left, and there is nothing to wait for.
+  float ladder_shift_time() const {
+    return leg_set_ == LegSet::QUADRUPED ? config_.quadruped_shift_time : 0.0f;
+  }
+  // legs_ with the parked pair dropped: what every per-leg velocity, stride and
+  // reversal computation is priced against. Rebuilt whenever leg_set_ or the
+  // nominal stance changes.
+  void refresh_active_legs();
+  // The base stance for a leg set, re-solved to the current applied height. The
+  // bases are stored at zero height offset, so a leg-set swap that happens while
+  // a height offset is still applied lands on the right footprint.
+  std::map<std::string, Vec3> stance_for(LegSet set) const;
+  // Overwrite the parked pair's entries with their held position. Applied to
+  // every walking sub-controller's output, so none of them has to know about
+  // parking. The two stand ladders pin the pair themselves — they are the ones
+  // that know it is folded rather than merely held.
+  void overlay_parked(std::map<std::string, LegOutput>& out) const;
 
   bool cmd_is_zero(std::pair<float, float> v_body_xy, float omega_z) const;
   std::map<std::string, LegOutput> emit_stand() const;
@@ -268,8 +344,19 @@ class Engine {
   float coxa_to_bottom_;
   float foot_radius_;
   std::map<std::string, LegContext> legs_;
+  std::map<std::string, LegContext> active_legs_;
   std::optional<std::map<std::string, kin::LegSpec>> leg_specs_;
   std::optional<ReseatGeometryByLeg> reseat_geometry_;
+
+  LegSet leg_set_ = LegSet::HEXAPOD;
+  // The hexapod stance at a zero height offset; nominal_ tracks whichever leg
+  // set is applied, at the applied height. The quadruped half lives in
+  // quadruped_.
+  std::map<std::string, Vec3> hexa_nominal_base_;
+  std::optional<QuadrupedSetup> quadruped_;
+  // The last hexapod strategy applied. FAULT recovery reverts to it, so the
+  // pristine folded baseline is never left paired with a four-leg strategy.
+  std::string fallback_strategy_name_;
 
   std::optional<GaitClock> clock_;
   StanceIntegrator stance_;
@@ -313,6 +400,7 @@ class Engine {
 
 EngineConfig engine_config_from_config();
 std::array<JointAngles, kNumLegs> standing_pose_from_config();
+std::array<JointAngles, kNumLegs> quad_standing_pose_from_config();
 std::map<std::string, Vec3> nominal_stance_from_config();
 std::map<std::string, Vec3> folded_stance_from_config();
 std::map<std::string, Vec3> initialized_stance_from_config();
@@ -336,6 +424,17 @@ std::unique_ptr<Engine> make_default_engine(
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
     float foot_radius, const ::hexa::config::StandingPose& standing);
+
+// The same for quadruped mode, which stands on the four corners alone. The
+// middle rows are copied from `standing_pose` as a placeholder: that pair never
+// stands in this mode — it is parked at the folded pose — but the six-leg
+// helpers this feeds (nominal_stance_from / reseat_geometry_from) want a full
+// array, and a row that is reachable at every body height keeps their per-leg
+// solves from throwing on a leg nobody is standing on.
+std::array<JointAngles, kNumLegs> quad_standing_pose_from(
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    float foot_radius, const ::hexa::config::CornerStandingPose& quad_standing,
+    const std::array<JointAngles, kNumLegs>& standing_pose);
 
 std::map<std::string, Vec3> nominal_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
@@ -361,7 +460,10 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<JointAngles, kNumLegs>& standing_pose,
     const std::array<JointAngles, kNumLegs>& folded_pose,
     const std::array<JointAngles, kNumLegs>& initialized_pose,
-    float coxa_to_bottom, float foot_radius);
+    float coxa_to_bottom, float foot_radius,
+    // Quadruped mode's stance, solved by the caller from quad_standing_pose.
+    // Its parked middle pair needs nothing here — that is folded_pose.
+    const std::array<JointAngles, kNumLegs>& quad_standing_pose);
 
 // Wire string for /gait/state.
 std::string state_value(EngineState s);

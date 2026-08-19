@@ -63,7 +63,13 @@ base:
 gait:
   bindings:
     btn_3: init
-    btn_4: record
+    # Stand up in quadruped mode: the middle pair stays folded and the four
+    # corners creep one leg at a time. The second half of the init button —
+    # btn_3 stands the robot up on six legs, this on four, and off the belly
+    # either one folds it. It takes gait mode's btn_4 because `record` only
+    # does anything in posture mode, where it keeps the same slot; bound here
+    # only, which is also what confines it to gait mode.
+    btn_4: quadruped_mode
     btn_5: gait_prev
     btn_6: gait_next
     btn_7: height_up

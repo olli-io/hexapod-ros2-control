@@ -16,6 +16,7 @@ PipelineConfig PipelineConfig::baked() {
   c.coxa_to_bottom = cfg::kCoxaToBottom;
   c.foot_radius = cfg::kFootRadius;
   c.standing_pose = cfg::kStandingPose;
+  c.quad_standing_pose = cfg::kQuadStandingPose;
   c.folded_pose = cfg::kFoldedPose;
   c.initialized_pose = cfg::kInitializedPose;
   // tuning.yaml

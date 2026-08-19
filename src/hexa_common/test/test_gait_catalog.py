@@ -10,13 +10,14 @@ value here, change it there too.
 from hexa_common.gait_catalog import GAIT_DESCRIPTORS, GaitDescriptor
 
 
-def test_catalog_has_the_five_registered_gaits():
+def test_catalog_has_the_registered_gaits():
     assert set(GAIT_DESCRIPTORS) == {
         "tripod",
         "surf",
         "tetrapod",
         "crawl",
         "ripple",
+        "quadruped_wave",
     }
 
 
@@ -32,6 +33,7 @@ def test_duty_factors():
     assert GAIT_DESCRIPTORS["tetrapod"].duty_factor == 2.0 / 3.0
     assert GAIT_DESCRIPTORS["crawl"].duty_factor == 2.0 / 3.0
     assert GAIT_DESCRIPTORS["ripple"].duty_factor == 5.0 / 6.0
+    assert GAIT_DESCRIPTORS["quadruped_wave"].duty_factor == 3.0 / 4.0
 
 
 def test_unstable_flags():
@@ -40,3 +42,4 @@ def test_unstable_flags():
     assert GAIT_DESCRIPTORS["tetrapod"].unstable is False
     assert GAIT_DESCRIPTORS["crawl"].unstable is True
     assert GAIT_DESCRIPTORS["ripple"].unstable is False
+    assert GAIT_DESCRIPTORS["quadruped_wave"].unstable is False

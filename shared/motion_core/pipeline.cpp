@@ -14,12 +14,13 @@ namespace hexa::pipeline {
 
 namespace {
 
-// STAND swaps immediately; the others latch a pending change the engine commits
-// once it has settled back to a stand.
+// FOLDED and FAULT swap the strategy the next stand will come up on, leg set
+// included; STAND swaps immediately; the others latch a pending change the
+// engine commits once it has settled back to a stand.
 bool gait_switch_allowed(hexa::gait::EngineState s) {
   using E = hexa::gait::EngineState;
-  return s == E::STAND || s == E::GAIT || s == E::SETTLING ||
-         s == E::RESEATING;
+  return s == E::FOLDED || s == E::FAULT || s == E::STAND || s == E::GAIT ||
+         s == E::SETTLING || s == E::RESEATING;
 }
 
 // Every state may hold the rail closed except a latched FAULT, where the servos
@@ -46,10 +47,14 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
           cfg.standing_pose)),
       nominal_stance_(
           hexa::gait::nominal_stance_from(cfg.leg_specs, standing_pose_)),
+      folded_pose_(cfg.folded_pose),
       engine_(hexa::gait::make_default_engine(
           cfg.default_gait, cfg.leg_specs, cfg.engine, standing_pose_,
           cfg.folded_pose, cfg.initialized_pose, cfg.coxa_to_bottom,
-          cfg.foot_radius)),
+          cfg.foot_radius,
+          hexa::gait::quad_standing_pose_from(
+              cfg.leg_specs, cfg.coxa_to_bottom, cfg.foot_radius,
+              cfg.quad_standing_pose, standing_pose_))),
       caps_(cfg.caps),
       control_(cfg.control, cfg.caps, nominal_stance_,
                hexa::gait::build_leg_contexts_from(cfg.leg_specs,
@@ -96,7 +101,19 @@ int Pipeline::compose_gait(
   for (int i = 0; i < hexa::kNumLegs; ++i) {
     const hexa::config::LegSpec& spec =
         leg_specs_[static_cast<std::size_t>(i)];
-    const hexa::Vec3& target = out.at(hexa::gait::LEG_NAMES[i]).foot_target;
+    const hexa::gait::LegOutput& leg = out.at(hexa::gait::LEG_NAMES[i]);
+    if (leg.parked) {
+      // Straight from the pose, bypassing both apply_body_pose and IK. Exact
+      // (the foot target IS this pose's FK, so the round trip is identity), and
+      // the only thing stopping a 50 mm support shift from dragging a leg that
+      // is rigidly held in the air.
+      const std::size_t idx = static_cast<std::size_t>(i);
+      theta_[i * 3 + 0] = folded_pose_[idx][0];
+      theta_[i * 3 + 1] = folded_pose_[idx][1];
+      theta_[i * 3 + 2] = folded_pose_[idx][2];
+      continue;
+    }
+    const hexa::Vec3& target = leg.foot_target;
     const hexa::Vec3 in_offset = hexa::apply_body_pose(target, body_pose);
     const hexa::Vec3 in_leg = hexa::body_to_leg(in_offset, spec);
     try {
@@ -126,7 +143,25 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   r.mode_changed = jo.mode_changed;
   r.mode = joystate_.mode;
 
-  // FOLDED -> INITIALIZE, or from anywhere else a queued fold request.
+  // Ahead of the init edge: an init request carries its leg set as the gait it
+  // publishes, and start_initialize() reads the leg set off the strategy that is
+  // applied by then.
+  if (jo.has_gait_select) {
+    r.has_gait_select = true;
+    std::string name(jo.gait_select);
+    r.gait_select = name;
+    if (gait_switch_allowed(engine_->state()) && engine_->set_strategy(name)) {
+      control_.set_gait(name);
+      joycfg_.gait_linear_max = caps_.linear_max(name);
+      joycfg_.gait_angular_z_max = caps_.angular_max(name);
+      r.gait_accepted = true;
+      r.gait_linear_max = joycfg_.gait_linear_max;
+      r.gait_angular_z_max = joycfg_.gait_angular_z_max;
+    }
+  }
+
+  // FOLDED -> INITIALIZE, on the leg set the applied strategy walks, or from
+  // anywhere else a queued fold request.
   r.init_request = jo.init_request;
   if (jo.init_request) {
     if (engine_->start_initialize()) {
@@ -148,22 +183,6 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
     r.has_animation_name = true;
     r.animation_name = std::string(jo.animation_name);
     r.animation_accepted = posture_.set_animation_mode(jo.animation_name);
-  }
-
-  // On accept, the control accel cap and the stick scale track the new gait.
-  if (jo.has_gait_select) {
-    r.has_gait_select = true;
-    std::string name(jo.gait_select);
-    r.gait_select = name;
-    if (gait_switch_allowed(engine_->state())) {
-      engine_->set_strategy(name);
-      control_.set_gait(name);
-      joycfg_.gait_linear_max = caps_.linear_max(name);
-      joycfg_.gait_angular_z_max = caps_.angular_max(name);
-      r.gait_accepted = true;
-      r.gait_linear_max = joycfg_.gait_linear_max;
-      r.gait_angular_z_max = joycfg_.gait_angular_z_max;
-    }
   }
 
   const hexa::gait::EngineState st = engine_->state();
@@ -205,6 +224,9 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   std::tie(cmd_x, cmd_y, cmd_z) =
       engine_->shape_reversal(in.dt, {cmd_x, cmd_y}, cmd_z);
 
+  // The engine's applied leg set, so the envelope stops pricing the middles'
+  // lever arms the moment the stand ladder commits one — and not before.
+  control_.set_leg_set(engine_->leg_set());
   const auto [vx, vy, wz] = control_.shape(cmd_x, cmd_y, cmd_z, st, in.dt);
   const std::map<std::string, hexa::gait::LegOutput> out =
       engine_->update(in.dt, {vx, vy}, wz);
@@ -217,8 +239,8 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
                                                  jo.pose_yaw});
   const bool walking = cmd_is_walking(cmd_x, cmd_y, cmd_z);
   const hexa::posture::BodyPose body_pose = posture_.update(
-      out, engine_->master_phase(), walking, st, engine_->strategy_name(), in.dt,
-      static_cast<float>(in.now_us) * 1e-6f);
+      out, engine_->master_phase(), walking, st, engine_->strategy_name(),
+      engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f);
 
   r.unreachable = compose_gait(out, body_pose);
   std::copy(std::begin(theta_), std::end(theta_), std::begin(r.theta));

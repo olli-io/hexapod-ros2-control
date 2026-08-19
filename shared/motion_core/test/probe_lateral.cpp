@@ -76,7 +76,7 @@ void run_scenario(float vx_frac, float vy_frac, const char* label) {
   for (int i = 0; i < 40000 && engine->state() != EngineState::STAND; ++i) {
     out = engine->update(dt, {0.0f, 0.0f}, 0.0f);
     posture.update(out, engine->master_phase(), false, engine->state(),
-                   engine->strategy_name(), dt, t);
+                   engine->strategy_name(), hexa::gait::LegSet::HEXAPOD, dt, t);
     t += dt;
   }
 
@@ -92,7 +92,7 @@ void run_scenario(float vx_frac, float vy_frac, const char* label) {
     out = engine->update(dt, {vx, vy}, 0.0f);
     const hexa::posture::BodyPose pose =
         posture.update(out, engine->master_phase(), true, st,
-                       engine->strategy_name(), dt, t);
+                       engine->strategy_name(), hexa::gait::LegSet::HEXAPOD, dt, t);
     t += dt;
 
     if (!prev_targets.empty()) {

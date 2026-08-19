@@ -77,8 +77,10 @@ from .web_mapping import (
 PUBLISH_RATE_HZ = 60.0
 TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 
+# "folded" and "fault" swap the strategy the next stand comes up on, leg
+# set included; the rest are as in hexa_teleop's copy.
 _GAIT_SWITCH_STATES: frozenset[str] = frozenset(
-    {"stand", "gait", "settling", "reseating"}
+    {"folded", "fault", "stand", "gait", "settling", "reseating"}
 )
 
 
@@ -298,9 +300,6 @@ class WebTeleopNode(Node):
         if self._arbitration_enabled and not web_owns:
             return
 
-        if out.init_request:
-            self.get_logger().info("webapp init — publishing /gait/initialize")
-            self._pub_init.publish(Empty())
         if out.animation_name is not None:
             self.get_logger().info(
                 f"publishing /animation/mode={out.animation_name!r}"
@@ -319,6 +318,15 @@ class WebTeleopNode(Node):
                     f"gait switch to {out.gait_select!r} dropped — "
                     f"engine in {self._latest_gait_state!r} (gait locked)"
                 )
+        # After the gait publish, not before: an init request carries its leg
+        # set as the gait it publishes, and hexa_locomotion reads the leg set
+        # off the strategy that is applied by the time it starts the ladder.
+        if out.init_request:
+            which = "quadruped" if out.init_quadruped else "hexapod"
+            self.get_logger().info(
+                f"webapp init ({which}) — publishing /gait/initialize"
+            )
+            self._pub_init.publish(Empty())
 
         stamp = self.get_clock().now().to_msg()
         twist = Twist()

@@ -61,7 +61,9 @@ joints:
     velocity: 7.25
 
 folded_pose:
-  # Joint angles held at power-up, before any commanded motion.
+  # Joint angles held at power-up, before any commanded motion. Also where the
+  # middle pair is parked while quadruped mode walks the corners — the same
+  # pose, reached and left through the same initialized_pose rung below.
   coxa:
     l_front_deg: 60 # 30° mount + 60° coxa → leg points at body-yaw 90°
     l_middle_deg: 0 # 90° mount + 0° coxa → leg points straight outward
@@ -79,3 +81,4 @@ initialized_pose:
     above_horizontal_deg: 90
   tibia:
     interior_deg: 70
+

@@ -45,7 +45,7 @@ Ground rules for AI assistants working in this hexapod ROS2 codebase.
 
 Use exactly these names in identifiers, log messages, and docstrings — not the literature synonyms:
 
-- **stance** — foot on ground (not *support*, *retraction*, *power stroke*).
+- **stance** — foot on ground (not *support* as a synonym for a leg's phase, *retraction*, *power stroke*). *support polygon*, *support centroid* and *support shift* are correct — they name the ground the feet enclose, not the phase one leg is in.
 - **swing** — foot in air (not *transfer*, *protraction*, *recovery*).
 - **lift-off** — stance → swing transition.
 - **touchdown** — swing → stance transition.
@@ -61,6 +61,10 @@ Use exactly these names in identifiers, log messages, and docstrings — not the
 - **gait-active** — `/cmd_vel` is non-zero; posture animations run on top of the walking gait.
 - **settle** — how the robot stops: the gait keeps running at an exactly zero command, so every AEP collapses onto the leg's nominal stance and the walk re-plants its own feet. Ends when all six are home. Not *pause*, *stop sequence*, *re-plant*.
 - **reseat** — the mirrored-pair re-plant ladder. Three callers: a body-height change from a stand, a settle on a gait too slow (or, like crawl, unable) to walk its own legs home, and a command withdrawn mid-engagement (the engagement cannot re-plant its own feet at a zero command).
+- **leg set** — which legs a strategy walks: `hexapod` (all six) or `quadruped` (the four corners, middle pair parked). A property of the **strategy**, so it rides `/cmd_gait` and needs no second channel. Not *leg subset*, *active legs*.
+- **park** — the middle pair held at the **folded** pose while the corners walk. It is never lifted there and never placed back down: the pair powers up folded, the stand ladder leaves it alone, and the fold ladder finds it already home. Neither stance nor swing; a parked leg is emitted with `parked = true` and its `stance` flag is meaningless. Not *tuck*, *stow* — **fold** stays reserved for the whole-robot belly rest.
+- **quadruped mode** — the operator-facing mode: quadruped leg set + the `quadruped_wave` gait + the `support_shift` animation. The leg set is chosen **from the belly and nowhere else**: **start** stands the robot up on six legs, **select** on four, and off the belly either button folds it. Between the two stands the ladder is the same one, minus the middle pair's rungs. Animation mode is unavailable while quadruped (every animation is written for six legs); gait and posture stay available.
+- **support shift** — the posture animation that carries the body into the next support triangle before the foot leaves it. Not *CoM shift*, *weight transfer*.
 - **reversal ladder** — how the robot turns around: the walk is held at the knee until the gait has all six feet down, the phase circle is mirrored there, and the command released. Not *flip*, *turnaround*.
 - **mirror** — the phase circle reflected about the swing end, so every stance leg's progress `s` becomes `1 - s` and its remaining runway matches where its foot actually stands. Only exact with all six planted *and* at a stride the legs both have been and will be walking. Not *phase flip*, *phase reverse*.
 - **knee** — the leg speed at which `derive_cycle_time` stops stretching the cycle and starts shortening the stride: `stride_length · swing_end / (max_swing_time · (1 - swing_end))`. Above it the phase clock is locked to distance travelled and a foot sits exactly where its stance progress says; below it the clock outruns the travel and the feet bunch toward nominal. Not *saturation point*.

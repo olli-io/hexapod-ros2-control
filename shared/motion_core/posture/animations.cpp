@@ -30,6 +30,26 @@ BodyPose GaitSway::eval(const AnimationContext& ctx) const {
   return BodyPose{k * cx, k * cy};
 }
 
+// The one animation with no `walking` gate, and the one that is not an
+// animation in the decorative sense: on four feet the ladders lift a leg at a
+// zero command too — a settle walking its own feet home, a reseat re-planting
+// them — and every one of those lift-offs needs the body off the foot first.
+// Gated, the crossfade would fade the robot's balance out the moment the stick
+// came back to centre. Standing still it costs nothing: with every phase at
+// zero the target is the plain stance centroid.
+BodyPose SupportShift::eval(const AnimationContext& ctx) const {
+  if (!ctx.anticipated_support_xy.has_value()) {
+    return IDENTITY;
+  }
+  if (gain_ == 0.0f) {
+    return IDENTITY;
+  }
+  // No sign flip: apply_body_pose computes p_nominal - pose.xy, so a BodyPose
+  // carrying the target point in the foot frame IS the body standing there.
+  const auto [cx, cy] = *ctx.anticipated_support_xy;
+  return BodyPose{gain_ * cx, gain_ * cy};
+}
+
 BodyPose GaitBounce::eval(const AnimationContext& ctx) const {
   if (!ctx.walking || !ctx.swing_lift_z.has_value()) {
     return IDENTITY;

@@ -89,17 +89,32 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   // triples (and validates them against the joint limits). The splay stays as
   // configured — the left leg's, positive outward — and standing_pose_from owns
   // the rear/right negation, so the sign rule lives in exactly one place.
-  const YAML::Node sp = g["default_standing_pose"];
-  cfg.standing_pose.body_height = f(sp["body_height"]);
-  for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
-    const YAML::Node grp = sp[std::string(hexa::LEG_GROUP_NAMES[gi])];
-    cfg.standing_pose.groups[gi] = {
+  const auto leg_group_stance = [&](const YAML::Node& grp) {
+    return hexa::config::LegGroupStance{
         f(grp["tip_reach"]),
         static_cast<float>(to_urdf_rad("coxa", grp["coxa_deg"].as<double>()))};
+  };
+  {
+    const YAML::Node sp = g["default_standing_pose"];
+    cfg.standing_pose.body_height = f(sp["body_height"]);
+    for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
+      cfg.standing_pose.groups[gi] =
+          leg_group_stance(sp[std::string(hexa::LEG_GROUP_NAMES[gi])]);
+    }
+  }
+  {
+    // The corners only: quadruped mode's middle pair does not stand, it is held
+    // at folded_pose, so the block has no middle entry to read.
+    const YAML::Node sp = g["quad_standing_pose"];
+    cfg.quad_standing_pose.body_height = f(sp["body_height"]);
+    cfg.quad_standing_pose.front = leg_group_stance(sp["front"]);
+    cfg.quad_standing_pose.rear = leg_group_stance(sp["rear"]);
   }
 
   // ── the two belly-rest poses (geometry.yaml folded_pose /
   // initialized_pose, port of gen_config.rest_pose) ──
+  // folded is also where quadruped mode parks the middle pair, and initialized
+  // the rung it climbs through — neither needs a pose of its own.
   // femur/tibia uniform; coxa front/rear/middle by symmetry in degrees, then
   // rear negates and right negates before the deg->rad conversion. Both poses
   // share the schema, so one lambda reads either.
@@ -148,6 +163,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.touchdown_velocity = f(g["touchdown_velocity"]);
   e.touchdown_probe_fraction = f(g["touchdown_probe_fraction"]);
   e.swing_phase_margin = f(g["swing_phase_margin"]);
+  e.quadruped_swing_phase_margin = f(g["quadruped_swing_phase_margin"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
   e.settle_debounce_delay = f(g["settle"]["debounce_delay"]);
@@ -162,6 +178,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.reseat_pair_swing_time = f(g["reseat"]["pair_swing_time"]);
   e.reseat_pair_dwell_time = f(g["reseat"]["pair_dwell_time"]);
   e.reseat_swing_clearance = f(g["reseat"]["swing_clearance"]);
+  e.quadruped_shift_time = f(g["quadruped"]["shift_time"]);
 
   // ── velocity caps (tuning.yaml gait_node, port of load_velocity_caps) ──
   // Duty factor is not in YAML; enumerate the linked firmware gait registry so a
@@ -182,13 +199,17 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   cfg.caps.angular_max_by_gait.clear();
   cfg.caps.yaw_bias_by_gait.clear();
   for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
-    const float duty = factory()->duty_factor();
+    const auto strategy = factory();
+    const float duty = strategy->duty_factor();
     // The cap is stride_length covered in one stance, so it keys off the
-    // realized swing/stance split, not the nominal duty factor. Must stay
-    // identical to gen_config.py's velocity_caps(), or the loader-vs-baked
-    // parity test in test_config_loader.cpp fails.
-    const float swing_end =
-        hexa::gait::swing_end_phase(duty, e.swing_phase_margin);
+    // realized swing/stance split, not the nominal duty factor — and off the
+    // margin the gait's own LEG SET walks on. Must stay identical to
+    // gen_config.py's velocity_caps(), or the loader-vs-baked parity test in
+    // test_config_loader.cpp fails.
+    const float swing_end = hexa::gait::swing_end_phase(
+        duty, hexa::gait::swing_phase_margin_for(
+                  strategy->leg_set(), e.swing_phase_margin,
+                  e.quadruped_swing_phase_margin));
     const float linear_max =
         stride * swing_end / (min_swing * (1.0f - swing_end));
     cfg.caps.linear_max_by_gait[gait_name] = linear_max;
@@ -232,6 +253,9 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.gait_bounce_step_height_ref = f(p["gait_bounce_step_height_ref"]);
   ps.support_centroid_tau = f(p["support_centroid_tau"]);
   ps.swing_lift_tau = f(p["swing_lift_tau"]);
+  ps.support_shift_gain = f(p["support_shift_gain"]);
+  ps.support_shift_lead = f(p["support_shift_lead"]);
+  ps.support_shift_tau = f(p["support_shift_tau"]);
   ps.gait_activation_slew_rate = f(p["gait_activation_slew_rate"]);
   ps.pose_filter_tau = f(p["pose_filter_tau"]);
   ps.pose_filter_damping_ratio = f(p["pose_filter_damping_ratio"]);

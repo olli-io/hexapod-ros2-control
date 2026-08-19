@@ -160,7 +160,11 @@ Properties of the gait cycle (the synchronized motion of all six legs):
   lift-off; splitting it across both ends would give an identical
   stance-count profile, since shifting the window inside the cycle only
   relabels master phase. It costs top speed: stance grows, so the same
-  stride takes longer to cover.
+  stride takes longer to cover. It is configured **per leg set**, not per
+  gait: on six feet the overlap is insurance against jitter, on four it is
+  the window the support shift has to carry the body across into the next
+  triangle, and it is worth much more of the top speed there
+  (`swing_phase_margin` 0.12 vs `quadruped_swing_phase_margin` 0.25).
 - **Duty factor** (β) — fraction of the cycle a leg spends in stance.
   Higher β means more legs on the ground at any instant — more stable,
   but slower: the body advances only during stance, and per-leg swing
@@ -190,6 +194,58 @@ on flat ground. Tripod (3 legs down) is statically stable only when the
 three stance legs form a triangle enclosing the CoG projection — which
 our standard leg layout achieves, but with a smaller margin than the
 other two gaits.
+
+### Quadruped mode
+
+**Quadruped mode** parks the middle pair (`l_middle` / `r_middle`) in the air and
+walks the four corner legs one at a time. The vocabulary:
+
+- **leg set** — which legs the strategy walks. A property of the strategy, so
+  selecting the `quadruped_wave` gait *is* selecting the mode.
+- **park** — a leg held clear of the walk. Neither stance nor swing: it carries
+  no weight and takes no phase. The parked pose is the **folded** pose
+  (`geometry.yaml folded_pose`) — the same angles the robot powers up in — and
+  the middle pair never leaves it. There is no park move and no unpark move: the
+  mode is chosen from the belly, where that pair is already folded, and the
+  stand ladder simply skips it. Leaving the mode is the fold, which finds it
+  already home.
+- **choosing the set** — from the belly and nowhere else. Start stands the robot
+  up on six legs, select on four; off the belly either one is a fold, which is
+  the only way between the two. The engine refuses a gait whose leg set differs
+  from the one it is standing on, so nothing downstream has to guard against a
+  middle pair that is in the wrong place.
+
+The gait is a lateral-sequence creep at duty factor 3/4. Lift-offs are a quarter
+cycle apart and the swing window is
+`0.25 * (1 - quadruped_swing_phase_margin) = 0.1875`, so exactly one foot is ever
+airborne and every handover has a 0.0625-cycle window with all four down. Because a leg lifts at master phase `pymod(-offset, 1)`, the
+lateral order (left rear, left front, right rear, right front) needs the offsets
+run the other way: `l_rear 0, r_front 1/4, r_rear 1/2, l_front 3/4`. The naive
+reading gives the diagonal order, whose worst static margin is negative on this
+chassis.
+
+**Why the body has to move.** With four feet down the support polygon is a convex
+quadrilateral, and lifting one leg leaves one of its four "drop a vertex"
+triangles. Those four triangles intersect only where the diagonals cross — a
+single point, an intersection with empty interior. So no fixed body position is
+inside all four, and a four-legged creep cannot be statically stable at a standing
+posture. The body must carry itself into the next triangle before the foot leaves
+it. That is the **support shift** animation: a stance-leg centroid weighted by
+each leg's time to lift-off, so the target is always a positive-weight convex
+combination of the grounded feet and therefore always strictly inside the current
+support polygon.
+
+Two things shape how the body actually rides that target. `support_shift_gain`
+scales it: below 1 the body stops short of the point and stands nearer the middle
+of the four-foot rectangle, which is less body movement and less static margin —
+one knob, both effects. And the target is low-passed **in polar**, not per axis:
+it walks a rough circle around the body as each handover passes it to the next
+triangle, and lagging `x` and `y` independently cuts every one of those turns
+into a corner (both axes cross their midpoints together, collapsing the reach to
+`1/sqrt(2)` at the crossing). Lagged in polar the radius holds while the angle
+sweeps, so the body arcs through the handover — which is what makes a lag slow
+enough to be smooth usable at all. `PoseSmoother` eases the commanded body pose
+the same way and for the same reason.
 
 ## 5. Cold start
 

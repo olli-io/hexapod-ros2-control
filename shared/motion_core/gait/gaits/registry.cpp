@@ -61,6 +61,25 @@ const PhaseOffsets& metachronal_offsets() {
   return offsets;
 }
 
+// Lateral-sequence creep on the four corner legs; the middle pair is parked.
+// A leg lifts at master pymod(-offset, 1), so the offsets run the mirror of the
+// lift order: left rear, left front, right rear, right front. Reading the table
+// as the lift order instead gives the diagonal sequence, whose static margin is
+// negative on this chassis. The middles are present at 0 only because
+// PhaseOffsets insists on all six — colliding with l_rear makes a missed
+// parked-leg filter fail loudly instead of walking a tucked leg.
+const PhaseOffsets& quadruped_wave_offsets() {
+  static const PhaseOffsets offsets({
+      {"l_rear", 0.0f},
+      {"r_front", 1.0f / 4.0f},
+      {"r_rear", 1.0f / 2.0f},
+      {"l_front", 3.0f / 4.0f},
+      {"l_middle", 0.0f},
+      {"r_middle", 0.0f},
+  });
+  return offsets;
+}
+
 // Shared by every strategy. Swing is [0, stride.swing_end) on swing_arc; stance
 // is the rest, a quartic Bezier from AEP toward PEP at constant tip velocity.
 Vec3 phased_foot_target(float phase, const StrideParams& stride,
@@ -153,6 +172,25 @@ class Ripple : public Strategy {
   }
 };
 
+// The four corners creeping one leg at a time. beta = 3/4 puts the lift-offs a
+// quarter cycle apart, which is more than the 0.22 swing window, so exactly one
+// foot is ever airborne and every handover has all four down for 0.03 of a
+// cycle. Not the six-leg `tetrapod` gait, which is a different animal: there
+// "tetrapod" counts feet on the ground, here it counts legs.
+class QuadrupedWave : public Strategy {
+ public:
+  const PhaseOffsets& phase_offsets() const override {
+    return quadruped_wave_offsets();
+  }
+  float duty_factor() const override { return 3.0f / 4.0f; }
+  bool unstable() const override { return false; }
+  LegSet leg_set() const override { return LegSet::QUADRUPED; }
+  Vec3 foot_target(float phase, const StrideParams& stride,
+                   const LegContext& leg) const override {
+    return phased_foot_target(phase, stride, leg);
+  }
+};
+
 }  // namespace
 
 const std::map<std::string, StrategyFactory>& strategies() {
@@ -162,6 +200,7 @@ const std::map<std::string, StrategyFactory>& strategies() {
       {"tetrapod", [] { return std::make_unique<Tetrapod>(); }},
       {"crawl", [] { return std::make_unique<Crawl>(); }},
       {"ripple", [] { return std::make_unique<Ripple>(); }},
+      {"quadruped_wave", [] { return std::make_unique<QuadrupedWave>(); }},
   };
   return registry;
 }

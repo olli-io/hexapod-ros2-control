@@ -41,6 +41,31 @@ web teleop and the firmware, so `hexa_description/config/tuning.yaml` owns
 them (`teleop_node` block), alongside the `posture_node` envelope each must
 stay inside. Velocity caps and the animation list come from the same file.
 
+## Quadruped mode (**select**, from the belly)
+
+**select** is the second half of the init button. From the folded state
+**start** stands the robot up on six legs and **select** stands it up on four:
+the middle pair stays folded where it powered up and the four corner legs creep
+one at a time, with the body carrying itself into the next support triangle
+before each foot leaves. Off the belly both buttons mean the same thing — fold —
+which is the only way between the two leg sets.
+
+- Both stands climb the same ladder (folded → initialized → standing); the
+  quadruped one just leaves out the middle pair's rungs. About two seconds
+  either way, during which a gait switch is refused.
+- **select** is bound only in the `gait` section, so it does nothing in posture
+  or animation mode, where it keeps its base `record` binding. Gait is the mode
+  the teleop boots into, so the cold start is covered.
+- The D-pad gait cycler is locked while quadruped: there is exactly one gait for
+  this leg set, and the engine refuses a switch to any other until the next fold.
+- Animation mode is unavailable while quadruped — every animation is written for
+  six legs. Gait and posture stay available.
+
+The mode rides `/cmd_gait` as the gait name `quadruped_wave`, which is
+deliberately absent from `gait_cycle` — the select init is the only way in. The
+engine reads the leg set off the strategy applied when `/gait/initialize`
+arrives, so the gait publish leads the init publish by design.
+
 ## Drive sticks (gait / animation mode)
 
 Both sticks can drive; neither is a strict subset of the other.

@@ -48,9 +48,10 @@ g::RestPoseMove make_unfold(const Ladder& l) {
   return g::RestPoseMove(l.folded, l.initialized, l.cfg.init_unfold_time);
 }
 
-g::InitializeController make_initialize(const Ladder& l) {
+g::InitializeController make_initialize(const Ladder& l,
+                                       g::LegSet set = g::LegSet::HEXAPOD) {
   return g::InitializeController(
-      l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
+      set, l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
       hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
       l.cfg.init_lift_body_time, l.cfg.init_unfold_time,
       l.cfg.init_place_clearance, l.cfg.init_swing_clearance, l.cfg.swing_width,
@@ -58,9 +59,10 @@ g::InitializeController make_initialize(const Ladder& l) {
       l.cfg.controller_dt);
 }
 
-g::FoldController make_fold(const Ladder& l) {
+g::FoldController make_fold(const Ladder& l,
+                            g::LegSet set = g::LegSet::HEXAPOD) {
   return g::FoldController(
-      l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
+      set, l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
       hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
       l.cfg.init_lift_body_time, l.cfg.init_unfold_time,
       l.cfg.init_swing_clearance, l.cfg.swing_width, l.cfg.touchdown_velocity,
@@ -612,5 +614,84 @@ TEST(FoldLadder, BodyRampMeetsTheFloorStationaryAtItsEnd) {
       << "peak speed";
   for (std::size_t i = 0; i < z.size(); ++i) {
     EXPECT_LE(z[i], contact_z() + kTol) << "body dipped past the floor at " << i;
+  }
+}
+
+// ── Quadruped: the same two ladders, minus the middle pair ──────────────────
+//
+// Quadruped mode powers up folded like everything else and simply leaves the
+// middle pair there, so both ladders drive the four corners around two legs
+// that never move. The rungs are what skips them; the pin is what holds them
+// through the unfold's chord, which has no idea they are sitting it out.
+
+TEST(QuadPairOrder, CoversTheFourCornersExactlyOnceAndNoMiddle) {
+  std::multiset<std::string> seen;
+  for (const auto& rung : g::pair_list(g::LegSet::QUADRUPED)) {
+    for (const auto& name : rung) seen.insert(name);
+  }
+  ASSERT_EQ(seen.size(), 4u);
+  for (const auto& name : g::PARKED_LEGS) {
+    EXPECT_EQ(seen.count(name), 0u) << name << " is parked, not a rung leg";
+  }
+  for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+    EXPECT_EQ(seen.count(name), 1u) << name << " is missing or listed twice";
+  }
+}
+
+TEST(QuadInitializeLadder, LeavesTheMiddlesFoldedAndStandsTheCornersUp) {
+  const Ladder l = baked();
+  auto init = make_initialize(l, g::LegSet::QUADRUPED);
+
+  std::map<std::string, g::LegOutput> out;
+  for (int i = 0; i < max_ticks(l) && !init.done(); ++i) {
+    out = init.update(kDt);
+    for (const auto& name : g::PARKED_LEGS) {
+      ASSERT_TRUE(out.at(name).parked) << name << " at tick " << i;
+      expect_near(out.at(name).foot_target, l.folded.at(name), name);
+    }
+  }
+  ASSERT_TRUE(init.done()) << "the quadruped ladder never finished";
+  for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+    expect_near(out.at(name).foot_target, l.nominal.at(name), name);
+    EXPECT_FALSE(out.at(name).parked) << name;
+  }
+}
+
+TEST(QuadInitializeLadder, LiftsOneDiagonalAtATime) {
+  const Ladder l = baked();
+  auto init = make_initialize(l, g::LegSet::QUADRUPED);
+
+  bool saw_swing = false;
+  for (int i = 0; i < max_ticks(l) && !init.done(); ++i) {
+    const auto out = init.update(kDt);
+    if (init.state() != g::InitializeState::PLACE_FEET) continue;
+    int swinging = 0;
+    for (const char* name : {"l_front", "r_front", "l_rear", "r_rear"}) {
+      if (!out.at(name).stance) ++swinging;
+    }
+    EXPECT_LE(swinging, 2) << "more than one diagonal airborne at tick " << i;
+    if (swinging > 0) saw_swing = true;
+  }
+  EXPECT_TRUE(saw_swing) << "PLACE_FEET never swung a corner";
+}
+
+TEST(QuadFoldLadder, LeavesTheMiddlesFoldedAndTucksTheCorners) {
+  const Ladder l = baked();
+  auto fold = make_fold(l, g::LegSet::QUADRUPED);
+
+  std::map<std::string, g::LegOutput> out;
+  for (int i = 0; i < max_ticks(l) && !fold.done(); ++i) {
+    out = fold.update(kDt);
+    for (const auto& name : g::PARKED_LEGS) {
+      ASSERT_TRUE(out.at(name).parked) << name << " at tick " << i;
+      expect_near(out.at(name).foot_target, l.folded.at(name), name);
+    }
+  }
+  ASSERT_TRUE(fold.done()) << "the quadruped fold never finished";
+  // Every leg ends folded, which is what makes the folded state one pose
+  // whichever leg set walked into it.
+  for (const auto& name : g::LEG_NAMES) {
+    expect_near(out.at(std::string(name)).foot_target,
+                l.folded.at(std::string(name)), std::string(name));
   }
 }

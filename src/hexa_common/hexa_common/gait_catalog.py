@@ -30,6 +30,11 @@ class GaitDescriptor:
     name: str
     duty_factor: float
     unstable: bool
+    # Which legs the gait walks: "hexapod" (all six) or "quadruped" (the four
+    # corners, middle pair parked). Here as well as on the C++ strategy class
+    # because the swing phase margin — and so the derived velocity cap in
+    # limits.py — is per leg set.
+    leg_set: str = "hexapod"
 
 
 # Registry: name → descriptor. Adding a gait means adding an entry here and
@@ -41,4 +46,9 @@ GAIT_DESCRIPTORS: dict[str, GaitDescriptor] = {
     "tetrapod": GaitDescriptor("tetrapod", 2.0 / 3.0, False),
     "crawl": GaitDescriptor("crawl", 2.0 / 3.0, True),
     "ripple": GaitDescriptor("ripple", 5.0 / 6.0, False),
+    # Quadruped leg set: the four corners creep one leg at a time while the
+    # middle pair is parked. Deliberately absent from every gait_cycle — the
+    # teleop select toggle is the only way in. Not the six-leg "tetrapod" above.
+    "quadruped_wave": GaitDescriptor("quadruped_wave", 3.0 / 4.0, False,
+                                     "quadruped"),
 }
