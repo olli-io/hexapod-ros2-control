@@ -180,6 +180,31 @@ float derive_cycle_time(float max_leg_v, float stride_length,
 
 Vec3 live_aep(const Vec3& nominal, const Vec3& stride_vec);
 
+// How far a planted foot may drift from its leg's nominal stance. `band` is the
+// AEP..PEP envelope a steady walk rides exactly; `ceiling` is the hard limit.
+// Between them the outward rate eases to zero, where a hard clip would kink the
+// foot target.
+struct StanceBand {
+  Vec3 nominal = Vec3::Zero();
+  float band = 0.0f;
+  float ceiling = 0.0f;
+};
+
+// Ease the outward part of one stance step to zero as the foot leaves its band.
+// Inward and tangential motion is untouched, so a leg carried out recovers at
+// full rate the moment the command turns: a wall, not a spring.
+//
+// The gain is 1 with zero slope at `band` — ordinary walking rides exactly there
+// at AEP and PEP — and 0 at `ceiling`, which the foot can therefore never pass. It
+// shapes the *increment*, never the accumulated state: re-clipping the state every
+// tick would creep the foot inward even at zero velocity.
+//
+// Shared, because the walk is not the only thing that carries a planted foot at
+// the commanded velocity: the engagement ladder does too, and a command turned
+// under it walks a just-landed foot straight back out past its own touchdown.
+std::pair<float, float> ease_outward(float e_x, float e_y, float d_x, float d_y,
+                                     float band, float ceiling);
+
 int identity_y_sign(const Vec3& nominal_stance);
 
 // Quintic smoothstep: zero slope and curvature at both ends.

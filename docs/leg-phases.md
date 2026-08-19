@@ -96,7 +96,9 @@ engagement ladder, which is one whole cycle long and so is where a short
 drive on a slow gait usually ends — goes to the reseat too. The
 engagement carries its planted feet at the commanded velocity, so a zero
 command only freezes them where they were; it has no way to walk them
-home, and the ladder is what puts them back.
+home, and the ladder is what puts them back. A command *withdrawn*, that
+is. A command merely turned around is not a release, however close to
+zero the velocity shaper takes it on the way — see below.
 
 ### Reversing
 
@@ -141,6 +143,38 @@ for its own shorter stride, but the walk being asked for is a longer one, so the
 reflection would over-credit them just the same, and its excursions are smaller
 in proportion anyway. Neither are crawl and surf, whose swings run end to end so
 that all six feet are never down at once.
+
+Not held is not the same as not noticed, and the difference matters most before
+the walk has started. The velocity shaper slews the commanded velocity as a
+vector, so a stick turned around drags the command straight through zero and
+leaves it inside the zero tolerance for a tenth of a second on a tripod and four
+tenths on a ripple. Read as a released stick that is a stop: in the walk it bleeds
+a little speed, and in the engagement it re-plants the robot outright, one whole
+reseat ladder and a fresh engagement to resume the other way. So the ladder
+latches every reversal it recognises, including the ones it declines to hold, and
+the engine asks it rather than the command whether the stick was let go.
+
+The ladder therefore spans the engagement as well as the walk. It holds there —
+the engagement re-plans off the live command every tick, so a hold at the knee
+simply walks that ladder out at the knee — but it cannot reflect there: the
+engagement runs its own master clock, and the handoff into the walk reseeds the
+gait clock the reflection acts on. The hold carries across the handoff and the
+reflection lands on the other side.
+
+Not at the walk's first all-down window, though, on any gait but a tripod. The
+engagement eases its body velocity in under a smoothstep whose window outlasts the
+first touchdowns everywhere else, and a foot that landed under a half-open
+envelope has covered less ground than its phase has spent — a third of a stride on
+a ripple's rear leg, which is exactly the over-credit the whole ladder exists to
+avoid. Those legs need one swing under the walk to square up, and the reflection
+waits for the last of them. A tripod lands every leg on the window exactly and
+waits for nothing.
+
+A turn the ladder declines is absorbed by the engagement instead, which is why
+every planted foot there rides the same excursion wall the walk's do: a foot that
+has just landed on the old AEP starts the turn already at what has become its PEP,
+and unbounded it would walk another whole stride the same way, half as far again
+as the leg can reach.
 
 ## 3. Cycle-level parameters
 
@@ -201,7 +235,7 @@ other two gaits.
 walks the four corner legs one at a time. The vocabulary:
 
 - **leg set** — which legs the strategy walks. A property of the strategy, so
-  selecting one of the four-corner gaits (`quad_walk`, `quad_gallop`) *is*
+  selecting one of the four-corner gaits (`quad_walk`, `quad_canter`) *is*
   selecting the mode.
 - **park** — a leg held clear of the walk. Neither stance nor swing: it carries
   no weight and takes no phase. The parked pose is the **folded** pose
@@ -228,7 +262,7 @@ differ only in footfall order, and because a leg lifts at master phase
   `l_rear 0, r_front 1/4, r_rear 1/2, l_front 3/4`. Reading that table as the
   lift order instead gives the diagonal sequence, whose worst static margin is
   negative on this chassis.
-- **`quad_gallop`** — the perimeter sequence (right front, left front, left
+- **`quad_canter`** — the perimeter sequence (right front, left front, left
   rear, right rear), round the chassis rather than up one side, so the two fores
   lift back to back. Offsets `r_front 0, r_rear 1/4, l_rear 1/2, l_front 3/4`.
 

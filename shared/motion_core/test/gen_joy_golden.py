@@ -39,7 +39,7 @@ GAITS = [
 # one, so no duty factor here feeds the stick caps.
 QUAD_GAITS = [
     ("quad_walk", 3.0 / 4.0, False),
-    ("quad_gallop", 3.0 / 4.0, False),
+    ("quad_canter", 3.0 / 4.0, False),
 ]
 
 DT = 0.02  # matches the firmware tick / teleop_joy PUBLISH_RATE_HZ

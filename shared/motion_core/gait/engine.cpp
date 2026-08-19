@@ -63,31 +63,6 @@ std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
   return {cfg.min_swing_time * scale, cfg.max_swing_time * scale};
 }
 
-// Ease the outward part of one stance step to zero as the anchor leaves its band.
-// Inward and tangential motion is untouched, so a leg carried out recovers at
-// full rate the moment the command turns: a wall, not a spring.
-//
-// The gain is 1 with zero slope at `band` — ordinary walking rides exactly there
-// at AEP and PEP — and 0 at `ceiling`, which the anchor can therefore never
-// pass. It shapes the *increment*, never the accumulated state: re-clipping the
-// state every tick would creep the anchor inward even at zero velocity.
-std::pair<float, float> ease_outward(float e_x, float e_y, float d_x, float d_y,
-                                     float band, float ceiling) {
-  const float m = std::hypot(e_x, e_y);
-  if (m <= band || ceiling <= band) {
-    return {d_x, d_y};
-  }
-  const float u_x = e_x / m;
-  const float u_y = e_y / m;
-  const float radial = d_x * u_x + d_y * u_y;
-  if (radial <= 0.0f) {
-    return {d_x, d_y};  // heading back toward nominal
-  }
-  const float gain =
-      1.0f - ease5(std::min((m - band) / (ceiling - band), 1.0f));
-  const float blocked = (1.0f - gain) * radial;
-  return {d_x - blocked * u_x, d_y - blocked * u_y};
-}
 }  // namespace
 
 StanceIntegrator::StanceIntegrator() {
@@ -264,6 +239,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
   for (const auto& n : LEG_NAMES) {
     last_stance_[n] = true;
     held_down_[n] = false;
+    on_schedule_[n] = true;
   }
 }
 
@@ -327,8 +303,19 @@ std::tuple<float, float, float> Engine::shape_reversal(
   in.applied_omega = applied_omega_;
   in.request_xy = v_body_xy;
   in.request_omega = omega_z;
-  in.walking = state_ == EngineState::GAIT;
+  // The engagement is a walk too: it re-plans off the live command every tick, so
+  // the ladder can hold it at the knee the same way it holds the gait. What it
+  // cannot do there is reflect, which is what `engaging` says.
+  in.walking =
+      state_ == EngineState::GAIT || state_ == EngineState::ENGAGING;
+  in.engaging = state_ == EngineState::ENGAGING;
+  // Left honest: quadruped SHIFTING stands on all four with nothing moved yet,
+  // and it is `engaging` that must stop the gate firing there, not a lie about
+  // where the feet are.
   in.all_planted = all_planted();
+  // GAIT only: inside the engagement the answer is the engagement's to give, and
+  // it gives it once, at the handoff.
+  in.feet_on_schedule = state_ == EngineState::GAIT && feet_on_schedule();
   in.can_mirror = clock_.has_value() &&
                   has_all_down_window(clock_->offsets(), swing_end, leg_set_);
   // The knee, read off the stride the *held* travel lays down rather than the
@@ -351,7 +338,10 @@ std::tuple<float, float, float> Engine::shape_reversal(
   in.dt = dt;
 
   const ReversalGate::Output out = reversal_.step(active_legs_, in);
-  if (out.mirror && in.walking && in.all_planted) {
+  // Spelled GAIT rather than in.walking, which now spans the engagement too: this
+  // reflects clock_, which the engagement does not run. The gate refuses to
+  // reflect while engaging; this is the belt to that braces.
+  if (out.mirror && state_ == EngineState::GAIT && in.all_planted) {
     clock_->mirror(swing_end);
   }
   return {out.v_xy.first, out.v_xy.second, out.omega};
@@ -447,9 +437,11 @@ void Engine::enter_fault() {
   for (const auto& n : LEG_NAMES) {
     last_stance_[n] = true;
     held_down_[n] = false;
+    on_schedule_[n] = true;
   }
   cmd_zero_elapsed_ = 0.0f;
   cmd_gain_ = 1.0f;
+  reversal_.reset();
   pending_fold_ = false;
   pending_strategy_name_.reset();
   // The folded baseline is a six-leg pose, so the leg set has to come back with
@@ -578,7 +570,14 @@ std::map<std::string, LegOutput> Engine::update(
   // slow gait's derated axis that hold sits below the tolerance, and reading it
   // as a release would decay cmd_gain_, slowing the feet and speeding the clock,
   // which the reflection's premise forbids. The gate bounds the exemption.
-  const bool cmd_zero = cmd_is_zero(v_body_xy, omega_z) && !reversal_.armed();
+  //
+  // reversing(), not armed(): the velocity limiter slews the planar command
+  // through the origin, so every sign flip spends a tenth of a second or more
+  // inside the tolerance whether or not the ladder took the reversal on. Where
+  // GAIT would only have lost a little cmd_gain_ to that, ENGAGING re-plants on
+  // the first such tick.
+  const bool cmd_zero =
+      cmd_is_zero(v_body_xy, omega_z) && !reversal_.reversing();
   if (cmd_zero) {
     cmd_zero_elapsed_ += dt;
   } else {
@@ -665,8 +664,10 @@ std::map<std::string, LegOutput> Engine::update(
   }
 
   if (state_ == EngineState::ENGAGING) {
-    // A command withdrawn mid-engagement goes straight to the reseat ladder: the
-    // engagement cannot be run out at a zero command. Its stance legs integrate
+    // A command *withdrawn* mid-engagement goes straight to the reseat ladder: the
+    // engagement cannot be run out at a zero command. A command merely turned
+    // around no longer arrives here — the reversal gate latches it, so the
+    // crossing through zero is not read as a release. Its stance legs integrate
     // the commanded velocity, so a zero freezes each one where the walk left it,
     // while its swing branch evaluates the strategy closed form — which at a zero
     // stride is nominal — and teleports every leg home at its own lift-off. No
@@ -684,6 +685,11 @@ std::map<std::string, LegOutput> Engine::update(
       clock_->reset(engagement_->exit_master());
       stance_.seed(last_targets_, last_stance_);
       reset_swing_state();
+      // What the engagement's velocity envelope left owing, the walk has to make
+      // good before the reversal ladder may register anything against it.
+      for (const auto& n : LEG_NAMES) {
+        on_schedule_[n] = engagement_->foot_on_schedule(n);
+      }
       state_ = EngineState::GAIT;
     }
     return out;
@@ -833,6 +839,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
         // stride it is nominal, which is how a settle re-plants with no extra pass.
         touchdown_anchor = swing_.target(name);
         swing_.touchdown(name);
+        // Landed on the live AEP with the integrator anchored there: whatever the
+        // engagement left this leg owing, it is square with its phase now.
+        on_schedule_[name] = true;
       } else {
         touchdown_anchor = strategy_target;
       }
@@ -897,6 +906,18 @@ bool Engine::all_planted() const {
   return true;
 }
 
+bool Engine::feet_on_schedule() const {
+  for (const auto& n : LEG_NAMES) {
+    if (is_parked(n)) {
+      continue;  // lays nothing down, so it can owe the schedule nothing
+    }
+    if (!on_schedule_.at(n)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool Engine::settle_beats_reseat() const {
   const float swing_end =
       swing_end_phase(strategy_->duty_factor(), swing_margin());
@@ -946,6 +967,10 @@ void Engine::hand_off_to_reseat() {
   // build_reseat reads last_targets_, so the ladder starts from where the feet
   // are, and its first stage lands anything airborne before lifting a foot that
   // is down — which is why this needs no all_planted() check.
+  //
+  // The gate self-clears on the next tick out of the walk, but its latch suppresses
+  // cmd_zero, and state that can suppress a stop is torn down where the walk is.
+  reversal_.reset();
   stance_.reset();
   reset_swing_state();
   reseat_ = build_reseat(nominal_);

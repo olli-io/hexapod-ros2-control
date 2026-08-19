@@ -14,7 +14,7 @@ const LABELS = {
   posture_mode: "Posture",
   animation_mode: "Anim",
   init: "Stand\n(Hexa)",
-  record: "Rec",
+  record: "Save\nposture",
   gait_prev: "Prev\nGait",
   gait_next: "Next\nGait",
   animation_prev: "Prev\nAnim",
@@ -31,6 +31,18 @@ function labelFor(fn) {
   return LABELS[fn] || fn;
 }
 
+// Status-strip names for the animation-mode animations. Display only —
+// the wire names on /animation/mode stay the long ones.
+const ANIM_LABELS = {
+  vertical_body_roll: "wave",
+  horizontal_body_roll: "snake",
+  body_roll_3d: "spiral",
+};
+
+function animationLabel(name) {
+  return ANIM_LABELS[name] || name;
+}
+
 // ── State ──────────────────────────────────────────────────────────
 
 let ws = null;
@@ -43,6 +55,9 @@ let currentMode = "gait";
 // means nothing latched yet (pipeline startup default) → placeholder.
 let currentGait = "";
 let currentAnimation = "";
+// Latest /gait/state. Only the folded case is read here: no gait is running
+// on the belly, so the strategy the next stand will use is not a status.
+let currentGaitState = "";
 
 // Re-send held input this often (ms) so the server's input watchdog
 // (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a
@@ -119,6 +134,7 @@ function handleMessage(msg) {
       currentMode = msg.mode;
       currentGait = msg.gait;
       currentAnimation = msg.animation;
+      currentGaitState = msg.gait_state;
       updateModeDisplay();
       updateButtonLabels(msg.button_labels);
       updateOwnerDisplay();
@@ -148,6 +164,8 @@ function handleMessage(msg) {
       updateStatusDisplay();
       break;
     case "gait_state":
+      currentGaitState = msg.state;
+      updateStatusDisplay();
       break;
   }
 }
@@ -187,8 +205,9 @@ function updateOwnerDisplay() {
 }
 
 function updateStatusDisplay() {
-  $("status-gait").textContent = currentGait || "—";
-  $("status-animation").textContent = currentAnimation || "—";
+  const folded = currentGaitState === "folded";
+  $("status-gait").textContent = (!folded && currentGait) || "—";
+  $("status-animation").textContent = animationLabel(currentAnimation) || "—";
 }
 
 function setJoysticksEnabled(enabled) {

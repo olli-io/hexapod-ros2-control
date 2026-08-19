@@ -127,7 +127,7 @@ GAITS = [
     # margin, and so the derived velocity cap, is per leg set; the strategy class
     # stays its source of truth for the engine.
     ("quad_walk",       3.0 / 4.0,   False,    "quadruped"),
-    ("quad_gallop",     3.0 / 4.0,   False,    "quadruped"),
+    ("quad_canter",     3.0 / 4.0,   False,    "quadruped"),
 ]
 
 # NUL-padded width of GaitSpec::name. Must exceed the longest name above.

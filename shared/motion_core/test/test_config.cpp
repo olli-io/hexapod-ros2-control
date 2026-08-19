@@ -172,7 +172,7 @@ TEST(VelocityCaps, DerivedFromEngineKnobs) {
     // quadruped gaits are named here. A new one would have to be added — which
     // is the point: its cap must not silently come out on the six-leg margin.
     const bool quadruped =
-        gait_name(g) == "quad_walk" || gait_name(g) == "quad_gallop";
+        gait_name(g) == "quad_walk" || gait_name(g) == "quad_canter";
     const float margin = quadruped ? cfg::kEngine.quadruped_swing_phase_margin
                                    : cfg::kEngine.swing_phase_margin;
     const float swing_end = (1.0f - g.duty_factor) * (1.0f - margin);

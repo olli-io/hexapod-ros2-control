@@ -29,8 +29,8 @@ initial_mode: gait
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple]
 default_gait: tripod
 allow_unstable_gaits: false
-quadruped_gait_cycle: [quad_gallop, quad_walk]
-default_quadruped_gait: quad_gallop
+quadruped_gait_cycle: [quad_canter, quad_walk]
+default_quadruped_gait: quad_canter
 
 server:
   port: 8080
@@ -259,9 +259,9 @@ def test_the_two_rotations_stay_partitioned_by_leg_set(cfg):
     # rejects it — here we pin that the shipped lists are on the right sides.
     loaded_cfg, _, _ = cfg
     assert "quad_walk" not in loaded_cfg.gait_cycle
-    assert "quad_gallop" not in loaded_cfg.gait_cycle
-    assert loaded_cfg.quadruped_gait_cycle == ("quad_gallop", "quad_walk")
-    assert loaded_cfg.default_quadruped_gait == "quad_gallop"
+    assert "quad_canter" not in loaded_cfg.gait_cycle
+    assert loaded_cfg.quadruped_gait_cycle == ("quad_canter", "quad_walk")
+    assert loaded_cfg.default_quadruped_gait == "quad_canter"
 
 
 def test_load_config_animation_list(cfg):
@@ -463,7 +463,7 @@ def test_quadruped_init_asks_for_the_quadruped_gait(cfg):
     out = map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
     # The leg set rides the gait, and the init that goes with it is what
     # stands the robot up on that set.
-    assert out.gait_select == "quad_gallop"
+    assert out.gait_select == "quad_canter"
     assert out.init_request is True
     assert out.init_quadruped is True
     assert state.quadruped is True

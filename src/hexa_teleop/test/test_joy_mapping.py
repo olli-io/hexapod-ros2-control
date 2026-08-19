@@ -168,8 +168,8 @@ def _cfg(**overrides) -> JoyConfig:
     animation_bindings = dict(_DEFAULT_ANIMATION_BINDINGS)
     top_level = {
         "gait_cycle": ("ripple", "crawl", "tripod"),
-        "quadruped_gait_cycle": ("quad_gallop", "quad_walk"),
-        "default_quadruped_gait": "quad_gallop",
+        "quadruped_gait_cycle": ("quad_canter", "quad_walk"),
+        "default_quadruped_gait": "quad_canter",
         "gait_linear_max": 0.4,
         "gait_angular_z_max": 1.0,
         "stance_unit": _DEFAULT_STANCE_UNIT,
@@ -1761,7 +1761,7 @@ def test_select_asks_for_a_quadruped_init():
     assert out.init_request is True
     assert out.init_quadruped is True
     # The leg set rides the gait, so the request carries the gait that walks it.
-    assert out.gait_select == "quad_gallop"
+    assert out.gait_select == "quad_canter"
     assert state.quadruped is True
     assert state.current_quadruped_gait_idx == 0
     _press_select(cfg, state, False)
@@ -1791,7 +1791,7 @@ def test_quadruped_mode_cycles_its_own_rotation():
     # And it wraps inside the leg set rather than out of it.
     map_joy(_axes(), _buttons(), cfg, state, DT)
     out = map_joy(_axes(dpad_x=1.0), _buttons(), cfg, state, DT)
-    assert out.gait_select == "quad_gallop"
+    assert out.gait_select == "quad_canter"
     assert state.current_gait_idx == 2
 
 
@@ -1809,7 +1809,7 @@ def test_select_re_enters_on_the_default_quadruped_gait():
     _press_select(cfg, state, True)
     _press_select(cfg, state, False)
     out = _press_select(cfg, state, True)
-    assert out.gait_select == "quad_gallop"
+    assert out.gait_select == "quad_canter"
     assert state.current_quadruped_gait_idx == 0
 
 

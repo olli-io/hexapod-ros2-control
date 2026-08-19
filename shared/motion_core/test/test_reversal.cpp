@@ -72,12 +72,30 @@ struct SkidStats {
   int landings = 0;
   int mirrors = 0;
   // What the engine did underneath the ladder's hold. The hold is a walk, not a
-  // released stick, so the engine must stay in GAIT through it; and once the
-  // command has come down onto the knee the clock must run no faster than the
-  // walk's own longest cycle, which is the rate the knee is defined by.
+  // released stick, so the engine must stay walking through it — GAIT, or the
+  // engagement ladder on its way there; and once the command has come down onto
+  // the knee the clock must run no faster than the walk's own longest cycle,
+  // which is the rate the knee is defined by.
   int hold_ticks = 0;
-  int hold_ticks_out_of_gait = 0;
+  int hold_ticks_not_walking = 0;
   float worst_hold_phase_step = 0.0f;
+  // Where the turn landed, and where the engine went afterwards. A reversal must
+  // never be read as a released stick, so neither of the re-plant states is
+  // allowed to appear after one.
+  bool turned_while_engaging = false;
+  bool reseated = false;
+  bool stood = false;
+  bool reached_gait = false;
+  // Worst planar distance any foot target sat from its nominal stance. The walk
+  // holds this under the stance ceiling; the engagement has no such bound, so this
+  // is what says whether a turn it absorbs stays inside the leg's envelope.
+  float worst_excursion = 0.0f;
+};
+
+// Where in the robot's start-up the turn lands.
+enum class From {
+  kSteadyGait,  // walking, everything settled — the ladder's home ground
+  kEngagement,  // still on the STAND -> GAIT ladder
 };
 
 // What the command does once the gait is steady.
@@ -93,7 +111,8 @@ enum class Turn {
 // integrating the command, since foot-derived odometry would be polluted by the
 // very slip being measured.
 SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
-                     int axis, bool instant = false, bool ladder = false) {
+                     int axis, bool instant = false, bool ladder = false,
+                     From from = From::kSteadyGait) {
   const auto cfg = g::engine_config_from_config();
   const auto nominal = g::nominal_stance_from_config();
   auto e = g::make_default_engine(gait);
@@ -156,11 +175,21 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
     return out;
   };
 
-  for (int i = 0; i < 6000 && e->state() != g::EngineState::GAIT; ++i) {
-    tick(speed);
+  if (from == From::kEngagement) {
+    // Into the engagement and no further: the turn lands while the ladder out of
+    // the stand is still running, which is where the command has not yet had
+    // time to reach the knee either.
+    for (int i = 0; i < 6000 && e->state() != g::EngineState::ENGAGING; ++i) {
+      tick(speed);
+    }
+    EXPECT_EQ(e->state(), g::EngineState::ENGAGING);
+  } else {
+    for (int i = 0; i < 6000 && e->state() != g::EngineState::GAIT; ++i) {
+      tick(speed);
+    }
+    EXPECT_EQ(e->state(), g::EngineState::GAIT);
+    for (int i = 0; i < 600; ++i) tick(speed);
   }
-  EXPECT_EQ(e->state(), g::EngineState::GAIT);
-  for (int i = 0; i < 600; ++i) tick(speed);
   for (int i = 0; i < static_cast<int>(flip_offset / kDt); ++i) tick(speed);
 
   struct LegTrace {
@@ -179,7 +208,11 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
                        : turn == Turn::kStop ? 0.0f
                                              : speed;
   SkidStats s;
-  for (int i = 0; i < 1600; ++i) {
+  s.turned_while_engaging = e->state() == g::EngineState::ENGAGING;
+  // Long enough for the whole ladder out of an engagement: the rest of the
+  // engagement at the knee, then the walk's wait for its first all-down window.
+  const int ticks = from == From::kEngagement ? 4000 : 1600;
+  for (int i = 0; i < ticks; ++i) {
     const auto before = last_targets;
     const auto out = tick(turned);
 
@@ -191,14 +224,33 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
     prev_master = e->master_phase();
     prev_state = e->state();
 
+    for (const auto& [name, leg] : out) {
+      // Planted only: a swing bows the foot out sideways by swing_width on its
+      // way round, which is the arc doing its job and not the stance bound's
+      // business.
+      if (!leg.stance) continue;
+      s.worst_excursion = std::max(
+          s.worst_excursion,
+          std::hypot(leg.foot_target.x - nominal.at(name).x,
+                     leg.foot_target.y - nominal.at(name).y));
+    }
+    if (e->state() == g::EngineState::RESEATING) s.reseated = true;
+    if (e->state() == g::EngineState::STAND) s.stood = true;
+    if (e->state() == g::EngineState::GAIT) s.reached_gait = true;
+
     if (holding) {
       ++s.hold_ticks;
-      if (e->state() != g::EngineState::GAIT) ++s.hold_ticks_out_of_gait;
+      if (e->state() != g::EngineState::GAIT &&
+          e->state() != g::EngineState::ENGAGING) {
+        ++s.hold_ticks_not_walking;
+      }
       // Only once the limiter has brought the command down onto the knee: while
-      // it is still above, the walk legitimately runs a shorter cycle. The
-      // reflection is never the step measured here — the gate hands the request
-      // straight back on the tick it fires, so that tick is not a hold.
-      if (std::fabs(v) <= knee * 1.05f) {
+      // it is still above, the walk legitimately runs a shorter cycle. Only in
+      // GAIT, too — the engagement reports its own master, which is not the clock
+      // the rate below is about. The reflection is never the step measured here —
+      // the gate hands the request straight back on the tick it fires, so that
+      // tick is not a hold.
+      if (e->state() == g::EngineState::GAIT && std::fabs(v) <= knee * 1.05f) {
         s.worst_hold_phase_step =
             std::max(s.worst_hold_phase_step, step > 0.5f ? 1.0f - step : step);
       }
@@ -328,7 +380,7 @@ SkidStats sweep(const std::string& gait, bool ladder) {
       w.worst_over_credit = std::max(w.worst_over_credit, s.worst_over_credit);
       w.mirrors += s.mirrors;
       w.hold_ticks += s.hold_ticks;
-      w.hold_ticks_out_of_gait += s.hold_ticks_out_of_gait;
+      w.hold_ticks_not_walking += s.hold_ticks_not_walking;
       w.worst_hold_phase_step =
           std::max(w.worst_hold_phase_step, s.worst_hold_phase_step);
     }
@@ -374,7 +426,7 @@ TEST(Reversal, TheLaddersHoldIsNotReadAsAReleasedStick) {
     const float walk_step = kDt / (cfg.max_swing_time / swing_end);
 
     ASSERT_GT(s.hold_ticks, 0) << gait << " never held, so nothing was tested";
-    EXPECT_EQ(s.hold_ticks_out_of_gait, 0)
+    EXPECT_EQ(s.hold_ticks_not_walking, 0)
         << gait << " stopped walking under the ladder's hold";
     // One tick's worth of slack: the limiter lands on the knee asymptotically,
     // so the first tick inside the window can still be a hair above it.
@@ -410,14 +462,161 @@ TEST(Reversal, LadderHandsTheStanceLegsTheirRunwayBack) {
 
 // Crawl and surf swing end to end and never have all six feet down, so there is
 // no instant at which the reflection is valid and the ladder must not hold them
-// up pretending otherwise: they reverse exactly as they did before.
+// up pretending otherwise: nothing is reflected and nothing is held.
+//
+// Not bit-identical to the no-ladder run any more, though. The gate still
+// recognises the reversal it cannot help, and the engine reads that to keep the
+// command's crossing through zero from arming a settle — so where the bare run
+// bled a little cmd_gain_ mid-turn and slowed the feet, this one keeps walking
+// the command it was given and drags a hair further for it. A percent, not a
+// mechanism.
 TEST(Reversal, GaitsWithoutAnAllDownWindowAreLeftAlone) {
   for (const char* gait : {"crawl", "surf"}) {
     const SkidStats bare = sweep(gait, /*ladder=*/false);
     const SkidStats led = sweep(gait, /*ladder=*/true);
     EXPECT_EQ(led.mirrors, 0) << gait << " reflected without an all-down window";
-    EXPECT_FLOAT_EQ(led.peak_stance_drag, bare.peak_stance_drag)
+    EXPECT_EQ(led.hold_ticks, 0)
+        << gait << " was held by a ladder that cannot help it";
+    EXPECT_NEAR(led.peak_stance_drag, bare.peak_stance_drag,
+                0.05f * bare.peak_stance_drag)
         << gait << " was disturbed by a ladder that cannot help it";
+  }
+}
+
+// ── The ladder across the engagement ──
+//
+// Turning the stick around before the walk has fully started used to be read as
+// letting go of it. The velocity limiter slews the planar command straight
+// through the origin, so every sign flip spends a tenth of a second or more
+// inside cmd_zero_tol, and the engagement re-plants on the first such tick —
+// three lifted pairs, a stand, and a whole second engagement to get going again
+// the other way. These pin both halves of the answer: the crossing is not a
+// release, and where the ladder can take the turn on it holds the engagement at
+// the knee and reflects on the other side of the handoff.
+
+namespace {
+
+// One flip point inside the engagement, on one axis, with the ladder in the loop.
+SkidStats engage_then_reverse(const std::string& gait, float flip, int axis) {
+  return drive_skid(gait, flip, Turn::kReverse, axis, /*instant=*/false,
+                    /*ladder=*/true, From::kEngagement);
+}
+
+std::string where_of(const std::string& gait, int axis, float flip) {
+  return gait + " axis " + std::to_string(axis) + " flip " +
+         std::to_string(flip) + "s";
+}
+
+}  // namespace
+
+// The headline: whatever the gait and wherever in the engagement the turn lands,
+// the robot keeps walking into it. Both re-plant states are the failure — the
+// reseat is where this used to go, and STAND is where that left it.
+TEST(Reversal, AReversalMidEngagementNeverReseats) {
+  for (const char* gait : {"tripod", "tetrapod", "ripple", "crawl", "surf"}) {
+    for (int axis = 0; axis < 2; ++axis) {
+      for (const float flip : {0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+        const SkidStats s = engage_then_reverse(gait, flip, axis);
+        const std::string where = where_of(gait, axis, flip);
+        ASSERT_TRUE(s.turned_while_engaging)
+            << where << ": the turn missed the engagement, so nothing was tested";
+        EXPECT_FALSE(s.reseated) << where << " re-planted on a turn";
+        EXPECT_FALSE(s.stood) << where << " went back to standing on a turn";
+        EXPECT_TRUE(s.reached_gait) << where << " never reached the walk";
+        EXPECT_EQ(s.hold_ticks_not_walking, 0)
+            << where << " stopped walking under the ladder's hold";
+      }
+    }
+  }
+}
+
+// The ladder cannot reflect inside the engagement — that runs its own master
+// clock, and the handoff reseeds the gait clock from it — so the hold has to
+// carry across the state change and fire on the other side. One reflection, and
+// the same credit bound the walk's own reversals are held to: the engagement
+// leaves every foot planted and standing where its stance progress says.
+TEST(Reversal, AReversalMidEngagementIsReflectedAfterTheHandoff) {
+  for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
+    for (int axis = 0; axis < 2; ++axis) {
+      for (const float flip : {0.5f, 0.75f, 1.0f}) {
+        const SkidStats s = engage_then_reverse(gait, flip, axis);
+        const std::string where = where_of(gait, axis, flip);
+        ASSERT_TRUE(s.turned_while_engaging) << where << ": the turn missed it";
+        EXPECT_GT(s.hold_ticks, 0) << where << " was never held";
+        EXPECT_EQ(s.mirrors, 1)
+            << where << " reflected " << s.mirrors << " times";
+        EXPECT_LT(s.worst_over_credit, 0.02f)
+            << where << " was credited " << s.worst_over_credit * 100.0f
+            << "% of a stance more than its foot position affords";
+      }
+    }
+  }
+}
+
+// A turn on the first tick of the engagement is below the knee: the engine only
+// leaves the stand once the shaped command clears cmd_zero_tol, and on these gaits
+// the knee is several times that. Nothing to hold and nothing to reflect — the
+// feet have not gone anywhere yet, and the engagement simply takes the new
+// direction.
+//
+// Ripple is not in the list, and the reason is worth knowing: its knee is
+// 0.0226 m/s against a 0.02 tolerance, so it is already walking above the knee on
+// the tick it leaves the stand and there is no below-knee opening to test.
+TEST(Reversal, AReversalAtTheStartOfAnEngagementIsAbsorbed) {
+  for (const char* gait : {"tripod", "tetrapod"}) {
+    for (int axis = 0; axis < 2; ++axis) {
+      const SkidStats s = engage_then_reverse(gait, 0.0f, axis);
+      const std::string where = where_of(gait, axis, 0.0f);
+      EXPECT_EQ(s.hold_ticks, 0) << where << " held a turn below the knee";
+      EXPECT_EQ(s.mirrors, 0) << where << " reflected a turn below the knee";
+      EXPECT_FALSE(s.reseated) << where << " re-planted on a turn";
+    }
+  }
+}
+
+// Crawl and surf are left alone here for the same reason they are in the walk —
+// no all-down window, so nothing to reflect and nothing to hold for. What they
+// do get is the engagement they were already having, in the other direction.
+TEST(Reversal, GaitsWithoutAnAllDownWindowEngageThroughAReversal) {
+  for (const char* gait : {"crawl", "surf"}) {
+    for (int axis = 0; axis < 2; ++axis) {
+      for (const float flip : {0.5f, 1.0f}) {
+        const SkidStats s = engage_then_reverse(gait, flip, axis);
+        const std::string where = where_of(gait, axis, flip);
+        EXPECT_EQ(s.mirrors, 0) << where << " reflected without a window";
+        EXPECT_EQ(s.hold_ticks, 0) << where << " was held by a ladder that "
+                                              "cannot help it";
+        EXPECT_FALSE(s.reseated) << where << " re-planted on a turn";
+      }
+    }
+  }
+}
+
+// Where the ladder declines to hold, the engagement absorbs the turn itself — and
+// unlike the walk, its stance integration has no band to ride: it carries every
+// planted foot at the commanded velocity for as long as the command asks. A foot
+// that has just landed on the old AEP starts the turn already at what is now its
+// PEP, so the question is how far past the stance ceiling the rest of the ladder
+// takes it before the walk's own bound picks it up.
+TEST(Reversal, AnEngagementThatAbsorbsATurnStaysReachable) {
+  const auto cfg = g::engine_config_from_config();
+  const auto legs = g::build_leg_contexts_from_config();
+  for (const char* gait : {"crawl", "surf", "tripod", "tetrapod"}) {
+    for (int axis = 0; axis < 2; ++axis) {
+      const std::pair<float, float> dir =
+          axis == 0 ? std::pair<float, float>{1.0f, 0.0f}
+                    : std::pair<float, float>{0.0f, 1.0f};
+      const float stride = g::effective_stride_length(
+          legs, dir, 0.0f, cfg.stride_length, cfg.stride_length_radial);
+      const float ceiling = 0.5f * stride * (1.0f + g::kStanceExcursionGrace);
+      for (const float flip : {0.0f, 0.25f, 0.5f, 1.0f}) {
+        const SkidStats s = engage_then_reverse(gait, flip, axis);
+        EXPECT_LT(s.worst_excursion, ceiling)
+            << where_of(gait, axis, flip) << " carried a foot "
+            << s.worst_excursion * 1000.0f << " mm from nominal, against a "
+            << ceiling * 1000.0f << " mm ceiling";
+      }
+    }
   }
 }
 

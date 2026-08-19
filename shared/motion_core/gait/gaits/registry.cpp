@@ -87,7 +87,7 @@ const PhaseOffsets& quad_walk_offsets() {
 // r_rear 1/4, l_rear 1/2, l_front 3/4 — and the middles are at 0 for the same
 // fail-loudly reason. Unlike quad_walk it lifts the two fores back to back, so
 // its handovers hand the body across the chassis rather than up one side.
-const PhaseOffsets& quad_gallop_offsets() {
+const PhaseOffsets& quad_canter_offsets() {
   static const PhaseOffsets offsets({
       {"r_front", 0.0f},
       {"r_rear", 1.0f / 4.0f},
@@ -213,10 +213,10 @@ class QuadWalk : public Strategy {
 // The same creep on the perimeter order. Everything but the offsets is
 // quad_walk's: same leg set, same duty factor, so the same swing window, the
 // same velocity cap and the same support-shift machinery carry it.
-class QuadGallop : public Strategy {
+class QuadCanter : public Strategy {
  public:
   const PhaseOffsets& phase_offsets() const override {
-    return quad_gallop_offsets();
+    return quad_canter_offsets();
   }
   float duty_factor() const override { return 3.0f / 4.0f; }
   bool unstable() const override { return false; }
@@ -237,7 +237,7 @@ const std::map<std::string, StrategyFactory>& strategies() {
       {"crawl", [] { return std::make_unique<Crawl>(); }},
       {"ripple", [] { return std::make_unique<Ripple>(); }},
       {"quad_walk", [] { return std::make_unique<QuadWalk>(); }},
-      {"quad_gallop", [] { return std::make_unique<QuadGallop>(); }},
+      {"quad_canter", [] { return std::make_unique<QuadCanter>(); }},
   };
   return registry;
 }

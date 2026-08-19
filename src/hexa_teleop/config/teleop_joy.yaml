@@ -5,8 +5,8 @@ initial_mode: gait # gait | posture | animation
 gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
 default_gait: tripod
 allow_unstable_gaits: true # when false, surf and crawl are skipped
-quadruped_gait_cycle: [quad_gallop, quad_walk] # the four-corner rotation
-default_quadruped_gait: quad_gallop # what `select` stands up on
+quadruped_gait_cycle: [quad_canter, quad_walk] # the four-corner rotation
+default_quadruped_gait: quad_canter # what `select` stands up on
 
 base:
   deadband: 0.1

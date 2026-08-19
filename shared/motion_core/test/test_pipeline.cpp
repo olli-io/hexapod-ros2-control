@@ -222,6 +222,58 @@ TEST(Pipeline, StrafeReversalKeepsEveryFootReachable) {
       << "a foot target went unreachable while reversing";
 }
 
+// The same reversal asked for before the walk has started — while the engine is
+// still on the engagement ladder out of the stand. Control::shape slews the planar
+// command as a vector, so the turn goes straight through the origin and sits inside
+// cmd_zero_tol for several 20 ms ticks; read as a released stick that used to abort
+// the engagement into the reseat ladder, stand the robot back up and make the
+// operator engage all over again. It must now walk through the turn.
+TEST(Pipeline, StrafeReversalMidEngagementKeepsWalking) {
+  // Ticks after the stick goes over, spanning the engagement: the opening, where
+  // the command has not reached the knee, and the middle, where it has.
+  for (const int flip_after : {2, 10, 25, 60}) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    stand_up(p, now_us);
+
+    Pad left;
+    left.axes[bt_teleop::kRightStickX] = bt_teleop::kAxisMax;
+    Pad right;
+    right.axes[bt_teleop::kRightStickX] = bt_teleop::kAxisMin;
+
+    bool engaging = false;
+    for (int i = 0; i < 200 && !engaging; ++i) {
+      engaging = run(p, left, 1, now_us).engine_state == EngineState::ENGAGING;
+    }
+    ASSERT_TRUE(engaging) << "never reached the engagement";
+    // TickResult reports the state the tick began in, so this is where the stick
+    // actually goes over.
+    EngineState at_flip = EngineState::ENGAGING;
+    for (int i = 0; i < flip_after; ++i) {
+      at_flip = run(p, left, 1, now_us).engine_state;
+    }
+    ASSERT_EQ(at_flip, EngineState::ENGAGING)
+        << "flip_after " << flip_after << " overshot the engagement";
+
+    bool reached_gait = false;
+    int max_unreachable = 0;
+    for (int i = 0; i < 600; ++i) {
+      const pl::TickResult r = run(p, right, 1, now_us);
+      max_unreachable = std::max(max_unreachable, r.unreachable);
+      reached_gait = reached_gait || r.engine_state == EngineState::GAIT;
+      ASSERT_TRUE(r.engine_state == EngineState::ENGAGING ||
+                  r.engine_state == EngineState::GAIT)
+          << "flip_after " << flip_after << ": the turn dropped the walk into "
+          << hexa::gait::state_name(r.engine_state) << " at tick " << i;
+    }
+    EXPECT_TRUE(reached_gait)
+        << "flip_after " << flip_after << ": never got to the walk";
+    EXPECT_EQ(max_unreachable, 0)
+        << "flip_after " << flip_after
+        << ": a foot target went unreachable while reversing";
+  }
+}
+
 // A lost link is a safe-stop: the watchdog fires, the command is force-zeroed,
 // and the posture chain sees a non-walking body — the engine settles instead of
 // latching the last velocity.
@@ -574,6 +626,54 @@ TEST(Quadruped, EngagementKeepsTheBodyInsideTheSupportTriangle) {
   }
 }
 
+// The turn is the other thing that can arrive mid-engagement, and on four feet
+// the reseat detour it used to take costs six seconds — four rungs of one corner,
+// each waiting on the body. It must walk through instead, and the body must stay
+// inside its support triangle while it does: the ladder's hold slows the walk to
+// the knee under a support shift that is still steering off the same phases.
+TEST(Quadruped, ReversingMidEngagementDoesNotReseat) {
+  const auto cfg = hexa::gait::engine_config_from_config();
+  const float swing_end = hexa::gait::swing_end_phase(
+      3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+  const float speed = cfg.stride_length * swing_end /
+                      (cfg.min_swing_time * (1.0f - swing_end));
+
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  ASSERT_NO_FATAL_FAILURE(enter_quadruped(p, now_us));
+
+  // Until a corner is actually off the ground, so the turn lands on an engagement
+  // with something committed to it rather than inside the shift hold.
+  bool lifted = false;
+  for (int i = 0; i < 4000 && !lifted; ++i) {
+    const pl::TickResult r = tick_cmd(p, drive(speed, 0.0f, 0.0f), now_us);
+    lifted = r.engine_state == EngineState::ENGAGING &&
+             grounded_corners(feet_from_theta(r)) < 4;
+  }
+  ASSERT_TRUE(lifted) << "the engagement never lifted a corner";
+
+  int worst_airborne = 0;
+  float worst_margin = 1.0f;
+  bool reached_gait = false;
+  for (int i = 0; i < 6000; ++i) {
+    const pl::TickResult r = tick_cmd(p, drive(-speed, 0.0f, 0.0f), now_us);
+    ASSERT_TRUE(r.engine_state == EngineState::ENGAGING ||
+                r.engine_state == EngineState::GAIT)
+        << "the turn dropped the walk into "
+        << hexa::gait::state_name(r.engine_state) << " at tick " << i;
+    reached_gait = reached_gait || r.engine_state == EngineState::GAIT;
+    const auto feet = feet_from_theta(r);
+    worst_airborne = std::max(worst_airborne, 4 - grounded_corners(feet));
+    worst_margin = std::min(worst_margin, support_margin(feet));
+  }
+  EXPECT_TRUE(reached_gait) << "never got to the walk";
+  EXPECT_LE(worst_airborne, 1)
+      << "the turn had " << worst_airborne << " corners off the ground";
+  EXPECT_GT(worst_margin, 0.008f)
+      << "the turn left only " << worst_margin * 1000.0f
+      << " mm of static margin";
+}
+
 // The reseat ladder re-plants in mirrored pairs. On four feet a mirrored pair is
 // half the robot's support, so it has to go one corner at a time.
 TEST(Quadruped, ReseatLiftsOneCornerAtATime) {
@@ -742,7 +842,7 @@ TEST(Quadruped, SelectStandsUpOnFourLegsAndFoldsBack) {
   const pl::TickResult back = run(p, start, 1, now_us);
   EXPECT_TRUE(back.has_gait_select);
   EXPECT_NE(back.gait_select, "quad_walk");
-  EXPECT_NE(back.gait_select, "quad_gallop");
+  EXPECT_NE(back.gait_select, "quad_canter");
   EXPECT_EQ(back.init_action, pl::InitAction::kInitialized);
   run(p, neutral, 1, now_us);
 

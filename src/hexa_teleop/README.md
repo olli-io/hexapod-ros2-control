@@ -81,7 +81,7 @@ The two footfall orders, both duty factor 3/4 with one foot airborne at a time:
 - **`quad_walk`** — lateral sequence, `l_rear → l_front → r_rear → r_front`.
   Each hind is followed by the fore on its own side, so the body works up one
   side and then the other.
-- **`quad_gallop`** — perimeter sequence, `r_front → l_front → l_rear → r_rear`.
+- **`quad_canter`** — perimeter sequence, `r_front → l_front → l_rear → r_rear`.
   Round the chassis rather than up one side, so the two fores lift back to back
   and the handovers carry the body across it.
 

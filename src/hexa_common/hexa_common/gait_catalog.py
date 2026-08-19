@@ -53,5 +53,5 @@ GAIT_DESCRIPTORS: dict[str, GaitDescriptor] = {
     # footfall order (lateral sequence vs the perimeter one); neither is the
     # six-leg "tetrapod" above.
     "quad_walk": GaitDescriptor("quad_walk", 3.0 / 4.0, False, "quadruped"),
-    "quad_gallop": GaitDescriptor("quad_gallop", 3.0 / 4.0, False, "quadruped"),
+    "quad_canter": GaitDescriptor("quad_canter", 3.0 / 4.0, False, "quadruped"),
 }

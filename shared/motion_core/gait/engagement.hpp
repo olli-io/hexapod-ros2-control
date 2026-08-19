@@ -35,6 +35,19 @@ class EngagementController {
   // Master phase to seed the engine clock with on GAIT handoff (master mod 1).
   float exit_master() const { return pymod(master_, 1.0f); }
 
+  // Did this leg finish the ladder standing where its phase says it stands? Only
+  // a leg whose first touchdown came after the body-velocity envelope had fully
+  // opened. Before that a planted foot covers less ground than its phase spends —
+  // cycle_time is derived from the commanded velocity while the foot integrates
+  // the enveloped one — so its excursion lags its stance progress by up to a third
+  // of a stride. Tripod lands every leg on the window exactly and is the only gait
+  // where this is all six.
+  //
+  // The reversal ladder's reflection is the one thing that cares: it re-registers
+  // the schedule against the feet, so the two have to agree first. One swing under
+  // the walk squares a leg up again.
+  bool foot_on_schedule(const std::string& name) const;
+
   // Diagnostics/tests only.
   Vec3 v_body() const { return Vec3(v_body_x_, v_body_y_, omega_); }
 

@@ -114,16 +114,6 @@ struct EngineConfig {
   }
 };
 
-// How far a stance anchor may drift from its leg's nominal stance. `band` is the
-// AEP..PEP envelope a steady walk rides exactly; `ceiling` is the hard limit.
-// Between them the outward rate eases to zero, where a hard clip would kink the
-// foot target.
-struct StanceBand {
-  Vec3 nominal = Vec3::Zero();
-  float band = 0.0f;
-  float ceiling = 0.0f;
-};
-
 // Per-leg stance target as an integral from touchdown: removes foot-scrub under
 // varying velocity, reproduces the stance Bezier under constant velocity.
 class StanceIntegrator {
@@ -320,6 +310,8 @@ class Engine {
   // No foot in the air; the phase margin guarantees this window at every
   // handover.
   bool all_planted() const;
+  // Every walking foot standing where its phase says. See on_schedule_.
+  bool feet_on_schedule() const;
   // Whether letting the gait finish the settle beats the reseat ladder's three
   // mirrored pairs. Tripod wins; the longer duty factors, walking their legs home
   // in many small groups, do not.
@@ -383,6 +375,12 @@ class Engine {
   // Per-leg: lift-off came due while the settle was holding them, so the leg sits
   // this swing window out.
   std::map<std::string, bool> held_down_;
+  // Per-leg: is the foot where its phase says it is? Written false only at the
+  // ENGAGING -> GAIT handoff, from what the engagement reports of its own
+  // velocity envelope, and back to true at the leg's next touchdown under the
+  // walk, where the planner lands it on the live AEP and the integrator anchors
+  // there. The reversal ladder's reflection is the only reader.
+  std::map<std::string, bool> on_schedule_;
 
   ReversalGate reversal_;
   // The command update() was last given — what the robot is carrying rather than

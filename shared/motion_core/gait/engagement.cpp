@@ -226,6 +226,17 @@ std::map<std::string, LegOutput> EngagementController::update(
   const auto body_leg_v =
       per_leg_planar_velocity(leg_contexts_, {v_body_x_, v_body_y_}, omega_);
 
+  // The same wall every planted foot in the walk rides, for the same reason and
+  // now on the same path. A steady engagement never touches it — the drift budget
+  // the smoothstep window is sized for lands exactly on the band — but a command
+  // *turned* under the ladder is absorbed here whenever the reversal gate declines
+  // to hold it (below the knee, or a gait with no all-down window), and a foot that
+  // just landed on the old AEP starts that turn already at what is now its PEP.
+  // Unbounded it walks another whole stride the same way: 127 mm from nominal
+  // against the 66 mm this leg can reach.
+  const float stance_band = 0.5f * stride_length;
+  const float stance_ceiling = stance_band * (1.0f + kStanceExcursionGrace);
+
   const auto& offsets = strategy_->phase_offsets().offsets();
   std::map<std::string, LegOutput> out;
   for (const auto& name : LEG_NAMES) {
@@ -242,7 +253,11 @@ std::map<std::string, LegOutput> EngagementController::update(
       if (in_stance) {
         const auto& v = body_leg_v.at(name);
         Vec3& fp = foot_position_[name];
-        fp = Vec3(fp[0] - v.first * dt, fp[1] - v.second * dt, fp[2]);
+        const Vec3& home = nominal_[name];
+        const auto [d_x, d_y] =
+            ease_outward(fp[0] - home[0], fp[1] - home[1], -v.first * dt,
+                         -v.second * dt, stance_band, stance_ceiling);
+        fp = Vec3(fp[0] + d_x, fp[1] + d_y, fp[2]);
         foot = fp;
       } else {
         const auto& v = cmd_leg_v.at(name);
@@ -289,10 +304,16 @@ std::map<std::string, LegOutput> EngagementController::update(
       foot_position_[name] = foot;
       out[name] = LegOutput{foot, phase, false};
     } else {
-      // Integrate the internal body velocity.
+      // Integrate the internal body velocity, against the same wall: this leg has
+      // no swing coming to put it back, which is what the envelope's drift budget
+      // above is sized for, and the wall is what holds when a turn spends it twice.
       const auto& vb = body_leg_v.at(name);
       Vec3& fp = foot_position_[name];
-      fp = Vec3(fp[0] - vb.first * dt, fp[1] - vb.second * dt, fp[2]);
+      const Vec3& home = nominal_[name];
+      const auto [d_x, d_y] =
+          ease_outward(fp[0] - home[0], fp[1] - home[1], -vb.first * dt,
+                       -vb.second * dt, stance_band, stance_ceiling);
+      fp = Vec3(fp[0] + d_x, fp[1] + d_y, fp[2]);
       out[name] = LegOutput{fp, phase, true};
     }
   }
@@ -302,6 +323,16 @@ std::map<std::string, LegOutput> EngagementController::update(
   }
 
   return out;
+}
+
+bool EngagementController::foot_on_schedule(const std::string& name) const {
+  if (!walks(name)) {
+    return true;  // parked: out of the walk, so nothing to be off-schedule about
+  }
+  // Tripod's window IS its own min_first_touchdown, but the two are reached by
+  // different expressions (swing_end_ against the drift budget's arithmetic), so
+  // the comparison needs the slack a float round-trip costs.
+  return first_touchdown_master_.at(name) >= smoothstep_window_ - 1.0e-6f;
 }
 
 std::map<std::string, LegOutput> EngagementController::emit_nominal_stance()

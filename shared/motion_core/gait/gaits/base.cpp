@@ -119,6 +119,24 @@ float effective_stride_length(const std::map<std::string, LegContext>& legs,
       stride_length_radial);
 }
 
+std::pair<float, float> ease_outward(float e_x, float e_y, float d_x, float d_y,
+                                     float band, float ceiling) {
+  const float m = std::hypot(e_x, e_y);
+  if (m <= band || ceiling <= band) {
+    return {d_x, d_y};
+  }
+  const float u_x = e_x / m;
+  const float u_y = e_y / m;
+  const float radial = d_x * u_x + d_y * u_y;
+  if (radial <= 0.0f) {
+    return {d_x, d_y};  // heading back toward nominal
+  }
+  const float gain =
+      1.0f - ease5(std::min((m - band) / (ceiling - band), 1.0f));
+  const float blocked = (1.0f - gain) * radial;
+  return {d_x - blocked * u_x, d_y - blocked * u_y};
+}
+
 float swing_end_phase(float duty_factor, float margin_fraction) {
   const float nominal = std::max(0.0f, 1.0f - duty_factor);
   return nominal * (1.0f - std::clamp(margin_fraction, 0.0f, 0.4f));

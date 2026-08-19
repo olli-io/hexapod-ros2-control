@@ -2763,9 +2763,9 @@ TEST(Quadruped, WalkLiftsInLateralSequence) {
 
 // The second order for the same four corners, pinned the same way: round the
 // chassis rather than up one side, so the two fores lift back to back.
-TEST(Quadruped, GallopLiftsInPerimeterSequence) {
+TEST(Quadruped, CanterLiftsInPerimeterSequence) {
   const auto offsets =
-      g::strategies().at("quad_gallop")()->phase_offsets().offsets();
+      g::strategies().at("quad_canter")()->phase_offsets().offsets();
   const auto lift_at = [&](const char* leg) {
     return g::pymod(-offsets.at(leg), 1.0f);
   };
@@ -2779,7 +2779,7 @@ TEST(Quadruped, GallopLiftsInPerimeterSequence) {
 // neither may appear in the six-leg one — the cycler picks its rotation off the
 // leg set it is standing on and would otherwise land on a refused gait.
 TEST(Quadruped, TheQuadrupedGaitsAreInTheirOwnCycle) {
-  for (const auto& name : {"quad_walk", "quad_gallop"}) {
+  for (const auto& name : {"quad_walk", "quad_canter"}) {
     EXPECT_EQ(g::strategies().at(name)()->leg_set(), g::LegSet::QUADRUPED);
     for (const auto& entry : hexa::config::kGaitCycle) {
       EXPECT_NE(entry, name);

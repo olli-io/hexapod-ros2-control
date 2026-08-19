@@ -70,10 +70,16 @@ ReversalGate::Output ReversalGate::step(
   const Output pass{in.request_xy, in.request_omega, false};
 
   if (armed_) {
-    held_for_ += in.dt;
-    // Out of GAIT, no longer opposed, or no longer able to reflect: let go. The
-    // timeout is the backstop — an unreflected reversal is the old behaviour,
-    // not a broken one.
+    // Not while engaging: the timeout is the backstop for a gait that never
+    // offers an all-down window, and an engagement offers none by construction.
+    // Counting it here would spend the whole budget before the walk it hands
+    // over to gets its first one.
+    if (!in.engaging) {
+      held_for_ += in.dt;
+    }
+    // Out of the walk, no longer opposed, or no longer able to reflect: let go.
+    // The timeout is the backstop — an unreflected reversal is the old
+    // behaviour, not a broken one.
     const bool still_reversing =
         in.walking && in.can_mirror && held_for_ < in.timeout &&
         travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
@@ -89,26 +95,39 @@ ReversalGate::Output ReversalGate::step(
                                hold_omega_, in.zero_tol);
     return pass;
   } else {
-    const float carrying =
-        max_leg_speed(legs, in.applied_xy, in.applied_omega);
-    // Below the knee the walk is already on a shorter stride than the one asked
-    // for next, so the reflection would over-credit every leg.
-    if (!in.walking || !in.can_mirror || carrying < in.knee_speed ||
+    if (!in.walking ||
         !travel_reverses(legs, in.request_xy, in.request_omega, in.applied_xy,
                          in.applied_omega, in.zero_tol)) {
       return pass;
     }
-    armed_ = true;
-    held_for_ = 0.0f;
+    // Latched before the hold is decided, because a reversal this ladder cannot
+    // help is still a reversal: it is what reversing() reports and what the
+    // clear test below measures the request against.
     hold_xy_ = in.applied_xy;
     hold_omega_ = in.applied_omega;
+    const float carrying =
+        max_leg_speed(legs, in.applied_xy, in.applied_omega);
+    // Below the knee the walk is already on a shorter stride than the one asked
+    // for next, so the reflection would over-credit every leg. Recognised, not
+    // held: the command goes through as it always did.
+    if (!in.can_mirror || carrying < in.knee_speed) {
+      handled_ = true;
+      return pass;
+    }
+    armed_ = true;
+    held_for_ = 0.0f;
     hold_scale_ = in.knee_speed / carrying;
   }
 
-  // At the hold speed with every foot planted the schedule and the feet agree:
-  // reflect one onto the other and hand the command back.
+  // At the hold speed with every foot planted and the schedule true of the feet,
+  // reflect one onto the other and hand the command back. Both of the first two
+  // are stated: `engaging` because the clock this reflects is not the one the
+  // engagement runs, `feet_on_schedule` because the engagement hands the walk legs
+  // it has not yet squared up. One implies the other today; they are two different
+  // reasons and neither is the other's shorthand.
   const float carrying = max_leg_speed(legs, in.applied_xy, in.applied_omega);
-  if (in.all_planted && carrying <= in.knee_speed * kHoldTolerance) {
+  if (!in.engaging && in.feet_on_schedule && in.all_planted &&
+      carrying <= in.knee_speed * kHoldTolerance) {
     armed_ = false;
     handled_ = true;
     return {in.request_xy, in.request_omega, true};

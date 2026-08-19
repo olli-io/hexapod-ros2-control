@@ -18,7 +18,7 @@ def test_catalog_has_the_registered_gaits():
         "crawl",
         "ripple",
         "quad_walk",
-        "quad_gallop",
+        "quad_canter",
     }
 
 
@@ -35,7 +35,7 @@ def test_duty_factors():
     assert GAIT_DESCRIPTORS["crawl"].duty_factor == 2.0 / 3.0
     assert GAIT_DESCRIPTORS["ripple"].duty_factor == 5.0 / 6.0
     assert GAIT_DESCRIPTORS["quad_walk"].duty_factor == 3.0 / 4.0
-    assert GAIT_DESCRIPTORS["quad_gallop"].duty_factor == 3.0 / 4.0
+    assert GAIT_DESCRIPTORS["quad_canter"].duty_factor == 3.0 / 4.0
 
 
 def test_unstable_flags():
@@ -45,7 +45,7 @@ def test_unstable_flags():
     assert GAIT_DESCRIPTORS["crawl"].unstable is True
     assert GAIT_DESCRIPTORS["ripple"].unstable is False
     assert GAIT_DESCRIPTORS["quad_walk"].unstable is False
-    assert GAIT_DESCRIPTORS["quad_gallop"].unstable is False
+    assert GAIT_DESCRIPTORS["quad_canter"].unstable is False
 
 
 def test_leg_sets():
@@ -54,4 +54,4 @@ def test_leg_sets():
         for name, descriptor in GAIT_DESCRIPTORS.items()
         if descriptor.leg_set == "quadruped"
     }
-    assert quadruped == {"quad_walk", "quad_gallop"}
+    assert quadruped == {"quad_walk", "quad_canter"}
