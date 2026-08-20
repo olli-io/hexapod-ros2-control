@@ -1,5 +1,6 @@
 from .web_mapping import (
     NUM_BUTTONS,
+    battery_payload,
     button_labels_for_mode,
     input_is_stale,
     load_web_config,
@@ -10,6 +11,7 @@ from .web_mapping import (
 
 __all__ = [
     "NUM_BUTTONS",
+    "battery_payload",
     "button_labels_for_mode",
     "input_is_stale",
     "load_web_config",

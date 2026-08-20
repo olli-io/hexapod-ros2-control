@@ -192,15 +192,28 @@ button.nav-icon:active {
   min-height: 0;
 }
 
-/* Current gait + animation mode. Compact one-liner so it doesn't steal
-   height from the joysticks; visible in both grid and prompt states. */
+/* Current gait, animation mode and pack telemetry. Compact so it doesn't
+   steal height from the joysticks; visible in both grid and prompt states.
+   Wraps rather than widening: the max-widths below hold it to the grid's
+   width (set per orientation, same viewport fractions), so a third item —
+   or a narrow phone — costs a second line instead of squeezing the
+   joysticks the panel sits between. */
 #status-bar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 1.2rem;
+  gap: 0.15rem 1.2rem;
   font-size: 0.7rem;
   letter-spacing: 0.05em;
   white-space: nowrap;
+}
+
+@media (orientation: landscape) {
+  #status-bar { max-width: min(500px, 30vw); }
+}
+
+@media (orientation: portrait) {
+  #status-bar { max-width: min(52vw, 30vh); }
 }
 
 .status-key {

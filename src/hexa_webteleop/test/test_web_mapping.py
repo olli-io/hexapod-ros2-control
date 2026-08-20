@@ -6,6 +6,7 @@ import yaml
 
 from hexa_webteleop import (
     NUM_BUTTONS,
+    battery_payload,
     button_labels_for_mode,
     input_is_stale,
     load_web_config,
@@ -624,6 +625,38 @@ def test_input_is_fresh_within_timeout():
 def test_input_is_stale_at_startup():
     # last-input seed of 0.0 reads stale against any real monotonic clock
     assert input_is_stale(0.0, 1234.5, 0.5) is True
+
+
+def test_battery_payload_reports_a_fresh_reading():
+    assert battery_payload((8.3, 1.5, 100.0), 100.4, 5.0) == {
+        "voltage": 8.3,
+        "current": 1.5,
+    }
+
+
+def test_battery_payload_is_unknown_before_the_first_reading():
+    assert battery_payload(None, 100.0, 5.0) == {"voltage": None, "current": None}
+
+
+def test_battery_payload_goes_unknown_when_stale():
+    # Hardware node died at t=100; at t=106 the last reading is a lie, not
+    # merely old — the strip must fall back to a dash.
+    assert battery_payload((8.3, 1.5, 100.0), 106.0, 5.0) == {
+        "voltage": None,
+        "current": None,
+    }
+
+
+def test_battery_payload_drops_non_finite_fields():
+    # A bare NaN in the JSON would throw in the client's JSON.parse and take
+    # the whole message with it.
+    payload = battery_payload(
+        (float("nan"), float("inf"), 100.0), 100.1, 5.0
+    )
+    assert payload == {"voltage": None, "current": None}
+    import json
+
+    assert json.loads(json.dumps(payload)) == payload
 
 
 def test_neutral_inputs_are_centred_and_released():

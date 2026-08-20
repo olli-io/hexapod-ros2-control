@@ -70,6 +70,12 @@
             <span class="status-key">Anim</span>
             <span class="status-value" id="status-animation">&mdash;</span>
           </span>
+          <!-- Pack voltage + current, polled over the WebSocket. Real robot
+               only; a dash where nothing publishes telemetry. -->
+          <span class="status-item">
+            <span class="status-key">Pack</span>
+            <span class="status-value" id="status-battery">&mdash;</span>
+          </span>
         </div>
 
         <!-- 3x3 grid. DOM order is visual order; JS keys off data-index.

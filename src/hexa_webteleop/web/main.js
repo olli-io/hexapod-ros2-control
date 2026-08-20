@@ -58,6 +58,11 @@ let currentAnimation = "";
 // Latest /gait/state. Only the folded case is read here: no gait is running
 // on the belly, so the strategy the next stand will use is not a status.
 let currentGaitState = "";
+// Pack telemetry, polled over the WebSocket. Null means unknown — never
+// heard, stale, or a non-finite reading — and shows as a dash.
+let packVoltage = null;
+let packCurrent = null;
+let packTimer = null;
 
 // Re-send held input this often (ms) so the server's input watchdog
 // (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a
@@ -105,6 +110,7 @@ function connect() {
     connected = false;
     $("conn-status").className = "nav-icon disconnected";
     setJoysticksEnabled(false);
+    stopPackPolling();
     updateConnOverlay();
     // A manual disconnect stays down until the user reconnects.
     if (!manualDisconnect) setTimeout(connect, 2000);
@@ -139,6 +145,7 @@ function handleMessage(msg) {
       updateButtonLabels(msg.button_labels);
       updateOwnerDisplay();
       updateStatusDisplay();
+      startPackPolling(msg.battery_poll_s);
       break;
     case "busy":
       // Server already has another device; it closes the socket right
@@ -165,6 +172,12 @@ function handleMessage(msg) {
       break;
     case "gait_state":
       currentGaitState = msg.state;
+      updateStatusDisplay();
+      break;
+    case "battery":
+      // Either field is null when the node has no fresh reading to give.
+      packVoltage = typeof msg.voltage === "number" ? msg.voltage : null;
+      packCurrent = typeof msg.current === "number" ? msg.current : null;
       updateStatusDisplay();
       break;
   }
@@ -208,6 +221,40 @@ function updateStatusDisplay() {
   const folded = currentGaitState === "folded";
   $("status-gait").textContent = (!folded && currentGait) || "—";
   $("status-animation").textContent = animationLabel(currentAnimation) || "—";
+  $("status-battery").textContent = packText();
+}
+
+// Pack readout: both values, or a single dash while neither is known.
+function packText() {
+  if (packVoltage === null && packCurrent === null) return "—";
+  const v = packVoltage === null ? "— V" : packVoltage.toFixed(2) + " V";
+  const a = packCurrent === null ? "— A" : packCurrent.toFixed(2) + " A";
+  return v + "  " + a;
+}
+
+// ── Pack telemetry polling ────────────────────────────────
+
+// Ask the node for voltage/current every `periodS` (its config value, sent
+// with "init"). Polled rather than pushed because the pack is sampled at
+// 10 Hz on the robot and the strip needs it about once a second.
+function startPackPolling(periodS) {
+  stopPackPolling();
+  const poll = function () {
+    send({ type: "battery" });
+  };
+  poll();
+  packTimer = setInterval(poll, Math.max(200, (periodS || 1) * 1000));
+}
+
+function stopPackPolling() {
+  if (packTimer !== null) {
+    clearInterval(packTimer);
+    packTimer = null;
+  }
+  // A dropped link makes the last reading meaningless, not merely old.
+  packVoltage = null;
+  packCurrent = null;
+  updateStatusDisplay();
 }
 
 function setJoysticksEnabled(enabled) {

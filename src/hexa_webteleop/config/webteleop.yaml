@@ -24,6 +24,16 @@ server:
 safety:
   input_timeout_s: 0.5
 
+# Pack telemetry for the status strip (sensor_msgs/BatteryState, published by
+# hexa_hardware on the real robot only — in sim nothing publishes it and the
+# readout stays a dash). The webapp polls it over the WebSocket at
+# poll_period_s; a reading older than stale_after_s reads as unknown, so a dead
+# hardware node shows a dash instead of a frozen number.
+telemetry:
+  battery_topic: /hexa_hardware_aux/battery_state
+  poll_period_s: 1.0
+  stale_after_s: 5.0
+
 # Logs page: the node runs `command` as a shell command on demand (GET /logs)
 # and returns its last `lines` lines. Robots under docker/systemd can override,
 # e.g. "journalctl -u hexapod -n 200 --no-pager -o short-iso".

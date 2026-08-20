@@ -37,12 +37,13 @@ syncing the animation cycler would be dead code, since the shared
   mode-dependent (node pushes labels on mode change). While a controller
   owns control the grid becomes an inline "Take control" prompt and the
   sticks are disabled.
-- **Status strip** — a one-line readout above the button grid showing the
-  current gait and animation mode (em dash until an animation is first
-  latched). Fed by the node from the latched command topics, so it follows
-  gamepad-initiated switches too, and stays visible while the take-control
-  prompt replaces the grid — a controller owner switching gaits is exactly
-  when the passive observer wants to see it.
+- **Status strip** — a compact readout above the button grid showing the
+  current gait, animation mode (em dash until an animation is first
+  latched) and pack voltage/current. Gait and animation are fed by the node
+  from the latched command topics, so the strip follows gamepad-initiated
+  switches too, and it stays visible while the take-control prompt replaces
+  the grid — a controller owner switching gaits is exactly when the passive
+  observer wants to see it.
 
 Default stick mapping (config): left = forward/strafe (gait) or x/y
 translation (posture); right = turn, plus forward on its Y axis so either
@@ -64,6 +65,25 @@ four legs, prev/next walks `quadruped_gait_cycle` instead, the four-corner
 rotation; the six-leg selection keeps its own slot and is waiting after the
 next fold. Posture mode still poses the body on four feet; only `record`
 goes inert there, for the reason `hexa_teleop`'s README gives.
+
+## Pack telemetry
+
+The node subscribes `sensor_msgs/BatteryState` (`telemetry.battery_topic`,
+default `/hexa_hardware_aux/battery_state` — the same topic the face and the
+front-panel button read) with sensor QoS, and the webapp **polls** it over the
+WebSocket every `telemetry.poll_period_s`, one reply per ask. Polled rather
+than broadcast because the robot samples the pack at 10 Hz while the strip
+needs it about once a second, and because a client that stops asking — a
+backgrounded tab — stops the traffic by itself. The node pushes the period in
+its `init` message, so it stays a config value rather than a constant in the
+webapp.
+
+Either value reads as a dash when it is unknown: nothing has published (the
+sim has no hardware node), the last reading is older than
+`telemetry.stale_after_s` so a dead hardware node cannot leave a frozen number
+on screen, or the board reported a non-finite value — that last one is not
+only defensive, since `NaN` is not JSON and would throw in the client's
+`JSON.parse`. The rule is pure and unit-tested (`battery_payload`).
 
 ## Safety
 
@@ -117,8 +137,8 @@ port 80 — arrive at all. Best-effort: a privileged port needs a root container
 
 ## Config
 
-Server port/heartbeat, safety watchdog timeout, stick deadband, and per-mode
-button→function bindings live in
+Server port/heartbeat, safety watchdog timeout, pack-telemetry topic and
+poll period, stick deadband, and per-mode button→function bindings live in
 [`config/webteleop.yaml`](config/webteleop.yaml) (documented inline).
 Velocity caps, the animation list, and the posture-mode scalar limits come
 from `hexa_description/config/tuning.yaml` (SSoT — `gait_node`,

@@ -6,6 +6,8 @@ gamepad teleop publishes: ``/cmd_vel``, ``/body/pose``, ``/cmd_gait``,
 ``/animation/mode``, ``/gait/initialize``. The webapp is pure HTML +
 JavaScript (no build step); the server serves the static files plus a
 ``/ws`` WebSocket and the ``/logs`` and ``/control/release`` endpoints.
+The webapp also polls pack telemetry (``sensor_msgs/BatteryState``) over
+the same WebSocket for its status strip.
 
 Coexistence with the gamepad teleop (``hexa_teleop.teleop_joy``) is
 mediated by ``/teleop/owner`` (``std_msgs/String``, TRANSIENT_LOCAL).
@@ -31,7 +33,9 @@ Architecture:
 - Shared state: ``threading.Lock``-protected stick/button values +
   last-input timestamp + client count + ownership flag. The WS handler
   writes; the timer reads. rclpy publishers are thread-safe, so
-  ``/teleop/owner`` is published from the WS handler directly.
+  ``/teleop/owner`` is published from the WS handler directly. The pack
+  reading crosses the other way (executor writes, WS handler reads) as a
+  single tuple swapped whole, which needs no lock.
 """
 
 from __future__ import annotations
@@ -49,7 +53,8 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Empty, String
 
 from hexa_teleop.joy_mapping import JoyState
@@ -64,6 +69,7 @@ from hexa_teleop.teleop_arbitration import (
 from . import captive_portal
 from .web_mapping import (
     NUM_BUTTONS,
+    battery_payload,
     button_labels_for_mode,
     input_is_stale,
     load_web_config,
@@ -142,6 +148,14 @@ class WebTeleopNode(Node):
         logs_cfg = raw.get("logs", {}) or {}
         self._logs_command = str(logs_cfg.get("command", "")).strip()
         self._logs_lines = int(logs_cfg.get("lines", 200))
+        telemetry_cfg = raw.get("telemetry", {}) or {}
+        self._battery_topic = str(
+            telemetry_cfg.get("battery_topic", "/hexa_hardware_aux/battery_state")
+        )
+        self._battery_poll_s = float(telemetry_cfg.get("poll_period_s", 2.0))
+        self._battery_stale_after_s = float(
+            telemetry_cfg.get("stale_after_s", 10.0)
+        )
         self._web_dir = str(
             Path(get_package_share_directory("hexa_webteleop")) / "web"
         )
@@ -164,6 +178,13 @@ class WebTeleopNode(Node):
         # Seeded to 0.0 so input reads stale until the first message lands.
         self._last_input_monotonic = 0.0
         self._input_stale = True
+
+        # Latest pack telemetry as ``(volts, amps, monotonic_stamp)``, or None
+        # until the first reading. Written by the executor thread, read by the
+        # server thread answering a poll: one tuple swapped whole, so the read
+        # is consistent without taking ``_lock``. Stamped off the monotonic
+        # clock, like the input watchdog — an NTP step must not age a reading.
+        self._battery: tuple[float, float, float] | None = None
 
         # Arbitration + client tracking
         self._arbitration = ArbitrationState()
@@ -196,6 +217,14 @@ class WebTeleopNode(Node):
         )
         self._sub_animation_mode = self.create_subscription(
             String, "/animation/mode", self._on_animation_mode, latched_qos
+        )
+        # Pack telemetry for the status strip. Sensor QoS (best-effort) to
+        # match hexa_hardware's publisher — a reliable reader would never
+        # match it. Real robot only: in sim nothing publishes here and the
+        # readout stays a dash.
+        self._sub_battery = self.create_subscription(
+            BatteryState, self._battery_topic, self._on_battery,
+            qos_profile_sensor_data,
         )
 
         # Publish "gamepad" on startup so a dormant gamepad from a
@@ -264,6 +293,9 @@ class WebTeleopNode(Node):
             "type": "animation",
             "animation": msg.data,
         })
+
+    def _on_battery(self, msg: BatteryState) -> None:
+        self._battery = (msg.voltage, msg.current, time.monotonic())
 
     def _tick(self) -> None:
         with self._lock:
@@ -508,6 +540,10 @@ class WebTeleopNode(Node):
             "gait_state": self._latest_gait_state,
             "gait": self._active_gait,
             "animation": self._latest_animation_mode,
+            # How often the client should poll for pack telemetry. Pushed
+            # rather than hard-coded in the webapp so the period stays a
+            # config value; see ``_handle_ws_message``.
+            "battery_poll_s": self._battery_poll_s,
         })
 
         try:
@@ -566,6 +602,17 @@ class WebTeleopNode(Node):
                     btns[idx] = 1 if pressed else 0
                     self._buttons = tuple(btns)
                     self._last_input_monotonic = time.monotonic()
+        elif msg_type == "battery":
+            # Polled rather than pushed: the pack is sampled at 10 Hz on the
+            # robot and the strip reads it once a second or so, so a reply per
+            # ask is far less traffic than a broadcast per reading — and a
+            # client that stops asking (backgrounded tab) stops the traffic.
+            await ws.send_json({
+                "type": "battery",
+                **battery_payload(
+                    self._battery, time.monotonic(), self._battery_stale_after_s
+                ),
+            })
         elif msg_type == "request_control":
             self._claim_control()
         elif msg_type == "release_control":

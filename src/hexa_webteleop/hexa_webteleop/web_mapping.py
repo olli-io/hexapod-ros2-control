@@ -27,6 +27,7 @@ unit-testable standalone.
 from __future__ import annotations
 
 import dataclasses
+import math
 from pathlib import Path
 
 import yaml
@@ -247,6 +248,34 @@ def input_is_stale(
     commanded velocity and walking the robot away.
     """
     return (now_monotonic - last_input_monotonic) > timeout_s
+
+
+def battery_payload(
+    reading: tuple[float, float, float] | None,
+    now_monotonic: float,
+    stale_after_s: float,
+) -> dict[str, float | None]:
+    """Pack voltage / current as the webapp's WebSocket fields.
+
+    ``reading`` is ``(volts, amps, monotonic_stamp)`` from the last
+    ``BatteryState``, or ``None`` before the first one arrives. A field
+    reads ``None`` — a dash in the webapp — when the pack has never been
+    heard (the sim publishes no telemetry at all), when the last reading
+    is older than ``stale_after_s`` so a dead hardware node cannot leave a
+    frozen number on screen, or when the board reported a non-finite
+    value. That last case is not only defensive: ``json.dumps`` writes a
+    bare ``NaN``, which is not JSON and throws in the client's
+    ``JSON.parse``, taking the whole message down with it.
+    """
+    if reading is None:
+        return {"voltage": None, "current": None}
+    voltage, current, stamp = reading
+    if (now_monotonic - stamp) > stale_after_s:
+        return {"voltage": None, "current": None}
+    return {
+        "voltage": voltage if math.isfinite(voltage) else None,
+        "current": current if math.isfinite(current) else None,
+    }
 
 
 def neutral_inputs() -> tuple[tuple[float, float], tuple[float, float], tuple[int, ...]]:
