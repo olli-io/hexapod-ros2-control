@@ -5,9 +5,10 @@ UI that publishes the **same** ROS topics as the gamepad teleop
 (`hexa_teleop`): `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/animation/mode`,
 `/gait/initialize`, plus `/teleop/owner`. Subscribes `/gait/state` for
 switch gating, and the latched `/cmd_gait` + `/animation/mode` themselves —
-the only truth for the current selection (locomotion publishes no name
+the only truth for the current *selection* (locomotion publishes no gait-name
 feedback), heard from **both** teleops and from its own publishes via
-loopback. `/cmd_gait` does double duty: it drives the UI's status strip
+loopback. It also subscribes `/gait/leg_set`, which is the engine's own report
+of the leg set it has applied and the Mode view's only source of truth. `/cmd_gait` does double duty: it drives the UI's status strip
 *and* resyncs the node's stick velocity caps and gait cycler when the
 gamepad switches gaits (`web_mapping.resync_gait`), so the two teleops
 agree on more than the display. `/animation/mode` is display-only —
@@ -31,7 +32,10 @@ syncing the animation cycler would be dead code, since the shared
 
 - **Navbar** (symbols only, top bar in portrait / left strip in landscape)
   — wifi connection indicator, controller icon (green while a controller
-  owns `/cmd_vel`; tap for a switch toggle), log icon.
+  owns `/cmd_vel`; tap for a switch toggle), **mode** icon (a six-legged
+  body whose middle pair dims on four legs, so the navbar carries the
+  current mode without the popover being open; tap for the Mode view),
+  log icon.
 - **Control area** — two touch joysticks flanking a 3×3 button grid; top 3
   buttons select mode (Gait / Posture / Anim), bottom 6 are
   mode-dependent (node pushes labels on mode change). While a controller
@@ -58,13 +62,41 @@ four-legged half of the init button: from the belly it stands the robot up
 with the middle pair left folded, and off the belly it folds like init does.
 It takes gait mode's second slot because `record` only does anything in
 posture mode, and it is bound in the gait section alone, which is what
-confines it to gait mode. It selects `default_quadruped_gait`, which stays
-out of `gait_cycle` — that init is the only way in, so prev/next can never
-ask a standing robot for a leg set it cannot reach without folding. Once on
-four legs, prev/next walks `quadruped_gait_cycle` instead, the four-corner
-rotation; the six-leg selection keeps its own slot and is waiting after the
-next fold. Posture mode still poses the body on four feet; only `record`
+confines it to gait mode. It selects the QUAD preset's gait, which lives in
+that preset's own rotation and never in the six-leg one — so prev/next can
+never ask a standing robot for a leg set it is not on. Once on four legs,
+prev/next walks the QUAD rotation instead; the six-leg selection keeps its own
+slot and is waiting when the robot comes back. The Mode view is the other way
+in, and unlike this button it does not need the belly. Posture mode still poses the body on four feet; only `record`
 goes inert there, for the reason `hexa_teleop`'s README gives.
+
+## Mode view
+
+A navbar icon opening a popover that lists the operator **presets** — `NORMAL`
+(six legs) and `QUAD` (four corners, middle pair parked) today, more later — and
+switches between them. Tapping one publishes that preset's remembered gait on
+`/cmd_gait`; the engine runs a **leg-set change** in place, without folding to
+the belly. See `hexa_teleop`'s README for what a preset is and
+`docs/leg-phases.md` for what the robot actually does.
+
+A popover rather than a page like `logs.html`: pending and refused are live
+states, and only the WebSocket carries them.
+
+- **The active row comes from `/gait/leg_set` and nothing else** — never the
+  tap, never the latched `/cmd_gait`. That command topic keeps a refused name
+  forever, so a view reading it would show a mode the robot never took, with
+  nothing to correct it. Before the first `/gait/leg_set` arrives no row is lit,
+  which is honest rather than a guess.
+- The client sets no optimistic state. During the ~2 s change the current row
+  stays filled and the target row goes dashed — "on six, going to four" — and
+  every row is inert until it lands.
+- A switch is **refused** where the engine would not take one: the node gates on
+  `/gait/state` before publishing (a leg-set change is legal only from a stand,
+  unlike a plain gait switch), and it holds a deadline for the cases it cannot
+  predict — the state moved between the tap and the tick, or the operator's body
+  pose never came back to neutral. `/gait/leg_set` publishes on change, so
+  silence past the deadline is the answer. Either way a reason appears under the
+  list and the active row does not move.
 
 ## Pack telemetry
 
@@ -104,9 +136,17 @@ inherit the departed one's inputs.
 
 ## Coexistence with gamepad teleop
 
-Both nodes run simultaneously; only one publishes. A single latched
-`/teleop/owner` (`gamepad` default, or `web`) arbitrates; only the web
-node writes it. Webapp connects as a passive observer, then **Take
+Both nodes run simultaneously; only one publishes **drive** commands. A single
+latched `/teleop/owner` (`gamepad` default, or `web`) arbitrates; only the web
+node writes it.
+
+A **Mode view switch is exempt**, deliberately: it touches neither `/cmd_vel`
+nor `/body/pose` — the two continuous streams arbitration exists to stop from
+fighting — and is one idempotent write to a latched selection topic the gamepad
+already writes without asking anyone. So the Mode view works while a controller
+drives, which is the point of it. The gamepad node follows the result by
+subscribing `/cmd_gait` itself (see its README), so its D-pad never ends up
+rotating a list the robot is not standing on. Webapp connects as a passive observer, then **Take
 control** → `request_control` → owner `web`, gamepad goes dormant.
 Releasing (toggle, disconnect, or `POST /control/release`) publishes
 `gamepad` and resumes it. Logic lives in
@@ -137,9 +177,12 @@ port 80 — arrive at all. Best-effort: a privileged port needs a root container
 
 ## Config
 
-Server port/heartbeat, safety watchdog timeout, pack-telemetry topic and
-poll period, stick deadband, and per-mode button→function bindings live in
-[`config/webteleop.yaml`](config/webteleop.yaml) (documented inline).
+Operator presets (the Mode view's list and each one's gait rotation), server
+port/heartbeat, safety watchdog timeout, pack-telemetry topic and poll period,
+stick deadband, and per-mode button→function bindings live in
+[`config/webteleop.yaml`](config/webteleop.yaml) (documented inline). A preset's
+leg set is derived from `hexa_common.gait_catalog`, never declared, and adding a
+third preset is an edit to that file alone.
 Velocity caps, the animation list, and the posture-mode scalar limits come
 from `hexa_description/config/tuning.yaml` (SSoT — `gait_node`,
 `posture_node` and `teleop_node` blocks), not from here. The scalar limits

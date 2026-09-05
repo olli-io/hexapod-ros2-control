@@ -33,6 +33,7 @@ Each arrow is "depends on" — the higher-level package imports the lower one (o
 - Web teleop: `hexa_webteleop` → `hexa_teleop` (shared mapping) → `cmd_vel` / `/body/pose`
 - `hexa_bringup` → `hexa_locomotion`, `hexa_display`, `hexa_buttons`, `hexa_buzzer` (composes the launch)
 - Face: `hexa_display` subscribes to `hexa_locomotion`'s `/gait/state` (+ hardware topics) and rasterizes the eyes on the SH1122 OLED in one process. Nothing else depends on it.
+- Leg set: `hexa_locomotion` also publishes `/gait/leg_set` (`std_msgs/String`, latched, `hexapod` | `quadruped`) — the set the engine has **applied**. Report only; the leg set is still commanded by naming a gait on `/cmd_gait`. It exists because that command topic is latched, so a request the engine refuses stays on it and a UI reading it would show a leg set the robot never took. Both teleops read it; the face does not.
 - Buttons: `hexa_buttons` → `/display/text` + `/bluetooth/scanning` → `hexa_display`. One-way and topic-only, so the face stays a pure sink; a future Bluetooth scanning utility plugs in at `/bluetooth/status`.
 - Buzzer: `hexa_hardware` → `/buzzer/play` → `hexa_buzzer`. One-way and topic-only, same shape as the face. The `boot` and `shutdown` tunes are host systemd units instead, because no container is running that early or that late.
 - Leaves: `hexa_description`, `hexa_interfaces`, `hexa_simulation`.

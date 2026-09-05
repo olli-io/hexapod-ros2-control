@@ -12,6 +12,9 @@ from hexa_webteleop import (
     load_web_config,
     map_web,
     neutral_inputs,
+    preset_descriptors,
+    preset_payload,
+    preset_pending_expired,
     resync_gait,
 )
 from hexa_teleop.joy_mapping import apply_deadband
@@ -27,11 +30,21 @@ DT = 0.02
 
 _WEBTELEOP_YAML = """
 initial_mode: gait
-gait_cycle: [tripod, surf, tetrapod, crawl, ripple]
-default_gait: tripod
 allow_unstable_gaits: false
-quadruped_gait_cycle: [quad_canter, quad_walk]
-default_quadruped_gait: quad_canter
+presets:
+  default: normal
+  switch_timeout_s: 4.0
+  list:
+    - id: normal
+      label: NORMAL
+      sub: six legs
+      gait_cycle: [tripod, surf, tetrapod, crawl, ripple]
+      default_gait: tripod
+    - id: quad
+      label: QUAD
+      sub: four corners, middle pair parked
+      gait_cycle: [quad_canter, quad_walk]
+      default_gait: quad_canter
 
 server:
   port: 8080
@@ -177,7 +190,7 @@ def _load(tmp_path):
 
 @pytest.fixture
 def cfg(tmp_path):
-    loaded_cfg, initial_mode, default_gait, _ = _load(tmp_path)
+    loaded_cfg, initial_mode, default_gait, _, _ = _load(tmp_path)
     return loaded_cfg, initial_mode, default_gait
 
 
@@ -540,10 +553,10 @@ def test_quadruped_button_held_across_a_mode_switch_does_not_fire(cfg):
 # ─── resync_gait: external /cmd_gait switches ───────────────────────
 
 def test_resync_gait_updates_caps_and_cycler(cfg_and_caps):
-    loaded_cfg, _, _, caps = cfg_and_caps
+    loaded_cfg, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
-    new_cfg = resync_gait("ripple", loaded_cfg, state, caps)
+    new_cfg = resync_gait("ripple", loaded_cfg, state, caps, registry)
     assert new_cfg is not None
     assert state.current_gait_idx == loaded_cfg.gait_cycle.index("ripple")
     assert math.isclose(new_cfg.gait_linear_max, caps.linear_max("ripple"))
@@ -552,10 +565,10 @@ def test_resync_gait_updates_caps_and_cycler(cfg_and_caps):
 
 def test_resync_gait_unknown_name_returns_none(cfg_and_caps):
     # A foreign string on /cmd_gait: no cfg, cycler untouched.
-    loaded_cfg, _, _, caps = cfg_and_caps
+    loaded_cfg, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=1)
-    assert resync_gait("moonwalk", loaded_cfg, state, caps) is None
+    assert resync_gait("moonwalk", loaded_cfg, state, caps, registry) is None
     assert state.current_gait_idx == 1
 
 
@@ -563,11 +576,11 @@ def test_resync_gait_outside_cycle_updates_caps_only(cfg_and_caps):
     # crawl is in the catalog but filtered from this config's gait_cycle
     # (unstable) — the gamepad may still command it. Caps follow; the
     # cycler keeps its old position.
-    loaded_cfg, _, _, caps = cfg_and_caps
+    loaded_cfg, _, _, caps, registry = cfg_and_caps
     assert "crawl" not in loaded_cfg.gait_cycle
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=2)
-    new_cfg = resync_gait("crawl", loaded_cfg, state, caps)
+    new_cfg = resync_gait("crawl", loaded_cfg, state, caps, registry)
     assert new_cfg is not None
     assert state.current_gait_idx == 2
     assert math.isclose(new_cfg.gait_linear_max, caps.linear_max("crawl"))
@@ -577,13 +590,13 @@ def test_resync_gait_own_loopback_is_idempotent(cfg_and_caps):
     # The node hears its own accepted publish back via loopback; map_joy
     # already advanced the cycler on the press, so the resync must land
     # on the same slot.
-    loaded_cfg, _, _, caps = cfg_and_caps
+    loaded_cfg, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
     out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)  # gait_next
     assert out.gait_select is not None
     idx_after_press = state.current_gait_idx
-    new_cfg = resync_gait(out.gait_select, loaded_cfg, state, caps)
+    new_cfg = resync_gait(out.gait_select, loaded_cfg, state, caps, registry)
     assert new_cfg is not None
     assert state.current_gait_idx == idx_after_press
 
@@ -677,3 +690,55 @@ def test_neutral_inputs_map_to_zero_velocity(cfg):
     assert out.linear_x == 0.0
     assert out.linear_y == 0.0
     assert out.angular_z == 0.0
+
+
+# ─── Mode view payloads ─────────────────────────────────────────────
+
+def test_preset_payload_reads_the_applied_leg_set(cfg_and_caps):
+    _, _, _, _, registry = cfg_and_caps
+    payload = preset_payload(registry, "quadruped", None, None)
+    assert payload["active"] == "quad"
+    assert payload["leg_set"] == "quadruped"
+    assert payload["pending"] is None
+    assert payload["refused"] is None
+
+    payload = preset_payload(registry, "hexapod", None, None)
+    assert payload["active"] == "normal"
+
+
+def test_preset_payload_is_blank_before_the_first_leg_set(cfg_and_caps):
+    # /gait/leg_set is latched, but nothing has published it yet in sim before
+    # the locomotion node starts. Showing no row beats guessing at one.
+    _, _, _, _, registry = cfg_and_caps
+    payload = preset_payload(registry, "", None, None)
+    assert payload["active"] is None
+    assert payload["leg_set"] is None
+
+
+def test_preset_payload_carries_pending_and_refused(cfg_and_caps):
+    _, _, _, _, registry = cfg_and_caps
+    payload = preset_payload(registry, "hexapod", "quad", None)
+    assert payload["active"] == "normal"
+    assert payload["pending"] == "quad"
+
+    payload = preset_payload(registry, "hexapod", None, "not while walking")
+    assert payload["refused"] == "not while walking"
+    # The active row never moves on a refusal — it is still what the robot is.
+    assert payload["active"] == "normal"
+
+
+def test_preset_descriptors_list_every_preset(cfg_and_caps):
+    _, _, _, _, registry = cfg_and_caps
+    rows = preset_descriptors(registry)
+    assert [r["id"] for r in rows] == ["normal", "quad"]
+    assert rows[0]["label"] == "NORMAL"
+    assert rows[1]["leg_set"] == "quadruped"
+
+
+def test_preset_pending_expired():
+    # /gait/leg_set publishes on change only, so a refusal the node could not
+    # predict arrives as silence; past the deadline that is the answer.
+    assert preset_pending_expired(10.0, 10.5) is True
+    assert preset_pending_expired(10.0, 9.5) is False
+    # Nothing pending never expires.
+    assert preset_pending_expired(None, 1e9) is False

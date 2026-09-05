@@ -32,7 +32,6 @@ from hexa_common import (
     load_velocity_caps,
     unit_stance_xy,
 )
-from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 
 from .joy_mapping import (
     ANIMATION,
@@ -48,9 +47,9 @@ from .joy_mapping import (
     PostureConfig,
     cross_section_function_check,
     map_joy,
-    resolve_gait_cycle,
     validate_bindings,
 )
+from .presets import HEXAPOD, QUADRUPED, PresetRegistry, load_presets, resync
 from .teleop_arbitration import GAMEPAD, ArbitrationState, on_owner_msg, should_publish
 
 # Matches the gamepad's polling rate (8BitDo and most modern pads: 250 Hz).
@@ -63,6 +62,10 @@ TICK_DT_S = 1.0 / PUBLISH_RATE_HZ
 # engine commits once it has settled back to a stand. The gait is locked
 # during engaging, and a switch is meaningless mid-ladder (initialize /
 # folding). The empty pre-first-publish state stays refused for free.
+# "folding_pair" / "unfolding_pair" are deliberately absent alongside
+# "initialize", "engaging" and "folding": the middle pair is between the ground
+# and the folded pose, and the engine refuses a switch there. A leg-set change
+# is narrower still — see presets.LEG_SET_SWITCH_STATES.
 _GAIT_SWITCH_STATES: frozenset[str] = frozenset(
     {"folded", "fault", "stand", "gait", "settling", "reseating"}
 )
@@ -109,7 +112,7 @@ def _parse_mode_bindings(
 
 def _load_config(
     path: Path, gait_yaml: Path, posture_yaml: Path, geometry_yaml: Path
-) -> tuple[JoyConfig, str, str, VelocityCaps, bool]:
+) -> tuple[JoyConfig, str, str, VelocityCaps, bool, PresetRegistry]:
     with path.open() as f:
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml, geometry_yaml)
@@ -120,56 +123,18 @@ def _load_config(
     # offsets. Teleop uses it only to saturate the height integrator.
     height_min, height_max = load_body_height_offsets(gait_yaml, posture_yaml)
 
-    gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
-    allow_unstable = bool(raw.get("allow_unstable_gaits", False))
-    unstable_gaits = frozenset(
-        name for name, descriptor in GAIT_DESCRIPTORS.items() if descriptor.unstable
-    )
-    # The two rotations are partitioned by leg set: each one's validator is
-    # handed the other set as foreign, so a quadruped gait in gait_cycle (or a
-    # six-leg gait in the quadruped rotation) is a load-time error rather than a
-    # cycler press the engine silently refuses.
-    quadruped_gaits = frozenset(
-        name
-        for name, descriptor in GAIT_DESCRIPTORS.items()
-        if descriptor.leg_set == "quadruped"
-    )
-    hexapod_gaits = frozenset(GAIT_DESCRIPTORS) - quadruped_gaits
-    gait_cycle = resolve_gait_cycle(
-        gait_cycle_raw,
-        set(GAIT_DESCRIPTORS),
-        unstable_gaits,
-        allow_unstable,
-        foreign_gaits=quadruped_gaits,
-    )
-    default_gait = str(raw["default_gait"])
-    if default_gait not in gait_cycle:
-        detail = (
-            "is excluded by allow_unstable_gaits: false"
-            if default_gait in gait_cycle_raw
-            else f"must be in gait_cycle={list(gait_cycle_raw)}"
-        )
-        raise ValueError(f"default_gait={default_gait!r} {detail}")
-
-    quad_cycle_raw = tuple(str(n) for n in raw["quadruped_gait_cycle"])
-    quadruped_gait_cycle = resolve_gait_cycle(
-        quad_cycle_raw,
-        set(GAIT_DESCRIPTORS),
-        unstable_gaits,
-        allow_unstable,
-        foreign_gaits=hexapod_gaits,
-        key="quadruped_gait_cycle",
-    )
-    default_quadruped_gait = str(raw["default_quadruped_gait"])
-    if default_quadruped_gait not in quadruped_gait_cycle:
-        detail = (
-            "is excluded by allow_unstable_gaits: false"
-            if default_quadruped_gait in quad_cycle_raw
-            else f"must be in quadruped_gait_cycle={list(quad_cycle_raw)}"
-        )
+    registry = load_presets(raw)
+    hexapod_preset = registry.active(HEXAPOD)
+    quadruped_preset = registry.active(QUADRUPED)
+    if hexapod_preset is None or quadruped_preset is None:
         raise ValueError(
-            f"default_quadruped_gait={default_quadruped_gait!r} {detail}"
+            "presets must declare at least one six-leg and one four-corner "
+            "preset: the init buttons stand up on one of each"
         )
+    gait_cycle = hexapod_preset.gait_cycle
+    default_gait = registry.entry_gait(hexapod_preset.id)
+    quadruped_gait_cycle = quadruped_preset.gait_cycle
+    default_quadruped_gait = registry.entry_gait(quadruped_preset.id)
 
     base = _parse_base(raw)
     gait_bindings = _parse_mode_bindings("gait", raw["gait"], base)
@@ -219,7 +184,7 @@ def _load_config(
         )
     arbitration_raw = raw.get("arbitration", {})
     arbitration_enabled = bool(arbitration_raw.get("enabled", True))
-    return cfg, initial_mode, default_gait, caps, arbitration_enabled
+    return cfg, initial_mode, default_gait, caps, arbitration_enabled, registry
 
 
 class TeleopJoyNode(Node):
@@ -245,7 +210,14 @@ class TeleopJoyNode(Node):
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
         )
-        self._cfg, initial_mode, default_gait, self._caps, self._arbitration_enabled = _load_config(
+        (
+            self._cfg,
+            initial_mode,
+            default_gait,
+            self._caps,
+            self._arbitration_enabled,
+            self._presets,
+        ) = _load_config(
             cfg_path, tuning_yaml_path, tuning_yaml_path, geometry_yaml_path
         )
         self._state = JoyState(
@@ -323,6 +295,14 @@ class TeleopJoyNode(Node):
         # changes only on a user press.
         gait_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._pub_cmd_gait = self.create_publisher(String, "/cmd_gait", gait_qos)
+        # And read it back. Both teleops write this topic, so without this the
+        # gamepad keeps its own idea of the gait, the cycler slot and the leg
+        # set while the web app changes all three — leaving the D-pad rotating
+        # a list the robot is not standing on. Own publishes arrive here too,
+        # via loopback, so both initiators take one bookkeeping path.
+        self._sub_cmd_gait = self.create_subscription(
+            String, "/cmd_gait", self._on_cmd_gait, gait_qos
+        )
         # Animation-mode selection (``""`` = default stack, otherwise
         # the name of the selected animation). transient_local so a
         # late-starting posture node still sees the current selection.
@@ -341,6 +321,43 @@ class TeleopJoyNode(Node):
 
     def _on_gait_state(self, msg: String) -> None:
         self._latest_gait_state = msg.data
+
+    def _on_cmd_gait(self, msg: String) -> None:
+        """Every gait on the wire — ours, heard back, or the web app's.
+
+        All the bookkeeping lives here (``_tick`` only gates and publishes):
+        stick caps, the cycler slot, the active preset, and the leg-set flag the
+        cycler picks its rotation off. Runs on the same single-threaded executor
+        as ``_tick``, so ``_cfg`` / ``_state`` need no lock.
+        """
+        name = msg.data
+        if name == self._active_gait:
+            return
+        result = resync(name, self._cfg, self._state, self._caps, self._presets)
+        if result is None:
+            self.get_logger().warning(
+                f"/cmd_gait={name!r} unknown to velocity caps — keeping "
+                f"{self._active_gait!r}"
+            )
+            return
+        self._cfg = result.cfg
+        self._active_gait = name
+        self.get_logger().info(
+            f"stick linear_max={result.cfg.gait_linear_max:.3f} m/s, "
+            f"angular_max={result.cfg.gait_angular_z_max:.3f} rad/s for gait "
+            f"{name!r}"
+        )
+        if result.leg_set_changed:
+            self.get_logger().info(
+                f"leg-set change to {name!r} — reverting the recorded posture "
+                f"(the engine holds the middle pair until the body is neutral)"
+            )
+        if result.left_animation_mode:
+            # Animations are six-leg only, so arriving on four has to leave the
+            # mode — and tell the pipeline, which is still holding the last
+            # selected animation.
+            self.get_logger().info("animation mode left (quadruped leg set)")
+            self._pub_animation_mode.publish(String(data=""))
 
     def _on_owner(self, msg: String) -> None:
         prev = self._arbitration.owner
@@ -385,25 +402,10 @@ class TeleopJoyNode(Node):
             # regardless.
             if self._latest_gait_state in _GAIT_SWITCH_STATES:
                 self.get_logger().info(f"switching gait to {out.gait_select!r}")
-                self._pub_cmd_gait.publish(String(data=out.gait_select))
-                # Update the active caps so the next stick read scales
-                # to the new gait's per-leg velocity ceiling. During a
-                # mid-walk switch the cap leads the engine for as long
-                # as it takes to settle — harmless, the engine clamps
-                # stride internally.
-                self._active_gait = out.gait_select
-                new_linear = self._caps.linear_max(self._active_gait)
-                new_angular = self._caps.angular_max(self._active_gait)
-                self._cfg = dataclasses.replace(
-                    self._cfg,
-                    gait_linear_max=new_linear,
-                    gait_angular_z_max=new_angular,
-                )
-                self.get_logger().info(
-                    f"stick linear_max={new_linear:.3f} m/s, "
-                    f"angular_max={new_angular:.3f} rad/s for gait "
-                    f"{self._active_gait!r}"
-                )
+                # Caps and cycler bookkeeping happens in _on_cmd_gait when
+                # this publish loops back — one path, whichever teleop
+                # initiated it. Sticks run on the old cap for the tick or two
+                # until then, invisible at 60 Hz.
             else:
                 self.get_logger().info(
                     f"gait switch to {out.gait_select!r} dropped — "

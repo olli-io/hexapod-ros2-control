@@ -14,6 +14,10 @@
 //
 // The pairs are what makes the middle rung safe both ways: while the feet carry
 // the body, only one mirrored pair is ever off the ground.
+//
+//   PairFoldController (leg-set change): the middle pair alone, between the
+//   ground and the folded pose, with the body standing on the four corners. Not
+//   a ladder — one rung, and that rung is PAIR_ORDER's own first one.
 #pragma once
 
 #include <array>
@@ -142,6 +146,85 @@ class RestPoseMove {
 
   float t_ = 0.0f;
   bool done_ = false;
+};
+
+// Which way the pair is going. FOLD lifts it off the ground to the folded pose
+// (the far half of a hexapod -> quadruped change); UNFOLD brings it back down.
+enum class PairFoldDirection { FOLD, UNFOLD };
+
+// UNFOLD alone has a SET_DOWN: the move runs at zero clearance, which forgoes
+// the swing profile's own probe, so the last few millimetres are their own
+// segment rather than the arc's tail.
+enum class PairFoldState { DWELL, MOVE, SET_DOWN, DONE };
+
+// The middle pair between the folded pose and the ground, moved while the body
+// stands on the four corners. The other half of a leg-set change; the reseat
+// does the corners.
+//
+// Both middles move together, for the reason PAIR_ORDER's own first rung gives:
+// the four corners hold the body either way and the two reactions cancel. The
+// path is a single eased chord with no waypoint, because standing (unlike on the
+// belly, where the initialized pose has to deploy the legs before they can swing
+// down past a chassis on the floor) it is a near-vertical line well outboard of
+// the corner feet, with every joint triple along it inside its limits.
+//
+// It emits all six legs every tick. The four corners come from the stance it was
+// handed, planted and un-parked; the caller owns nothing here.
+//
+// The pair is emitted `parked = false` throughout, even at the folded end: a
+// parked leg's joint angles bypass the body pose, an unparked one's do not, so
+// the two only agree at a neutral pose. The caller is responsible for having
+// reverted the operator's pose before building this — which is also what makes
+// the handover at either end exact, since IK round-trips the folded pose.
+class PairFoldController {
+ public:
+  // `held_stance` is where all six legs stand right now. `folded_stance` and
+  // `nominal_stance` are the pair's two endpoints; which is the origin and which
+  // the target follows from `direction`.
+  //
+  // The UNFOLD origin comes from `folded_stance`, never from `held_stance`: on a
+  // quadruped stand the caller's last targets carry the ground placeholder for a
+  // middle, not the pose its foot is actually at. The mode's own invariant — the
+  // pair does not leave the folded pose — is the only trustworthy source.
+  //
+  // `swing` must have zero clearance; see EngineConfig::pair_fold_profile for
+  // why that is a fact about the folded pose and not a tuning choice.
+  // `probe_band` is how far above its target the unfold hands over to the braked
+  // descent, which runs at the profile's own touchdown_velocity.
+  PairFoldController(PairFoldDirection direction,
+                     std::map<std::string, Vec3> held_stance,
+                     std::map<std::string, Vec3> folded_stance,
+                     std::map<std::string, Vec3> nominal_stance,
+                     float swing_time, float dwell_time, float probe_band,
+                     const SwingProfile& swing, float controller_dt);
+
+  PairFoldDirection direction() const { return direction_; }
+  PairFoldState state() const { return state_; }
+  bool done() const { return state_ == PairFoldState::DONE; }
+
+  std::map<std::string, LegOutput> update(float dt);
+
+ private:
+  std::map<std::string, LegOutput> emit(float pair_phase,
+                                        bool pair_stance) const;
+
+  PairFoldDirection direction_;
+  std::map<std::string, Vec3> held_;
+  // The pair's three waypoints: where it starts, where the chord ends, and where
+  // it finishes. The middle two differ only on an UNFOLD, by probe_band.
+  std::map<std::string, Vec3> origin_;
+  std::map<std::string, Vec3> chord_end_;
+  std::map<std::string, Vec3> final_;
+  float swing_time_;
+  float dwell_time_;
+  // probe_band / touchdown_velocity, or 0 when there is no SET_DOWN to run.
+  float set_down_time_ = 0.0f;
+  SwingProfile swing_;
+  float controller_dt_;
+
+  std::map<std::string, Vec3> pair_pos_;
+  PairFoldState state_ = PairFoldState::DWELL;
+  float t_ = 0.0f;
 };
 
 enum class InitializeState { UNFOLD, PLACE_FEET, LIFT_BODY, DONE };

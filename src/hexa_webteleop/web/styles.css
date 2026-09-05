@@ -104,6 +104,66 @@ button.nav-icon:active {
 /* Controller icon: green while a controller owns /cmd_vel. */
 #controller-btn.active { color: var(--green); }
 
+/* Mode icon: accent while a switch is in flight. The two middle legs dim when
+   the robot is standing on four, so the navbar carries the current mode without
+   the popover being open. */
+#preset-btn.active { color: var(--accent); }
+.preset-mid-leg { transition: opacity 0.2s ease; }
+#preset-btn.quad .preset-mid-leg { opacity: 0.2; }
+
+/* ── Mode popover rows ──────────────────────────────────────────── */
+
+#preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+
+.preset-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+.preset-label { font-size: 0.95rem; font-weight: 700; }
+.preset-sub { font-size: 0.75rem; color: var(--muted); }
+
+/* Active is the mode the robot is actually standing in — from /gait/leg_set,
+   never from the tap. Same solid fill the active teleop mode button uses. */
+.preset-item.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-dim);
+}
+.preset-item.active .preset-sub { color: var(--bg-dim); }
+
+/* Asked for, not yet arrived. Dashed rather than filled, so during the couple
+   of seconds the change takes both rows are legible: "on six, going to four". */
+.preset-item.pending {
+  border-style: dashed;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.preset-item.pending .preset-label::after {
+  content: " — switching…";
+  font-weight: 400;
+  font-size: 0.75rem;
+}
+
+.preset-item:disabled { opacity: 0.5; pointer-events: none; }
+
+#preset-note.refused { color: var(--red); }
+
 /* ── Control area ───────────────────────────────────────────────── */
 /* Portrait: joysticks top/bottom (column). Landscape: left/right (row).
    The button grid is always centred. */

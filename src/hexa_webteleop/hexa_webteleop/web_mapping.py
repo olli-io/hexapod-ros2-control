@@ -40,7 +40,14 @@ from hexa_common import (
     load_velocity_caps,
     unit_stance_xy,
 )
-from hexa_common.gait_catalog import GAIT_DESCRIPTORS
+
+from hexa_teleop.presets import (
+    HEXAPOD,
+    QUADRUPED,
+    PresetRegistry,
+    load_presets,
+    resync,
+)
 
 from hexa_teleop.joy_mapping import (
     ALL_FUNCTIONS,
@@ -56,7 +63,6 @@ from hexa_teleop.joy_mapping import (
     PostureConfig,
     cross_section_function_check,
     map_joy,
-    resolve_gait_cycle,
     validate_bindings,
 )
 
@@ -68,10 +74,10 @@ def load_web_config(
     gait_yaml: str | Path,
     posture_yaml: str | Path,
     geometry_yaml: str | Path,
-) -> tuple[JoyConfig, str, str, VelocityCaps]:
+) -> tuple[JoyConfig, str, str, VelocityCaps, PresetRegistry]:
     """Load ``webteleop.yaml`` + gait/posture/geometry configs into a ``JoyConfig``.
 
-    Returns ``(cfg, initial_mode, default_gait, caps)`` — same shape as
+    Returns ``(cfg, initial_mode, default_gait, caps, presets)`` — same shape as
     ``teleop_joy._load_config`` so the node can consume both identically.
     ``geometry_yaml`` supplies the leg mounts the angular cap is derived from.
     """
@@ -87,56 +93,18 @@ def load_web_config(
     # webteleop.yaml. Used only to saturate the height integrator.
     height_min, height_max = load_body_height_offsets(gait_yaml, posture_yaml)
 
-    gait_cycle_raw = tuple(str(n) for n in raw["gait_cycle"])
-    allow_unstable = bool(raw.get("allow_unstable_gaits", False))
-    unstable_gaits = frozenset(
-        name for name, descriptor in GAIT_DESCRIPTORS.items() if descriptor.unstable
-    )
-    # The two rotations are partitioned by leg set: each one's validator is
-    # handed the other set as foreign, so a quadruped gait in gait_cycle (or a
-    # six-leg gait in the quadruped rotation) is a load-time error rather than a
-    # cycler press the engine silently refuses.
-    quadruped_gaits = frozenset(
-        name
-        for name, descriptor in GAIT_DESCRIPTORS.items()
-        if descriptor.leg_set == "quadruped"
-    )
-    hexapod_gaits = frozenset(GAIT_DESCRIPTORS) - quadruped_gaits
-    gait_cycle = resolve_gait_cycle(
-        gait_cycle_raw,
-        set(GAIT_DESCRIPTORS),
-        unstable_gaits,
-        allow_unstable,
-        foreign_gaits=quadruped_gaits,
-    )
-    default_gait = str(raw["default_gait"])
-    if default_gait not in gait_cycle:
-        detail = (
-            "is excluded by allow_unstable_gaits: false"
-            if default_gait in gait_cycle_raw
-            else f"must be in gait_cycle={list(gait_cycle_raw)}"
-        )
-        raise ValueError(f"default_gait={default_gait!r} {detail}")
-
-    quad_cycle_raw = tuple(str(n) for n in raw["quadruped_gait_cycle"])
-    quadruped_gait_cycle = resolve_gait_cycle(
-        quad_cycle_raw,
-        set(GAIT_DESCRIPTORS),
-        unstable_gaits,
-        allow_unstable,
-        foreign_gaits=hexapod_gaits,
-        key="quadruped_gait_cycle",
-    )
-    default_quadruped_gait = str(raw["default_quadruped_gait"])
-    if default_quadruped_gait not in quadruped_gait_cycle:
-        detail = (
-            "is excluded by allow_unstable_gaits: false"
-            if default_quadruped_gait in quad_cycle_raw
-            else f"must be in quadruped_gait_cycle={list(quad_cycle_raw)}"
-        )
+    registry = load_presets(raw)
+    hexapod_preset = registry.active(HEXAPOD)
+    quadruped_preset = registry.active(QUADRUPED)
+    if hexapod_preset is None or quadruped_preset is None:
         raise ValueError(
-            f"default_quadruped_gait={default_quadruped_gait!r} {detail}"
+            "presets must declare at least one six-leg and one four-corner "
+            "preset: the init buttons stand up on one of each"
         )
+    gait_cycle = hexapod_preset.gait_cycle
+    default_gait = registry.entry_gait(hexapod_preset.id)
+    quadruped_gait_cycle = quadruped_preset.gait_cycle
+    default_quadruped_gait = registry.entry_gait(quadruped_preset.id)
 
     base_raw = raw["base"]
     button_index = {str(k): int(v) for k, v in base_raw["buttons"].items()}
@@ -212,7 +180,7 @@ def load_web_config(
             f"initial_mode must be one of "
             f"{POSTURE!r}, {GAIT!r}, {ANIMATION!r}; got {initial_mode!r}"
         )
-    return cfg, initial_mode, default_gait, caps
+    return cfg, initial_mode, default_gait, caps, registry
 
 
 def map_web(
@@ -284,34 +252,73 @@ def neutral_inputs() -> tuple[tuple[float, float], tuple[float, float], tuple[in
 
 
 def resync_gait(
-    name: str, cfg: JoyConfig, state: JoyState, caps: VelocityCaps
+    name: str,
+    cfg: JoyConfig,
+    state: JoyState,
+    caps: VelocityCaps,
+    registry: PresetRegistry,
 ) -> JoyConfig | None:
-    """Resync stick caps and the gait cycler to a commanded gait.
+    """Resync stick caps, the cycler and the active preset to a commanded gait.
 
-    Fed every ``/cmd_gait`` value the node hears — its own accepted
-    switches (heard back via loopback) and the gamepad's — so both
-    initiators take one bookkeeping path. Returns ``cfg`` rebuilt with
-    the gait's velocity caps, or ``None`` when the name is unknown to
-    the caps table (a foreign string on the topic; the caller logs and
-    keeps the old caps).
-
-    A gait valid in the catalog but outside ``cfg.gait_cycle`` (the
-    gamepad may allow unstable gaits this config excludes) still gets
-    its caps; the cycler keeps its old position, so the web's next
-    prev/next resumes from where its own selection left off.
+    A thin wrapper over ``hexa_teleop.presets.resync`` for callers that only
+    want the rebuilt config. The shared version lives in ``hexa_teleop`` because
+    the gamepad node needs the same bookkeeping — without it, a preset switch
+    made from the web app leaves its D-pad rotating the wrong list.
     """
-    try:
-        new_linear = caps.linear_max(name)
-        new_angular = caps.angular_max(name)
-    except KeyError:
-        return None
-    if name in cfg.gait_cycle:
-        state.current_gait_idx = cfg.gait_cycle.index(name)
-    elif name in cfg.quadruped_gait_cycle:
-        state.current_quadruped_gait_idx = cfg.quadruped_gait_cycle.index(name)
-    return dataclasses.replace(
-        cfg, gait_linear_max=new_linear, gait_angular_z_max=new_angular
-    )
+    result = resync(name, cfg, state, caps, registry)
+    return None if result is None else result.cfg
+
+
+def preset_payload(
+    registry: PresetRegistry,
+    leg_set: str | None,
+    pending: str | None,
+    refused: str | None,
+) -> dict:
+    """The webapp's ``preset`` message: which preset is actually in force.
+
+    ``leg_set`` is what ``/gait/leg_set`` last reported — the set the engine has
+    APPLIED — and is the only thing the active row is derived from. Never the
+    click, and never the latched ``/cmd_gait``: that topic keeps a refused name
+    forever, so a UI reading it would show a preset the robot never took, with
+    nothing to correct it.
+
+    ``None`` before the first ``/gait/leg_set`` arrives, which is honest — the
+    webapp shows no row lit rather than guessing at one.
+    """
+    active = registry.active_id(leg_set) if leg_set else None
+    return {
+        "active": active,
+        "leg_set": leg_set or None,
+        "pending": pending,
+        "refused": refused,
+    }
+
+
+def preset_descriptors(registry: PresetRegistry) -> list[dict]:
+    """The preset list the webapp renders, sent once with ``init``."""
+    return [
+        {
+            "id": p.id,
+            "label": p.label,
+            "sub": p.sub,
+            "leg_set": p.leg_set,
+        }
+        for p in registry.presets
+    ]
+
+
+def preset_pending_expired(
+    deadline_monotonic: float | None, now_monotonic: float
+) -> bool:
+    """True if a pending preset switch has outlived its deadline.
+
+    ``/gait/leg_set`` publishes on change only, so a refusal the node could not
+    predict — the engine's state moved between the click and the tick, or the
+    body pose never came back to neutral — arrives as silence. Silence past the
+    deadline is what the webapp reads as "it did not happen".
+    """
+    return deadline_monotonic is not None and now_monotonic > deadline_monotonic
 
 
 def button_labels_for_mode(cfg: JoyConfig, mode: str) -> tuple[str, ...]:

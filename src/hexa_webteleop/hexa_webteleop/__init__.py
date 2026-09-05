@@ -6,6 +6,9 @@ from .web_mapping import (
     load_web_config,
     map_web,
     neutral_inputs,
+    preset_descriptors,
+    preset_payload,
+    preset_pending_expired,
     resync_gait,
 )
 
@@ -17,5 +20,8 @@ __all__ = [
     "load_web_config",
     "map_web",
     "neutral_inputs",
+    "preset_descriptors",
+    "preset_payload",
+    "preset_pending_expired",
     "resync_gait",
 ]

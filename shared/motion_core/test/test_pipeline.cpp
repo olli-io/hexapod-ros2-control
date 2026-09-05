@@ -856,3 +856,256 @@ TEST(Quadruped, SelectStandsUpOnFourLegsAndFoldsBack) {
 }
 
 }  // namespace
+
+// ── Leg-set change from a stand ────────────────────────────────────────────
+//
+// The whole change over the core seam, the way hexa_locomotion drives it: a
+// /cmd_gait naming a gait of the other leg set, and nothing else. These are the
+// tests that see what the servos are actually told, which is where the frame
+// problem lives — a parked leg's angles bypass the body pose and a planted
+// leg's do not, so the pair crossing between them is the one place a step can
+// appear in theta that no foot-target test would catch.
+
+namespace {
+
+// Drive the change through to the far stand, returning every tick's result.
+// `pose` is held on the sticks throughout, so a test can starve the change of
+// the neutral pose it waits for.
+std::vector<pl::TickResult> run_change(pl::Pipeline& p, std::uint64_t& now_us,
+                                       std::string_view gait,
+                                       pl::CommandIntent hold = {},
+                                       int max_ticks = 6000) {
+  std::vector<pl::TickResult> steps;
+  pl::CommandIntent first = hold;
+  first.has_gait_select = true;
+  first.gait_select = gait;
+  steps.push_back(tick_cmd(p, first, now_us));
+  for (int i = 0; i < max_ticks; ++i) {
+    steps.push_back(tick_cmd(p, hold, now_us));
+    if (steps.back().engine_state == EngineState::STAND &&
+        p.engine().strategy_name() == gait) {
+      break;
+    }
+  }
+  return steps;
+}
+
+bool saw_state(const std::vector<pl::TickResult>& steps, EngineState want) {
+  for (const auto& r : steps) {
+    if (r.engine_state == want) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(LegSetChange, CmdGaitCarriesTheRobotBetweenTheStands) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+  ASSERT_EQ(p.engine().leg_set(), hexa::gait::LegSet::HEXAPOD);
+
+  const auto to_quad = run_change(p, now_us, "quad_walk");
+  ASSERT_EQ(p.engine().leg_set(), hexa::gait::LegSet::QUADRUPED)
+      << "never reached the four-corner stand";
+  EXPECT_TRUE(saw_state(to_quad, EngineState::RESEATING));
+  EXPECT_TRUE(saw_state(to_quad, EngineState::FOLDING_PAIR));
+  EXPECT_EQ(to_quad.back().leg_set, hexa::gait::LegSet::QUADRUPED)
+      << "the tick result never reported the applied set";
+
+  const auto to_hex = run_change(p, now_us, "tripod");
+  ASSERT_EQ(p.engine().leg_set(), hexa::gait::LegSet::HEXAPOD)
+      << "never came back to six legs";
+  EXPECT_TRUE(saw_state(to_hex, EngineState::UNFOLDING_PAIR));
+  EXPECT_TRUE(saw_state(to_hex, EngineState::RESEATING));
+
+  // And it walks on the far side — the change is not a one-way door into a
+  // stand that cannot engage.
+  for (int i = 0; i < 400; ++i) {
+    tick_cmd(p, drive(0.03f, 0.0f, 0.0f), now_us);
+  }
+  EXPECT_TRUE(p.engine().state() == EngineState::ENGAGING ||
+              p.engine().state() == EngineState::GAIT);
+}
+
+TEST(LegSetChange, TheBodyStaysInsideTheSupportPolygonThroughout) {
+  for (bool to_quad : {true, false}) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    if (to_quad) {
+      stand_up(p, now_us);
+    } else {
+      enter_quadruped(p, now_us);
+      if (::testing::Test::HasFatalFailure()) return;
+    }
+
+    const auto steps = run_change(p, now_us, to_quad ? "quad_walk" : "tripod");
+    float worst = 1.0f;
+    for (const auto& r : steps) {
+      worst = std::min(worst, support_margin(feet_from_theta(r)));
+    }
+    EXPECT_GT(worst, 0.008f)
+        << (to_quad ? "hex -> quad" : "quad -> hex") << " left only "
+        << worst * 1000.0f << " mm of static margin";
+  }
+}
+
+// The most valuable one. A single assertion that catches the frame problem, an
+// arc that climbs over the folded pose, the parked-flag flip and the posture
+// stack swapping under the body — all of which show up the same way, as a joint
+// command no servo can honour.
+//
+// The bound is each joint's own rated speed rather than a round number, which
+// is what makes it mean something: the reseat ladder already peaks around
+// 5 rad/s on a corner's femur, so a tighter threshold would be measuring the
+// ladder's tuning rather than this feature's continuity.
+TEST(LegSetChange, NoJointCommandOutrunsItsServo) {
+
+  for (bool to_quad : {true, false}) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    if (to_quad) {
+      stand_up(p, now_us);
+    } else {
+      enter_quadruped(p, now_us);
+      if (::testing::Test::HasFatalFailure()) return;
+    }
+
+    // Settle on the core seam first. stand_up drives the pad, whose neutral
+    // posture baseline is not the CommandIntent's zero, and the one-tick hop
+    // between the two seams is a test artefact rather than anything the robot
+    // does. What is being measured starts after it.
+    for (int i = 0; i < 400; ++i) {
+      tick_cmd(p, pl::CommandIntent{}, now_us);
+    }
+
+    const auto steps = run_change(p, now_us, to_quad ? "quad_walk" : "tripod");
+    ASSERT_GT(steps.size(), 2u);
+    for (std::size_t i = 1; i < steps.size(); ++i) {
+      for (std::size_t j = 0; j < servo_out::kNumJoints; ++j) {
+        const float step = std::fabs(steps[i].theta[j] - steps[i - 1].theta[j]);
+        const float budget =
+            hexa::config::kJointLimits[j % 3].velocity * pl::kDt;
+        ASSERT_LT(step, budget)
+            << "joint " << j << " was commanded " << step / pl::kDt
+            << " rad/s on tick " << i << ", past its rated "
+            << hexa::config::kJointLimits[j % 3].velocity << " ("
+            << (to_quad ? "hex -> quad" : "quad -> hex") << ")";
+      }
+    }
+  }
+}
+
+
+TEST(LegSetChange, WaitsForThePoseToRevert) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+
+  // A body pose held on the sticks. The change is accepted — the operator asked
+  // for it and it is a legal request — but nothing moves while the pose is out.
+  pl::CommandIntent posed;
+  posed.pose_y = 0.03f;
+
+  pl::CommandIntent ask = posed;
+  ask.has_gait_select = true;
+  ask.gait_select = "quad_walk";
+  const pl::TickResult first = tick_cmd(p, ask, now_us);
+  EXPECT_TRUE(first.gait_accepted);
+
+  for (int i = 0; i < 400; ++i) {
+    tick_cmd(p, posed, now_us);
+  }
+  EXPECT_EQ(p.engine().state(), EngineState::STAND)
+      << "the change ran with the body still posed";
+  EXPECT_EQ(p.engine().leg_set(), hexa::gait::LegSet::HEXAPOD);
+
+  // Release it — this is what the teleops' own revert looks like from here —
+  // and the change runs.
+  bool arrived = false;
+  for (int i = 0; i < 6000 && !arrived; ++i) {
+    tick_cmd(p, pl::CommandIntent{}, now_us);
+    arrived = p.engine().leg_set() == hexa::gait::LegSet::QUADRUPED;
+  }
+  EXPECT_TRUE(arrived) << "the change never ran once the pose was released";
+}
+
+TEST(LegSetChange, GivesUpIfThePoseNeverComesBack) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+
+  pl::CommandIntent posed;
+  posed.pose_y = 0.03f;
+  pl::CommandIntent ask = posed;
+  ask.has_gait_select = true;
+  ask.gait_select = "quad_walk";
+  tick_cmd(p, ask, now_us);
+
+  // Nothing is easing the pose out — a client holding /body/pose. The request
+  // is dropped and the caller is told which of the two refusals this was.
+  bool blocked = false;
+  for (int i = 0; i < 2000 && !blocked; ++i) {
+    blocked = tick_cmd(p, posed, now_us).gait_blocked_by_posture;
+  }
+  EXPECT_TRUE(blocked) << "the request stayed armed forever";
+  EXPECT_EQ(p.engine().leg_set(), hexa::gait::LegSet::HEXAPOD);
+
+  // And it stays dropped: releasing the pose later does not fire a request the
+  // operator has long since given up on.
+  for (int i = 0; i < 2000; ++i) {
+    tick_cmd(p, pl::CommandIntent{}, now_us);
+  }
+  EXPECT_EQ(p.engine().leg_set(), hexa::gait::LegSet::HEXAPOD);
+}
+
+TEST(LegSetChange, ABodyPosePushedMidChangeDoesNotReachTheMiddles) {
+  // The pin: once the pair is in the air, the frame it is crossing between must
+  // not move under it. A stick pushed mid-change is ignored, so the joints the
+  // pair is commanded through are the same ones a neutral run produces.
+  const auto record = [](bool push) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    stand_up(p, now_us);
+    pl::CommandIntent hold;
+    std::vector<std::array<float, 6>> middles;
+
+    pl::CommandIntent ask;
+    ask.has_gait_select = true;
+    ask.gait_select = "quad_walk";
+    tick_cmd(p, ask, now_us);
+    for (int i = 0; i < 6000; ++i) {
+      const pl::TickResult r = tick_cmd(p, hold, now_us);
+      if (r.engine_state == EngineState::FOLDING_PAIR) {
+        // Only once the pair is airborne, so the wait above is not what is
+        // being tested here.
+        if (push) {
+          hold.pose_x = 0.04f;
+          hold.pose_y = -0.04f;
+          hold.pose_roll = 0.2f;
+        }
+        std::array<float, 6> t{};
+        for (int j = 0; j < 3; ++j) {
+          t[static_cast<std::size_t>(j)] =
+              r.theta[hexa::leg_index(hexa::Leg::L_MIDDLE) * 3 + j];
+          t[static_cast<std::size_t>(j + 3)] =
+              r.theta[hexa::leg_index(hexa::Leg::R_MIDDLE) * 3 + j];
+        }
+        middles.push_back(t);
+      }
+      if (p.engine().leg_set() == hexa::gait::LegSet::QUADRUPED) break;
+    }
+    return middles;
+  };
+
+  const auto quiet = record(false);
+  const auto pushed = record(true);
+  ASSERT_FALSE(quiet.empty());
+  ASSERT_EQ(quiet.size(), pushed.size());
+  for (std::size_t i = 0; i < quiet.size(); ++i) {
+    for (std::size_t j = 0; j < 6; ++j) {
+      EXPECT_NEAR(quiet[i][j], pushed[i][j], 1e-6f)
+          << "the pair moved with the body pose at sample " << i;
+    }
+  }
+}

@@ -379,11 +379,24 @@ bool Engine::set_strategy(const std::string& name) {
     }
     return true;
   }
-  // Off the belly it is not. The middle pair is either folded or standing, and
-  // the only thing that moves it between the two is the stand ladder — so a
-  // strategy that walks the other leg set is refused until the next fold.
+  // Off the belly a change of set is a change of stance and a move of the
+  // middle pair, so it is only taken from a stand — never mid-ladder, never
+  // mid-engagement, and never from a walk, which is what makes "refused while
+  // walking" total rather than a matter of timing. The ladder itself is armed
+  // in update()'s STAND branch; this only latches the request.
   if (want != leg_set_) {
-    return false;
+    if (state_ != EngineState::STAND) {
+      return false;
+    }
+    if (!quadruped_available() || !leg_specs_.has_value() ||
+        !reseat_geometry_.has_value()) {
+      // No four-corner stance, or no geometry to reseat through: there is no
+      // ladder to run, so this is a refusal rather than a half-done change.
+      return false;
+    }
+    pending_leg_set_ = want;
+    pending_strategy_name_ = name;
+    return true;
   }
   if (state_ == EngineState::STAND) {
     if (name != strategy_name_) {
@@ -416,6 +429,17 @@ bool Engine::start_initialize() {
   return true;
 }
 
+void Engine::set_leg_set(LegSet set) {
+  if (set == leg_set_) {
+    return;
+  }
+  leg_set_ = set;
+  // Both read the set: which legs walk, and what swing margin the engagement is
+  // priced against.
+  refresh_active_legs();
+  engagement_ = build_engagement();
+}
+
 void Engine::apply_leg_set(LegSet set) {
   if (set == leg_set_) {
     return;
@@ -444,6 +468,9 @@ void Engine::enter_fault() {
   reversal_.reset();
   pending_fold_ = false;
   pending_strategy_name_.reset();
+  // A change the operator asked for before the board tripped means nothing on
+  // the far side of a fault: recovery is the cold start, on six legs.
+  pending_leg_set_.reset();
   // The folded baseline is a six-leg pose, so the leg set has to come back with
   // it, and with it the strategy: recovering through start_initialize() reads
   // the strategy's leg set, and a four-leg one would stand the robot up on a
@@ -523,6 +550,44 @@ std::unique_ptr<ReseatController> Engine::build_reseat(
       config_.reseat_pair_dwell_time, config_.reseat_profile(),
       config_.controller_dt, reseat_rungs(leg_set_), ladder_shift_time(),
       config_.support_shift_lead);
+}
+
+void Engine::begin_reseat(const std::map<std::string, Vec3>& target_stance,
+                          float target_height) {
+  reseat_ = build_reseat(target_stance);
+  reseat_target_stance_ = target_stance;
+  reseat_target_height_ = target_height;
+  state_ = EngineState::RESEATING;
+}
+
+std::unique_ptr<PairFoldController> Engine::build_pair_fold(
+    PairFoldDirection direction) {
+  if (leg_set_ != LegSet::HEXAPOD) {
+    // The pair only moves with all four corners priced and rung as six-leg
+    // hardware. Reaching here on the quadruped set would mean the reseat ahead
+    // of it ran the four-corner ladder, which is the thing the ordering exists
+    // to prevent.
+    throw std::invalid_argument("pair fold requires the hexapod leg set");
+  }
+  return std::make_unique<PairFoldController>(
+      direction, last_targets_, folded_, nominal_,
+      config_.pair_fold_swing_time, config_.pair_fold_dwell_time,
+      config_.pair_fold_probe_band(), config_.pair_fold_profile(),
+      config_.controller_dt);
+}
+
+void Engine::commit_leg_set_change() {
+  if (!pending_leg_set_.has_value()) {
+    return;
+  }
+  // The set first: apply_strategy rebuilds the engagement, which prices itself
+  // against the swing margin of whichever set is in force when it runs.
+  set_leg_set(*pending_leg_set_);
+  pending_leg_set_.reset();
+  if (pending_strategy_name_.has_value()) {
+    apply_strategy(*pending_strategy_name_);
+    pending_strategy_name_.reset();
+  }
 }
 
 void Engine::commit_new_nominal(const std::map<std::string, Vec3>& new_nominal,
@@ -623,7 +688,12 @@ std::map<std::string, LegOutput> Engine::update(
 
   if (state_ == EngineState::STAND) {
     if (!cmd_zero) {
-      // Walking takes priority over a pending reseat / fold.
+      // Walking takes priority over a pending reseat / fold. It also drops a
+      // leg-set change outright rather than banking it: a request only ever
+      // runs from the stand it was made at, or "refused while walking" would
+      // mean "deferred until you stop", which is a different promise.
+      pending_leg_set_.reset();
+      pending_strategy_name_.reset();
       engagement_->begin(*strategy_, active_legs_);
       state_ = EngineState::ENGAGING;
       return tick_engagement(dt, v_body_xy, omega_z);
@@ -632,9 +702,32 @@ std::map<std::string, LegOutput> Engine::update(
         std::fabs(applied_height_) <= config_.reseat_height_change_threshold &&
         std::fabs(target_height_) <= config_.reseat_height_change_threshold) {
       pending_fold_ = false;
+      // The fold is where the operator wants to be; it reaches a leg-set-
+      // neutral FOLDED on its own, so an unstarted change is just dropped.
+      pending_leg_set_.reset();
+      pending_strategy_name_.reset();
       fold_ = build_fold();
       state_ = EngineState::FOLDING;
       return tick_fold(dt);
+    }
+    // A leg-set change, ahead of the height reseat: both want the ladder, and
+    // this one has a pair of legs to move as well. The order is fixed by which
+    // way it is going — the reseat always runs on six planted feet.
+    if (pending_leg_set_.has_value() && *pending_leg_set_ != leg_set_) {
+      if (*pending_leg_set_ == LegSet::QUADRUPED) {
+        // Corners onto the four-corner footprint first, with the middle pair
+        // still down. It agrees with the six-leg stance on the middles, so the
+        // ladder skips their rung outright.
+        begin_reseat(stance_for(LegSet::QUADRUPED), applied_height_);
+        return tick_reseat(dt);
+      }
+      // The other way the pair comes down first, so the reseat that follows it
+      // also runs on six. Commit the set now: nominal_ still holds the quad
+      // stance, whose middle entries are exactly where the pair is headed.
+      commit_leg_set_change();
+      pair_fold_ = build_pair_fold(PairFoldDirection::UNFOLD);
+      state_ = EngineState::UNFOLDING_PAIR;
+      return tick_pair_fold(dt);
     }
     if (reseat_geometry_.has_value() && leg_specs_.has_value() &&
         std::fabs(target_height_ - applied_height_) >
@@ -650,10 +743,7 @@ std::map<std::string, LegOutput> Engine::update(
         // resting on a stance it was never solved for.
         return emit_stand();
       }
-      reseat_ = build_reseat(target_stance);
-      state_ = EngineState::RESEATING;
-      reseat_target_stance_ = target_stance;
-      reseat_target_height_ = target_height_;
+      begin_reseat(target_stance, target_height_);
       return tick_reseat(dt);
     }
     return emit_stand();
@@ -661,6 +751,13 @@ std::map<std::string, LegOutput> Engine::update(
 
   if (state_ == EngineState::RESEATING) {
     return tick_reseat(dt);
+  }
+
+  // Neither reads the command: a stick pushed while the pair is in the air is
+  // ignored, and the walk engages from the stand on the far side.
+  if (state_ == EngineState::FOLDING_PAIR ||
+      state_ == EngineState::UNFOLDING_PAIR) {
+    return tick_pair_fold(dt);
   }
 
   if (state_ == EngineState::ENGAGING) {
@@ -973,10 +1070,7 @@ void Engine::hand_off_to_reseat() {
   reversal_.reset();
   stance_.reset();
   reset_swing_state();
-  reseat_ = build_reseat(nominal_);
-  reseat_target_stance_ = nominal_;
-  reseat_target_height_ = applied_height_;
-  state_ = EngineState::RESEATING;
+  begin_reseat(nominal_, applied_height_);
 }
 
 void Engine::finish_settling() {
@@ -1001,16 +1095,57 @@ std::map<std::string, LegOutput> Engine::tick_reseat(float dt) {
   overlay_parked(out);
   capture_state(out);
   if (reseat_->done()) {
+    // The corners have arrived; the footprint they arrived on is now nominal.
+    commit_new_nominal(reseat_target_stance_, reseat_target_height_);
+    // A leg-set change still owing its pair fold: this was the reseat that runs
+    // AHEAD of it, so the pair goes up next rather than the robot standing. The
+    // pending strategy is deliberately left alone — it names a gait of the set
+    // the robot is not on yet, and commit_leg_set_change applies the two
+    // together on the far side.
+    if (pending_leg_set_.has_value() && *pending_leg_set_ != leg_set_) {
+      pair_fold_ = build_pair_fold(PairFoldDirection::FOLD);
+      state_ = EngineState::FOLDING_PAIR;
+      return out;
+    }
     // Commit a pending gait change at the RESEATING -> STAND handoff.
     std::optional<std::string> pending = pending_strategy_name_;
     pending_strategy_name_.reset();
     if (pending.has_value() && *pending != strategy_name_) {
       apply_strategy(*pending);
     }
-    commit_new_nominal(reseat_target_stance_, reseat_target_height_);
+    // Nothing owing: either there never was a change, or this was the reseat
+    // that ran after the unfold and the set was committed before it started.
+    pending_leg_set_.reset();
     state_ = EngineState::STAND;
     last_targets_ = nominal_;
     for (const auto& n : LEG_NAMES) last_stance_[n] = true;
+  }
+  return out;
+}
+
+std::map<std::string, LegOutput> Engine::tick_pair_fold(float dt) {
+  auto out = pair_fold_->update(dt);
+  // No overlay_parked: leg_set_ is HEXAPOD for the whole move, and the pair is
+  // the one thing this controller is emitting itself. capture_state matters
+  // more than usual here — on the way down it is what makes last_targets_
+  // honest for all six before the reseat that follows reads it as the stance
+  // the feet are actually standing on.
+  capture_state(out);
+  if (!pair_fold_->done()) {
+    return out;
+  }
+  if (pair_fold_->direction() == PairFoldDirection::FOLD) {
+    // The pair is at the folded pose, so the flag may now say so. This is the
+    // one tick where leg_set_ and the pair's actual position change together.
+    commit_leg_set_change();
+    state_ = EngineState::STAND;
+    last_targets_ = nominal_;
+    for (const auto& n : LEG_NAMES) last_stance_[n] = true;
+  } else {
+    // Down and planted on the middle nominal, which both stances agree on. The
+    // corners are still out on the quadruped footprint; the reseat walks them
+    // in, and commits the six-leg stance when they arrive.
+    begin_reseat(stance_for(LegSet::HEXAPOD), applied_height_);
   }
   return out;
 }
@@ -1076,6 +1211,8 @@ EngineConfig engine_config_from_config() {
   cfg.reseat_pair_swing_time = c.reseat_pair_swing_time;
   cfg.reseat_pair_dwell_time = c.reseat_pair_dwell_time;
   cfg.reseat_swing_clearance = c.reseat_swing_clearance;
+  cfg.pair_fold_swing_time = c.pair_fold_swing_time;
+  cfg.pair_fold_dwell_time = c.pair_fold_dwell_time;
   return cfg;
 }
 
@@ -1315,6 +1452,10 @@ std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
       ::hexa::config::kFootRadius, quad_standing_pose_from_config());
 }
 
+std::string leg_set_value(LegSet set) {
+  return set == LegSet::QUADRUPED ? "quadruped" : "hexapod";
+}
+
 std::string state_value(EngineState s) {
   switch (s) {
     case EngineState::FOLDED: return "folded";
@@ -1325,6 +1466,8 @@ std::string state_value(EngineState s) {
     case EngineState::SETTLING: return "settling";
     case EngineState::FOLDING: return "folding";
     case EngineState::RESEATING: return "reseating";
+    case EngineState::FOLDING_PAIR: return "folding_pair";
+    case EngineState::UNFOLDING_PAIR: return "unfolding_pair";
     case EngineState::FAULT: return "fault";
   }
   return "unknown";
@@ -1340,6 +1483,8 @@ std::string state_name(EngineState s) {
     case EngineState::SETTLING: return "SETTLING";
     case EngineState::FOLDING: return "FOLDING";
     case EngineState::RESEATING: return "RESEATING";
+    case EngineState::FOLDING_PAIR: return "FOLDING_PAIR";
+    case EngineState::UNFOLDING_PAIR: return "UNFOLDING_PAIR";
     case EngineState::FAULT: return "FAULT";
   }
   return "UNKNOWN";

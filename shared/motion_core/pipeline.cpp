@@ -7,6 +7,7 @@
 #include <tuple>
 
 #include "config_generated.hpp"
+#include "gait/gaits/registry.hpp"
 #include "kinematics/leg_ik.hpp"
 #include "leg_index.hpp"
 
@@ -29,6 +30,36 @@ bool gait_switch_allowed(hexa::gait::EngineState s) {
 bool engine_armable(hexa::gait::EngineState s) {
   return s != hexa::gait::EngineState::FAULT;
 }
+
+// How near identity the operator's body pose has to be before the middle pair
+// may cross between planted and parked. Tight on purpose: a folded middle's foot
+// is ~0.1 m from its femur joint, so 5 mm of body y is already 4.5 degrees of
+// femur. Deadbanded sticks at rest give exactly zero, so this asks for "hands
+// off the pose sticks", not for a steady hand.
+constexpr float kNeutralPoseEpsilon = 1e-3f;
+
+bool pose_is_neutral(const hexa::posture::BodyPose& p) {
+  return std::fabs(p.x) < kNeutralPoseEpsilon &&
+         std::fabs(p.y) < kNeutralPoseEpsilon &&
+         std::fabs(p.z) < kNeutralPoseEpsilon &&
+         std::fabs(p.roll) < kNeutralPoseEpsilon &&
+         std::fabs(p.pitch) < kNeutralPoseEpsilon &&
+         std::fabs(p.yaw) < kNeutralPoseEpsilon;
+}
+
+// The engine is mid-leg-set-change: the middle pair is between the ground and
+// the folded pose.
+bool pair_in_flight(hexa::gait::EngineState s) {
+  return s == hexa::gait::EngineState::FOLDING_PAIR ||
+         s == hexa::gait::EngineState::UNFOLDING_PAIR;
+}
+
+// How long a leg-set change waits for the pose. The teleops' own revert eases a
+// recorded posture out over a few multiples of posture.revert_tau (0.25 s), so
+// this is several times the time it should take — long enough that a slow
+// revert is never mistaken for a stuck one, short enough that an operator whose
+// request went nowhere finds out while they still remember making it.
+constexpr float kPoseRevertTimeout = 3.0f;
 
 // Gates the posture chain's walking-only vs idle-only animations.
 constexpr float kCmdVelZeroTol = 1e-4f;
@@ -150,13 +181,65 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
     r.has_gait_select = true;
     std::string name(jo.gait_select);
     r.gait_select = name;
-    if (gait_switch_allowed(engine_->state()) && engine_->set_strategy(name)) {
+    // From the belly the leg set is still open — a four-corner gait there is
+    // the ordinary selection start_initialize() reads to pick its ladder, not a
+    // change of anything. It only becomes a change once a robot is standing on
+    // a set, which is also the only time there is a middle pair to move.
+    const hexa::gait::EngineState st_now = engine_->state();
+    const bool off_the_belly = st_now != hexa::gait::EngineState::FOLDED &&
+                               st_now != hexa::gait::EngineState::FAULT;
+    const bool changes_leg_set =
+        off_the_belly && hexa::gait::leg_set_of(name) != engine_->leg_set();
+    if (changes_leg_set) {
+      // Held here rather than handed to the engine, until the operator's pose
+      // is out of the way. Asking the teleop for it is the caller's job on the
+      // ROS path (it owns /body/pose); on the joy path this pipeline owns the
+      // posture baseline, so it starts the revert itself.
+      if (gait_switch_allowed(engine_->state()) &&
+          engine_->state() == hexa::gait::EngineState::STAND) {
+        pending_leg_set_gait_ = name;
+        pending_leg_set_elapsed_ = 0.0f;
+        joystate_.reverting = true;
+        r.gait_accepted = true;
+      }
+    } else if (gait_switch_allowed(engine_->state()) &&
+               engine_->set_strategy(name)) {
       control_.set_gait(name);
       joycfg_.gait_linear_max = caps_.linear_max(name);
       joycfg_.gait_angular_z_max = caps_.angular_max(name);
       r.gait_accepted = true;
       r.gait_linear_max = joycfg_.gait_linear_max;
       r.gait_angular_z_max = joycfg_.gait_angular_z_max;
+    }
+  }
+
+  // A leg-set change waiting on the pose. It only ever runs from the stand it
+  // was asked at, so anything that leaves STAND drops it — the same rule the
+  // engine applies to a request it has already taken.
+  if (pending_leg_set_gait_.has_value()) {
+    pending_leg_set_elapsed_ += in.dt;
+    const bool live = pose_is_neutral(last_body_pose_) &&
+                      pose_is_neutral(hexa::posture::BodyPose{
+                          jo.pose_x, jo.pose_y, jo.pose_z, jo.pose_roll,
+                          jo.pose_pitch, jo.pose_yaw});
+    if (engine_->state() != hexa::gait::EngineState::STAND) {
+      pending_leg_set_gait_.reset();
+    } else if (live) {
+      const std::string name = *pending_leg_set_gait_;
+      pending_leg_set_gait_.reset();
+      if (engine_->set_strategy(name)) {
+        control_.set_gait(name);
+        joycfg_.gait_linear_max = caps_.linear_max(name);
+        joycfg_.gait_angular_z_max = caps_.angular_max(name);
+        r.gait_linear_max = joycfg_.gait_linear_max;
+        r.gait_angular_z_max = joycfg_.gait_angular_z_max;
+      }
+    } else if (pending_leg_set_elapsed_ > kPoseRevertTimeout) {
+      // Nothing is easing the pose out — a client holding /body/pose, most
+      // likely. Drop it and say why, rather than leaving the request armed for
+      // however long it takes the operator to notice nothing happened.
+      pending_leg_set_gait_.reset();
+      r.gait_blocked_by_posture = true;
     }
   }
 
@@ -234,18 +317,31 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   // walking gates the animations off the post-watchdog command, so a stale link
   // settles the body too. update() returns the clamped body_pose_target, or
   // IDENTITY while pre-stand.
-  posture_.set_user_pose(hexa::posture::BodyPose{jo.pose_x, jo.pose_y, jo.pose_z,
-                                                 jo.pose_roll, jo.pose_pitch,
-                                                 jo.pose_yaw});
+  // Pinned to identity while the pair is in the air. The wait above already
+  // required a neutral pose to start, so this is the backstop against a stick
+  // pushed mid-change — which is ignored rather than obeyed, because the one
+  // thing that must not move under a leg crossing between the two frames is the
+  // frame itself.
+  const hexa::posture::BodyPose user_pose =
+      pair_in_flight(st) ? hexa::posture::BodyPose{}
+                         : hexa::posture::BodyPose{jo.pose_x, jo.pose_y,
+                                                   jo.pose_z, jo.pose_roll,
+                                                   jo.pose_pitch, jo.pose_yaw};
+  posture_.set_user_pose(user_pose);
   const bool walking = cmd_is_walking(cmd_x, cmd_y, cmd_z);
   const hexa::posture::BodyPose body_pose = posture_.update(
       out, engine_->master_phase(), walking, st, engine_->strategy_name(),
       engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f);
 
   r.unreachable = compose_gait(out, body_pose);
+  // What compose_gait actually applied, for next tick's neutral-pose check.
+  last_body_pose_ = body_pose;
   std::copy(std::begin(theta_), std::end(theta_), std::begin(r.theta));
 
   r.engine_state = st;
+  // The applied set, not the requested one — read after the tick, so a change
+  // that completed on this tick reports the set it landed on.
+  r.leg_set = engine_->leg_set();
   r.master_phase = engine_->master_phase();
   r.walking = walking;
 

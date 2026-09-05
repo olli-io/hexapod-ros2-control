@@ -633,6 +633,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("reseat_pair_dwell_time", gait["reseat"]["pair_dwell_time"]),
         ("reseat_swing_clearance", gait["reseat"]["swing_clearance"]),
         ("quadruped_shift_time", gait["quadruped"]["shift_time"]),
+        ("pair_fold_swing_time", gait["pair_fold"]["swing_time"]),
+        ("pair_fold_dwell_time", gait["pair_fold"]["dwell_time"]),
     ]
     for fname, _ in fields:
         w(f"  float {fname};")
@@ -758,7 +760,30 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("")
     # Modes / gait cycle.
     w(f"inline constexpr std::string_view kInitialMode = {cstr(teleop['initial_mode'])};")
-    w(f"inline constexpr std::string_view kDefaultGait = {cstr(teleop['default_gait'])};")
+    # The firmware has one input path and no way to ask for a leg-set change,
+    # so it needs only the two presets the init buttons stand up on — the
+    # six-leg one the operator boots into, and the four-corner one `select`
+    # takes. Presets beyond those two are a web-teleop affair; the pad cannot
+    # reach them, so nothing is baked for them here.
+    leg_sets_of = {name: ls for name, _d, _u, ls in GAITS}
+
+    def preset_by_leg_set(leg_set):
+        for entry in teleop["presets"]["list"]:
+            names = [str(g) for g in entry["gait_cycle"]]
+            if names and leg_sets_of[names[0]] == leg_set:
+                return entry
+        raise ValueError(
+            f"presets: no preset walks the {leg_set} leg set; the init buttons "
+            f"stand up on one of each")
+
+    default_id = str(teleop["presets"]["default"])
+    by_id = {str(e["id"]): e for e in teleop["presets"]["list"]}
+    if default_id not in by_id:
+        raise ValueError(f"presets.default: no preset {default_id!r}")
+    hexapod_preset = preset_by_leg_set("hexapod")
+    quadruped_preset = preset_by_leg_set("quadruped")
+    w(f"inline constexpr std::string_view kDefaultGait = "
+      f"{cstr(str(hexapod_preset['default_gait']))};")
     w(f"inline constexpr bool kAllowUnstableGaits = "
       f"{'true' if teleop['allow_unstable_gaits'] else 'false'};")
     # kGaitCycle is the runtime rotation the teleop cycler walks — already
@@ -768,7 +793,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # keeping them apart is what stops the cycler landing on a leg set the
     # operator did not ask for.
     unstable_names = {name for name, _, u, _ls in GAITS if u}
-    leg_sets = {name: ls for name, _d, _u, ls in GAITS}
+    leg_sets = leg_sets_of
 
     def resolve_cycle(raw, leg_set, key):
         """Port of joy_mapping.resolve_gait_cycle: validate, then filter."""
@@ -784,10 +809,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
             return names
         return [g for g in names if g not in unstable_names]
 
-    cycle = resolve_cycle(teleop["gait_cycle"], "hexapod", "gait_cycle")
-    quad_cycle = resolve_cycle(teleop["quadruped_gait_cycle"], "quadruped",
-                               "quadruped_gait_cycle")
-    quad_default = str(teleop["default_quadruped_gait"])
+    cycle = resolve_cycle(hexapod_preset["gait_cycle"], "hexapod",
+                          f"presets.{hexapod_preset['id']}.gait_cycle")
+    quad_cycle = resolve_cycle(quadruped_preset["gait_cycle"], "quadruped",
+                               f"presets.{quadruped_preset['id']}.gait_cycle")
+    quad_default = str(quadruped_preset["default_gait"])
     if quad_default not in quad_cycle:
         raise ValueError(
             f"default_quadruped_gait: {quad_default!r} must be in "

@@ -695,3 +695,198 @@ TEST(QuadFoldLadder, LeavesTheMiddlesFoldedAndTucksTheCorners) {
                 l.folded.at(std::string(name)), std::string(name));
   }
 }
+
+// ── PairFoldController: the middle pair, standing on the four corners ──────
+//
+// The other half of a leg-set change. Unlike the ladders above there is no
+// belly under this one — the corners are carrying the robot — so what matters
+// is that the pair goes exactly between its two endpoints without overshooting
+// either, that the corners are not touched, and that the landing is as gentle
+// as every other touchdown in the stack.
+
+namespace {
+
+g::PairFoldController make_pair_fold(const Ladder& l, g::PairFoldDirection dir) {
+  return g::PairFoldController(dir, l.nominal, l.folded, l.nominal,
+                               l.cfg.pair_fold_swing_time,
+                               l.cfg.pair_fold_dwell_time,
+                               l.cfg.pair_fold_probe_band(),
+                               l.cfg.pair_fold_profile(), l.cfg.controller_dt);
+}
+
+int pair_fold_max_ticks(const Ladder& l) {
+  return static_cast<int>((l.cfg.pair_fold_dwell_time +
+                           l.cfg.pair_fold_swing_time + 1.0f) /
+                          kDt) +
+         50;
+}
+
+const std::vector<std::string>& pair_legs() {
+  static const std::vector<std::string> kLegs = {"l_middle", "r_middle"};
+  return kLegs;
+}
+
+bool is_pair(const std::string& name) {
+  return name == "l_middle" || name == "r_middle";
+}
+
+}  // namespace
+
+TEST(PairFold, LiftsBothMiddlesTogetherAndLeavesTheCornersAlone) {
+  const Ladder l = baked();
+  auto fold = make_pair_fold(l, g::PairFoldDirection::FOLD);
+
+  std::map<std::string, g::LegOutput> out;
+  int ticks = 0;
+  const int limit = pair_fold_max_ticks(l);
+  while (!fold.done() && ticks < limit) {
+    out = fold.update(kDt);
+    ++ticks;
+    for (const auto& [leg, o] : out) {
+      if (is_pair(leg)) continue;
+      // A corner is never moved and never lifted: the whole move is paid for by
+      // the four of them staying exactly where the reseat left them.
+      expect_near(o.foot_target, l.nominal.at(leg), leg);
+      EXPECT_TRUE(o.stance) << leg << " reported airborne";
+      EXPECT_FALSE(o.parked) << leg << " reported parked";
+    }
+  }
+  ASSERT_TRUE(fold.done()) << "did not finish in " << limit << " ticks";
+  ASSERT_EQ(out.size(), 6u) << "the engine reads all six back out";
+
+  for (const auto& leg : pair_legs()) {
+    expect_near(out.at(leg).foot_target, l.folded.at(leg), leg);
+    EXPECT_FALSE(out.at(leg).stance) << leg << " ended up bearing weight";
+    // Never `parked` in transit: a parked leg's angles bypass the body pose and
+    // an unparked one's do not. The engine sets the flag once, on the far side.
+    EXPECT_FALSE(out.at(leg).parked) << leg << " parked itself";
+  }
+}
+
+TEST(PairFold, NeverClimbsAboveTheFoldedPoseAndEndsExactlyThere) {
+  // The folded pose's femur is on its lower joint limit, so a clearance over
+  // that end would be an unreachable arc. Zero clearance is what makes the move
+  // a plain chord, and this is what pins it.
+  const Ladder l = baked();
+  auto fold = make_pair_fold(l, g::PairFoldDirection::FOLD);
+
+  const int limit = pair_fold_max_ticks(l);
+  for (int i = 0; i < limit && !fold.done(); ++i) {
+    const auto out = fold.update(kDt);
+    for (const auto& leg : pair_legs()) {
+      const float z = out.at(leg).foot_target[2];
+      EXPECT_LE(z, l.folded.at(leg)[2] + kTol) << leg << " climbed over folded";
+      EXPECT_GE(z, l.nominal.at(leg)[2] - kTol) << leg << " dug below nominal";
+    }
+  }
+  ASSERT_TRUE(fold.done());
+}
+
+TEST(PairFold, UnfoldNeverDipsBelowItsTargetAndLandsOnIt) {
+  const Ladder l = baked();
+  auto unfold = make_pair_fold(l, g::PairFoldDirection::UNFOLD);
+
+  std::map<std::string, g::LegOutput> out;
+  const int limit = pair_fold_max_ticks(l);
+  for (int i = 0; i < limit && !unfold.done(); ++i) {
+    out = unfold.update(kDt);
+    for (const auto& leg : pair_legs()) {
+      const float z = out.at(leg).foot_target[2];
+      EXPECT_GE(z, l.nominal.at(leg)[2] - kTol) << leg << " went through the floor";
+      EXPECT_LE(z, l.folded.at(leg)[2] + kTol) << leg << " climbed over folded";
+    }
+  }
+  ASSERT_TRUE(unfold.done());
+  for (const auto& leg : pair_legs()) {
+    expect_near(out.at(leg).foot_target, l.nominal.at(leg), leg);
+    EXPECT_TRUE(out.at(leg).stance) << leg << " never took the ground";
+  }
+}
+
+TEST(PairFold, TheUnfoldsLastStretchDescendsAtTouchdownVelocity) {
+  // Zero clearance also zeroes the swing profile's granted probe time, so the
+  // braked descent is a segment of its own. Its speed is the same
+  // touchdown_velocity every other landing in the stack arrives at.
+  const Ladder l = baked();
+  auto unfold = make_pair_fold(l, g::PairFoldDirection::UNFOLD);
+
+  std::vector<float> set_down_z;
+  const int limit = pair_fold_max_ticks(l);
+  for (int i = 0; i < limit && !unfold.done(); ++i) {
+    const auto out = unfold.update(kDt);
+    if (unfold.state() == g::PairFoldState::SET_DOWN || unfold.done()) {
+      set_down_z.push_back(out.at(kProbeLeg).foot_target[2]);
+    }
+  }
+  ASSERT_GE(set_down_z.size(), 3u) << "no braked descent ran";
+
+  // Mean speed over the stretch, excluding the final clamped sample.
+  const float travelled = set_down_z.front() - set_down_z[set_down_z.size() - 2];
+  const float elapsed = kDt * static_cast<float>(set_down_z.size() - 2);
+  ASSERT_GT(elapsed, 0.0f);
+  EXPECT_NEAR(travelled / elapsed, l.cfg.touchdown_velocity,
+              0.1f * l.cfg.touchdown_velocity);
+}
+
+TEST(PairFold, HoldsEveryFootStillThroughTheDwell) {
+  // The corners have just finished carrying the body across a moving support.
+  // The dwell is the beat that lets the pose smoother catch up, so nothing may
+  // move during it.
+  const Ladder l = baked();
+  ASSERT_GT(l.cfg.pair_fold_dwell_time, 0.0f) << "config has no dwell to test";
+  auto fold = make_pair_fold(l, g::PairFoldDirection::FOLD);
+
+  int dwell_ticks = 0;
+  const int limit = pair_fold_max_ticks(l);
+  for (int i = 0; i < limit && !fold.done(); ++i) {
+    const auto out = fold.update(kDt);
+    if (fold.state() != g::PairFoldState::DWELL) break;
+    ++dwell_ticks;
+    for (const auto& [leg, o] : out) {
+      expect_near(o.foot_target, l.nominal.at(leg), leg);
+      // Still planted on the way up: the pair does not give up the ground until
+      // the chord actually starts.
+      EXPECT_TRUE(o.stance) << leg << " let go during the dwell";
+    }
+  }
+  EXPECT_GE(dwell_ticks,
+            static_cast<int>(l.cfg.pair_fold_dwell_time / kDt) - 1);
+}
+
+TEST(PairFold, StartsAndEndsStationary) {
+  // ease7 through the chord, for the same reason every other move here eases:
+  // the servos take up and give back the motion without a jerk step.
+  const Ladder l = baked();
+  auto fold = make_pair_fold(l, g::PairFoldDirection::FOLD);
+
+  std::vector<float> z;
+  const int limit = pair_fold_max_ticks(l);
+  for (int i = 0; i < limit; ++i) {
+    const auto out = fold.update(kDt);
+    if (fold.state() != g::PairFoldState::MOVE) continue;
+    z.push_back(out.at(kProbeLeg).foot_target[2]);
+    if (fold.done()) break;
+  }
+  ASSERT_GE(z.size(), 3u);
+
+  const float peak = peak_step(z);
+  ASSERT_GT(peak, 0.0f);
+  EXPECT_LT(std::fabs(z[1] - z[0]), 0.05f * peak)
+      << "the pair leaves the ground at "
+      << 100.0f * std::fabs(z[1] - z[0]) / peak << "% of its peak speed";
+}
+
+TEST(PairFold, RefusesAClearance) {
+  // The one constructor argument that is a fact about the folded pose rather
+  // than a tuning choice, so it is rejected rather than quietly honoured.
+  const Ladder l = baked();
+  hexa::gait::SwingProfile bad = l.cfg.pair_fold_profile();
+  bad.clearance = 0.02f;
+  EXPECT_THROW(
+      g::PairFoldController(g::PairFoldDirection::FOLD, l.nominal, l.folded,
+                            l.nominal, l.cfg.pair_fold_swing_time,
+                            l.cfg.pair_fold_dwell_time,
+                            l.cfg.pair_fold_probe_band(), bad,
+                            l.cfg.controller_dt),
+      std::invalid_argument);
+}

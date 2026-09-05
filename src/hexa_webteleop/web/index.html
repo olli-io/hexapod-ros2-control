@@ -38,6 +38,22 @@
         </svg>
       </button>
 
+      <!-- Mode: the operator preset (NORMAL / QUAD). The icon doubles as a
+           leg-set readout — the two middle legs dim when the robot is standing
+           on four — so the current mode is visible without opening anything. -->
+      <button id="preset-btn" class="nav-icon" aria-label="Mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="8" y="6" width="8" height="12" rx="2"/>
+          <line x1="8" y1="8.5" x2="4" y2="6"/>
+          <line x1="16" y1="8.5" x2="20" y2="6"/>
+          <line class="preset-mid-leg" x1="8" y1="12" x2="3.5" y2="12"/>
+          <line class="preset-mid-leg" x1="16" y1="12" x2="20.5" y2="12"/>
+          <line x1="8" y1="15.5" x2="4" y2="18"/>
+          <line x1="16" y1="15.5" x2="20" y2="18"/>
+        </svg>
+      </button>
+
       <!-- Log -->
       <button id="log-btn" class="nav-icon" aria-label="Log">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -134,6 +150,21 @@
       <div class="dialog-buttons">
         <button id="controller-toggle"></button>
         <button id="controller-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mode popover, opened from the navbar mode icon. Reachable in every
+       state, including while the take-control prompt has replaced the button
+       grid — which is what makes a mode switch possible while a controller
+       drives. -->
+  <div id="preset-overlay" class="overlay hidden">
+    <div class="dialog">
+      <p>Mode</p>
+      <div id="preset-list"></div>
+      <p id="preset-note" class="dialog-sub"></p>
+      <div class="dialog-buttons">
+        <button id="preset-close">Close</button>
       </div>
     </div>
   </div>

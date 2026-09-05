@@ -58,6 +58,15 @@ let currentAnimation = "";
 // Latest /gait/state. Only the folded case is read here: no gait is running
 // on the belly, so the strategy the next stand will use is not a status.
 let currentGaitState = "";
+// The Mode view. `presets` is fixed at connect; `activePreset` / `activeLegSet`
+// come from /gait/leg_set and NOTHING else — never from the tap, never from the
+// latched /cmd_gait, which keeps a refused name forever. `pendingPreset` is what
+// was asked for and has not landed yet.
+let presets = [];
+let activePreset = null;
+let activeLegSet = null;
+let pendingPreset = null;
+let refusedTimer = null;
 // Pack telemetry, polled over the WebSocket. Null means unknown — never
 // heard, stale, or a non-finite reading — and shows as a dash.
 let packVoltage = null;
@@ -141,6 +150,12 @@ function handleMessage(msg) {
       currentGait = msg.gait;
       currentAnimation = msg.animation;
       currentGaitState = msg.gait_state;
+      presets = msg.presets || [];
+      activePreset = msg.preset_active || null;
+      activeLegSet = msg.preset_leg_set || null;
+      pendingPreset = msg.preset_pending || null;
+      renderPresetList();
+      updatePresetDisplay();
       updateModeDisplay();
       updateButtonLabels(msg.button_labels);
       updateOwnerDisplay();
@@ -173,6 +188,13 @@ function handleMessage(msg) {
     case "gait_state":
       currentGaitState = msg.state;
       updateStatusDisplay();
+      break;
+    case "preset":
+      activePreset = msg.active || null;
+      activeLegSet = msg.leg_set || null;
+      pendingPreset = msg.pending || null;
+      updatePresetDisplay();
+      showPresetRefusal(msg.refused || null);
       break;
     case "battery":
       // Either field is null when the node has no fresh reading to give.
@@ -260,6 +282,84 @@ function stopPackPolling() {
 function setJoysticksEnabled(enabled) {
   $("left-joystick").classList.toggle("disabled", !enabled);
   $("right-joystick").classList.toggle("disabled", !enabled);
+}
+
+
+// ── Mode view (navbar mode icon) ───────────────────────────────────
+//
+// The active row is driven by /gait/leg_set alone. A tap sets nothing locally:
+// an optimistic row would show a mode the robot may refuse, and on a latched
+// command topic that lie has nothing to correct it.
+
+function renderPresetList() {
+  const list = $("preset-list");
+  list.textContent = "";
+  presets.forEach(function (preset) {
+    const btn = document.createElement("button");
+    btn.className = "preset-item";
+    btn.dataset.preset = preset.id;
+
+    const label = document.createElement("span");
+    label.className = "preset-label";
+    label.textContent = preset.label;
+    btn.appendChild(label);
+
+    if (preset.sub) {
+      const sub = document.createElement("span");
+      sub.className = "preset-sub";
+      sub.textContent = preset.sub;
+      btn.appendChild(sub);
+    }
+
+    btn.addEventListener("click", function () {
+      buzz(15);
+      send({ type: "select_preset", preset: preset.id });
+    });
+    list.appendChild(btn);
+  });
+  updatePresetDisplay();
+}
+
+function updatePresetDisplay() {
+  const rows = document.querySelectorAll(".preset-item");
+  rows.forEach(function (row) {
+    const id = row.dataset.preset;
+    row.classList.toggle("active", id === activePreset);
+    row.classList.toggle("pending", id === pendingPreset);
+    // Everything is inert while a switch is in flight: the robot is moving its
+    // legs, and a second request would be refused anyway.
+    row.disabled = pendingPreset !== null;
+  });
+  // The navbar icon doubles as the readout, so the current mode is legible
+  // without opening anything.
+  $("preset-btn").classList.toggle("quad", activeLegSet === "quadruped");
+  $("preset-btn").classList.toggle("active", pendingPreset !== null);
+}
+
+function showPresetRefusal(reason) {
+  const note = $("preset-note");
+  if (!reason) {
+    note.textContent = "";
+    note.classList.remove("refused");
+    return;
+  }
+  note.textContent = reason;
+  note.classList.add("refused");
+  if (refusedTimer !== null) clearTimeout(refusedTimer);
+  refusedTimer = setTimeout(function () {
+    note.textContent = "";
+    note.classList.remove("refused");
+    refusedTimer = null;
+  }, 4000);
+}
+
+function showPresetOverlay() {
+  updatePresetDisplay();
+  $("preset-overlay").classList.remove("hidden");
+}
+
+function hidePresetOverlay() {
+  $("preset-overlay").classList.add("hidden");
 }
 
 // \u2500\u2500 Controller status overlay (navbar controller icon) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -379,6 +479,11 @@ function setupButtons() {
     }
     hideConnOverlay();
   });
+
+  // Navbar mode icon → preset popover. Deliberately outside the take-control
+  // gate: a mode switch is supervisory, so it works while a controller drives.
+  $("preset-btn").addEventListener("click", showPresetOverlay);
+  $("preset-close").addEventListener("click", hidePresetOverlay);
 
   // Navbar log icon → log page.
   $("log-btn").addEventListener("click", function () {

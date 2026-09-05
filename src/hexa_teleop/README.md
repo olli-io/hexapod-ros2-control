@@ -47,8 +47,9 @@ stay inside. Velocity caps and the animation list come from the same file.
 **start** stands the robot up on six legs and **select** stands it up on four:
 the middle pair stays folded where it powered up and the four corner legs creep
 one at a time, with the body carrying itself into the next support triangle
-before each foot leaves. Off the belly both buttons mean the same thing — fold —
-which is the only way between the two leg sets.
+before each foot leaves. Off the belly both buttons still mean the same thing —
+fold. What has changed is that folding is no longer the *only* way between the
+two leg sets: see **leg-set change** below.
 
 - Both stands climb the same ladder (folded → initialized → standing); the
   quadruped one just leaves out the middle pair's rungs. About two seconds
@@ -56,11 +57,11 @@ which is the only way between the two leg sets.
 - **select** is bound only in the `gait` section, so it does nothing in posture
   or animation mode, where it keeps its base `record` binding. Gait is the mode
   the teleop boots into, so the cold start is covered.
-- The D-pad gait cycler walks the four-leg rotation while quadruped
-  (`quadruped_gait_cycle`), not the six-leg one. The two lists are disjoint by
+- The D-pad gait cycler walks the QUAD preset's rotation while quadruped, not
+  the six-leg one. Every preset's rotation is disjoint from every other by
   load-time validation, so a press can never ask for a leg set the engine would
   refuse — and the six-leg slot the operator was on is kept in its own index,
-  waiting for the next fold.
+  waiting for them to come back to it.
 - Animation mode is unavailable while quadruped — every animation is written for
   six legs. Gait and posture stay available.
 - Posture mode poses the body on four feet exactly as it does on six; what it
@@ -70,11 +71,50 @@ which is the only way between the two leg sets.
   into the next support triangle — and that margin is millimetres. Body height
   is unaffected either way: it rides its own integrator, not the record.
 
-The mode rides `/cmd_gait` as one of the four-corner gait names, which are
-deliberately absent from `gait_cycle` — the select init is the only way in, and
-it always enters on `default_quadruped_gait`. The engine reads the leg set off
-the strategy applied when `/gait/initialize` arrives, so the gait publish leads
-the init publish by design.
+The mode rides `/cmd_gait` as one of the four-corner gait names, which live in
+their own preset's rotation and never in the six-leg one. From the belly the
+engine reads the leg set off the strategy applied when `/gait/initialize`
+arrives, so the gait publish leads the init publish by design.
+
+### Leg-set change (from a stand, not a button)
+
+A `/cmd_gait` naming a gait of the *other* leg set, sent while the engine is at
+`stand`, changes the leg set in place — no fold. The corners are reseated onto
+the other footprint with all six feet planted, and the middle pair is folded up
+or unfolded down on the other side of that, in whichever order keeps the reseat
+on six legs. It is refused from every other state, so a walking robot ignores it
+rather than stopping for it. `docs/leg-phases.md` has the ordering rationale.
+
+Nothing on the pad asks for one: **start** and **select** keep the meanings
+above exactly. The request comes from the web teleop's Mode view. This node
+still has to *follow* it, which is why it subscribes `/cmd_gait` — see below.
+
+### Following `/cmd_gait`
+
+Both teleops write `/cmd_gait`, so this node also reads it, own publishes
+included via loopback. One callback then owns all the bookkeeping a gait switch
+implies, whoever initiated it: the stick velocity caps, the cycler slot, the
+active **preset**, the leg-set flag the cycler picks its rotation off, and the
+posture revert a leg-set change needs (the engine holds the middle pair until
+the body pose is back at neutral, and the revert is what puts it there). Without
+this a switch made from the web app left the D-pad rotating a list the robot was
+not standing on. The shared logic is `presets.py` — pure, rclpy-free, and
+imported by `hexa_webteleop` too.
+
+## Presets
+
+A **preset** is a named bundle the operator picks as one thing: an id, a label,
+a gait rotation, and the gait it enters on. `NORMAL` (six legs) and `QUAD` (four
+corners) ship. They are declared under `presets:` in
+[`config/teleop_joy.yaml`](config/teleop_joy.yaml); a third is a config edit,
+because the active preset's rotation is *projected* onto the one `gait_cycle`
+`map_joy` reads, so the mapping's state machine never learns how many exist.
+
+A preset's **leg set is derived** from `hexa_common.gait_catalog`, never
+declared — that catalog already owns which legs a gait walks. Load-time
+validation keeps the rotations pairwise disjoint and one leg set per rotation,
+which is what lets a bare gait name on `/cmd_gait` say which preset is in force
+without a second field on the wire.
 
 The two footfall orders, both duty factor 3/4 with one foot airborne at a time:
 

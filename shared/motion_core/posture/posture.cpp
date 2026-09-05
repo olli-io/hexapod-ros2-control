@@ -225,6 +225,12 @@ bool posture_active(gait::EngineState state) {
     case E::GAIT:
     case E::SETTLING:
     case E::RESEATING:
+    // The pair is moving but the body is standing on a full stance, and the
+    // caller pins the user pose to identity here anyway. Going inactive would
+    // reset the smoother and emit IDENTITY in one tick — a step from whatever
+    // it was holding, which is exactly the jump the pin exists to avoid.
+    case E::FOLDING_PAIR:
+    case E::UNFOLDING_PAIR:
       return true;
     case E::FOLDED:
     case E::INITIALIZE:

@@ -2,11 +2,33 @@
 # Keys bind to function names (see joy_mapping.ALL_FUNCTIONS); "" is unbound.
 
 initial_mode: gait # gait | posture | animation
-gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
-default_gait: tripod
 allow_unstable_gaits: true # when false, surf and crawl are skipped
-quadruped_gait_cycle: [quad_canter, quad_walk] # the four-corner rotation
-default_quadruped_gait: quad_canter # what `select` stands up on
+
+# Operator presets: what the Mode view offers, and what the D-pad rotates
+# through once one is in force. A preset's LEG SET is derived from
+# hexa_common.gait_catalog, never declared here — that catalog already owns
+# which legs a gait walks. Rotations must be pairwise disjoint, so a bare gait
+# name on /cmd_gait says which preset is in force without a second field.
+#
+# Adding a third preset is an edit here and nothing else: the active preset's
+# rotation is projected onto the one gait_cycle map_joy reads, so the mapping's
+# state machine never learns how many there are.
+presets:
+  default: normal
+  # How long the web app's Mode view waits for /gait/leg_set to change before
+  # calling a switch refused. Comfortably over the ~2 s the change takes.
+  switch_timeout_s: 4.0
+  list:
+    - id: normal
+      label: NORMAL
+      sub: six legs
+      gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
+      default_gait: tripod
+    - id: quad
+      label: QUAD
+      sub: four corners, middle pair parked
+      gait_cycle: [quad_canter, quad_walk]
+      default_gait: quad_canter # what `select` stands up on
 
 base:
   deadband: 0.1

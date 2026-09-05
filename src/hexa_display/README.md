@@ -100,6 +100,12 @@ one's topic names; nothing here depends on it, so the face stays a pure sink.
 
 ## Configuration
 
+The expression map keys every value `/gait/state` can carry, `folding_pair` and
+`unfolding_pair` included — the two halves of a leg-set change, where the robot
+is standing and working and so wears the same neutral face a reseat does. They
+are deliberately outside the idle states: the legs are moving, so the idling
+look-around stays off.
+
 All knobs in `config/display.yaml`: policy rate, per-gait-state expression map,
 animation/battery/posture-stick expressions and thresholds, gaze deadband/hysteresis/caps,
 idling delay, and the SH1122 SPI/GPIO pins + render rate + headless switch.

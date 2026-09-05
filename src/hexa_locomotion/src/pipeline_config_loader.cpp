@@ -179,6 +179,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.reseat_pair_dwell_time = f(g["reseat"]["pair_dwell_time"]);
   e.reseat_swing_clearance = f(g["reseat"]["swing_clearance"]);
   e.quadruped_shift_time = f(g["quadruped"]["shift_time"]);
+  e.pair_fold_swing_time = f(g["pair_fold"]["swing_time"]);
+  e.pair_fold_dwell_time = f(g["pair_fold"]["dwell_time"]);
   e.support_shift_lead = f(p["support_shift_lead"]);
 
   // ── velocity caps (tuning.yaml gait_node, port of load_velocity_caps) ──

@@ -2855,17 +2855,16 @@ TEST(Quadruped, ParkedLegsDoNotConstrainTheStride) {
   EXPECT_GE(four, all_six);
 }
 
-// The leg set is chosen from the belly and nowhere else: the middle pair moves
-// between folded and standing on the stand ladder alone, so off the belly there
-// is no ladder to run and the switch is refused outright.
-TEST(Quadruped, SelectingItOffTheBellyIsRefused) {
+// A leg-set change moves the middle pair and re-plants four corners. From a
+// stand there is a ladder for that; from a walk there is not, and deferring it
+// until the robot next stops would make "refused while walking" mean "queued",
+// which is a different promise. So it is refused outright, both directions.
+TEST(Quadruped, AGaitOfTheOtherLegSetIsRefusedWhileWalking) {
   const auto cfg = g::engine_config_from_config();
+  const float speed = saturating_speed(cfg);
+
   auto e = g::make_default_engine("tripod");
   run_to_stand(*e);
-  EXPECT_FALSE(e->set_strategy("quad_walk"));
-  EXPECT_EQ(e->strategy_name(), "tripod");
-
-  const float speed = saturating_speed(cfg);
   for (int i = 0; i < 600; ++i) {
     e->update(kQuadDt, {speed, 0.0f}, 0.0f);
   }
@@ -2873,13 +2872,28 @@ TEST(Quadruped, SelectingItOffTheBellyIsRefused) {
   EXPECT_FALSE(e->set_strategy("quad_walk"));
   EXPECT_EQ(e->strategy_name(), "tripod");
   EXPECT_FALSE(e->pending_strategy_name().has_value());
+  EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
 
-  // And the same the other way: a six-leg gait is refused from a quadruped
-  // stand, since it would ask four planted corners to walk on six feet.
+  // Mid-engagement is the same answer: the corners are already carrying a
+  // command, so there is nothing standing still to re-plant.
+  auto x = g::make_default_engine("tripod");
+  run_to_stand(*x);
+  x->update(kQuadDt, {speed, 0.0f}, 0.0f);
+  ASSERT_EQ(x->state(), g::EngineState::ENGAGING);
+  EXPECT_FALSE(x->set_strategy("quad_walk"));
+
+  // And the same the other way round, off a four-corner walk.
   auto q = g::make_default_engine("tripod");
   ASSERT_TRUE(run_to_parked_stand(*q));
+  const float quad_speed = quad_saturating_speed(cfg);
+  for (int i = 0; i < 1200; ++i) {
+    q->update(kQuadDt, {quad_speed, 0.0f}, 0.0f);
+    if (q->state() == g::EngineState::GAIT) break;
+  }
+  ASSERT_EQ(q->state(), g::EngineState::GAIT);
   EXPECT_FALSE(q->set_strategy("tripod"));
   EXPECT_EQ(q->strategy_name(), "quad_walk");
+  EXPECT_EQ(q->leg_set(), g::LegSet::QUADRUPED);
 }
 
 // Leaving is the fold, and it is the plain fold ladder: the corners come down
@@ -2975,6 +2989,19 @@ TEST(Quadruped, AGaitSwitchIsRefusedMidLadder) {
   ASSERT_EQ(e->state(), g::EngineState::INITIALIZE);
   EXPECT_FALSE(e->set_strategy("ripple"));
   EXPECT_EQ(e->strategy_name(), "quad_walk");
+
+  // And mid pair-fold, which is the other place a change would land on a robot
+  // whose middle pair is neither down nor parked.
+  auto x = g::make_default_engine("tripod");
+  run_to_stand(*x);
+  ASSERT_TRUE(x->set_strategy("quad_walk"));
+  for (int i = 0; i < 4000; ++i) {
+    x->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    if (x->state() == g::EngineState::FOLDING_PAIR) break;
+  }
+  ASSERT_EQ(x->state(), g::EngineState::FOLDING_PAIR);
+  EXPECT_FALSE(x->set_strategy("tripod"));
+  EXPECT_FALSE(x->set_strategy("ripple"));
 }
 
 // A parked foot must end up clear of the floor, and clear fore/aft of the
@@ -3125,4 +3152,359 @@ TEST(Quadruped, TheReseatLadderNeverSendsTheBodyBackToCentre) {
   EXPECT_GT(worst, 0.020f) << "the body came back within " << worst * 1000.0f
                            << " mm of the four-foot centroid; peak was "
                            << peak * 1000.0f << " mm";
+}
+
+// ── Leg-set change from a stand ────────────────────────────────────────────
+//
+// Folding to the belly is no longer the only way between the two stands. What
+// this suite pins is the ordering, because it is the whole safety argument: the
+// reseat only ever runs with six feet on the ground, so the ladder's landing
+// stage can never get hold of a middle leg that is folded 111 mm up in the air
+// with nothing underneath it.
+
+namespace {
+
+std::map<std::string, g::Vec3> quad_nominal() {
+  return g::nominal_stance_from(hexa::config::kLegSpecs,
+                                g::quad_standing_pose_from_config());
+}
+
+const std::vector<std::string>& corner_legs() {
+  static const std::vector<std::string> kLegs = {"l_front", "r_front", "l_rear",
+                                                 "r_rear"};
+  return kLegs;
+}
+
+// Drive a standing engine through a change to `gait`, collecting every tick's
+// output alongside the state it was produced in. Returns false if it never
+// settles back onto a stand.
+struct Step {
+  g::EngineState state;
+  std::map<std::string, g::LegOutput> out;
+};
+
+bool run_leg_set_change(g::Engine& e, const std::string& gait,
+                        std::vector<Step>& steps, int max_ticks = 6000) {
+  if (!e.set_strategy(gait)) {
+    return false;
+  }
+  for (int i = 0; i < max_ticks; ++i) {
+    const auto out = e.update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    steps.push_back({e.state(), out});
+    if (i > 0 && e.state() == g::EngineState::STAND) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(LegSetChange, HexToQuadReseatsThenFoldsThePair) {
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  ASSERT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+
+  std::vector<Step> steps;
+  ASSERT_TRUE(run_leg_set_change(*e, "quad_walk", steps));
+
+  // The state sequence, deduplicated: reseat the corners, then fold the pair.
+  std::vector<g::EngineState> seen;
+  for (const auto& s : steps) {
+    if (seen.empty() || seen.back() != s.state) seen.push_back(s.state);
+  }
+  ASSERT_EQ(seen.size(), 3u);
+  EXPECT_EQ(seen[0], g::EngineState::RESEATING);
+  EXPECT_EQ(seen[1], g::EngineState::FOLDING_PAIR);
+  EXPECT_EQ(seen[2], g::EngineState::STAND);
+
+  EXPECT_EQ(e->leg_set(), g::LegSet::QUADRUPED);
+  EXPECT_EQ(e->strategy_name(), "quad_walk");
+  EXPECT_FALSE(e->pending_strategy_name().has_value());
+}
+
+TEST(LegSetChange, QuadToHexUnfoldsThePairThenReseats) {
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+
+  std::vector<Step> steps;
+  ASSERT_TRUE(run_leg_set_change(*e, "tripod", steps));
+
+  std::vector<g::EngineState> seen;
+  for (const auto& s : steps) {
+    if (seen.empty() || seen.back() != s.state) seen.push_back(s.state);
+  }
+  ASSERT_EQ(seen.size(), 3u);
+  EXPECT_EQ(seen[0], g::EngineState::UNFOLDING_PAIR);
+  EXPECT_EQ(seen[1], g::EngineState::RESEATING);
+  EXPECT_EQ(seen[2], g::EngineState::STAND);
+
+  EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+  EXPECT_EQ(e->strategy_name(), "tripod");
+}
+
+// The headline. Whichever way the change is going, the ladder that re-plants
+// the corners runs on six planted feet and on the six-leg rung table.
+TEST(LegSetChange, TheReseatRunsWithAllSixPlanted) {
+  const auto hex_nominal = g::nominal_stance_from_config();
+
+  for (const char* gait : {"quad_walk", "tripod"}) {
+    auto e = g::make_default_engine("tripod");
+    if (std::string(gait) == "quad_walk") {
+      run_to_stand(*e);
+    } else {
+      ASSERT_TRUE(run_to_parked_stand(*e));
+    }
+
+    std::vector<Step> steps;
+    ASSERT_TRUE(run_leg_set_change(*e, gait, steps)) << gait;
+
+    int reseat_ticks = 0;
+    for (const auto& s : steps) {
+      if (s.state != g::EngineState::RESEATING) continue;
+      ++reseat_ticks;
+      for (const auto& n : g::PARKED_LEGS) {
+        const auto& leg = s.out.at(n);
+        ASSERT_FALSE(leg.parked) << n << " was parked mid-reseat (" << gait << ")";
+        ASSERT_TRUE(leg.stance) << n << " was airborne mid-reseat (" << gait << ")";
+        // Both stances put a middle in the same place, so it should not have
+        // moved a micron either.
+        ASSERT_LT((leg.foot_target - hex_nominal.at(n)).norm(), 1e-5f)
+            << n << " moved during the reseat (" << gait << ")";
+      }
+    }
+    EXPECT_GT(reseat_ticks, 0) << "no reseat ran for " << gait;
+  }
+}
+
+TEST(LegSetChange, CornersReachTheNewStanceBeforeTheMiddlesLift) {
+  const auto hex_nominal = g::nominal_stance_from_config();
+  const auto quad = quad_nominal();
+
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  std::vector<Step> steps;
+  ASSERT_TRUE(run_leg_set_change(*e, "quad_walk", steps));
+
+  // The first tick a middle is off its nominal at all.
+  std::size_t lift = steps.size();
+  for (std::size_t i = 0; i < steps.size(); ++i) {
+    bool moved = false;
+    for (const auto& n : g::PARKED_LEGS) {
+      if ((steps[i].out.at(n).foot_target - hex_nominal.at(n)).norm() > 1e-4f) {
+        moved = true;
+      }
+    }
+    if (moved) {
+      lift = i;
+      break;
+    }
+  }
+  ASSERT_LT(lift, steps.size()) << "the pair never left the ground";
+
+  for (const auto& name : corner_legs()) {
+    EXPECT_LT((steps[lift].out.at(name).foot_target - quad.at(name)).norm(),
+              1e-4f)
+        << name << " was still short of the four-corner stance when the pair "
+                   "started to lift";
+  }
+}
+
+TEST(LegSetChange, MiddlesAreDownBeforeTheCornersMove) {
+  const auto hex_nominal = g::nominal_stance_from_config();
+  const auto quad = quad_nominal();
+
+  auto e = g::make_default_engine("tripod");
+  ASSERT_TRUE(run_to_parked_stand(*e));
+  std::vector<Step> steps;
+  ASSERT_TRUE(run_leg_set_change(*e, "tripod", steps));
+
+  // The first tick a corner is off the four-corner stance it was standing on.
+  std::size_t corner_move = steps.size();
+  for (std::size_t i = 0; i < steps.size(); ++i) {
+    bool moved = false;
+    for (const auto& name : corner_legs()) {
+      if ((steps[i].out.at(name).foot_target - quad.at(name)).norm() > 1e-4f) {
+        moved = true;
+      }
+    }
+    if (moved) {
+      corner_move = i;
+      break;
+    }
+  }
+  ASSERT_LT(corner_move, steps.size()) << "the corners never re-planted";
+
+  for (const auto& n : g::PARKED_LEGS) {
+    const auto& leg = steps[corner_move].out.at(n);
+    EXPECT_LT((leg.foot_target - hex_nominal.at(n)).norm(), 1e-4f)
+        << n << " was still in the air when the corners started to move";
+    EXPECT_TRUE(leg.stance) << n << " was not yet carrying weight";
+  }
+}
+
+TEST(LegSetChange, TheMiddlesNeverPassEitherEndpoint) {
+  const auto folded = g::folded_stance_from_config();
+  const auto hex_nominal = g::nominal_stance_from_config();
+
+  for (const char* gait : {"quad_walk", "tripod"}) {
+    auto e = g::make_default_engine("tripod");
+    if (std::string(gait) == "quad_walk") {
+      run_to_stand(*e);
+    } else {
+      ASSERT_TRUE(run_to_parked_stand(*e));
+    }
+    std::vector<Step> steps;
+    ASSERT_TRUE(run_leg_set_change(*e, gait, steps)) << gait;
+
+    for (const auto& s : steps) {
+      for (const auto& n : g::PARKED_LEGS) {
+        const float z = s.out.at(n).foot_target[2];
+        ASSERT_LE(z, folded.at(n)[2] + 1e-4f)
+            << n << " climbed over the folded pose (" << gait << ")";
+        ASSERT_GE(z, hex_nominal.at(n)[2] - 1e-4f)
+            << n << " went below the floor (" << gait << ")";
+      }
+    }
+  }
+}
+
+// The invariant the whole design leans on: the four-corner stance and the
+// six-leg one put a middle leg in exactly the same place, at any body height.
+// It is what lets one reseat serve both sets — the middle rung is skipped
+// because its target is already under its foot.
+TEST(LegSetChange, TheTwoStancesAgreeOnTheMiddles) {
+  const auto specs = g::leg_specs_from(hexa::config::kLegSpecs);
+  const auto hex_base = g::nominal_stance_from_config();
+  const auto quad_base = quad_nominal();
+  const auto hex_geom =
+      g::reseat_geometry_from(hexa::config::kLegSpecs, g::standing_pose_from_config());
+  const auto quad_geom = g::reseat_geometry_from(
+      hexa::config::kLegSpecs, g::quad_standing_pose_from_config());
+
+  int checked = 0;
+  for (float h = -0.02f; h <= 0.0201f; h += 0.005f) {
+    // A height either stance cannot reach is not this test's business; the
+    // engine drops such a reseat too. What matters is that where both solve,
+    // they solve the middles to the same point.
+    std::map<std::string, g::Vec3> hex;
+    std::map<std::string, g::Vec3> quad;
+    try {
+      hex = g::reseat_nominal_stance(h, hex_geom, specs, hex_base);
+      quad = g::reseat_nominal_stance(h, quad_geom, specs, quad_base);
+    } catch (const std::invalid_argument&) {
+      continue;
+    }
+    ++checked;
+    for (const auto& n : g::PARKED_LEGS) {
+      EXPECT_LT((hex.at(n) - quad.at(n)).norm(), 1e-6f)
+          << n << " disagrees at height " << h;
+    }
+  }
+  EXPECT_GE(checked, 3) << "no feasible height was actually compared";
+}
+
+TEST(LegSetChange, AStickPushAtTheStandDropsTheRequest) {
+  const auto cfg = g::engine_config_from_config();
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  ASSERT_TRUE(e->set_strategy("quad_walk"));
+
+  // The command arrives before the ladder is armed, so the walk wins and the
+  // request is dropped rather than banked for the next stand.
+  const float speed = saturating_speed(cfg);
+  e->update(kQuadDt, {speed, 0.0f}, 0.0f);
+  EXPECT_EQ(e->state(), g::EngineState::ENGAGING);
+
+  for (int i = 0; i < 4000; ++i) {
+    e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    if (e->state() == g::EngineState::STAND) break;
+  }
+  ASSERT_EQ(e->state(), g::EngineState::STAND);
+  EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD) << "the change fired at the next stand";
+  EXPECT_EQ(e->strategy_name(), "tripod");
+}
+
+TEST(LegSetChange, APendingFoldWins) {
+  auto e = g::make_default_engine("tripod");
+  run_to_stand(*e);
+  ASSERT_TRUE(e->set_strategy("quad_walk"));
+  ASSERT_TRUE(e->request_fold());
+
+  for (int i = 0; i < 6000; ++i) {
+    e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+    if (e->state() == g::EngineState::FOLDED) break;
+  }
+  EXPECT_EQ(e->state(), g::EngineState::FOLDED);
+  EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+}
+
+TEST(LegSetChange, AFaultMidTransitionRevertsCleanly) {
+  for (auto stop_at : {g::EngineState::RESEATING, g::EngineState::FOLDING_PAIR}) {
+    auto e = g::make_default_engine("tripod");
+    run_to_stand(*e);
+    ASSERT_TRUE(e->set_strategy("quad_walk"));
+
+    bool reached = false;
+    for (int i = 0; i < 6000; ++i) {
+      e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+      if (e->state() == stop_at) {
+        reached = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(reached);
+
+    e->enter_fault();
+    EXPECT_EQ(e->state(), g::EngineState::FAULT);
+    EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+    EXPECT_FALSE(e->pending_strategy_name().has_value());
+
+    // Recovery is the plain cold start, on six legs — the interrupted change is
+    // gone rather than resumed.
+    ASSERT_TRUE(e->start_initialize());
+    for (int i = 0; i < 4000; ++i) {
+      e->update(kQuadDt, {0.0f, 0.0f}, 0.0f);
+      if (e->state() == g::EngineState::STAND) break;
+    }
+    EXPECT_EQ(e->state(), g::EngineState::STAND);
+    EXPECT_EQ(e->leg_set(), g::LegSet::HEXAPOD);
+  }
+}
+
+TEST(LegSetChange, IsRefusedWithoutTheQuadrupedSetup) {
+  // No four-corner stance supplied means no footprint to reseat onto, so the
+  // request is refused rather than half-run.
+  const auto specs = hexa::config::kLegSpecs;
+  const auto standing = g::standing_pose_from_config();
+  g::Engine e(g::engine_config_from_config(), g::strategies().at("tripod")(),
+              "tripod", g::nominal_stance_from(specs, standing),
+              g::rest_stance_from(specs, hexa::config::kFoldedPose),
+              g::rest_stance_from(specs, hexa::config::kInitializedPose),
+              hexa::config::kCoxaToBottom, hexa::config::kFootRadius,
+              g::build_leg_contexts_from(specs, standing),
+              g::leg_specs_from(specs),
+              g::reseat_geometry_from(specs, standing));
+  run_to_stand(e);
+  EXPECT_FALSE(e.set_strategy("quad_walk"));
+  EXPECT_EQ(e.leg_set(), g::LegSet::HEXAPOD);
+}
+
+// Every state needs a wire string and a name. Both switches are exhaustive, so
+// the compiler catches a missing case — but a `default:` slipped in later would
+// silence it, and a state that reports "unknown" on /gait/state is invisible to
+// the face and to both teleops.
+TEST(EngineStates, EveryStateHasAWireStringAndAName) {
+  const g::EngineState kAll[] = {
+      g::EngineState::FOLDED,        g::EngineState::INITIALIZE,
+      g::EngineState::STAND,         g::EngineState::ENGAGING,
+      g::EngineState::GAIT,          g::EngineState::SETTLING,
+      g::EngineState::FOLDING,       g::EngineState::RESEATING,
+      g::EngineState::FOLDING_PAIR,  g::EngineState::UNFOLDING_PAIR,
+      g::EngineState::FAULT,
+  };
+  for (const auto s : kAll) {
+    EXPECT_NE(g::state_value(s), "unknown");
+    EXPECT_NE(g::state_name(s), "UNKNOWN");
+  }
 }

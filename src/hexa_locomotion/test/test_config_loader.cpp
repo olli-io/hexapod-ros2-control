@@ -113,6 +113,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.reseat_pair_dwell_time, be.reseat_pair_dwell_time, kTol);
   EXPECT_NEAR(le.reseat_swing_clearance, be.reseat_swing_clearance, kTol);
   EXPECT_NEAR(le.quadruped_shift_time, be.quadruped_shift_time, kTol);
+  EXPECT_NEAR(le.pair_fold_swing_time, be.pair_fold_swing_time, kTol);
+  EXPECT_NEAR(le.pair_fold_dwell_time, be.pair_fold_dwell_time, kTol);
   EXPECT_NEAR(le.support_shift_lead, be.support_shift_lead, kTol);
 
   // ── velocity caps (per-gait, keyed by the registry names) ──

@@ -110,6 +110,20 @@ gait_node:
       # at the announcement and the corner leaves under a body still in transit.
       shift_time: 1.2
 
+    pair_fold:
+      # The middle pair between the folded pose and the ground, done standing on
+      # the four corners — the two halves of a leg-set change that the reseat
+      # does not cover. Both directions take the same time; the unfold adds a
+      # braked descent after it, whose band is derived from touchdown_velocity
+      # and is not a knob. There is no clearance knob either: the folded pose's
+      # femur sits on its lower joint limit, so any arc that climbs over that end
+      # is unreachable, and the move is a plain eased chord by construction.
+      swing_time: 0.6
+      # All six feet planted for this long before the pair moves, either way. The
+      # corners have just finished carrying the body across a moving support; this
+      # is the beat that lets the pose smoother catch up. 0 disables.
+      dwell_time: 0.15
+
     reseat:
       # How long a new target height must hold before re-planting.
       pose_settle_delay: 0.5

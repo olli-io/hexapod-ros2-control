@@ -76,6 +76,15 @@ class LocomotionNode : public rclcpp::Node {
     // first tick — a face sink that subscribes later must still receive it.
     pub_state_ = create_publisher<StringMsg>("/gait/state",
                                              rclcpp::QoS(1).transient_local());
+    // The leg set the engine has APPLIED — "hexapod" or "quadruped". Report
+    // only; the leg set is still commanded by naming a gait on /cmd_gait, and
+    // nothing here reads this back. It exists because /cmd_gait is latched and
+    // a refused request stays on it forever, so a UI reading the command topic
+    // would show a leg set the robot never took. Latched for the same reason
+    // /gait/state is: it publishes on change, and the boot value has to reach a
+    // subscriber that joins later.
+    pub_leg_set_ = create_publisher<StringMsg>(
+        "/gait/leg_set", rclcpp::QoS(1).transient_local());
     // Relay-arm intent for hexa_hardware: the supervisor's per-tick decision
     // (energize only once stood, drop on fold / fault / critical battery). The
     // hardware node drives SET RELAY off this, honouring the board's staged-pose
@@ -244,6 +253,15 @@ class LocomotionNode : public rclcpp::Node {
       last_state_ = state;
     }
 
+    const std::string leg_set = hexa::gait::leg_set_value(res.leg_set);
+    if (leg_set != last_leg_set_) {
+      StringMsg lm;
+      lm.data = leg_set;
+      pub_leg_set_->publish(lm);
+      RCLCPP_INFO(get_logger(), "leg set -> %s", leg_set.c_str());
+      last_leg_set_ = leg_set;
+    }
+
     // Publish the relay-arm intent on change so hexa_hardware drives SET RELAY.
     if (!have_relay_ || res.relay_energized != last_relay_) {
       BoolMsg rm;
@@ -328,6 +346,13 @@ class LocomotionNode : public rclcpp::Node {
                     hexa::gait::state_value(res.engine_state).c_str());
       }
     }
+    if (res.gait_blocked_by_posture) {
+      // The other refusal. Worth its own line: "dropped (state=stand)" would be
+      // baffling, since a stand is exactly where a leg-set change is legal.
+      RCLCPP_WARN(get_logger(),
+                  "leg-set change dropped — the body pose never returned to "
+                  "neutral. Centre the posture sticks and ask again.");
+    }
     if (res.has_animation_name && !res.animation_accepted) {
       RCLCPP_WARN(get_logger(), "animation=%s dropped (unknown)",
                   res.animation_name.c_str());
@@ -367,6 +392,7 @@ class LocomotionNode : public rclcpp::Node {
       // Force the next tick to re-announce state to the face sink + hardware
       // (the fresh pipeline is FOLDED / de-energized).
       last_state_.clear();
+      last_leg_set_.clear();
       have_relay_ = false;
       res.success = true;
       res.message = "reloaded config (gait=" + cfg.default_gait +
@@ -395,6 +421,7 @@ class LocomotionNode : public rclcpp::Node {
   bool anim_pending_ = false;
   std::string anim_name_;
   std::string last_state_;
+  std::string last_leg_set_;
   bool fault_level_ = false;
   bool last_relay_ = false;
   bool have_relay_ = false;
@@ -415,6 +442,7 @@ class LocomotionNode : public rclcpp::Node {
   rclcpp::Subscription<StringMsg>::SharedPtr sub_anim_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_cmd_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_state_;
+  rclcpp::Publisher<StringMsg>::SharedPtr pub_leg_set_;
   rclcpp::Publisher<BoolMsg>::SharedPtr pub_relay_;
   rclcpp::Publisher<UInt8Msg>::SharedPtr pub_undervolt_;
   rclcpp::Service<Trigger>::SharedPtr srv_reload_;

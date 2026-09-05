@@ -54,6 +54,151 @@ std::map<std::string, LegOutput> RestPoseMove::update(float dt) {
   return out;
 }
 
+namespace {
+
+bool is_pair_leg(const std::string& name) {
+  for (const auto& parked : PARKED_LEGS) {
+    if (parked == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+PairFoldController::PairFoldController(
+    PairFoldDirection direction, std::map<std::string, Vec3> held_stance,
+    std::map<std::string, Vec3> folded_stance,
+    std::map<std::string, Vec3> nominal_stance, float swing_time,
+    float dwell_time, float probe_band, const SwingProfile& swing,
+    float controller_dt)
+    : direction_(direction),
+      swing_time_(swing_time),
+      dwell_time_(dwell_time),
+      swing_(swing),
+      controller_dt_(controller_dt) {
+  require_all_legs(held_stance, "held_stance");
+  require_all_legs(folded_stance, "folded_stance");
+  require_all_legs(nominal_stance, "nominal_stance");
+  if (swing_time <= 0.0f) {
+    throw std::invalid_argument("swing_time must be positive");
+  }
+  if (dwell_time < 0.0f) {
+    throw std::invalid_argument("dwell_time must not be negative");
+  }
+  if (swing.clearance != 0.0f) {
+    // Not a preference. The folded end is always the higher of the two, and its
+    // femur sits on its lower joint limit, so a clearance would ask for an
+    // unreachable arc over it.
+    throw std::invalid_argument("pair fold swing must have zero clearance");
+  }
+  for (const auto& name : LEG_NAMES) {
+    held_[name] = held_stance.at(name);
+  }
+  for (const auto& name : PARKED_LEGS) {
+    if (direction_ == PairFoldDirection::FOLD) {
+      // Planted, so the caller's stance is honest for this end.
+      origin_[name] = held_stance.at(name);
+      chord_end_[name] = folded_stance.at(name);
+      final_[name] = folded_stance.at(name);
+    } else {
+      // NOT held_stance: see the header.
+      origin_[name] = folded_stance.at(name);
+      final_[name] = nominal_stance.at(name);
+      chord_end_[name] = final_.at(name);
+    }
+    pair_pos_[name] = origin_.at(name);
+  }
+  // The braked descent, on the way down only: hand the chord over probe_band
+  // above the target and cover the rest at the gait's own touchdown speed.
+  if (direction_ == PairFoldDirection::UNFOLD && probe_band > 0.0f &&
+      swing.touchdown_velocity > 0.0f) {
+    set_down_time_ = probe_band / swing.touchdown_velocity;
+    for (const auto& name : PARKED_LEGS) {
+      chord_end_[name] = final_.at(name) + Vec3{0.0f, 0.0f, probe_band};
+    }
+  }
+}
+
+std::map<std::string, LegOutput> PairFoldController::emit(
+    float pair_phase, bool pair_stance) const {
+  std::map<std::string, LegOutput> out;
+  for (const auto& name : LEG_NAMES) {
+    if (is_pair_leg(name)) {
+      out[name] = LegOutput{pair_pos_.at(name), pair_phase, pair_stance};
+    } else {
+      // Every corner held exactly where it was handed over, planted. All six
+      // every tick: the engine reads the whole map back out.
+      out[name] = LegOutput{held_.at(name), 0.0f, true};
+    }
+  }
+  return out;
+}
+
+std::map<std::string, LegOutput> PairFoldController::update(float dt) {
+  // True while the pair is still standing on the ground, which is only ever the
+  // dwell at the head of a fold.
+  const bool grounded_at_start = direction_ == PairFoldDirection::FOLD;
+
+  switch (state_) {
+    case PairFoldState::DWELL: {
+      t_ += dt;
+      if (t_ >= dwell_time_) {
+        t_ = 0.0f;
+        state_ = PairFoldState::MOVE;
+      }
+      return emit(0.0f, grounded_at_start);
+    }
+
+    case PairFoldState::MOVE: {
+      t_ += dt;
+      const float phase = t_ / swing_time_;
+      if (phase >= 1.0f) {
+        for (const auto& name : PARKED_LEGS) {
+          pair_pos_[name] = chord_end_.at(name);
+        }
+        t_ = 0.0f;
+        state_ = set_down_time_ > 0.0f ? PairFoldState::SET_DOWN
+                                       : PairFoldState::DONE;
+        return emit(1.0f, state_ == PairFoldState::DONE &&
+                              direction_ == PairFoldDirection::UNFOLD);
+      }
+      for (const auto& name : PARKED_LEGS) {
+        const Vec3& origin = origin_.at(name);
+        const Vec3& target = chord_end_.at(name);
+        // Rest to rest, zero clearance and zero width: swing_arc degenerates to
+        // the eased chord between the two ends, which is the whole move.
+        pair_pos_[name] =
+            swing_arc(phase, origin, target, identity_y_sign(target),
+                      swing_time_, swing_, Vec3::Zero(), Vec3::Zero());
+      }
+      return emit(phase, false);
+    }
+
+    case PairFoldState::SET_DOWN: {
+      t_ += dt;
+      const float s = std::min(t_ / set_down_time_, 1.0f);
+      for (const auto& name : PARKED_LEGS) {
+        const Vec3& from = chord_end_.at(name);
+        const Vec3& to = final_.at(name);
+        // Linear, so the contact speed is exactly touchdown_velocity rather
+        // than the peak of some ramp.
+        pair_pos_[name] = from + (to - from) * s;
+      }
+      if (s >= 1.0f) {
+        state_ = PairFoldState::DONE;
+        return emit(1.0f, true);
+      }
+      return emit(1.0f, false);
+    }
+
+    case PairFoldState::DONE:
+      break;
+  }
+  return emit(1.0f, direction_ == PairFoldDirection::UNFOLD);
+}
+
 InitializeController::InitializeController(
     LegSet leg_set, std::map<std::string, Vec3> folded_stance,
     std::map<std::string, Vec3> initialized_stance,

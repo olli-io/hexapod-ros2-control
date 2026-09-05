@@ -16,6 +16,11 @@ display_node:
     expression_map.gait: neutral
     expression_map.settling: neutral
     expression_map.reseating: neutral
+    # The middle pair on its way to or from the folded pose — a leg-set change.
+    # The robot is standing and working, so it wears the same face a reseat
+    # does; it is not going to sleep.
+    expression_map.folding_pair: neutral
+    expression_map.unfolding_pair: neutral
     expression_map.folding: sleepy
 
     animation_expression: woozy

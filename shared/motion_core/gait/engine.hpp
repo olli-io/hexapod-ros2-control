@@ -35,6 +35,11 @@ enum class EngineState {
   SETTLING,
   FOLDING,
   RESEATING,
+  // The two halves of a leg-set change the reseat does not cover: the middle
+  // pair on its way to the folded pose, and on its way back down. The leg set
+  // is HEXAPOD throughout both — it flips only once the pair has arrived.
+  FOLDING_PAIR,
+  UNFOLDING_PAIR,
   FAULT,
 };
 
@@ -83,6 +88,11 @@ struct EngineConfig {
   float reseat_pair_swing_time = 0.0f;
   float reseat_pair_dwell_time = 0.0f;
   float reseat_swing_clearance = 0.0f;
+  // The middle pair between the folded pose and the ground, standing on the four
+  // corners — the half of a leg-set change the reseat does not cover.
+  float pair_fold_swing_time = 0.0f;
+  // All six feet planted for this long before the pair moves, either way.
+  float pair_fold_dwell_time = 0.0f;
 
   // Shared with the engagement controller so a swing looks the same however the
   // leg got airborne. effective_stride is the stride this tick actually lays
@@ -111,6 +121,28 @@ struct EngineConfig {
     p.touchdown_velocity = touchdown_velocity;
     p.touchdown_probe_fraction = touchdown_probe_fraction;
     return p;
+  }
+
+  // The pair's move between the folded pose and the ground. Zero clearance, and
+  // not because nobody has tuned it: swing_arc measures clearance from the
+  // higher of the two ends, which here is always the folded one, whose femur
+  // sits ON its lower joint limit — so any climb over that end is unreachable.
+  // At zero the arc degenerates to a plain eased chord, which is what this move
+  // wants anyway. Zero clearance also zeroes the granted probe time, so the
+  // unfold's landing is a segment of its own rather than the profile's tail.
+  SwingProfile pair_fold_profile() const {
+    SwingProfile p;
+    p.clearance = 0.0f;
+    p.touchdown_velocity = touchdown_velocity;
+    p.touchdown_probe_fraction = touchdown_probe_fraction;
+    return p;
+  }
+
+  // How far above its target the unfold hands over to the braked descent.
+  // Derived, not configured: the same expression the gait's own probe band uses,
+  // so the pair lands at exactly the speed every other touchdown does.
+  float pair_fold_probe_band() const {
+    return touchdown_velocity * touchdown_probe_fraction * pair_fold_swing_time;
   }
 };
 
@@ -222,7 +254,9 @@ class Engine {
 
   // Accepted from FOLDED / FAULT, where it also fixes the leg set the next
   // stand comes up on, and from a stand or a walk as long as the leg set does
-  // not change — that one is settled by the ladder that stands the robot up.
+  // not change. A strategy that DOES change it is accepted from STAND alone,
+  // where it arms a leg-set change; from anywhere else it is refused, which is
+  // what makes "refused while walking" total.
   bool set_strategy(const std::string& name);
   // Stands up on the leg set the applied strategy asks for: hexapod on all six,
   // quadruped on the four corners with the middle pair left folded where it is.
@@ -248,9 +282,14 @@ class Engine {
 
  private:
   void apply_strategy(const std::string& name);
-  // Swap the walking leg set and the nominal stance that goes with it. Only the
-  // two ends of the stand ladder call it: the leg set is fixed for as long as
-  // the robot is off its belly.
+  // Swap the walking leg set alone, leaving every nominal where it is. Whoever
+  // calls this owes the feet a stance that matches — either commit_new_nominal
+  // in the same breath (apply_leg_set, below) or a ladder that walks them there.
+  void set_leg_set(LegSet set);
+  // set_leg_set plus the nominal stance that goes with it, committed on the
+  // spot. A teleport of nominal_, so it is only safe where no foot is standing
+  // on the old one: the two ends of the stand ladder, and the fault revert. A
+  // leg-set change from a stand uses set_leg_set and lets its reseat commit.
   void apply_leg_set(LegSet set);
   std::unique_ptr<InitializeController> build_initialize();
   std::unique_ptr<FoldController> build_fold();
@@ -325,7 +364,21 @@ class Engine {
   // re-plant itself: the ladder arcs each foot home from where it is, where
   // assigning nominal_ would teleport it.
   void hand_off_to_reseat();
+  // The one way into RESEATING: sets the ladder, the target it commits on
+  // arrival, and the state, so the five callers cannot drift apart.
+  void begin_reseat(const std::map<std::string, Vec3>& target_stance,
+                    float target_height);
   std::map<std::string, LegOutput> tick_reseat(float dt);
+  // The middle pair's own move. Refuses unless leg_set_ is HEXAPOD, which is
+  // what makes "the reseat already ran on six feet" structural rather than a
+  // property of how the states happen to be wired.
+  std::unique_ptr<PairFoldController> build_pair_fold(
+      PairFoldDirection direction);
+  std::map<std::string, LegOutput> tick_pair_fold(float dt);
+  // The single commit point for a leg-set change: the set and the strategy that
+  // walks it move together, or the engagement is rebuilt on the wrong swing
+  // margin for as long as the pair is in the air.
+  void commit_leg_set_change();
   std::map<std::string, LegOutput> tick_fold(float dt);
   std::map<std::string, LegOutput> tick_engagement(
       float dt, std::pair<float, float> v_body_xy, float omega_z);
@@ -344,6 +397,10 @@ class Engine {
   std::optional<std::map<std::string, kin::LegSpec>> leg_specs_;
   std::optional<ReseatGeometryByLeg> reseat_geometry_;
 
+  // QUADRUPED iff the middle pair is at the folded pose. That biconditional is
+  // what a leg-set change is built around: the whole change — both reseats and
+  // the pair's own move — runs HEXAPOD, and the flip happens on the one tick
+  // where the pair is actually at the pose the flag claims for it.
   LegSet leg_set_ = LegSet::HEXAPOD;
   // The hexapod stance at a zero height offset; nominal_ tracks whichever leg
   // set is applied, at the applied height. The quadruped half lives in
@@ -361,6 +418,7 @@ class Engine {
   std::unique_ptr<InitializeController> initialize_;
   std::unique_ptr<FoldController> fold_;
   std::unique_ptr<ReseatController> reseat_;
+  std::unique_ptr<PairFoldController> pair_fold_;
 
   EngineState state_ = EngineState::FOLDED;
   std::map<std::string, Vec3> last_targets_;
@@ -393,6 +451,11 @@ class Engine {
   float height_stable_elapsed_ = 0.0f;
   bool pending_fold_ = false;
   std::optional<std::string> pending_strategy_name_;
+  // The leg set a change is moving TO, live for the whole transition. A pair
+  // fold is owed exactly when it differs from leg_set_, which is true only in
+  // the reseat that runs ahead of the fold — that one bit is what tells the two
+  // leg-set reseats apart without a second flag.
+  std::optional<LegSet> pending_leg_set_;
 
   std::map<std::string, Vec3> reseat_target_stance_;
   float reseat_target_height_ = 0.0f;
@@ -466,6 +529,10 @@ std::unique_ptr<Engine> make_default_engine(
     // Quadruped mode's stance, solved by the caller from quad_standing_pose.
     // Its parked middle pair needs nothing here — that is folded_pose.
     const std::array<JointAngles, kNumLegs>& quad_standing_pose);
+
+// Wire string for /gait/leg_set. The same two words hexa_common's gait catalog
+// uses, so the topic and the catalog need no mapping table between them.
+std::string leg_set_value(LegSet set);
 
 // Wire string for /gait/state.
 std::string state_value(EngineState s);

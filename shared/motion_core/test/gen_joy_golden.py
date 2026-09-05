@@ -274,15 +274,28 @@ def main() -> int:
     known = hexapod_names | quad_names
     unstable = {n for n, _, u in GAITS + QUAD_GAITS if u}
     allow_unstable = bool(teleop.get("allow_unstable_gaits", False))
+    # map_joy still holds exactly two rotations, so the trace is generated from
+    # the two presets the init buttons stand up on — the same two gen_config.py
+    # bakes for the firmware. A third preset is a web-teleop affair and does not
+    # reach this mapping.
+    def preset_for(leg_set):
+        for entry in teleop["presets"]["list"]:
+            names = [str(g) for g in entry["gait_cycle"]]
+            if names and (names[0] in quad_names) == (leg_set == "quadruped"):
+                return entry
+        raise ValueError(f"presets: none walks the {leg_set} leg set")
+
+    hexapod_preset = preset_for("hexapod")
+    quadruped_preset = preset_for("quadruped")
     gait_cycle = jm.resolve_gait_cycle(
-        tuple(str(n) for n in teleop["gait_cycle"]), known, unstable,
+        tuple(str(n) for n in hexapod_preset["gait_cycle"]), known, unstable,
         allow_unstable, foreign_gaits=quad_names)
     quadruped_gait_cycle = jm.resolve_gait_cycle(
-        tuple(str(n) for n in teleop["quadruped_gait_cycle"]), known, unstable,
+        tuple(str(n) for n in quadruped_preset["gait_cycle"]), known, unstable,
         allow_unstable, foreign_gaits=hexapod_names,
         key="quadruped_gait_cycle")
-    default_quadruped_gait = str(teleop["default_quadruped_gait"])
-    default_gait = str(teleop["default_gait"])
+    default_quadruped_gait = str(quadruped_preset["default_gait"])
+    default_gait = str(hexapod_preset["default_gait"])
     duty = {n: d for n, d, _ in GAITS}[default_gait]
     stride = float(gait["stride_length"])
     min_swing = float(gait["min_swing_time"])

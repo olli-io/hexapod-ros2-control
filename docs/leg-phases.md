@@ -239,16 +239,19 @@ walks the four corner legs one at a time. The vocabulary:
   selecting the mode.
 - **park** — a leg held clear of the walk. Neither stance nor swing: it carries
   no weight and takes no phase. The parked pose is the **folded** pose
-  (`geometry.yaml folded_pose`) — the same angles the robot powers up in — and
-  the middle pair never leaves it. There is no park move and no unpark move: the
-  mode is chosen from the belly, where that pair is already folded, and the
-  stand ladder simply skips it. Leaving the mode is the fold, which finds it
-  already home.
-- **choosing the set** — from the belly and nowhere else. Start stands the robot
-  up on six legs, select on four; off the belly either one is a fold, which is
-  the only way between the two. The engine refuses a gait whose leg set differs
-  from the one it is standing on, so nothing downstream has to guard against a
-  middle pair that is in the wrong place.
+  (`geometry.yaml folded_pose`) — the same angles the robot powers up in. From
+  the belly the middle pair is already there and the stand ladder simply skips
+  it, and the fold ladder finds it already home. From a stand it is put there
+  and taken back by the **fold the pair** / **unfold the pair** moves, the two
+  halves of a leg-set change below.
+- **choosing the set** — from the belly by the init buttons, or from a stand by
+  a leg-set change. Start stands the robot up on six legs, select on four; off
+  the belly either one is still a fold. What has changed is that folding is no
+  longer the *only* way between the two: a `/cmd_gait` naming a gait of the
+  other leg set, sent from a stand, runs the change in place. The engine still
+  refuses one from anywhere else — mid-ladder, mid-engagement, walking or
+  settling — so nothing downstream has to guard against a middle pair caught in
+  the wrong place.
 
 Both gaits are creeps at duty factor 3/4. Lift-offs are a quarter cycle apart
 and the swing window is
@@ -300,6 +303,52 @@ pose is being held. What the teleop refuses on four feet is the posture
 budget is what carries the body into the next triangle, and the static margin
 there is millimetres. Body height is exempt; it never competed for the x-y
 budget in the first place.
+
+### Changing the leg set from a stand
+
+Folding to the belly is no longer the only way between the two stands. A
+`/cmd_gait` naming a gait of the other leg set, sent while the engine is at
+`stand`, runs the change in place. It is refused from every other state, so a
+walking robot ignores it rather than stopping for it.
+
+The two footprints are not the same. The corners stand at `tip_reach` 0.135 on
+six legs and 0.119 on four, and the rear pair's splay goes from 0° to 25° — 16 mm
+of travel at the front and 57 mm at the rear. So the corners have to be
+**reseated** onto the new footprint, and the middle pair has to travel the 111 mm
+between the ground and the folded pose. The ordering is fixed by which of those
+two the body can afford at a time:
+
+- **hexapod → quadruped** — reseat the corners onto the four-corner footprint
+  first, with all six feet still down, then **fold the pair** up.
+- **quadruped → hexapod** — **unfold the pair** down onto the ground first, then
+  reseat the corners outward onto the six-leg footprint.
+
+Either way **the reseat runs with all six legs planted**, and the engine's leg
+set stays `hexapod` for the whole change — it flips only once the pair has
+arrived. That is not bookkeeping tidiness: the reseat ladder reads its rung order
+and its pre-lift shift hold off the leg set, so a hexapod leg set is what gives
+both reseats mirrored pairs and no shift hold. It is also what keeps a folded
+middle out of the ladder's landing stage, which latches any foot above its target
+as one to be put down and would sweep it 111 mm straight down with nothing under
+it.
+
+The middle pair's own move needs neither a waypoint nor a clearance. Standing, the
+path from a middle's stance to the folded pose is a near-vertical 111 mm line well
+outboard of the corner feet, and every joint triple along it is inside its limits
+— so it is one eased chord, both legs together. A clearance would be actively
+wrong: the folded pose's femur sits *on* its lower joint limit, so any arc that
+climbs over that end is unreachable. The unfold ends with the same braked descent
+at `touchdown_velocity` every other touchdown gets.
+
+**The operator's posture is reverted first.** A planted foot is solved through the
+body pose; a parked one is held rigid at the folded angles, deliberately, so a
+body offset cannot drag a leg that is stuck out in the air. A middle leg crossing
+between the two is therefore in one frame at one end and the other at the other,
+and the mismatch is not small — the folded configuration puts the foot 0.102 m
+from the femur joint, so 5 mm of body y is 4.5° of femur and a third of the pose
+envelope is outside the joint limits outright. Easing the pose to neutral before
+the pair moves makes the two frames the same one. Body height rides the same
+revert, so it costs the operator nothing extra.
 
 ## 5. Cold start
 

@@ -23,6 +23,11 @@ const std::unordered_map<std::string, Expression>& defaultExpressionMap() {
         {"gait", Expression::NEUTRAL},
         {"settling", Expression::NEUTRAL},
         {"reseating", Expression::NEUTRAL},
+        // A leg-set change: standing and working, not going to sleep. Left out
+        // of idleGaitStates for the same reason reseating is — the robot is
+        // moving, so the idling look-around must stay off.
+        {"folding_pair", Expression::NEUTRAL},
+        {"unfolding_pair", Expression::NEUTRAL},
         {"folding", Expression::SLEEPY},
     };
     return kMap;

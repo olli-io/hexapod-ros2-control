@@ -242,4 +242,9 @@ const std::map<std::string, StrategyFactory>& strategies() {
   return registry;
 }
 
+LegSet leg_set_of(const std::string& name) {
+  const auto it = strategies().find(name);
+  return it == strategies().end() ? LegSet::HEXAPOD : it->second()->leg_set();
+}
+
 }  // namespace hexa::gait

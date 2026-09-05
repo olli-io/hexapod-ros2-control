@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "bt_teleop.hpp"
@@ -98,6 +99,16 @@ struct TickResult {
   bool has_animation_name = false;
   std::string animation_name;            // requested animation mode
   bool animation_accepted = false;       // known animation (else warn-and-ignore)
+
+  // The leg set the engine has actually applied — what the operator is standing
+  // on, as opposed to what the last /cmd_gait asked for. A refused request
+  // leaves the command topic latched at a name the engine never took, so this
+  // is the only honest source for a UI.
+  hexa::gait::LegSet leg_set = hexa::gait::LegSet::HEXAPOD;
+  // A leg-set change was asked for and dropped because the operator's body pose
+  // never came back to neutral. Distinct from a plain refusal, which is about
+  // the engine state — this one is about the sticks, and the caller says so.
+  bool gait_blocked_by_posture = false;
 };
 
 class Pipeline {
@@ -152,6 +163,21 @@ class Pipeline {
   hexa::control::Control control_;
   hexa::teleop::JoyConfig joycfg_;
   hexa::teleop::JoyState joystate_;
+
+  // A leg-set change waiting for the operator's pose to come back to neutral.
+  // A planted foot is solved through the body pose and a parked one is not, so
+  // the middle pair may only cross between the two where the two frames agree —
+  // and on a folded middle the disagreement is not small: that leg's foot sits
+  // 0.1 m from its femur joint, so millimetres of body offset are degrees of
+  // femur, and a good part of the pose envelope is outside the joint limits
+  // outright. The teleops ease their own posture out when they see the request
+  // on /cmd_gait; this waits for the result and gives up if it never comes.
+  std::optional<std::string> pending_leg_set_gait_;
+  float pending_leg_set_elapsed_ = 0.0f;
+  // The pose compose_gait actually applied last tick. The gait-select block runs
+  // before posture_.update, so it reads one tick stale, which at 200 Hz is not a
+  // distinction worth making.
+  hexa::posture::BodyPose last_body_pose_{};
   hexa::posture::PostureController posture_;
   hexa::supervisor::Supervisor supervisor_;
 

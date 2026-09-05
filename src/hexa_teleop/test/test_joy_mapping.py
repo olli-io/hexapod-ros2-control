@@ -1917,11 +1917,22 @@ def test_the_shipped_cycles_are_partitioned_by_leg_set():
     from hexa_common.gait_catalog import GAIT_DESCRIPTORS
 
     # The cycler picks its rotation off the leg set it is standing on, so a
-    # name in the wrong list is a press the engine would refuse.
+    # name in the wrong list is a press the engine would refuse. Each preset's
+    # rotation therefore walks one leg set, and no two share a gait — which is
+    # also what lets a bare name on /cmd_gait say which preset is in force.
     here = pathlib.Path(__file__).resolve().parents[1]
     raw = yaml.safe_load((here / "config" / "teleop_joy.yaml").read_text())
-    for name in raw["gait_cycle"]:
-        assert GAIT_DESCRIPTORS[name].leg_set == "hexapod", name
-    for name in raw["quadruped_gait_cycle"]:
-        assert GAIT_DESCRIPTORS[name].leg_set == "quadruped", name
-    assert raw["default_quadruped_gait"] in raw["quadruped_gait_cycle"]
+    seen: dict[str, str] = {}
+    leg_sets = set()
+    for preset in raw["presets"]["list"]:
+        sets = {GAIT_DESCRIPTORS[n].leg_set for n in preset["gait_cycle"]}
+        assert len(sets) == 1, (preset["id"], sets)
+        leg_sets |= sets
+        assert preset["default_gait"] in preset["gait_cycle"], preset["id"]
+        for name in preset["gait_cycle"]:
+            assert name not in seen, (name, seen.get(name), preset["id"])
+            seen[name] = preset["id"]
+    # And one preset of each set ships, since the init buttons stand up on one
+    # of each straight off the belly.
+    assert leg_sets == {"hexapod", "quadruped"}
+    assert raw["presets"]["default"] in {p["id"] for p in raw["presets"]["list"]}
