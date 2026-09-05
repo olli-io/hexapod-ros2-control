@@ -617,14 +617,38 @@ TEST(PostureSettleSnap, DeadbandDoesNotClipTheRebound) {
   EXPECT_EQ(s.value().x, 0.0f);
 }
 
-// A command inside the band is one below what a servo can express, so it snaps
-// too — the test is on the command as well as the position, and an axis parked
-// just off zero would otherwise never settle.
-TEST(PostureSettleSnap, SubToleranceCommandReadsAsZero) {
+// The case a band anchored at the origin could never serve, and the one the
+// operator is actually in most of the time: a HELD pose — a raised body height,
+// a recorded posture — which the spring would otherwise approach forever.
+TEST(PostureSettleSnap, HeldPoseArrivesExactlyOnTheCommand) {
   PoseSmoother s{PoseSmootherConfig{}};
-  run_to(s, BodyPose{2.0e-5f, 0.0f, 0.0f, 0.0f, 0.0f, 3.0e-5f}, 2000);
-  EXPECT_EQ(s.value().x, 0.0f);
-  EXPECT_EQ(s.value().yaw, 0.0f);
+  const BodyPose held{0.02f, -0.01f, 0.02f, 0.05f, -0.03f, 0.10f};
+  run_to(s, held, 2000);
+  const BodyPose p = s.value();
+  EXPECT_EQ(p.x, held.x);
+  EXPECT_EQ(p.y, held.y);
+  EXPECT_EQ(p.z, held.z);
+  EXPECT_EQ(p.roll, held.roll);
+  EXPECT_EQ(p.pitch, held.pitch);
+  EXPECT_EQ(p.yaw, held.yaw);
+  // And it STAYS there: the deadband re-fires every tick, so the pose does not
+  // drift back off the command by an ulp once it has arrived.
+  EXPECT_EQ(s.step(held, kEnv, kDt).x, held.x);
+}
+
+// The pair's error is Cartesian: a heading still sweeping toward the command is
+// far from it even at the right reach, so the deadband must not fire on a
+// radius that happens to match. Commanded a quarter turn away at constant
+// reach, the snap may not land until the sweep is over.
+TEST(PostureSettleSnap, PairDoesNotSettleOnRadiusAlone) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  constexpr float kR = 0.04f;
+  run_to(s, xy_pose(kR, 0.0f), 2000);
+  for (const BodyPose& p : run_to(s, xy_pose(0.0f, kR), 40)) {
+    EXPECT_LT(p.y, kR) << "snapped onto the command mid-sweep";
+  }
+  run_to(s, xy_pose(0.0f, kR), 2000);
+  EXPECT_EQ(s.value().y, kR);
 }
 
 // Zero disables it, so the tail can be had back from YAML without touching code.

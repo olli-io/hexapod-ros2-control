@@ -128,8 +128,8 @@ class PoseSmoother {
   // the body dead at its fastest point. The rebound past centre is
   // exp(-pi*zeta/sqrt(1-zeta^2)) of the reach withdrawn, so damping_ratio is the
   // knob that governs it. The snap_tol_* deadband ends that ring-down rather
-  // than bounding it: it needs the axis SLOW as well as near zero, so it fires
-  // on the arrival and never on the crossing.
+  // than bounding it: it needs the pose SLOW as well as near the command, so it
+  // fires on the arrival and never on the crossing.
   //
   // tau <= 0 bypasses the filter — every axis snaps to the clamped target.
   BodyPose step(const BodyPose& target, const PoseLimits& envelope, float dt);

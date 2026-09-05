@@ -82,36 +82,45 @@ PolarState to_polar(float a, float b) {
 }
 
 namespace {
-// The settle deadband, shared by the lone axes and a pair's magnitude: near
-// zero, commanded near zero, and slow enough to need a whole tau (1/w) to cross
-// the band. That last test is what stops the band being a floor — a withdrawal
-// ringing through the origin is moving far too fast to qualify, so it is left to
-// ring, and only an axis that is actually arriving gets snapped.
-bool settled_at_zero(float pos, float vel, float target, float tol, float w) {
-  return tol > 0.0f && std::fabs(pos) <= tol && std::fabs(target) <= tol &&
-         std::fabs(vel) <= tol * w;
+// The settle deadband, shared by the lone axes and the pairs: within `tol` of
+// the COMMAND, and slow enough to need a whole tau (1/w) to cross that gap.
+//
+// Anchored on the command, not on zero: the pose the operator holds is almost
+// never identity — a raised body height, a recorded posture — and a band at the
+// origin would then never be reached at all. Arriving is what ends the ring-down,
+// and arriving is relative to what was asked for.
+//
+// The speed test is what stops the band being a floor: a withdrawal ringing
+// THROUGH its target is inside the band for a tick or two while doing 0.3 m/s,
+// three orders above this gate, so it is left to ring and only the arrival at
+// the end of the ring-down snaps.
+bool settled_on_target(float err, float speed, float tol, float w) {
+  return tol > 0.0f && err <= tol && speed <= tol * w;
 }
 
 // One semi-implicit Euler step of a damped spring, with the saturation clamp
 // folded in so a pinned axis also drops its velocity. A non-positive w snaps.
 void step_axis(float& pos, float& vel, float target, float lo, float hi, float w,
                float zeta, float snap_tol, float dt) {
+  // The reachable command: a target outside the envelope settles ON the limit,
+  // where the integrator has already pinned it.
+  const float tgt = clamp_axis(target, lo, hi);
   if (w <= 0.0f) {
-    pos = clamp_axis(target, lo, hi);
+    pos = tgt;
     vel = 0.0f;
-  } else {
-    vel += (w * w * (target - pos) - 2.0f * zeta * w * vel) * dt;
-    pos += vel * dt;
-    if (pos < lo) {
-      pos = lo;
-      vel = 0.0f;
-    } else if (pos > hi) {
-      pos = hi;
-      vel = 0.0f;
-    }
+    return;
   }
-  if (settled_at_zero(pos, vel, target, snap_tol, w)) {
-    pos = 0.0f;
+  vel += (w * w * (target - pos) - 2.0f * zeta * w * vel) * dt;
+  pos += vel * dt;
+  if (pos < lo) {
+    pos = lo;
+    vel = 0.0f;
+  } else if (pos > hi) {
+    pos = hi;
+    vel = 0.0f;
+  }
+  if (settled_on_target(std::fabs(tgt - pos), std::fabs(vel), snap_tol, w)) {
+    pos = tgt;
     vel = 0.0f;
   }
 }
@@ -140,19 +149,16 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
     out_a = target_a;
     out_b = target_b;
     clamp_disc(out_a, out_b, r_max);
-    const float r = std::hypot(out_a, out_b);
-    if (settled_at_zero(r, 0.0f, r, snap_tol, 0.0f)) {
-      out_a = 0.0f;
-      out_b = 0.0f;
-    }
     s = to_polar(out_a, out_b);
     return;
   }
 
-  float target_r = std::hypot(target_a, target_b);
-  if (target_r > r_max) {
-    target_r = r_max;
-  }
+  // The reachable command, kept in CARTESIAN so the snap below can land on it
+  // bit-exactly rather than on a polar round trip of it.
+  float tgt_a = target_a;
+  float tgt_b = target_b;
+  clamp_disc(tgt_a, tgt_b, r_max);
+  const float target_r = std::hypot(tgt_a, tgt_b);
 
   // The magnitude is SIGNED between ticks. Canonicalise before anything reads
   // the heading, or a pair caught mid-crossing is re-commanded against a heading
@@ -175,7 +181,7 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
   // Nor has a target at the origin: freeze the heading so a withdrawn pose
   // retracts along its own line rather than spinning on the way to centre.
   const float target_angle =
-      target_r > kPolarEps ? std::atan2(target_b, target_a) : s.angle;
+      target_r > kPolarEps ? std::atan2(tgt_b, tgt_a) : s.angle;
 
   const float err = wrap_pi(target_angle - s.angle);
   s.angle_rate += (w * w * err - 2.0f * zeta * w * s.angle_rate) * dt;
@@ -201,16 +207,23 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
     s.radius_rate = 0.0f;
   }
 
-  if (settled_at_zero(s.radius, s.radius_rate, target_r, snap_tol, w)) {
-    s.radius = 0.0f;
-    s.radius_rate = 0.0f;
-    // A heading at the origin means nothing and the next target that has one is
-    // adopted outright, so a leftover rate on it could only smear that adoption.
-    s.angle_rate = 0.0f;
-  }
-
   out_a = s.radius * std::cos(s.angle);
   out_b = s.radius * std::sin(s.angle);
+
+  // The pair's deadband is measured in CARTESIAN error and Cartesian speed, not
+  // on the radius: a heading a few degrees off at full reach is millimetres from
+  // the commanded point, so radius and angle cannot each be judged against one
+  // tolerance. Speed likewise composes the radial and tangential rates.
+  const float speed = std::hypot(s.radius_rate, s.radius * s.angle_rate);
+  if (settled_on_target(std::hypot(tgt_a - out_a, tgt_b - out_b), speed,
+                        snap_tol, w)) {
+    s.radius = target_r;
+    s.angle = target_angle;
+    s.radius_rate = 0.0f;
+    s.angle_rate = 0.0f;
+    out_a = tgt_a;
+    out_b = tgt_b;
+  }
 }
 }  // namespace
 

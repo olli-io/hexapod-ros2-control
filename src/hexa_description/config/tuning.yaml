@@ -213,8 +213,8 @@ posture_node:
     # Only fires on an arrival — an axis still moving fast (more than the
     # tolerance per tau) is left to ring, so a withdrawal keeps its swing past
     # centre. 0 disables.
-    pose_filter_snap_tol_linear: 1.0e-4 # m
-    pose_filter_snap_tol_angular: 1.0e-4 # rad
+    pose_filter_snap_tol_linear: 0.002 # m
+    pose_filter_snap_tol_angular: 0.01 # rad
 
     # Posing limits. Body height is ground to underside; the other five axes are
     # symmetric (± the value). Manual pose and animation share this envelope and
