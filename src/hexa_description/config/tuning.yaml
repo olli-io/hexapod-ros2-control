@@ -208,6 +208,14 @@ posture_node:
     pose_filter_tau: 0.15
     pose_filter_damping_ratio: 0.5
 
+    # Settle deadband on that smoother: the spring's tail is asymptotic, so
+    # below this the command snaps to exactly 0 and its velocity is dropped.
+    # Only fires on an arrival — an axis still moving fast (more than the
+    # tolerance per tau) is left to ring, so a withdrawal keeps its swing past
+    # centre. 0 disables.
+    pose_filter_snap_tol_linear: 1.0e-4 # m
+    pose_filter_snap_tol_angular: 1.0e-4 # rad
+
     # Posing limits. Body height is ground to underside; the other five axes are
     # symmetric (± the value). Manual pose and animation share this envelope and
     # their sum is clamped to it.

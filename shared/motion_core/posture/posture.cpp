@@ -268,8 +268,9 @@ PostureController::PostureController(const config::PostureConfig& p)
       swing_lift_tau_(p.swing_lift_tau),
       support_shift_lead_(p.support_shift_lead),
       support_shift_tau_(p.support_shift_tau) {
-  pose_smoother_ = PoseSmoother(
-      PoseSmootherConfig{p.pose_filter_tau, p.pose_filter_damping_ratio});
+  pose_smoother_ = PoseSmoother(PoseSmootherConfig{
+      p.pose_filter_tau, p.pose_filter_damping_ratio,
+      p.pose_filter_snap_tol_linear, p.pose_filter_snap_tol_angular});
 
   std::vector<std::string_view> enabled(config::kEnabledAnimations.begin(),
                                         config::kEnabledAnimations.end());

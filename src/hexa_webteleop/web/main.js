@@ -72,6 +72,10 @@ let refusedTimer = null;
 let packVoltage = null;
 let packCurrent = null;
 let packTimer = null;
+// Set once in init(); module-scoped because the Mode view re-centres them on
+// the way in — the sticks leave the screen, and a knob held at that moment
+// would otherwise never see its own touchend.
+let joysticks = [];
 
 // Re-send held input this often (ms) so the server's input watchdog
 // (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a
@@ -287,6 +291,10 @@ function setJoysticksEnabled(enabled) {
 
 // ── Mode view (navbar mode icon) ───────────────────────────────────
 //
+// A full view that replaces the control area in place, not an overlay over it.
+// It stays in this page rather than becoming one like logs.html because
+// pending and refused are live states and only the WebSocket carries them.
+//
 // The active row is driven by /gait/leg_set alone. A tap sets nothing locally:
 // an optimistic row would show a mode the robot may refuse, and on a latched
 // command topic that lie has nothing to correct it.
@@ -353,13 +361,27 @@ function showPresetRefusal(reason) {
   }, 4000);
 }
 
-function showPresetOverlay() {
-  updatePresetDisplay();
-  $("preset-overlay").classList.remove("hidden");
+function presetViewOpen() {
+  return !$("preset-view").classList.contains("hidden");
 }
 
-function hidePresetOverlay() {
-  $("preset-overlay").classList.add("hidden");
+function showPresetView() {
+  updatePresetDisplay();
+  // The sticks are about to disappear from under the operator's thumbs.
+  joysticks.forEach(function (j) {
+    j.reset();
+  });
+  $("control-area").classList.add("hidden");
+  $("preset-view").classList.remove("hidden");
+}
+
+function hidePresetView() {
+  $("preset-view").classList.add("hidden");
+  $("control-area").classList.remove("hidden");
+  // The canvases were display:none, so their measured size was zero.
+  joysticks.forEach(function (j) {
+    j.resize();
+  });
 }
 
 // \u2500\u2500 Controller status overlay (navbar controller icon) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -480,10 +502,14 @@ function setupButtons() {
     hideConnOverlay();
   });
 
-  // Navbar mode icon → preset popover. Deliberately outside the take-control
-  // gate: a mode switch is supervisory, so it works while a controller drives.
-  $("preset-btn").addEventListener("click", showPresetOverlay);
-  $("preset-close").addEventListener("click", hidePresetOverlay);
+  // Navbar mode icon → the Mode view, in and back out. Deliberately outside
+  // the take-control gate: a mode switch is supervisory, so it works while a
+  // controller drives.
+  $("preset-btn").addEventListener("click", function () {
+    if (presetViewOpen()) hidePresetView();
+    else showPresetView();
+  });
+  $("preset-back").addEventListener("click", hidePresetView);
 
   // Navbar log icon → log page.
   $("log-btn").addEventListener("click", function () {
@@ -673,7 +699,7 @@ class TouchJoystick {
 
 function init() {
   setupButtons();
-  const joysticks = [
+  joysticks = [
     new TouchJoystick("left-canvas", "left"),
     new TouchJoystick("right-canvas", "right"),
   ];

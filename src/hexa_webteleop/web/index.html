@@ -40,7 +40,8 @@
 
       <!-- Mode: the operator preset (NORMAL / QUAD). The icon doubles as a
            leg-set readout — the two middle legs dim when the robot is standing
-           on four — so the current mode is visible without opening anything. -->
+           on four — so the current mode is visible without opening the view.
+           Tap toggles the Mode view in and out. -->
       <button id="preset-btn" class="nav-icon" aria-label="Mode">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">
@@ -121,6 +122,27 @@
         <span class="joystick-label">Right</span>
       </div>
     </div>
+
+    <!-- Mode view. Replaces the control area in place, keeping the navbar and
+         — crucially — the WebSocket: pending and refused are live states that
+         only the socket carries, so this is a view in this page and not a page
+         like logs.html. Reachable in every state, including while the
+         take-control prompt has replaced the button grid, which is what makes a
+         mode switch possible while a controller drives. -->
+    <div id="preset-view" class="hidden">
+      <div class="view-header">
+        <button id="preset-back" class="nav-icon" aria-label="Back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"/>
+            <polyline points="12 19 5 12 12 5"/>
+          </svg>
+        </button>
+        <span class="view-title">Mode</span>
+      </div>
+      <div id="preset-list"></div>
+      <p id="preset-note"></p>
+    </div>
   </div>
 
   <!-- Shown when the server already has another device connected. -->
@@ -150,21 +172,6 @@
       <div class="dialog-buttons">
         <button id="controller-toggle"></button>
         <button id="controller-close">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Mode popover, opened from the navbar mode icon. Reachable in every
-       state, including while the take-control prompt has replaced the button
-       grid — which is what makes a mode switch possible while a controller
-       drives. -->
-  <div id="preset-overlay" class="overlay hidden">
-    <div class="dialog">
-      <p>Mode</p>
-      <div id="preset-list"></div>
-      <p id="preset-note" class="dialog-sub"></p>
-      <div class="dialog-buttons">
-        <button id="preset-close">Close</button>
       </div>
     </div>
   </div>

@@ -571,6 +571,74 @@ TEST(PosturePolarFilter, ResetSeedsThePolarStateFromThePose) {
   }
 }
 
+// ── settle deadband ───────────────────────────────────────────────────────
+
+// A spring's tail is asymptotic: without a deadband a released stick leaves the
+// body creeping through fractions of a servo count long after it has visibly
+// arrived. Every axis group has to land on exactly zero — the two eased pairs
+// and the two lone axes alike.
+TEST(PostureSettleSnap, WithdrawnPoseArrivesExactlyAtZero) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  const BodyPose reach{0.03f, 0.02f, 0.02f, 0.10f, 0.05f, 0.20f};
+  run_to(s, reach, 2000);
+  ASSERT_NEAR(s.value().x, reach.x, 1e-5f);
+
+  run_to(s, hexa::posture::IDENTITY, 2000);
+  const BodyPose p = s.value();
+  EXPECT_EQ(p.x, 0.0f);
+  EXPECT_EQ(p.y, 0.0f);
+  EXPECT_EQ(p.z, 0.0f);
+  EXPECT_EQ(p.roll, 0.0f);
+  EXPECT_EQ(p.pitch, 0.0f);
+  EXPECT_EQ(p.yaw, 0.0f);
+
+  // Snapped, not frozen: the next command still moves it.
+  EXPECT_GT(s.step(reach, kEnv, kDt).x, 0.0f);
+}
+
+// The deadband must not become the floor the magnitude deliberately does not
+// have. Even a fat one — 2 mm, an eighth of the rebound — leaves the crossing
+// alone, because a pair travelling through the origin at 0.3 m/s is plainly not
+// settling. Only the arrival at the end of the ring-down qualifies.
+TEST(PostureSettleSnap, DeadbandDoesNotClipTheRebound) {
+  PoseSmootherConfig cfg;
+  cfg.snap_tol_linear = 0.002f;
+  PoseSmoother s{cfg};
+  constexpr float kR = 0.04f;
+  run_to(s, xy_pose(kR, 0.0f), 2000);
+
+  float depth = 0.0f;
+  for (const BodyPose& p : run_to(s, xy_pose(0.0f, 0.0f), 400)) {
+    depth = std::min(depth, p.x);
+  }
+  EXPECT_NEAR(depth, -kR * predicted_overshoot(cfg.damping_ratio), 0.03f * kR);
+
+  run_to(s, xy_pose(0.0f, 0.0f), 2000);
+  EXPECT_EQ(s.value().x, 0.0f);
+}
+
+// A command inside the band is one below what a servo can express, so it snaps
+// too — the test is on the command as well as the position, and an axis parked
+// just off zero would otherwise never settle.
+TEST(PostureSettleSnap, SubToleranceCommandReadsAsZero) {
+  PoseSmoother s{PoseSmootherConfig{}};
+  run_to(s, BodyPose{2.0e-5f, 0.0f, 0.0f, 0.0f, 0.0f, 3.0e-5f}, 2000);
+  EXPECT_EQ(s.value().x, 0.0f);
+  EXPECT_EQ(s.value().yaw, 0.0f);
+}
+
+// Zero disables it, so the tail can be had back from YAML without touching code.
+TEST(PostureSettleSnap, ZeroToleranceLeavesTheTailAlone) {
+  PoseSmootherConfig cfg;
+  cfg.snap_tol_linear = 0.0f;
+  cfg.snap_tol_angular = 0.0f;
+  PoseSmoother s{cfg};
+  run_to(s, xy_pose(0.03f, 0.0f), 2000);
+  run_to(s, xy_pose(0.0f, 0.0f), 600);
+  EXPECT_NE(s.value().x, 0.0f);
+  EXPECT_LT(std::fabs(s.value().x), 1.0e-4f);
+}
+
 }  // namespace
 
 // ── Quadruped support shift ──

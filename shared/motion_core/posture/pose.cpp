@@ -82,22 +82,36 @@ PolarState to_polar(float a, float b) {
 }
 
 namespace {
+// The settle deadband, shared by the lone axes and a pair's magnitude: near
+// zero, commanded near zero, and slow enough to need a whole tau (1/w) to cross
+// the band. That last test is what stops the band being a floor — a withdrawal
+// ringing through the origin is moving far too fast to qualify, so it is left to
+// ring, and only an axis that is actually arriving gets snapped.
+bool settled_at_zero(float pos, float vel, float target, float tol, float w) {
+  return tol > 0.0f && std::fabs(pos) <= tol && std::fabs(target) <= tol &&
+         std::fabs(vel) <= tol * w;
+}
+
 // One semi-implicit Euler step of a damped spring, with the saturation clamp
 // folded in so a pinned axis also drops its velocity. A non-positive w snaps.
 void step_axis(float& pos, float& vel, float target, float lo, float hi, float w,
-               float zeta, float dt) {
+               float zeta, float snap_tol, float dt) {
   if (w <= 0.0f) {
     pos = clamp_axis(target, lo, hi);
     vel = 0.0f;
-    return;
+  } else {
+    vel += (w * w * (target - pos) - 2.0f * zeta * w * vel) * dt;
+    pos += vel * dt;
+    if (pos < lo) {
+      pos = lo;
+      vel = 0.0f;
+    } else if (pos > hi) {
+      pos = hi;
+      vel = 0.0f;
+    }
   }
-  vel += (w * w * (target - pos) - 2.0f * zeta * w * vel) * dt;
-  pos += vel * dt;
-  if (pos < lo) {
-    pos = lo;
-    vel = 0.0f;
-  } else if (pos > hi) {
-    pos = hi;
+  if (settled_at_zero(pos, vel, target, snap_tol, w)) {
+    pos = 0.0f;
     vel = 0.0f;
   }
 }
@@ -118,13 +132,19 @@ float omega_for(float tau, float dt) {
 // separate state but share one w, which is a parameter so the direction can be
 // given its own tau again by passing a second one in.
 void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
-                float target_b, float r_max, float w, float zeta, float dt) {
+                float target_b, float r_max, float w, float zeta,
+                float snap_tol, float dt) {
   if (w <= 0.0f) {
     // Snap in Cartesian rather than round-tripping through polar, so the result
     // is bit-identical to the old per-axis snap.
     out_a = target_a;
     out_b = target_b;
     clamp_disc(out_a, out_b, r_max);
+    const float r = std::hypot(out_a, out_b);
+    if (settled_at_zero(r, 0.0f, r, snap_tol, 0.0f)) {
+      out_a = 0.0f;
+      out_b = 0.0f;
+    }
     s = to_polar(out_a, out_b);
     return;
   }
@@ -181,6 +201,14 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
     s.radius_rate = 0.0f;
   }
 
+  if (settled_at_zero(s.radius, s.radius_rate, target_r, snap_tol, w)) {
+    s.radius = 0.0f;
+    s.radius_rate = 0.0f;
+    // A heading at the origin means nothing and the next target that has one is
+    // adopted outright, so a leftover rate on it could only smear that adoption.
+    s.angle_rate = 0.0f;
+  }
+
   out_a = s.radius * std::cos(s.angle);
   out_b = s.radius * std::sin(s.angle);
 }
@@ -194,13 +222,17 @@ BodyPose PoseSmoother::step(const BodyPose& target, const PoseLimits& envelope,
   const float w = omega_for(cfg_.tau, dt);
   const float z = cfg_.damping_ratio;
 
+  const float tol_lin = cfg_.snap_tol_linear;
+  const float tol_ang = cfg_.snap_tol_angular;
+
   step_polar(xy_, pose_.x, pose_.y, target.x, target.y, envelope.xy_radius(), w,
-             z, dt);
+             z, tol_lin, dt);
   step_polar(tilt_, pose_.roll, pose_.pitch, target.roll, target.pitch,
-             envelope.tilt_radius(), w, z, dt);
-  step_axis(pose_.z, vel_z_, target.z, envelope.z_min, envelope.z_max, w, z, dt);
+             envelope.tilt_radius(), w, z, tol_ang, dt);
+  step_axis(pose_.z, vel_z_, target.z, envelope.z_min, envelope.z_max, w, z,
+            tol_lin, dt);
   step_axis(pose_.yaw, vel_yaw_, target.yaw, -envelope.yaw, envelope.yaw, w, z,
-            dt);
+            tol_ang, dt);
   return pose_;
 }
 

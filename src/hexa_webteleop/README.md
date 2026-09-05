@@ -34,7 +34,7 @@ syncing the animation cycler would be dead code, since the shared
   — wifi connection indicator, controller icon (green while a controller
   owns `/cmd_vel`; tap for a switch toggle), **mode** icon (a six-legged
   body whose middle pair dims on four legs, so the navbar carries the
-  current mode without the popover being open; tap for the Mode view),
+  current mode without the view being open; tap toggles the Mode view),
   log icon.
 - **Control area** — two touch joysticks flanking a 3×3 button grid; top 3
   buttons select mode (Gait / Posture / Anim), bottom 6 are
@@ -72,15 +72,22 @@ goes inert there, for the reason `hexa_teleop`'s README gives.
 
 ## Mode view
 
-A navbar icon opening a popover that lists the operator **presets** — `NORMAL`
+A navbar icon opening a view that lists the operator **presets** — `NORMAL`
 (six legs) and `QUAD` (four corners, middle pair parked) today, more later — and
 switches between them. Tapping one publishes that preset's remembered gait on
 `/cmd_gait`; the engine runs a **leg-set change** in place, without folding to
 the belly. See `hexa_teleop`'s README for what a preset is and
 `docs/leg-phases.md` for what the robot actually does.
 
-A popover rather than a page like `logs.html`: pending and refused are live
-states, and only the WebSocket carries them.
+A view that **replaces the control area** in `index.html` — not an overlay over
+it, and not a page like `logs.html`. Full-screen because the list is the whole
+task while it is open and a preset row is a thing you tap on a phone, in this
+page because pending and refused are live states and only the WebSocket carries
+them; navigating away would drop the socket, and the server hands its one client
+slot to whoever reconnects. The navbar stays put, so the mode icon toggles the
+view and the back arrow leaves it, and both sticks are re-centred on the way in —
+they leave the screen, and a knob held at that moment never sees its own
+touchend.
 
 - **The active row comes from `/gait/leg_set` and nothing else** — never the
   tap, never the latched `/cmd_gait`. That command topic keeps a refused name

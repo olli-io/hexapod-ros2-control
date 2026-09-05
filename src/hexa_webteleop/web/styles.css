@@ -106,37 +106,75 @@ button.nav-icon:active {
 
 /* Mode icon: accent while a switch is in flight. The two middle legs dim when
    the robot is standing on four, so the navbar carries the current mode without
-   the popover being open. */
+   the view being open. */
 #preset-btn.active { color: var(--accent); }
 .preset-mid-leg { transition: opacity 0.2s ease; }
 #preset-btn.quad .preset-mid-leg { opacity: 0.2; }
 
-/* ── Mode popover rows ──────────────────────────────────────────── */
+/* ── Mode view (replaces the control area) ──────────────────────── */
+
+/* Takes the control area's place in the #app flexbox, so it inherits the
+   same box in both orientations and the navbar stays put. */
+#preset-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.8rem;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  touch-action: pan-y;
+}
+
+/* Own header rather than the settings page's bar: the navbar is still on
+   screen here, so this titles the view instead of replacing the chrome. */
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.view-header .nav-icon svg { width: 24px; height: 24px; }
+
+.view-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
 
 #preset-list {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin: 0.6rem 0;
+  gap: 0.5rem;
+  /* Full-width rows read as a list on a phone but stretch absurdly on a
+     landscape tablet; cap and centre them. */
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
 }
 
 .preset-item {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.1rem;
-  padding: 0.55rem 0.8rem;
+  gap: 0.15rem;
+  padding: 0.9rem 1rem;
   border: 1px solid var(--muted);
   border-radius: 8px;
   background: var(--surface);
   color: var(--fg);
   font: inherit;
   text-align: left;
+  cursor: pointer;
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
-.preset-label { font-size: 0.95rem; font-weight: 700; }
-.preset-sub { font-size: 0.75rem; color: var(--muted); }
+.preset-label { font-size: 1rem; font-weight: 700; }
+.preset-sub { font-size: 0.78rem; color: var(--muted); }
 
 /* Active is the mode the robot is actually standing in — from /gait/leg_set,
    never from the tap. Same solid fill the active teleop mode button uses. */
@@ -161,6 +199,16 @@ button.nav-icon:active {
 }
 
 .preset-item:disabled { opacity: 0.5; pointer-events: none; }
+
+/* Empty until the node refuses something, so it reserves no space. */
+#preset-note {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: center;
+}
 
 #preset-note.refused { color: var(--red); }
 

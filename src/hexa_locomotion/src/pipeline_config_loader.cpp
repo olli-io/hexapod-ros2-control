@@ -262,6 +262,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.gait_activation_slew_rate = f(p["gait_activation_slew_rate"]);
   ps.pose_filter_tau = f(p["pose_filter_tau"]);
   ps.pose_filter_damping_ratio = f(p["pose_filter_damping_ratio"]);
+  ps.pose_filter_snap_tol_linear = f(p["pose_filter_snap_tol_linear"]);
+  ps.pose_filter_snap_tol_angular = f(p["pose_filter_snap_tol_angular"]);
   ps.gait_body_animations_enabled =
       p["gait_body_animations_enabled"].as<bool>();
   ps.pose_limit_x = f(p["pose_limit_x"]);

@@ -915,6 +915,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         # damping_ratio = zeta, both frame-rate independent.
         ("pose_filter_tau", pn["pose_filter_tau"]),
         ("pose_filter_damping_ratio", pn["pose_filter_damping_ratio"]),
+        ("pose_filter_snap_tol_linear", pn["pose_filter_snap_tol_linear"]),
+        ("pose_filter_snap_tol_angular", pn["pose_filter_snap_tol_angular"]),
         # Composed-pose clamp envelope. body_height_{max,min} are ABSOLUTE belly
         # clearance; nominal_body_height is carried alongside so
         # PostureController can turn the pair into the offsets BodyPose::z is.

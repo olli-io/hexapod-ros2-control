@@ -86,6 +86,15 @@ PolarState to_polar(float a, float b);
 struct PoseSmootherConfig {
   float tau = 0.135f;           // s, 1/omega_n; <= 0 bypasses the filter
   float damping_ratio = 0.32f;  // zeta; < 1 overshoots
+
+  // Settle deadband. A spring's tail is asymptotic, so a released stick would
+  // otherwise leave the body creeping through fractions of a servo count long
+  // after it has visibly arrived. Inside this of zero — command, position, and
+  // velocity scaled by tau -- the axis snaps to exactly 0 and drops its
+  // velocity. Two tolerances because the pose carries both metres and radians,
+  // as control's snap_tol_* do. 0 disables.
+  float snap_tol_linear = 1.0e-4f;   // m, for x-y and z
+  float snap_tol_angular = 1.0e-4f;  // rad, for roll-pitch and yaw
 };
 
 // Damped second-order smoother on the commanded body pose — a spring/inertia
@@ -118,7 +127,9 @@ class PoseSmoother {
   // origin and rings down about it as the lone axes do, and a floor would stop
   // the body dead at its fastest point. The rebound past centre is
   // exp(-pi*zeta/sqrt(1-zeta^2)) of the reach withdrawn, so damping_ratio is the
-  // knob that governs it.
+  // knob that governs it. The snap_tol_* deadband ends that ring-down rather
+  // than bounding it: it needs the axis SLOW as well as near zero, so it fires
+  // on the arrival and never on the crossing.
   //
   // tau <= 0 bypasses the filter — every axis snaps to the clamped target.
   BodyPose step(const BodyPose& target, const PoseLimits& envelope, float dt);
