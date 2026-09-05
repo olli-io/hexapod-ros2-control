@@ -9,7 +9,7 @@ UI that publishes the **same** ROS topics as the gamepad teleop
 (locomotion publishes no gait-name feedback), heard from **both** teleops and
 from its own publishes via loopback. It also subscribes the engine's two report
 topics: `/gait/preset`, the preset it has applied and the Mode view's only source
-of truth, and `/gait/leg_set`, which drives the navbar icon alone — three of the
+of truth, and `/gait/leg_set`, which drives the Mode tab icon alone — three of the
 four presets stand on six legs, so the leg set cannot tell them apart.
 `/cmd_gait` does double duty: it drives the UI's status strip *and* resyncs the
 node's stick velocity caps and gait cycler when the gamepad switches gaits
@@ -27,18 +27,22 @@ syncing the animation cycler would be dead code, since the shared
   + 60 Hz rclpy timer that maps input and publishes; shared state behind a
   `threading.Lock`. Single-connection policy: a second device gets `busy`
   and is closed, retrying until the slot frees.
-- **`web/`** — static webapp (`index.html` + `main.js`, `logs.html` +
-  `logs.js`, `styles.css`). No TypeScript, no build step, no npm.
+- **`web/`** — static webapp (`index.html` + `main.js` + `styles.css`), one
+  page holding all four views. No TypeScript, no build step, no npm.
 
 ## Webapp UI
 
-- **Navbar** (symbols only, top bar in portrait / left strip in landscape)
-  — wifi connection indicator, controller icon (green while a controller
-  owns `/cmd_vel`; tap for a switch toggle), **mode** icon (a six-legged
-  body whose middle pair dims on four legs, so the navbar carries the
-  current leg set without the view being open; tap toggles the Mode view. It
-  shows the leg set rather than the preset, so NORMAL, FAST and OFFROAD share
-  one icon), log icon.
+- **Tab bar** (symbols only, bottom bar in portrait / left strip in landscape)
+  — four tabs, each swapping the view above it: **Control** (a joystick; green
+  while a controller owns `/cmd_vel`, since that is the view whose grid becomes
+  the take-control prompt), **Mode** (a six-legged body whose middle pair dims on
+  four legs, so the bar carries the current leg set without the view being open;
+  it shows the leg set rather than the preset, so NORMAL, FAST and OFFROAD share
+  one icon), **Network** (a wifi symbol keeping its connection colour) and
+  **Log**. The tab now showing is drawn in `#FABD2F`, which outranks those status
+  tints — which view you are looking at is the one thing the bar must not get
+  wrong, and each view says the rest in words. The bar never leaves the screen,
+  so no view carries a back arrow and Control is the way back from all of them.
 - **Control area** — two touch joysticks flanking a 3×3 button grid; top 3
   buttons select mode (Gait / Posture / Anim), bottom 6 are
   mode-dependent (node pushes labels on mode change). While a controller
@@ -46,7 +50,7 @@ syncing the animation cycler would be dead code, since the shared
   sticks are disabled.
 - **Status strip** — a compact readout above the button grid showing the
   current **preset**, gait, animation mode (em dash until an animation is first
-  latched) and pack voltage/current. The preset is here because the navbar icon
+  latched) and pack voltage/current. The preset is here because the Mode tab icon
   cannot carry it: that icon shows the leg set, and NORMAL, FAST and OFFROAD all
   stand on six legs. It reads `/gait/preset`, so it is a dash until the engine
   has spoken — the Mode view lights no row then either. Gait and animation are
@@ -78,7 +82,7 @@ goes inert there, for the reason `hexa_teleop`'s README gives.
 
 ## Mode view
 
-A navbar icon opening a view that lists the operator **presets** — `NORMAL` (six
+A tab opening a view that lists the operator **presets** — `NORMAL` (six
 legs, everyday stance), `FAST` (low, long-striding), `OFFROAD` (tall, short
 steps, high clearance) and `QUAD` (four corners, middle pair parked) — and
 switches between them. Tapping one publishes its id on `/cmd_preset` and that
@@ -90,14 +94,13 @@ set. See `hexa_teleop`'s README for what a preset is and `docs/leg-phases.md`
 for what the robot actually does.
 
 A view that **replaces the control area** in `index.html` — not an overlay over
-it, and not a page like `logs.html`. Full-screen because the list is the whole
-task while it is open and a preset row is a thing you tap on a phone, in this
-page because pending and refused are live states and only the WebSocket carries
-them; navigating away would drop the socket, and the server hands its one client
-slot to whoever reconnects. The navbar stays put, so the mode icon toggles the
-view and the back arrow leaves it, and both sticks are re-centred on the way in —
-they leave the screen, and a knob held at that moment never sees its own
-touchend.
+it, and not a page of its own. Full-screen because the list is the whole task
+while it is open and a preset row is a thing you tap on a phone, in this page
+because pending and refused are live states and only the WebSocket carries them;
+navigating away would drop the socket, and the server hands its one client slot
+to whoever reconnects. The tab bar stays put, so the Mode tab opens the view and
+the Control tab leaves it, and both sticks are re-centred on the way in — they
+leave the screen, and a knob held at that moment never sees its own touchend.
 
 - **The active row comes from `/gait/preset` and nothing else** — never the tap,
   never the latched `/cmd_preset`. That command topic keeps a refused id forever,
@@ -126,6 +129,31 @@ touchend.
   pose never came back to neutral. `/gait/preset` publishes on change, so silence
   past the deadline is the answer. Either way a reason appears under the
   list and the active row does not move.
+
+## Network view
+
+Link state and the controller handover, in one view, because they are one
+question: which input the robot is listening to, and whether this device can
+reach it at all. It replaces the two tab-bar popovers — a dialog over the
+joysticks sat in front of a control the operator still had a thumb on, and the
+handover is a state worth reading rather than a menu item to confirm.
+
+- **Link** — connected/disconnected, the host, and a disconnect/reconnect
+  toggle. A manual disconnect stays down; every other close retries.
+- **Control** — who owns `/cmd_vel`, and the toggle that moves it:
+  **Take control** while a controller drives, **Give control to controller**
+  while the webapp does. The same handover the control area's inline prompt
+  offers, which stays where it is: that one is the affordance in context, this
+  one is the one that works from any tab and in either direction. With
+  arbitration disabled the toggle is hidden and the view says why.
+
+## Log view
+
+Recent output from `GET /logs`, fetched when the tab opens and on its refresh
+button. A view rather than the standalone page it used to be: leaving `index.html`
+dropped the WebSocket, and the server hands its one client slot to whoever
+reconnects, so reading the log cost the reader control of the robot. Not polled —
+it is a thing you go and read, and the socket beside it is carrying control input.
 
 ## Pack telemetry
 
@@ -192,7 +220,7 @@ Releasing (toggle, disconnect, or `POST /control/release`) publishes
 Alongside `/ws`:
 
 - **`GET /logs`** — returns `{"lines": [...]}` from the configured
-  `logs.command` (default: recent `~/.ros/log` files), for the log page.
+  `logs.command` (default: recent `~/.ros/log` files), for the Log view.
 - **`POST /control/release`** — hands control back to the gamepad
   (out-of-band equivalent of the webapp's `release_control`).
 - **everything else** — redirected to `/`. Nothing 404s, because on the

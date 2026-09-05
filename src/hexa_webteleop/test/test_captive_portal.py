@@ -34,7 +34,7 @@ def test_the_root_survives_normalisation():
 
 def test_a_flat_asset_name_is_served_from_the_web_directory():
     assert static_filename("/main.js") == "main.js"
-    assert static_filename("/logs.html") == "logs.html"
+    assert static_filename("/styles.css") == "styles.css"
 
 
 @pytest.mark.parametrize(

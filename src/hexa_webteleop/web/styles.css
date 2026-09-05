@@ -11,6 +11,7 @@
   --accent:    #89b482; /* aqua — active/control */
   --green:     #a9b665; /* green — connected */
   --red:       #ea6962; /* red — disconnected */
+  --tab-active:#FABD2F; /* yellow — the tab now showing */
   --radius:    6px;
 }
 
@@ -32,7 +33,8 @@ html, body {
   font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
 }
 
-/* Portrait: navbar on top, control area below (column).
+/* Portrait: control area on top, navbar below (column; the navbar is ordered
+   last in the portrait rule below).
    Landscape: navbar on the left, control area right (row). */
 #app {
   display: flex;
@@ -44,30 +46,49 @@ html, body {
   #app { flex-direction: row; }
 }
 
-/* ── Navbar (symbols only) ──────────────────────────────────────── */
+/* ── Tab bar (symbols only) ─────────────────────────────────────── */
 
+/* One knob: the bar's thickness. Both orientations cap the bar's short axis
+   with it and let the items fill the box in both directions — nothing derives
+   its size from its own content, so there is no cycle to resolve. */
 #navbar {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
+  --nav-thickness: 4.5rem;
+  --nav-pad: 0.55rem;
+
+  /* Grid, not flex: `1fr` tracks divide the bar on BOTH axes, so the items fill
+     it without depending on how a <button> behaves as a flex item. Only the
+     flow direction differs per orientation. */
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  grid-auto-rows: 1fr;
   gap: 0.6rem;
-  padding: 0.55rem 0.9rem;
+  padding: var(--nav-pad);
   background: var(--bg-dim);
-  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+/* Portrait: the bar sits at the BOTTOM, within thumb reach, and the joysticks
+   keep the top of the screen. `order` rather than column-reverse on #app so the
+   control area and the mode view stay in DOM order. */
+@media (orientation: portrait) {
+  #navbar {
+    order: 1;
+    /* The inset is added to the height, not taken out of it, so the home
+       indicator costs the bar nothing. */
+    height: calc(var(--nav-thickness) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: max(var(--nav-pad), env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+  }
 }
 
 @media (orientation: landscape) {
   #navbar {
-    flex-direction: column;
-    padding: 0.9rem 0.55rem;
-    border-bottom: none;
+    grid-auto-flow: row;
+    width: var(--nav-thickness);
     border-right: 1px solid var(--border);
   }
 }
-
-/* Pushes the connection icon to one end, the rest to the other. */
-.nav-spacer { flex: 1; }
 
 .nav-icon {
   display: flex;
@@ -93,29 +114,71 @@ button.nav-icon:active {
   background: var(--surface);
 }
 
+/* Each menu item is its own rounded container, filling the track the grid gives
+   it. Scoped to the navbar: the back/refresh icons in the view header and the
+   logs page stay bare. */
+#navbar .nav-icon {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.4rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+/* An item can be narrower than the 38px icon on a small phone; shrink the glyph
+   with it rather than let it spill over the rounded edge. Safe against the
+   width above, which is the bar's and never the icon's. */
+#navbar .nav-icon svg {
+  max-width: 100%;
+  max-height: 100%;
+  height: auto;
+}
+
+#navbar button.nav-icon:active {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Connection: wifi on/off. Slash appears only when disconnected. */
 .wifi-slash { display: none; }
 
-#conn-status.connected { color: var(--green); }
+#tab-network.connected { color: var(--green); }
 
-#conn-status.disconnected { color: var(--red); }
-#conn-status.disconnected .wifi-slash { display: block; }
+#tab-network.disconnected { color: var(--red); }
+#tab-network.disconnected .wifi-slash { display: block; }
 
-/* Controller icon: green while a controller owns /cmd_vel. */
-#controller-btn.active { color: var(--green); }
+/* Control tab: green while a controller owns /cmd_vel — the tab whose contents
+   change, since its grid becomes the take-control prompt. */
+#tab-control.controlled { color: var(--green); }
 
 /* Mode icon: accent while a switch is in flight. The two middle legs dim when
-   the robot is standing on four, so the navbar carries the current mode without
+   the robot is standing on four, so the bar carries the current mode without
    the view being open. */
-#preset-btn.active { color: var(--accent); }
+#tab-preset.pending { color: var(--accent); }
 .preset-mid-leg { transition: opacity 0.2s ease; }
-#preset-btn.quad .preset-mid-leg { opacity: 0.2; }
+#tab-preset.quad .preset-mid-leg { opacity: 0.2; }
 
-/* ── Mode view (replaces the control area) ──────────────────────── */
+/* The tab now showing. Last, and carrying two classes to every status rule's
+   one, so it outranks the green/red/accent tints above: which view you are
+   looking at is the one thing the bar must never get wrong. The views
+   themselves report link and mode state in words. */
+#navbar .nav-icon.tab-active {
+  color: var(--tab-active);
+  background: var(--surface-2);
+}
 
-/* Takes the control area's place in the #app flexbox, so it inherits the
-   same box in both orientations and the navbar stays put. */
-#preset-view {
+/* ── Views (one at a time, above the tab bar) ───────────────────── */
+
+/* Every view takes the same place in the #app flexbox, so they inherit one box
+   in both orientations and the tab bar stays put. The control area brings its
+   own layout rules below; these are for the stacked list views. */
+#preset-view,
+#network-view,
+#log-view {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -127,24 +190,20 @@ button.nav-icon:active {
   touch-action: pan-y;
 }
 
-/* Own header rather than the settings page's bar: the navbar is still on
-   screen here, so this titles the view instead of replacing the chrome. */
+/* No titles: the tab bar names the view and never leaves the screen. The only
+   header left carries the log's refresh, aligned to the list column below it. */
 .view-header {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  justify-content: flex-end;
   flex-shrink: 0;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
 }
 
+.view-header .nav-icon { padding: 0.25rem; }
 .view-header .nav-icon svg { width: 24px; height: 24px; }
-
-.view-title {
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--fg);
-}
 
 #preset-list {
   display: flex;
@@ -222,6 +281,56 @@ button.nav-icon:active {
 }
 
 #preset-note.refused { color: var(--red); }
+
+/* ── Network view panels ────────────────────────────────────────── */
+
+/* Same 420px column the preset rows use, so the two views read as one app. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.panel-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.panel p { font-size: 0.9rem; }
+
+.panel-sub {
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.panel-btn {
+  margin-top: 0.3rem;
+  padding: 0.7rem 1.4rem;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.panel-btn:active {
+  background: var(--accent);
+  color: var(--bg-dim);
+}
 
 /* ── Control area ───────────────────────────────────────────────── */
 /* Portrait: joysticks top/bottom (column). Landscape: left/right (row).
@@ -450,7 +559,9 @@ button.nav-icon:active {
   pointer-events: none;
 }
 
-/* ── Modal overlay + dialog ─────────────────────────────────────── */
+/* ── Busy overlay ───────────────────────────────────────────────── */
+/* The one modal left: another device holds the server's single client slot,
+   which is a state the operator cannot act on from any tab. */
 
 .overlay {
   position: fixed;
@@ -481,74 +592,19 @@ button.nav-icon:active {
   color: var(--muted);
 }
 
-.dialog-buttons {
-  display: flex;
-  gap: 0.8rem;
-  justify-content: center;
-  margin-top: 1rem;
-}
-
-.dialog-buttons button {
-  padding: 0.6rem 1.5rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-#controller-toggle {
-  background: var(--surface-2);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* ── Utility ────────────────────────────────────────────────────── */
 
 .hidden {
   display: none !important;
 }
 
-/* ── Settings page ──────────────────────────────────────────────── */
-
-#settings-app {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-#settings-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.3rem 0.6rem;
-  background: var(--bg-dim);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-#settings-title {
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--fg);
-}
-
-#settings-body {
-  display: flex;
-  flex-direction: column;
-  padding: 0.8rem;
-  flex: 1;
-  min-height: 0;
-}
+/* ── Log view ───────────────────────────────────────────────────── */
 
 #logs-view {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  width: 100%;
   margin: 0;
   padding: 0.6rem;
   background: var(--bg-dim);

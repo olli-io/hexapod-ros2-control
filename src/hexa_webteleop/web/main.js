@@ -80,6 +80,10 @@ let buttonLabels = [];
 // the way in — the sticks leave the screen, and a knob held at that moment
 // would otherwise never see its own touchend.
 let joysticks = [];
+// The tab now showing: "control", "preset", "network" or "log". The tab bar is
+// the only navigation — every item swaps this and nothing else — so a view
+// never needs a way out of its own.
+let currentView = "control";
 
 // Re-send held input this often (ms) so the server's input watchdog
 // (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a
@@ -123,16 +127,16 @@ function connect() {
 
   ws.onopen = function () {
     connected = true;
-    $("conn-status").className = "nav-icon connected";
-    updateConnOverlay();
+    applyConnState();
+    updateNetworkView();
   };
 
   ws.onclose = function () {
     connected = false;
-    $("conn-status").className = "nav-icon disconnected";
+    applyConnState();
     setJoysticksEnabled(false);
     stopPackPolling();
-    updateConnOverlay();
+    updateNetworkView();
     // A manual disconnect stays down until the user reconnects.
     if (!manualDisconnect) setTimeout(connect, 2000);
   };
@@ -246,14 +250,15 @@ function updateButtonLabels(labels) {
 
 function updateOwnerDisplay() {
   // A controller is active whenever arbitration is on and the web app does
-  // not own /cmd_vel. The navbar controller icon turns green in that state,
-  // and the button grid is swapped for the inline take-control prompt.
+  // not own /cmd_vel. The Control tab turns green in that state — it is the
+  // tab whose contents change — and the button grid is swapped for the inline
+  // take-control prompt.
   const controllerActive = arbitrationEnabled && owner !== "web";
-  $("controller-btn").classList.toggle("active", controllerActive);
+  $("tab-control").classList.toggle("controlled", controllerActive);
   $("control-prompt").classList.toggle("hidden", !controllerActive);
   $("button-grid").classList.toggle("hidden", controllerActive);
   setJoysticksEnabled(!controllerActive);
-  updateControllerOverlay();
+  updateNetworkView();
 }
 
 function updateStatusDisplay() {
@@ -302,12 +307,60 @@ function setJoysticksEnabled(enabled) {
   $("right-joystick").classList.toggle("disabled", !enabled);
 }
 
-
-// ── Mode view (navbar mode icon) ───────────────────────────────────
+// ── Tab navigation ─────────────────────────────────────────────────
 //
-// A full view that replaces the control area in place, not an overlay over it.
-// It stays in this page rather than becoming one like logs.html because
-// pending and refused are live states and only the WebSocket carries them.
+// Every menu item is a tab: it swaps the view above the bar, the bar stays put,
+// and the Control tab is the way back — so no view carries a back arrow. All
+// four views live in this page rather than in pages of their own because the
+// WebSocket is the page: navigating away drops it, and the server hands its one
+// client slot to whoever reconnects.
+
+const VIEWS = {
+  control: "control-area",
+  preset: "preset-view",
+  network: "network-view",
+  log: "log-view",
+};
+
+function showView(name) {
+  if (!VIEWS[name]) return;
+  const leavingControl = currentView === "control" && name !== "control";
+  currentView = name;
+
+  // The sticks are about to disappear from under the operator's thumbs, and a
+  // knob held at that moment would never see its own touchend.
+  if (leavingControl) {
+    joysticks.forEach(function (j) {
+      j.reset();
+    });
+  }
+
+  Object.keys(VIEWS).forEach(function (key) {
+    $(VIEWS[key]).classList.toggle("hidden", key !== name);
+  });
+  document.querySelectorAll("#navbar .nav-icon").forEach(function (tab) {
+    tab.classList.toggle("tab-active", tab.dataset.view === name);
+  });
+
+  if (name === "control") {
+    // The canvases were display:none, so their measured size was zero.
+    joysticks.forEach(function (j) {
+      j.resize();
+    });
+  } else if (name === "preset") {
+    updatePresetDisplay();
+  } else if (name === "network") {
+    updateNetworkView();
+  } else if (name === "log") {
+    loadLogs();
+  }
+}
+
+
+// ── Mode view (Mode tab) ───────────────────────────────────────────
+//
+// Pending and refused are live states only the WebSocket carries, which is why
+// this is a view in this page and not a page of its own.
 //
 // The active row is driven by /gait/leg_set alone. A tap sets nothing locally:
 // an optimistic row would show a mode the robot may refuse, and on a latched
@@ -359,8 +412,8 @@ function updatePresetDisplay() {
   updateStandButton(folded);
   // The navbar icon doubles as the readout, so the current mode is legible
   // without opening anything.
-  $("preset-btn").classList.toggle("quad", activeLegSet === "quadruped");
-  $("preset-btn").classList.toggle("active", pendingPreset !== null);
+  $("tab-preset").classList.toggle("quad", activeLegSet === "quadruped");
+  $("tab-preset").classList.toggle("pending", pendingPreset !== null);
   // The strip carries the name the icon cannot: the icon is the leg set, and
   // three of the four presets share one.
   updateStatusDisplay();
@@ -415,32 +468,37 @@ function showPresetRefusal(reason) {
   }, 4000);
 }
 
-function presetViewOpen() {
-  return !$("preset-view").classList.contains("hidden");
-}
+// ── Network view (link + control handover) ─────────────────────────
+//
+// One view for both, because they are one question: which input the robot is
+// listening to, and whether this device can reach it at all. Replaces the two
+// navbar popovers — a modal over the joysticks sat in front of a control the
+// operator still had a thumb on.
 
-function showPresetView() {
-  updatePresetDisplay();
-  // The sticks are about to disappear from under the operator's thumbs.
-  joysticks.forEach(function (j) {
-    j.reset();
+function applyConnState() {
+  // classList, not className: the tab-active class lives on this element too.
+  const icon = $("tab-network");
+  icon.classList.toggle("connected", connected);
+  icon.classList.toggle("disconnected", !connected);
+
+  // With the socket down the control area commands nothing and the preset
+  // rows report a stale robot, so the bar keeps only the two tabs that still
+  // work: Network, to get the link back, and Log, which is fetched over plain
+  // HTTP and is where the reason for the drop shows up. The view follows
+  // unless it is already one of them, so nobody is left on a dead screen with
+  // no way back.
+  document.querySelectorAll("#navbar .nav-icon").forEach(function (tab) {
+    const usable = tab.dataset.view === "network" || tab.dataset.view === "log";
+    tab.classList.toggle("hidden", !connected && !usable);
   });
-  $("control-area").classList.add("hidden");
-  $("preset-view").classList.remove("hidden");
+  if (!connected && currentView !== "log") showView("network");
 }
 
-function hidePresetView() {
-  $("preset-view").classList.add("hidden");
-  $("control-area").classList.remove("hidden");
-  // The canvases were display:none, so their measured size was zero.
-  joysticks.forEach(function (j) {
-    j.resize();
-  });
-}
+function updateNetworkView() {
+  $("conn-host").textContent = location.host;
+  $("conn-state").textContent = connected ? "Connected to" : "Disconnected from";
+  $("conn-toggle").textContent = connected ? "Disconnect" : "Reconnect";
 
-// \u2500\u2500 Controller status overlay (navbar controller icon) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-function updateControllerOverlay() {
   const status = $("controller-status");
   const toggle = $("controller-toggle");
   if (!arbitrationEnabled) {
@@ -451,44 +509,36 @@ function updateControllerOverlay() {
   toggle.classList.remove("hidden");
   if (owner === "web") {
     status.textContent = "The web app is in control.";
-    toggle.textContent = "Switch to controller";
+    toggle.textContent = "Give control to controller";
   } else {
     status.textContent = "A controller is active.";
     toggle.textContent = "Take control";
   }
 }
 
-function showControllerOverlay() {
-  updateControllerOverlay();
-  $("controller-overlay").classList.remove("hidden");
-}
+// ── Log view ───────────────────────────────────────────────────────
+//
+// Recent log output from GET /logs, loaded when the tab opens and on demand.
+// Not polled: it is a thing you go and read, and the socket next to it is
+// carrying control input.
 
-function hideControllerOverlay() {
-  $("controller-overlay").classList.add("hidden");
-}
-
-// ── Connection overlay (navbar connection icon) ────────────────────
-
-function updateConnOverlay() {
-  $("conn-host").textContent = location.host;
-  const state = $("conn-state");
-  const toggle = $("conn-toggle");
-  if (connected) {
-    state.textContent = "Connected to";
-    toggle.textContent = "Disconnect";
-  } else {
-    state.textContent = "Disconnected from";
-    toggle.textContent = "Reconnect";
+async function loadLogs() {
+  const view = $("logs-view");
+  view.textContent = "Loading\u2026";
+  try {
+    const res = await fetch("/logs", { cache: "no-store" });
+    const data = await res.json();
+    if (data.error) {
+      view.textContent = "Error: " + data.error;
+      return;
+    }
+    const lines = data.lines || [];
+    view.textContent = lines.length ? lines.join("\n") : "(no log entries)";
+    // Pin to newest entry.
+    view.scrollTop = view.scrollHeight;
+  } catch (e) {
+    view.textContent = "Failed to load logs: " + e;
   }
-}
-
-function showConnOverlay() {
-  updateConnOverlay();
-  $("conn-overlay").classList.remove("hidden");
-}
-
-function hideConnOverlay() {
-  $("conn-overlay").classList.add("hidden");
 }
 
 // ── Busy overlay (another device already connected) ────────────────
@@ -548,17 +598,8 @@ function setupButtons() {
     send({ type: "request_control" });
   });
 
-  // Navbar controller icon → status overlay with a toggle.
-  $("controller-btn").addEventListener("click", showControllerOverlay);
-  $("controller-close").addEventListener("click", hideControllerOverlay);
-  $("controller-toggle").addEventListener("click", function () {
-    send({ type: owner === "web" ? "release_control" : "request_control" });
-    hideControllerOverlay();
-  });
-
-  // Navbar connection icon → host/disconnect popover.
-  $("conn-status").addEventListener("click", showConnOverlay);
-  $("conn-close").addEventListener("click", hideConnOverlay);
+  // Network view: the link toggle, and the control handover next to it. The
+  // handover is deliberately outside the take-control gate — it IS the gate.
   $("conn-toggle").addEventListener("click", function () {
     if (connected) {
       manualDisconnect = true;
@@ -566,21 +607,20 @@ function setupButtons() {
     } else {
       connect();
     }
-    hideConnOverlay();
+  });
+  $("controller-toggle").addEventListener("click", function () {
+    send({ type: owner === "web" ? "release_control" : "request_control" });
   });
 
-  // Navbar mode icon → the Mode view, in and back out. Deliberately outside
-  // the take-control gate: a mode switch is supervisory, so it works while a
-  // controller drives.
-  $("preset-btn").addEventListener("click", function () {
-    if (presetViewOpen()) hidePresetView();
-    else showPresetView();
-  });
-  $("preset-back").addEventListener("click", hidePresetView);
+  // Log view: manual refresh (the tab load is in showView).
+  $("log-refresh").addEventListener("click", loadLogs);
 
-  // Navbar log icon → log page.
-  $("log-btn").addEventListener("click", function () {
-    location.href = "logs.html";
+  // Tab bar. Nothing here is gated on ownership: every view but Control is
+  // supervisory, and the Mode view is meant to work while a controller drives.
+  document.querySelectorAll("#navbar .nav-icon").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      showView(tab.dataset.view);
+    });
   });
 }
 
@@ -798,6 +838,7 @@ function init() {
     }
   });
 
+  showView("control");
   connect();
 }
 

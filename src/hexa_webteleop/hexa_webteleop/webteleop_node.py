@@ -603,7 +603,13 @@ class WebTeleopNode(Node):
         if filename:
             filepath = Path(self._web_dir) / filename
             if filepath.is_file():
-                return aiohttp.web.FileResponse(filepath)
+                # no-store for the same reason index.html gets it, plus one:
+                # without it these carry only an ETag, so a phone is free to
+                # serve a heuristically cached copy and run last week's UI
+                # against today's socket protocol.
+                return aiohttp.web.FileResponse(
+                    filepath, headers={"Cache-Control": "no-store"}
+                )
         # Absolute, and to this same host: the client asked for
         # captive.apple.com (or whichever name it probes), so that is the one
         # its captive-portal browser already treats as the portal.
