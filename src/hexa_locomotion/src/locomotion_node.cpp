@@ -4,8 +4,9 @@
 // Mirrors the Pi Pico firmware's single 200 Hz loop, but with ROS seams instead
 // of the gamepad / servo hardware:
 //   - Input  seam: build a hexa::pipeline::CommandIntent from /cmd_vel (velocity)
-//     plus the discrete command topics (/cmd_gait, /gait/initialize, /body/pose,
-//     /animation/mode), and call the pipeline's CORE tick directly — bypassing
+//     plus the discrete command topics (/cmd_gait, /cmd_preset,
+//     /gait/initialize, /body/pose, /animation/mode), and call the pipeline's
+//     CORE tick directly — bypassing
 //     map_joy, so the node is /cmd_vel-native (Nav2 / twist_mux / teleop_twist).
 //   - Output seam: publish the pipeline's 18 joint angles (radians) as
 //     std_msgs/Float64MultiArray on /joint_group_position_controller/commands,
@@ -85,6 +86,12 @@ class LocomotionNode : public rclcpp::Node {
     // subscriber that joins later.
     pub_leg_set_ = create_publisher<StringMsg>(
         "/gait/leg_set", rclcpp::QoS(1).transient_local());
+    // The preset the engine has APPLIED. Report only, and the finer-grained
+    // half of the pair above: two presets can stand on the same leg set and
+    // differ in stance, stride and swing time, so /gait/leg_set alone cannot
+    // say which one is in force. Latched for the same reason.
+    pub_preset_ = create_publisher<StringMsg>(
+        "/gait/preset", rclcpp::QoS(1).transient_local());
     // Relay-arm intent for hexa_hardware: the supervisor's per-tick decision
     // (energize only once stood, drop on fold / fault / critical battery). The
     // hardware node drives SET RELAY off this, honouring the board's staged-pose
@@ -130,6 +137,15 @@ class LocomotionNode : public rclcpp::Node {
         "/cmd_gait", latched, [this](StringMsg::SharedPtr m) {
           gait_name_ = m->data;
           gait_pending_ = true;
+        });
+    // The operator preset. Latched like /cmd_gait, and read every tick rather
+    // than on the edge alone: request_preset is idempotent while the named
+    // preset is already in force, and re-asserting it is what makes a node that
+    // restarts mid-session come back on the preset the operator left it on.
+    sub_preset_ = create_subscription<StringMsg>(
+        "/cmd_preset", latched, [this](StringMsg::SharedPtr m) {
+          preset_name_ = m->data;
+          have_preset_ = true;
         });
     sub_anim_ = create_subscription<StringMsg>(
         "/animation/mode", latched, [this](StringMsg::SharedPtr m) {
@@ -194,6 +210,14 @@ class LocomotionNode : public rclcpp::Node {
       cmd.init_request = true;
       init_pending_ = false;
     }
+    // Before the gait, deliberately: the preset owns the leg set, and a
+    // /cmd_gait naming a gait of the other one is refused. When the operator
+    // picks a preset both topics land in the same tick, and the gait that walks
+    // the new preset is only legal once the preset request is in.
+    if (have_preset_) {
+      cmd.has_preset_select = true;
+      cmd.preset_select = preset_name_;  // view into preset_name_ (outlives tick)
+    }
     if (gait_pending_) {
       cmd.has_gait_select = true;
       cmd.gait_select = gait_name_;  // string_view into gait_name_ (outlives tick)
@@ -253,6 +277,13 @@ class LocomotionNode : public rclcpp::Node {
       last_state_ = state;
     }
 
+    if (res.preset != last_preset_) {
+      StringMsg pm;
+      pm.data = res.preset;
+      pub_preset_->publish(pm);
+      RCLCPP_INFO(get_logger(), "preset -> %s", res.preset.c_str());
+      last_preset_ = res.preset;
+    }
     const std::string leg_set = hexa::gait::leg_set_value(res.leg_set);
     if (leg_set != last_leg_set_) {
       StringMsg lm;
@@ -393,6 +424,7 @@ class LocomotionNode : public rclcpp::Node {
       // (the fresh pipeline is FOLDED / de-energized).
       last_state_.clear();
       last_leg_set_.clear();
+      last_preset_.clear();
       have_relay_ = false;
       res.success = true;
       res.message = "reloaded config (gait=" + cfg.default_gait +
@@ -418,10 +450,13 @@ class LocomotionNode : public rclcpp::Node {
   bool init_pending_ = false;
   bool gait_pending_ = false;
   std::string gait_name_;
+  bool have_preset_ = false;
+  std::string preset_name_;
   bool anim_pending_ = false;
   std::string anim_name_;
   std::string last_state_;
   std::string last_leg_set_;
+  std::string last_preset_;
   bool fault_level_ = false;
   bool last_relay_ = false;
   bool have_relay_ = false;
@@ -439,10 +474,12 @@ class LocomotionNode : public rclcpp::Node {
   rclcpp::Subscription<BoolMsg>::SharedPtr sub_fault_;
   rclcpp::Subscription<BatteryState>::SharedPtr sub_battery_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_gait_;
+  rclcpp::Subscription<StringMsg>::SharedPtr sub_preset_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_anim_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_cmd_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_state_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_leg_set_;
+  rclcpp::Publisher<StringMsg>::SharedPtr pub_preset_;
   rclcpp::Publisher<BoolMsg>::SharedPtr pub_relay_;
   rclcpp::Publisher<UInt8Msg>::SharedPtr pub_undervolt_;
   rclcpp::Service<Trigger>::SharedPtr srv_reload_;

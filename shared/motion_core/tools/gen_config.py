@@ -214,7 +214,8 @@ def joint_limits(geometry: dict):
 
 
 LEG_GROUPS = ("front", "middle", "rear")
-# Quadruped mode stands on the corners alone, so its stance block has no middle.
+# A quadruped preset stands on the corners alone, so its stance block has no
+# middle entry to read.
 QUAD_GROUPS = ("front", "rear")
 
 
@@ -233,23 +234,24 @@ def group_splay(group: str, side: str, coxa_deg: float) -> float:
     return sign * math.radians(coxa_deg)
 
 
-def standing_pose(gait: dict, geometry: dict,
-                  key: str = "default_standing_pose",
-                  groups: tuple = LEG_GROUPS) -> dict:
-    """At-rest stance from one of tuning.yaml's gait_node standing-pose blocks.
-
-    `key` is "default_standing_pose" (the six-leg stance) or
-    "quad_standing_pose" (quadruped mode's four corners, whose middle pair does
-    not stand at all — pass groups=("front", "rear") for it).
+def standing_pose(entry: dict, geometry: dict) -> dict:
+    """At-rest stance from one preset's `standing_pose` block.
 
     The stance is described by where the feet sit, not by joint angles: one
-    belly clearance for the body, plus a tip reach and a splay for each of the
-    three leg pairs. The femur/tibia angles follow from a 2-link IK solve that
-    motion_core owns (gait::standing_pose_from) — deliberately not duplicated
-    here, so there is exactly one copy of that math.
+    belly clearance for the body, plus a tip reach and a splay for each leg
+    group. The femur/tibia angles follow from a 2-link IK solve that motion_core
+    owns (gait::standing_pose_from) — deliberately not duplicated here, so there
+    is exactly one copy of that math.
+
+    A quadruped preset omits `middle:`; the group is emitted as a copy of the
+    front one so the baked table keeps a uniform shape. Nothing stands on it —
+    the pair is parked at kFoldedPose — and the placeholder only exists so the
+    six-leg helpers downstream have a reachable row for a leg nobody stands on.
     """
-    sp = gait[key]
+    pid = entry["id"]
+    sp = entry["standing_pose"]
     body_height = sp["body_height"]
+    groups = LEG_GROUPS if entry["leg_set"] == "hexapod" else QUAD_GROUPS
 
     # Reachability guard so a bad edit fails at build time rather than throwing
     # UnreachableTarget on the robot. The angles themselves are checked against
@@ -262,26 +264,74 @@ def standing_pose(gait: dict, geometry: dict,
     depth = (geometry["body"]["coxa_to_bottom"] + body_height
              - geometry["foot"]["radius"])
 
-    out_groups = []
+    solved = {}
     for group in groups:
         cfg = sp[group]
         tip_reach = cfg["tip_reach"]
         if tip_reach <= coxa_len:
             raise ValueError(
-                f"tuning.yaml {key}.{group}.tip_reach = "
+                f"tuning.yaml presets.{pid}.standing_pose.{group}.tip_reach = "
                 f"{tip_reach} m must exceed the coxa length ({coxa_len} m)")
         reach = math.hypot(tip_reach - coxa_len, depth)
         if not (abs(femur_len - tibia_len) <= reach <= femur_len + tibia_len):
             raise ValueError(
-                f"tuning.yaml {key}.{group}.tip_reach = "
+                f"tuning.yaml presets.{pid}.standing_pose.{group}.tip_reach = "
                 f"{tip_reach} m / body_height = {body_height} m puts the foot "
                 f"{reach:.4f} m from the femur joint; reach annulus is "
                 f"[{abs(femur_len - tibia_len):.4f}, "
                 f"{femur_len + tibia_len:.4f}] m")
-        out_groups.append(dict(tip_reach=tip_reach,
-                               coxa=to_urdf_rad("coxa", cfg["coxa_deg"])))
+        solved[group] = dict(tip_reach=tip_reach,
+                             coxa=to_urdf_rad("coxa", cfg["coxa_deg"]))
 
-    return dict(body_height=body_height, groups=out_groups)
+    if "middle" not in solved:
+        solved["middle"] = dict(solved["front"])
+
+    return dict(body_height=body_height,
+                groups=[solved[g] for g in LEG_GROUPS])
+
+
+PRESET_KNOBS = ("stride_length", "stride_length_radial",
+                "min_swing_time", "max_swing_time", "step_height")
+
+
+def presets(gait: dict, geometry: dict):
+    """The preset table: leg set, solved stance, and the stride/swing bundle.
+
+    Order is the YAML list's, because the baked table is indexed and the ROS
+    loader's parity test compares it position by position.
+    """
+    entries = gait["presets"]
+    if not entries:
+        raise ValueError("tuning.yaml gait_node.presets: must be non-empty")
+    out = []
+    seen = set()
+    for entry in entries:
+        pid = str(entry["id"])
+        if pid in seen:
+            raise ValueError(f"tuning.yaml presets: duplicate id {pid!r}")
+        seen.add(pid)
+        leg_set = str(entry["leg_set"])
+        if leg_set not in ("hexapod", "quadruped"):
+            raise ValueError(
+                f"tuning.yaml presets.{pid}.leg_set = {leg_set!r} must be "
+                f"'hexapod' or 'quadruped'")
+        row = dict(id=pid, leg_set=leg_set,
+                   standing=standing_pose(entry, geometry))
+        for knob in PRESET_KNOBS:
+            if knob not in entry:
+                raise ValueError(
+                    f"tuning.yaml presets.{pid}: missing {knob} — every preset "
+                    f"carries its own bundle, there is no global fallback")
+            row[knob] = entry[knob]
+        out.append(row)
+
+    default_id = str(gait["default_preset"])
+    ids = [r["id"] for r in out]
+    if default_id not in ids:
+        raise ValueError(
+            f"tuning.yaml default_preset = {default_id!r} names no preset; "
+            f"have {ids}")
+    return out, ids.index(default_id)
 
 
 def rest_pose(geometry: dict, key: str):
@@ -306,7 +356,7 @@ def rest_pose(geometry: dict, key: str):
     return out
 
 
-def unit_stance_xy(gait: dict, geometry: dict):
+def unit_stance_xy(default_preset: dict, geometry: dict):
     """Standing feet in the body plane, over the outermost foot's radius.
 
     Port of hexa_common/limits.py's standing_stance_xy + unit_stance_xy: the
@@ -316,8 +366,13 @@ def unit_stance_xy(gait: dict, geometry: dict):
     r_outer is what cancels the caps out of that bound — every gait's angular
     cap is its linear cap over exactly this radius, so one table covers them
     all. Keep in step with the Python original or the golden trace diverges.
+
+    Deliberately the DEFAULT preset's stance, not the active one: this table is
+    normalised by r_outer, so it barely moves between presets that scale reach
+    and height together, and fit_drive_to_envelope is parity-locked to the
+    golden trace. hexa_common/limits.py makes the same choice.
     """
-    sp = gait["default_standing_pose"]
+    sp = default_preset["standing_pose"]
     mounts = geometry["mounts"]
 
     stance = []
@@ -343,14 +398,19 @@ def unit_stance_xy(gait: dict, geometry: dict):
         raise ValueError(
             "outer stance radius is zero — every foot sits on the body axis, "
             "so the standing pose has no yaw authority; check tuning.yaml "
-            "default_standing_pose")
+            f"presets.{default_preset['id']}.standing_pose")
     return [(name, x / r_outer, y / r_outer) for name, x, y in stance]
 
 
-def velocity_caps(gait: dict):
-    """Per-gait linear_max + yaw_bias — port of load_velocity_caps()."""
-    stride = gait["stride_length"]
-    min_swing = gait["min_swing_time"]
+def velocity_caps(gait: dict, preset: dict):
+    """One preset's per-gait linear_max + yaw_bias — port of load_velocity_caps().
+
+    Per preset because three of the four inputs are: the stride it lays down and
+    the swing time it lays it down in ride the preset now, and so does the
+    standing pose the angular cap divides by.
+    """
+    stride = preset["stride_length"]
+    min_swing = preset["min_swing_time"]
     yaw_bias = gait["yaw_bias"]
     margins = {"hexapod": gait["swing_phase_margin"],
                "quadruped": gait["quadruped_swing_phase_margin"]}
@@ -467,13 +527,14 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
          webteleop, display, sources) -> str:
     specs = leg_specs(geometry)
     limits = joint_limits(geometry)
-    stand = standing_pose(gait, geometry)
-    quad_stand = standing_pose(gait, geometry, "quad_standing_pose",
-                               QUAD_GROUPS)
+    preset_rows, default_preset_idx = presets(gait, geometry)
+    default_entry = gait["presets"][default_preset_idx]
+    stand = preset_rows[default_preset_idx]["standing"]
     folded = rest_pose(geometry, "folded_pose")
     initialized = rest_pose(geometry, "initialized_pose")
-    caps = velocity_caps(gait)
-    stance_unit = unit_stance_xy(gait, geometry)
+    caps_by_preset = [velocity_caps(gait, r) for r in preset_rows]
+    caps = caps_by_preset[default_preset_idx]
+    stance_unit = unit_stance_xy(default_entry, geometry)
     joints = hardware_joints(hardware, calibration, limits)
 
     L = []
@@ -490,9 +551,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("#pragma once")
     w("")
     w("#include <array>")
+    w("#include <cstddef>")
     w("#include <cstdint>")
     w("#include <string_view>")
     w("")
+    w('#include "gait/types.hpp"  // hexa::gait::LegSet, for the preset table')
     w('#include "leg_index.hpp"')
     w('#include "vec3.hpp"')
     w("")
@@ -562,28 +625,66 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  std::array<LegGroupStance, kNumLegGroups> groups;")
     w("};")
     w("")
-    w("inline constexpr StandingPose kStandingPose = {")
-    w(f"    {fl(stand['body_height'])},")
-    w("    {{")
-    for name, grp in zip(LEG_GROUPS, stand["groups"]):
-        w(f"        {{{fl(grp['tip_reach'])}, {fl(grp['coxa'])}}},  // {name}")
-    w("    }},")
+    w("")
+    w("// ── Presets ──")
+    w("// A preset is the bundle the operator selects as one thing: which legs")
+    w("// it stands on, where those feet sit, and how far and how fast the walk")
+    w("// steps. Indexed; kDefaultPreset is the one the robot boots on, and the")
+    w("// firmware never leaves it (the pad has no preset control).")
+    w("struct PresetConfig {")
+    w("  std::string_view id;")
+    w("  hexa::gait::LegSet leg_set;")
+    w("  // The three groups always; a quadruped preset's middle row is a copy")
+    w("  // of its front one. Nothing stands on it — that pair is parked at")
+    w("  // kFoldedPose — it is there so the six-leg helpers downstream have a")
+    w("  // reachable row for a leg nobody stands on.")
+    w("  StandingPose standing;")
+    w("  float stride_length;")
+    w("  float stride_length_radial;")
+    w("  float min_swing_time;")
+    w("  float max_swing_time;")
+    w("  float step_height;")
     w("};")
     w("")
-    w("// Quadruped mode's stance: the four corners on a symmetric rectangle.")
-    w("// The middle pair is not part of it — it is parked at kFoldedPose — so")
-    w("// the schema has no middle entry.")
-    w("struct CornerStandingPose {")
-    w("  float body_height;  // m, body bottom -> ground")
-    w("  LegGroupStance front;")
-    w("  LegGroupStance rear;")
-    w("};")
+    w(f"inline constexpr std::array<PresetConfig, {len(preset_rows)}> kPresets "
+      "= {{")
+    for row in preset_rows:
+        st = row["standing"]
+        leg_set = ("hexa::gait::LegSet::QUADRUPED"
+                   if row["leg_set"] == "quadruped"
+                   else "hexa::gait::LegSet::HEXAPOD")
+        w(f"    {{  // {row['id']}")
+        w(f"        {cstr(row['id'])},")
+        w(f"        {leg_set},")
+        w(f"        {{{fl(st['body_height'])}, {{{{")
+        for name, grp in zip(LEG_GROUPS, st["groups"]):
+            w(f"            {{{fl(grp['tip_reach'])}, {fl(grp['coxa'])}}},"
+              f"  // {name}")
+        w("        }}},")
+        for knob in PRESET_KNOBS:
+            w(f"        {fl(row[knob])},  // {knob}")
+        w("    },")
+    w("}};")
     w("")
-    w("inline constexpr CornerStandingPose kQuadStandingPose = {")
-    w(f"    {fl(quad_stand['body_height'])},")
-    for name, grp in zip(QUAD_GROUPS, quad_stand["groups"]):
-        w(f"    {{{fl(grp['tip_reach'])}, {fl(grp['coxa'])}}},  // {name}")
-    w("};")
+    w(f"inline constexpr std::size_t kDefaultPreset = {default_preset_idx};"
+      f"  // {preset_rows[default_preset_idx]['id']}")
+    w("")
+    w("// Index of a preset by id, for a caller that names one rather than")
+    w("// indexing it. Returns kPresets.size() when there is no such preset.")
+    w("constexpr std::size_t preset_index(std::string_view id) {")
+    w("  for (std::size_t i = 0; i < kPresets.size(); ++i) {")
+    w("    if (kPresets[i].id == id) {")
+    w("      return i;")
+    w("    }")
+    w("  }")
+    w("  return kPresets.size();")
+    w("}")
+    w("")
+    w("// The boot preset's stance, named because it is the one every six-leg")
+    w("// helper defaults to — the middle rows a parked-pair preset borrows, and")
+    w("// the pose the pre-first-tick joint dump is seeded from.")
+    w("inline constexpr StandingPose kStandingPose = "
+      "kPresets[kDefaultPreset].standing;")
     w("")
     w("// Per-leg power-up pose (coxa varies by symmetry), indexed by Leg. Also")
     w("// the pose a fold ends on, the baseline FOLDED/FAULT hold, and where")
@@ -606,12 +707,9 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # ── gait engine ──
     w("// ── Gait engine knobs (hexa_description/config/tuning.yaml) ──")
     w("struct EngineConfig {")
+    # stride_length, stride_length_radial, min_swing_time, max_swing_time and
+    # step_height are NOT here: they ride the preset (kPresets above).
     fields = [
-        ("stride_length", gait["stride_length"]),
-        ("stride_length_radial", gait["stride_length_radial"]),
-        ("min_swing_time", gait["min_swing_time"]),
-        ("max_swing_time", gait["max_swing_time"]),
-        ("step_height", gait["step_height"]),
         ("swing_width", gait["swing_width"]),
         ("touchdown_velocity", gait["touchdown_velocity"]),
         ("touchdown_probe_fraction", gait["touchdown_probe_fraction"]),
@@ -632,6 +730,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("reseat_pair_swing_time", gait["reseat"]["pair_swing_time"]),
         ("reseat_pair_dwell_time", gait["reseat"]["pair_dwell_time"]),
         ("reseat_swing_clearance", gait["reseat"]["swing_clearance"]),
+        ("reseat_plane_ramp_time", gait["reseat"]["plane_ramp_time"]),
         ("quadruped_shift_time", gait["quadruped"]["shift_time"]),
         ("pair_fold_swing_time", gait["pair_fold"]["swing_time"]),
         ("pair_fold_dwell_time", gait["pair_fold"]["dwell_time"]),
@@ -667,13 +766,23 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         chars += [0] * (GAIT_NAME_LEN - len(chars))
         return "{" + ", ".join(str(c) for c in chars) + "}"
 
-    w("inline constexpr std::array<GaitSpec, "
-      f"{len(caps)}> kGaits = {{{{")
-    for c in caps:
-        w(f"    {{{name_arr(c['name'])}, {fl(c['duty'])}, "
-          f"{'true' if c['unstable'] else 'false'}, {fl(c['linear_max'])}, "
-          f"{fl(c['yaw_bias'])}}},  // {c['name']}")
+    w("// One row per preset, in kPresets order: three of the four inputs to a")
+    w("// cap ride the preset (its stride, its swing time, and the stance the")
+    w("// angular cap divides by), so the table cannot be per-gait alone.")
+    w(f"inline constexpr std::array<std::array<GaitSpec, {len(caps)}>, "
+      f"{len(caps_by_preset)}> kGaitsByPreset = {{{{")
+    for row, preset_caps in zip(preset_rows, caps_by_preset):
+        w(f"    {{{{  // {row['id']}")
+        for c in preset_caps:
+            w(f"        {{{name_arr(c['name'])}, {fl(c['duty'])}, "
+              f"{'true' if c['unstable'] else 'false'}, {fl(c['linear_max'])}, "
+              f"{fl(c['yaw_bias'])}}},  // {c['name']}")
+        w("    }},")
     w("}};")
+    w("")
+    w("// The default preset's row, which is the one the firmware runs on.")
+    w("inline constexpr std::array<GaitSpec, "
+      f"{len(caps)}> kGaits = kGaitsByPreset[kDefaultPreset];")
     w("")
 
     w("// Standing feet over the outermost foot's radius — the unitless lever")
@@ -767,20 +876,33 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # reach them, so nothing is baked for them here.
     leg_sets_of = {name: ls for name, _d, _u, ls in GAITS}
 
-    def preset_by_leg_set(leg_set):
-        for entry in teleop["presets"]["list"]:
-            names = [str(g) for g in entry["gait_cycle"]]
-            if names and leg_sets_of[names[0]] == leg_set:
-                return entry
-        raise ValueError(
-            f"presets: no preset walks the {leg_set} leg set; the init buttons "
-            f"stand up on one of each")
+    # Which legs a preset stands on is tuning.yaml's to say, so the two
+    # rotations are picked off that rather than off the gait names here. The
+    # hexapod one is the default preset's — with several six-leg presets to
+    # choose from, the boot preset is the only non-arbitrary answer.
+    preset_leg_set = {r["id"]: r["leg_set"] for r in preset_rows}
 
     default_id = str(teleop["presets"]["default"])
     by_id = {str(e["id"]): e for e in teleop["presets"]["list"]}
     if default_id not in by_id:
         raise ValueError(f"presets.default: no preset {default_id!r}")
-    hexapod_preset = preset_by_leg_set("hexapod")
+    for pid in by_id:
+        if pid not in preset_leg_set:
+            raise ValueError(
+                f"presets: {pid!r} has no entry in tuning.yaml gait_node."
+                f"presets, which is where a preset's leg set and stance live")
+
+    def preset_by_leg_set(leg_set):
+        for entry in teleop["presets"]["list"]:
+            if preset_leg_set[str(entry["id"])] == leg_set:
+                return entry
+        raise ValueError(
+            f"presets: no preset stands on the {leg_set} leg set; the init "
+            f"buttons stand up on one of each")
+
+    hexapod_preset = (by_id[default_id]
+                      if preset_leg_set[default_id] == "hexapod"
+                      else preset_by_leg_set("hexapod"))
     quadruped_preset = preset_by_leg_set("quadruped")
     w(f"inline constexpr std::string_view kDefaultGait = "
       f"{cstr(str(hexapod_preset['default_gait']))};")
@@ -864,13 +986,14 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     pn = posture["posture_node"]["ros__parameters"]
     # The nominal stance must sit strictly inside its own envelope, or the body
     # is clamped away from rest on the very first tick.
-    if not (pn["body_height_min_m"] < stand["body_height"]
-            < pn["body_height_max_m"]):
-        raise ValueError(
-            f"tuning.yaml posture_node body_height_min_m = "
-            f"{pn['body_height_min_m']} m / body_height_max_m = "
-            f"{pn['body_height_max_m']} m must bracket gait_node "
-            f"default_standing_pose.body_height = {stand['body_height']} m")
+    for row in preset_rows:
+        h = row["standing"]["body_height"]
+        if not (pn["body_height_min_m"] < h < pn["body_height_max_m"]):
+            raise ValueError(
+                f"tuning.yaml posture_node body_height_min_m = "
+                f"{pn['body_height_min_m']} m / body_height_max_m = "
+                f"{pn['body_height_max_m']} m must bracket gait_node "
+                f"presets.{row['id']}.standing_pose.body_height = {h} m")
     w("// ── Posture animation stack (hexa_description/config/tuning.yaml) ──")
     enabled = pn["enabled_animations"]
     w(f"inline constexpr std::array<std::string_view, {len(enabled)}> "

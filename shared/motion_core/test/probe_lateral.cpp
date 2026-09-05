@@ -53,13 +53,13 @@ void run_scenario(float vx_frac, float vy_frac, const char* label) {
   // to do it. A disabled budget leaves the ratio at exactly 1.
   const float dir = std::hypot(vx_frac, vy_frac);
   float ratio = 1.0f;
-  float eff = hexa::config::kEngine.stride_length;
+  float eff = hexa::config::kPresets[hexa::config::kDefaultPreset].stride_length;
   if (dir > 0.0f) {
     eff = effective_stride_length(
         build_leg_contexts_from_config(), {vx_frac / dir, vy_frac / dir}, 0.0f,
-        hexa::config::kEngine.stride_length,
-        hexa::config::kEngine.stride_length_radial);
-    ratio = eff / hexa::config::kEngine.stride_length;
+        hexa::config::kPresets[hexa::config::kDefaultPreset].stride_length,
+        hexa::config::kPresets[hexa::config::kDefaultPreset].stride_length_radial);
+    ratio = eff / hexa::config::kPresets[hexa::config::kDefaultPreset].stride_length;
   }
   const float vx = vx_frac * vmax * ratio;
   const float vy = vy_frac * vmax * ratio;

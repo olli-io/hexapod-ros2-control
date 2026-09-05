@@ -4,6 +4,7 @@
 // stride_length, min_swing_time, duty factor and the standing pose set them.
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <string>
 #include <tuple>
@@ -35,10 +36,12 @@ struct VelocityCaps {
 // (empty, or every foot on the body axis).
 float outer_stance_radius(const std::map<std::string, Vec3>& nominal_stance);
 
-// The angular cap is never baked — hexa_locomotion's runtime loader derives it
-// through this same helper, so the two agree exactly. r_outer is a parameter so
-// this stays free of the IK/engine translation units.
-VelocityCaps load_velocity_caps_from_config(float r_outer);
+// One preset's caps, from the baked table's row for it. The angular cap is
+// never baked — hexa_locomotion's runtime loader derives it through this same
+// division, so the two agree exactly. r_outer is a parameter so this stays free
+// of the IK/engine translation units, and it is the PRESET's: each stands its
+// outermost foot at its own radius.
+VelocityCaps load_velocity_caps_from_config(std::size_t preset, float r_outer);
 
 // Cut the velocity triple to fit the gait envelope. Returns (v_x, v_y, omega_z).
 // No separate angular clamp: bounding every leg's foot speed to linear_max

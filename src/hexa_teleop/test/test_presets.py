@@ -1,8 +1,14 @@
-"""Operator presets: loading, validation, and following /cmd_gait.
+"""Operator presets: loading, validation, and following the wire.
 
-The bookkeeping both teleops share. What matters most here is the resync: it is
-the one path a gait switch takes whoever initiated it, so a fact it forgets to
-update is a fact one teleop has and the other does not.
+The bookkeeping both teleops share. What matters most here are the three resync
+paths — a gait on /cmd_gait, a preset REQUEST on /cmd_preset, and the engine's
+applied preset on /gait/preset. Each is the one path its event takes whoever
+initiated it, so a fact one of them forgets to update is a fact one teleop has
+and the other does not.
+
+The leg set is NOT derived from the gait any more: tuning.yaml declares it per
+preset, because normal, fast and offroad all stand on six legs and can all offer
+the same gaits, so a gait name cannot say which preset is in force.
 """
 
 from __future__ import annotations
@@ -27,11 +33,15 @@ from hexa_teleop.joy_mapping import (
 from hexa_teleop.presets import (
     HEXAPOD,
     QUADRUPED,
-    leg_set_switch_allowed,
     load_presets,
-    resync,
+    preset_switch_allowed,
+    resync_gait,
+    resync_preset,
+    resync_preset_request,
 )
 
+# The operator half. Ids must match the tuning.yaml block below, which owns the
+# physical half — the leg set most of all.
 _YAML = """
 allow_unstable_gaits: true
 presets:
@@ -43,6 +53,13 @@ presets:
       sub: six legs
       gait_cycle: [tripod, surf, tetrapod, crawl, ripple]
       default_gait: tripod
+    - id: fast
+      label: FAST
+      sub: low and long-striding
+      # Overlaps normal's rotation, which is the point: two six-leg presets can
+      # offer the same gaits, and /cmd_preset is what tells them apart.
+      gait_cycle: [tripod, surf]
+      default_gait: tripod
     - id: quad
       label: QUAD
       sub: four corners, middle pair parked
@@ -50,25 +67,87 @@ presets:
       default_gait: quad_canter
 """
 
+# The physical half, in tuning.yaml's shape. Only the fields the preset loader
+# reads: the leg set, and the stride/swing bundle the caps are derived from —
+# `fast` gets a longer stride at a quicker cadence so a test can tell its caps
+# from normal's.
+_TUNING = """
+gait_node:
+  ros__parameters:
+    yaw_bias: 0.6
+    swing_phase_margin: 0.12
+    quadruped_swing_phase_margin: 0.25
+    default_preset: normal
+    presets:
+      - id: normal
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.06
+          front: {tip_reach: 0.135, coxa_deg: 25}
+          middle: {tip_reach: 0.135, coxa_deg: 0}
+          rear: {tip_reach: 0.135, coxa_deg: 0}
+        stride_length: 0.105
+        stride_length_radial: 0.085
+        min_swing_time: 0.6
+        max_swing_time: 0.8
+        step_height: 0.04
+      - id: fast
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.055
+          front: {tip_reach: 0.138, coxa_deg: 25}
+          middle: {tip_reach: 0.138, coxa_deg: 0}
+          rear: {tip_reach: 0.138, coxa_deg: 0}
+        stride_length: 0.125
+        stride_length_radial: 0.100
+        min_swing_time: 0.45
+        max_swing_time: 0.60
+        step_height: 0.035
+      - id: quad
+        leg_set: quadruped
+        standing_pose:
+          body_height: 0.06
+          front: {tip_reach: 0.119, coxa_deg: 25}
+          rear: {tip_reach: 0.119, coxa_deg: 25}
+        stride_length: 0.105
+        stride_length_radial: 0.085
+        min_swing_time: 0.6
+        max_swing_time: 0.8
+        step_height: 0.04
+"""
 
-def _registry(text: str = _YAML):
-    return load_presets(yaml.safe_load(text))
+_GEOMETRY = """
+mounts:
+  l_front: {x: 0.06, y: 0.05, yaw_deg: 30}
+  l_middle: {x: 0.0, y: 0.07, yaw_deg: 90}
+"""
+
+
+@pytest.fixture(scope="module")
+def yaml_paths(tmp_path_factory):
+    d = tmp_path_factory.mktemp("presets")
+    (d / "tuning.yaml").write_text(_TUNING)
+    (d / "geometry.yaml").write_text(_GEOMETRY)
+    return d / "tuning.yaml", d / "geometry.yaml"
 
 
 @pytest.fixture
-def registry():
-    return _registry()
+def _registry_factory(yaml_paths):
+    tuning, geometry = yaml_paths
+
+    def make(text: str = _YAML, tuning_text: str | None = None):
+        t = tuning
+        if tuning_text is not None:
+            t = tuning.parent / "tuning_override.yaml"
+            t.write_text(tuning_text)
+        return load_presets(yaml.safe_load(text), t, geometry)
+
+    return make
 
 
 @pytest.fixture
-def caps():
-    # Only the lookups resync makes; the real table comes from tuning.yaml. The
-    # values are per-gait so a test can tell one switch's caps from another's.
-    return VelocityCaps(
-        {name: 0.1 + 0.01 * i for i, name in enumerate(GAIT_DESCRIPTORS)},
-        {name: 0.5 + 0.01 * i for i, name in enumerate(GAIT_DESCRIPTORS)},
-        {name: 0.0 for name in GAIT_DESCRIPTORS},
-    )
+def registry(_registry_factory):
+    return _registry_factory()
 
 
 @pytest.fixture
@@ -118,52 +197,64 @@ def joy_cfg(registry):
 
 # ─── Loading and validation ────────────────────────────────────────
 
-def test_leg_set_is_derived_from_the_catalog(registry):
-    # Never declared in the config: the catalog already owns which legs a gait
-    # walks, and a second copy is a second copy to keep true.
+def test_leg_set_is_read_from_tuning_yaml(registry):
+    # Never declared in the teleop config: tuning.yaml owns whether the middle
+    # pair stands, because that is a physical fact about the robot and not a
+    # property of the gaits a preset happens to offer.
+    assert registry.get("normal").leg_set == HEXAPOD
+    assert registry.get("fast").leg_set == HEXAPOD
+    assert registry.get("quad").leg_set == QUADRUPED
+
+
+def test_every_gait_in_a_rotation_walks_the_presets_legs(registry):
     for preset in registry.presets:
         for gait in preset.gait_cycle:
             assert GAIT_DESCRIPTORS[gait].leg_set == preset.leg_set
 
-    assert registry.get("normal").leg_set == HEXAPOD
-    assert registry.get("quad").leg_set == QUADRUPED
 
-
-def test_a_preset_mixing_leg_sets_is_a_load_error():
+def test_a_rotation_mixing_leg_sets_is_a_load_error(_registry_factory):
+    # A prev/next press must never be able to ask a standing robot for legs it
+    # is not on.
     bad = _YAML.replace(
         "      gait_cycle: [quad_canter, quad_walk]",
         "      gait_cycle: [quad_canter, tetrapod]",
-    ).replace("      gait_cycle: [tripod, surf, tetrapod, crawl, ripple]",
-              "      gait_cycle: [tripod, surf, crawl, ripple]")
-    with pytest.raises(ValueError, match="leg set"):
-        _registry(bad)
-
-
-def test_two_presets_sharing_a_gait_is_a_load_error():
-    # Disjointness is what makes a bare name on /cmd_gait name one preset.
-    bad = _YAML.replace(
-        "      gait_cycle: [quad_canter, quad_walk]",
-        "      gait_cycle: [quad_canter, quad_walk, tripod]",
     )
     with pytest.raises(ValueError):
-        _registry(bad)
+        _registry_factory(bad)
 
 
-def test_a_default_gait_outside_its_own_rotation_is_a_load_error():
+def test_two_presets_may_share_a_gait(_registry_factory):
+    # The rule the preset channel replaced: rotations used to have to be
+    # disjoint so a bare gait name could name one preset. It cannot any more —
+    # normal and fast both offer tripod — and that is now legal.
+    reg = _registry_factory()
+    assert "tripod" in reg.get("normal").gait_cycle
+    assert "tripod" in reg.get("fast").gait_cycle
+
+
+def test_a_preset_missing_from_tuning_yaml_is_a_load_error(_registry_factory):
+    bad = _YAML.replace("    - id: fast", "    - id: offroad")
+    with pytest.raises(ValueError, match="tuning.yaml"):
+        _registry_factory(bad)
+
+
+def test_a_default_gait_outside_its_own_rotation_is_a_load_error(
+    _registry_factory
+):
     bad = _YAML.replace("      default_gait: quad_canter",
                         "      default_gait: tripod")
     with pytest.raises(ValueError, match="default_gait"):
-        _registry(bad)
+        _registry_factory(bad)
 
 
-def test_an_unknown_default_preset_is_a_load_error():
+def test_an_unknown_default_preset_is_a_load_error(_registry_factory):
     with pytest.raises(ValueError, match="default"):
-        _registry(_YAML.replace("  default: normal", "  default: sideways"))
+        _registry_factory(_YAML.replace("  default: normal", "  default: sideways"))
 
 
-def test_unstable_gaits_are_filtered_per_preset():
-    reg = _registry(_YAML.replace("allow_unstable_gaits: true",
-                                  "allow_unstable_gaits: false"))
+def test_unstable_gaits_are_filtered_per_preset(_registry_factory):
+    reg = _registry_factory(_YAML.replace("allow_unstable_gaits: true",
+                                          "allow_unstable_gaits: false"))
     normal = reg.get("normal")
     assert "surf" not in normal.gait_cycle
     assert "crawl" not in normal.gait_cycle
@@ -175,9 +266,39 @@ def test_entry_gait_starts_at_the_preset_default(registry):
     assert registry.entry_gait("quad") == "quad_canter"
 
 
-def test_for_gait_finds_the_owning_preset(registry):
-    assert registry.for_gait("ripple").id == "normal"
-    assert registry.for_gait("quad_walk").id == "quad"
+def test_caps_are_per_preset(registry):
+    # Three of the four inputs to a cap ride the preset: the stride it lays
+    # down, the swing time it lays it down in, and the stance the angular cap
+    # divides by. fast is the longer stride at the quicker cadence.
+    normal = registry.caps("normal").linear_max("tripod")
+    fast = registry.caps("fast").linear_max("tripod")
+    assert fast > normal
+    # The ratio is exactly the stride-over-swing-time one; nothing else moves.
+    assert math.isclose(fast / normal, (0.125 / 0.45) / (0.105 / 0.6), rel_tol=1e-6)
+
+
+def test_caps_default_to_the_preset_in_force(registry):
+    # Before any /gait/preset the boot preset's table is the honest guess.
+    assert registry.caps() is registry.caps("normal")
+    registry.note_preset("fast")
+    assert registry.caps() is registry.caps("fast")
+
+
+def test_current_is_empty_until_the_engine_reports(registry):
+    # Never seeded from the default: showing a preset the robot may not be on is
+    # exactly what the report topic exists to prevent.
+    assert registry.current_id() is None
+    assert registry.current() is None
+    registry.note_preset("quad")
+    assert registry.current_id() == "quad"
+
+
+def test_for_gait_prefers_the_preset_in_force(registry):
+    # Ambiguous by design now that rotations overlap; the preset actually in
+    # force is the answer that matters.
+    assert registry.for_gait("tripod").id == "normal"
+    registry.note_preset("fast")
+    assert registry.for_gait("tripod").id == "fast"
     assert registry.for_gait("moonwalk") is None
 
 
@@ -191,129 +312,185 @@ def test_project_writes_the_active_rotations(registry, joy_cfg):
     assert joy_cfg.default_quadruped_gait == "quad_canter"
 
 
+def test_project_follows_the_six_leg_preset_in_force(registry, joy_cfg):
+    # Entering `fast` swaps the one rotation map_joy reads; the mapping's state
+    # machine never learns a third preset exists.
+    resync_preset("fast", "tripod", joy_cfg, _state(), registry)
+    assert registry.project(joy_cfg).gait_cycle == registry.get("fast").gait_cycle
+
+
 # ─── resync ────────────────────────────────────────────────────────
 
 def _state(**kw) -> JoyState:
     return JoyState(mode=GAIT, **kw)
 
 
-def test_resync_sets_the_quadruped_flag(registry, caps, joy_cfg):
+def test_resync_preset_sets_the_quadruped_flag(registry, joy_cfg):
     # The regression this module exists for. map_joy reads state.quadruped to
-    # pick which rotation the D-pad walks and to gate animation mode, and the
-    # old resync_gait never touched it — so a gamepad `select` left the web app
-    # cycling the six-leg list while the robot stood on four.
+    # pick which rotation the D-pad walks and to gate animation mode, and it is
+    # the PRESET that moves it now — a gait name cannot, since three of the four
+    # presets stand on six legs.
     state = _state()
     assert state.quadruped is False
 
-    result = resync("quad_walk", joy_cfg, state, caps, registry)
+    result = resync_preset("quad", "quad_walk", joy_cfg, state, registry)
     assert result is not None
     assert state.quadruped is True
     assert result.leg_set_changed is True
     assert result.preset.id == "quad"
 
-    back = resync("tripod", result.cfg, state, caps, registry)
+    back = resync_preset("normal", "tripod", result.cfg, state, registry)
     assert back is not None
     assert state.quadruped is False
     assert back.leg_set_changed is True
 
 
-def test_resync_updates_the_right_cycler_index(registry, caps, joy_cfg):
+def test_resync_preset_between_two_six_leg_presets_keeps_the_flag(
+    registry, joy_cfg
+):
+    state = _state()
+    result = resync_preset("fast", "tripod", joy_cfg, state, registry)
+    assert state.quadruped is False
+    assert result.leg_set_changed is False
+    assert registry.current_id() == "fast"
+
+
+def test_resync_preset_swaps_the_caps(registry, joy_cfg):
+    state = _state()
+    result = resync_preset("fast", "tripod", joy_cfg, state, registry)
+    assert math.isclose(
+        result.cfg.gait_linear_max, registry.caps("fast").linear_max("tripod")
+    )
+    assert math.isclose(
+        result.cfg.gait_angular_z_max,
+        registry.caps("fast").angular_max("tripod"),
+    )
+
+
+def test_resync_preset_unknown_id_returns_none(registry, joy_cfg):
+    state = _state()
+    assert resync_preset("sideways", "tripod", joy_cfg, state, registry) is None
+    assert registry.current_id() is None
+    assert state.quadruped is False
+
+
+def test_resync_gait_updates_the_right_cycler_index(registry, joy_cfg):
     state = _state(current_gait_idx=0)
-    result = resync("ripple", joy_cfg, state, caps, registry)
+    result = resync_gait("ripple", joy_cfg, state, registry)
     assert state.current_gait_idx == result.cfg.gait_cycle.index("ripple")
     # The six-leg slot is untouched by a four-corner switch: it is still the
     # operator's, waiting for them to come back to it.
-    quad = resync("quad_walk", result.cfg, state, caps, registry)
+    resync_preset("quad", "quad_walk", result.cfg, state, registry)
+    quad = resync_gait("quad_walk", result.cfg, state, registry)
     assert state.current_gait_idx == result.cfg.gait_cycle.index("ripple")
     assert state.current_quadruped_gait_idx == (
         quad.cfg.quadruped_gait_cycle.index("quad_walk")
     )
 
 
-def test_resync_remembers_each_presets_slot(registry, caps, joy_cfg):
+def test_resync_remembers_each_presets_slot(registry, joy_cfg):
     state = _state(current_gait_idx=0)
-    cfg = joy_cfg
-    cfg = resync("ripple", cfg, state, caps, registry).cfg
-    cfg = resync("quad_walk", cfg, state, caps, registry).cfg
+    cfg = resync_gait("ripple", joy_cfg, state, registry).cfg
+    resync_preset("quad", "quad_canter", cfg, state, registry)
+    cfg = resync_gait("quad_walk", cfg, state, registry).cfg
     # Selecting NORMAL again should offer the gait it was left on, not the
     # preset's cold default — the round trip lands where the operator was.
     assert registry.entry_gait("normal") == "ripple"
     assert registry.entry_gait("quad") == "quad_walk"
 
 
-def test_resync_updates_the_caps(registry, caps, joy_cfg):
+def test_resync_gait_updates_the_caps(registry, joy_cfg):
     state = _state()
-    result = resync("ripple", joy_cfg, state, caps, registry)
+    caps = registry.caps()
+    result = resync_gait("ripple", joy_cfg, state, registry)
     assert math.isclose(result.cfg.gait_linear_max, caps.linear_max("ripple"))
     assert math.isclose(result.cfg.gait_angular_z_max, caps.angular_max("ripple"))
 
 
-def test_resync_starts_the_posture_revert_on_a_leg_set_change(
-    registry, caps, joy_cfg
-):
-    # The engine will not move the middle pair until the body pose is neutral,
-    # and map_joy's revert decay is the only thing that puts it there.
+def test_resync_gait_leaves_the_leg_set_alone(registry, joy_cfg):
+    # The split this refactor is about: a gait is a gait, and only the preset
+    # moves the robot between the leg sets.
+    state = _state()
+    result = resync_gait("ripple", joy_cfg, state, registry)
+    assert result.leg_set_changed is False
+    assert state.quadruped is False
+
+
+def test_a_preset_request_starts_the_posture_revert(registry, joy_cfg):
+    # The engine will not start the change until the body pose is neutral, and
+    # map_joy's revert decay is the only thing that puts it there. It has to
+    # follow the REQUEST: by the time /gait/preset answers it is far too late.
     state = _state()
     state.recorded_x = 0.02
-    result = resync("quad_walk", joy_cfg, state, caps, registry)
-    assert result.leg_set_changed is True
+    assert resync_preset_request("fast", state, registry) is not None
     assert state.reverting is True
 
 
-def test_resync_does_not_revert_on_a_plain_gait_switch(registry, caps, joy_cfg):
+def test_a_request_for_the_preset_in_force_does_not_revert(registry, joy_cfg):
     state = _state()
+    resync_preset("fast", "tripod", joy_cfg, state, registry)
     state.recorded_x = 0.02
-    result = resync("ripple", joy_cfg, state, caps, registry)
-    assert result.leg_set_changed is False
+    assert resync_preset_request("fast", state, registry) is None
     assert state.reverting is False
 
 
-def test_resync_drops_out_of_animation_mode_on_four_legs(
-    registry, caps, joy_cfg
+def test_an_unknown_preset_request_does_not_revert(registry):
+    state = _state()
+    assert resync_preset_request("sideways", state, registry) is None
+    assert state.reverting is False
+
+
+def test_a_gait_switch_does_not_revert(registry, joy_cfg):
+    state = _state()
+    state.recorded_x = 0.02
+    resync_gait("ripple", joy_cfg, state, registry)
+    assert state.reverting is False
+
+
+def test_resync_preset_drops_out_of_animation_mode_on_four_legs(
+    registry, joy_cfg
 ):
     # Every animation is written for six legs, and map_joy only blocks
     # *entering* the mode — arriving there on four has to leave.
     state = JoyState(mode=ANIMATION)
-    result = resync("quad_walk", joy_cfg, state, caps, registry)
+    result = resync_preset("quad", "quad_walk", joy_cfg, state, registry)
     assert result.left_animation_mode is True
     assert state.mode == GAIT
 
 
-def test_resync_leaves_animation_mode_alone_on_six_legs(
-    registry, caps, joy_cfg
+def test_resync_preset_leaves_animation_mode_alone_on_six_legs(
+    registry, joy_cfg
 ):
     state = JoyState(mode=ANIMATION)
-    result = resync("ripple", joy_cfg, state, caps, registry)
+    result = resync_preset("fast", "tripod", joy_cfg, state, registry)
     assert result.left_animation_mode is False
     assert state.mode == ANIMATION
 
 
-def test_resync_unknown_name_returns_none(registry, joy_cfg):
-    empty = VelocityCaps({}, {}, {})
+def test_resync_gait_unknown_name_returns_none(registry, joy_cfg):
     state = _state(current_gait_idx=1)
-    assert resync("moonwalk", joy_cfg, state, empty, registry) is None
+    assert resync_gait("moonwalk", joy_cfg, state, registry) is None
     assert state.current_gait_idx == 1
     assert state.quadruped is False
 
 
-def test_resync_of_an_own_loopback_is_idempotent(registry, caps, joy_cfg):
+def test_resync_of_an_own_loopback_is_idempotent(registry, joy_cfg):
     # The node hears its own accepted publish back; landing somewhere else
     # would make every switch jump two slots.
     state = _state(current_gait_idx=0)
-    first = resync("tetrapod", joy_cfg, state, caps, registry)
+    first = resync_gait("tetrapod", joy_cfg, state, registry)
     idx = state.current_gait_idx
-    second = resync("tetrapod", first.cfg, state, caps, registry)
+    resync_gait("tetrapod", first.cfg, state, registry)
     assert state.current_gait_idx == idx
-    assert second.leg_set_changed is False
 
 
 # ─── The publish gate ──────────────────────────────────────────────
 
-def test_leg_set_switch_allowed_only_where_the_engine_takes_one():
+def test_preset_switch_allowed_only_where_the_engine_takes_one():
     for state in ("stand", "folded", "fault"):
-        assert leg_set_switch_allowed(state), state
+        assert preset_switch_allowed(state), state
     # Narrower than the gait-switch set on purpose: a plain gait swap latches
-    # and applies at the next stand, a leg-set change does not.
+    # and applies at the next stand, a preset change re-plants every foot.
     for state in (
         "gait",
         "initialize",
@@ -325,4 +502,4 @@ def test_leg_set_switch_allowed_only_where_the_engine_takes_one():
         "unfolding_pair",
         "",
     ):
-        assert not leg_set_switch_allowed(state), state
+        assert not preset_switch_allowed(state), state

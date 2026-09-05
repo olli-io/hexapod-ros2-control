@@ -15,6 +15,12 @@ from .limits import (
     standing_stance_xy,
     unit_stance_xy,
 )
+from .preset_config import (
+    default_preset_id,
+    gait_params,
+    preset_leg_sets,
+    preset_table,
+)
 from .posture_config import (
     load_animation_mode_animations,
     load_body_height_offsets,
@@ -29,11 +35,15 @@ __all__ = [
     "GaitDescriptor",
     "PostureScalarLimits",
     "VelocityCaps",
+    "default_preset_id",
+    "gait_params",
     "load_animation_mode_animations",
     "load_body_height_offsets",
     "load_posture_scalar_limits",
     "load_velocity_caps",
     "outer_stance_radius",
+    "preset_leg_sets",
+    "preset_table",
     "scale_to_envelope",
     "standing_stance_xy",
     "unit_stance_xy",

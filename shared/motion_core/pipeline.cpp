@@ -75,19 +75,22 @@ Pipeline::Pipeline() : Pipeline(PipelineConfig::baked()) {}
 Pipeline::Pipeline(const PipelineConfig& cfg)
     : standing_pose_(hexa::gait::standing_pose_from(
           cfg.leg_specs, cfg.coxa_to_bottom, cfg.foot_radius,
-          cfg.standing_pose)),
+          cfg.presets.at(cfg.default_preset).standing,
+          "presets." + cfg.presets.at(cfg.default_preset).id)),
       nominal_stance_(
           hexa::gait::nominal_stance_from(cfg.leg_specs, standing_pose_)),
       folded_pose_(cfg.folded_pose),
+      preset_setups_(hexa::gait::solve_presets(cfg.presets, cfg.leg_specs,
+                                               cfg.coxa_to_bottom,
+                                               cfg.foot_radius,
+                                               cfg.default_preset)),
       engine_(hexa::gait::make_default_engine(
           cfg.default_gait, cfg.leg_specs, cfg.engine, standing_pose_,
           cfg.folded_pose, cfg.initialized_pose, cfg.coxa_to_bottom,
-          cfg.foot_radius,
-          hexa::gait::quad_standing_pose_from(
-              cfg.leg_specs, cfg.coxa_to_bottom, cfg.foot_radius,
-              cfg.quad_standing_pose, standing_pose_))),
-      caps_(cfg.caps),
-      control_(cfg.control, cfg.caps, nominal_stance_,
+          cfg.foot_radius, preset_setups_, cfg.default_preset)),
+      caps_by_preset_(cfg.caps_by_preset),
+      caps_(cfg.caps_by_preset.at(cfg.presets.at(cfg.default_preset).id)),
+      control_(cfg.control, caps_, nominal_stance_,
                hexa::gait::build_leg_contexts_from(cfg.leg_specs,
                                                    standing_pose_),
                cfg.engine.stride_length, cfg.engine.stride_length_radial,
@@ -107,8 +110,9 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
       leg_specs_(cfg.leg_specs) {
   // The JoyConfig's stick scaling tracks the active gait's caps; map_joy owns the
   // mode FSM / posture baseline in JoyState. Both are unused on the ROS path.
-  joycfg_.gait_linear_max = cfg.caps.linear_max(cfg.default_gait);
-  joycfg_.gait_angular_z_max = cfg.caps.angular_max(cfg.default_gait);
+  applied_preset_ = engine_->preset_id();
+  joycfg_.gait_linear_max = caps_.linear_max(cfg.default_gait);
+  joycfg_.gait_angular_z_max = caps_.angular_max(cfg.default_gait);
   joystate_.mode = hexa::teleop::mode_from_string(hexa::config::kInitialMode);
   for (std::size_t i = 0; i < hexa::config::kGaitCycle.size(); ++i) {
     if (hexa::config::kGaitCycle[i] == cfg.default_gait) {
@@ -174,34 +178,99 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   r.mode_changed = jo.mode_changed;
   r.mode = joystate_.mode;
 
-  // Ahead of the init edge: an init request carries its leg set as the gait it
-  // publishes, and start_initialize() reads the leg set off the strategy that is
-  // applied by then.
+  // The init buttons carry a LEG SET, not a preset: `start` stands on six and
+  // `select` on four, and neither pad has a preset control. Resolved here,
+  // ahead of everything else, because both the preset the stand climbs to and
+  // the legality of a /cmd_gait in the same tick follow from it — and both
+  // arrive together, since the teleops publish the gait alongside the init.
+  // Off the belly it is a no-op on the set the robot is already on, and the
+  // init edge below is a fold.
+  if (jo.init_request &&
+      (engine_->state() == hexa::gait::EngineState::FOLDED ||
+       engine_->state() == hexa::gait::EngineState::FAULT)) {
+    engine_->request_leg_set(jo.init_quadruped ? hexa::gait::LegSet::QUADRUPED
+                                               : hexa::gait::LegSet::HEXAPOD);
+  }
+
+  // Ahead of both the gait select and the init edge: the preset owns the leg
+  // set, so start_initialize() stands on whatever this applied, and a /cmd_gait
+  // in the same tick is measured against it.
+  if (jo.has_preset_select) {
+    r.has_preset_select = true;
+    std::string id(jo.preset_select);
+    r.preset_select = id;
+    const hexa::gait::EngineState st_now = engine_->state();
+    const bool off_the_belly = st_now != hexa::gait::EngineState::FOLDED &&
+                               st_now != hexa::gait::EngineState::FAULT;
+    if (!off_the_belly) {
+      // Nothing is standing: the choice is the ordinary one start_initialize()
+      // reads to pick its stance and its ladder, not a change of anything.
+      r.preset_accepted = engine_->request_preset(id);
+    } else if (id == engine_->preset_id()) {
+      // Already there. Idempotent, so a latched topic re-read every tick costs
+      // nothing and never arms a ladder.
+      r.preset_accepted = true;
+    } else if (st_now == hexa::gait::EngineState::STAND) {
+      // Held here rather than handed to the engine, until the operator's pose is
+      // out of the way. A planted foot is solved through the body pose and a
+      // parked one is not, and even where both presets stand on six the reseat
+      // wants a neutral pose to re-plant against. Asking the teleop for it is the
+      // caller's job on the ROS path (it owns /body/pose); on the joy path this
+      // pipeline owns the posture baseline, so it starts the revert itself.
+      pending_preset_ = id;
+      pending_preset_elapsed_ = 0.0f;
+      joystate_.reverting = true;
+      r.preset_accepted = true;
+    }
+  }
+
+  // A preset change waiting on the pose. It only ever runs from the stand it was
+  // asked at, so anything that leaves STAND drops it — the same rule the engine
+  // applies to a request it has already taken.
+  if (pending_preset_.has_value()) {
+    pending_preset_elapsed_ += in.dt;
+    const bool live = pose_is_neutral(last_body_pose_) &&
+                      pose_is_neutral(hexa::posture::BodyPose{
+                          jo.pose_x, jo.pose_y, jo.pose_z, jo.pose_roll,
+                          jo.pose_pitch, jo.pose_yaw});
+    if (engine_->state() != hexa::gait::EngineState::STAND) {
+      pending_preset_.reset();
+      pending_preset_gait_.reset();
+    } else if (live) {
+      const std::string id = *pending_preset_;
+      const std::optional<std::string> gait = pending_preset_gait_;
+      pending_preset_.reset();
+      pending_preset_gait_.reset();
+      if (engine_->request_preset(id) && gait.has_value()) {
+        // Legal only now: the engine measures a gait against the preset it has
+        // just armed, so the pair commits together.
+        engine_->set_strategy(*gait);
+      }
+    } else if (pending_preset_elapsed_ > kPoseRevertTimeout) {
+      // Nothing is easing the pose out — a client holding /body/pose, most
+      // likely. Drop it and say why, rather than leaving the request armed for
+      // however long it takes the operator to notice nothing happened.
+      pending_preset_.reset();
+      pending_preset_gait_.reset();
+      r.gait_blocked_by_posture = true;
+    }
+  }
+
   if (jo.has_gait_select) {
     r.has_gait_select = true;
     std::string name(jo.gait_select);
     r.gait_select = name;
-    // From the belly the leg set is still open — a four-corner gait there is
-    // the ordinary selection start_initialize() reads to pick its ladder, not a
-    // change of anything. It only becomes a change once a robot is standing on
-    // a set, which is also the only time there is a middle pair to move.
-    const hexa::gait::EngineState st_now = engine_->state();
-    const bool off_the_belly = st_now != hexa::gait::EngineState::FOLDED &&
-                               st_now != hexa::gait::EngineState::FAULT;
-    const bool changes_leg_set =
-        off_the_belly && hexa::gait::leg_set_of(name) != engine_->leg_set();
-    if (changes_leg_set) {
-      // Held here rather than handed to the engine, until the operator's pose
-      // is out of the way. Asking the teleop for it is the caller's job on the
-      // ROS path (it owns /body/pose); on the joy path this pipeline owns the
-      // posture baseline, so it starts the revert itself.
-      if (gait_switch_allowed(engine_->state()) &&
-          engine_->state() == hexa::gait::EngineState::STAND) {
-        pending_leg_set_gait_ = name;
-        pending_leg_set_elapsed_ = 0.0f;
-        joystate_.reverting = true;
-        r.gait_accepted = true;
-      }
+    // A gait that walks a different leg set than the preset in force is refused
+    // by the engine rather than inferred into a preset change — the preset topic
+    // is what moves the robot between leg sets now. The caps still follow every
+    // accepted name.
+    if (pending_preset_.has_value()) {
+      // A preset change is waiting on the pose, so the gait that walks it is not
+      // legal yet. Held with the preset rather than dropped: the teleops publish
+      // the pair in one tick, and losing the gait here would land the robot on
+      // the new preset walking whatever the engine picked for it.
+      pending_preset_gait_ = name;
+      r.gait_accepted = true;
     } else if (gait_switch_allowed(engine_->state()) &&
                engine_->set_strategy(name)) {
       control_.set_gait(name);
@@ -213,37 +282,26 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
     }
   }
 
-  // A leg-set change waiting on the pose. It only ever runs from the stand it
-  // was asked at, so anything that leaves STAND drops it — the same rule the
-  // engine applies to a request it has already taken.
-  if (pending_leg_set_gait_.has_value()) {
-    pending_leg_set_elapsed_ += in.dt;
-    const bool live = pose_is_neutral(last_body_pose_) &&
-                      pose_is_neutral(hexa::posture::BodyPose{
-                          jo.pose_x, jo.pose_y, jo.pose_z, jo.pose_roll,
-                          jo.pose_pitch, jo.pose_yaw});
-    if (engine_->state() != hexa::gait::EngineState::STAND) {
-      pending_leg_set_gait_.reset();
-    } else if (live) {
-      const std::string name = *pending_leg_set_gait_;
-      pending_leg_set_gait_.reset();
-      if (engine_->set_strategy(name)) {
-        control_.set_gait(name);
-        joycfg_.gait_linear_max = caps_.linear_max(name);
-        joycfg_.gait_angular_z_max = caps_.angular_max(name);
-        r.gait_linear_max = joycfg_.gait_linear_max;
-        r.gait_angular_z_max = joycfg_.gait_angular_z_max;
-      }
-    } else if (pending_leg_set_elapsed_ > kPoseRevertTimeout) {
-      // Nothing is easing the pose out — a client holding /body/pose, most
-      // likely. Drop it and say why, rather than leaving the request armed for
-      // however long it takes the operator to notice nothing happened.
-      pending_leg_set_gait_.reset();
-      r.gait_blocked_by_posture = true;
-    }
+  // The engine commits a preset at the end of whatever path it took — a belly
+  // apply, the end of a change ladder, or a fault revert. Following its report
+  // rather than the request is what makes every one of those paths land here.
+  if (engine_->preset_id() != applied_preset_) {
+    applied_preset_ = engine_->preset_id();
+    const auto& setup = *std::find_if(
+        preset_setups_.begin(), preset_setups_.end(),
+        [&](const hexa::gait::PresetSetup& p) { return p.id == applied_preset_; });
+    caps_ = caps_by_preset_.at(applied_preset_);
+    control_.set_preset(
+        caps_, setup.nominal_stance,
+        hexa::gait::leg_contexts_from_stance(leg_specs_, setup.nominal_stance),
+        setup.stride_length, setup.stride_length_radial);
+    joycfg_.gait_linear_max = caps_.linear_max(engine_->strategy_name());
+    joycfg_.gait_angular_z_max = caps_.angular_max(engine_->strategy_name());
+    r.gait_linear_max = joycfg_.gait_linear_max;
+    r.gait_angular_z_max = joycfg_.gait_angular_z_max;
   }
 
-  // FOLDED -> INITIALIZE, on the leg set the applied strategy walks, or from
+  // FOLDED -> INITIALIZE, on the leg set the applied PRESET stands on, or from
   // anywhere else a queued fold request.
   r.init_request = jo.init_request;
   if (jo.init_request) {
@@ -342,6 +400,7 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   // The applied set, not the requested one — read after the tick, so a change
   // that completed on this tick reports the set it landed on.
   r.leg_set = engine_->leg_set();
+  r.preset = engine_->preset_id();
   r.master_phase = engine_->master_phase();
   r.walking = walking;
 

@@ -13,40 +13,113 @@ gait_node:
     cmd_zero_tol: 0.02
     default_gait: tripod
 
-    # tip_reach — coxa axis to foot tip in the ground plane.
-    # coxa_deg — leg rotation off-centre; positive splays feet outward
-    # (rearward for the middle legs).
-    default_standing_pose:
-      body_height: 0.06
-      front:
-        tip_reach: 0.135
-        coxa_deg: 25
-      middle:
-        tip_reach: 0.135
-        coxa_deg: 0
-      rear:
-        tip_reach: 0.135
-        coxa_deg: 0
+    # ── Presets ──
+    # A preset is the bundle the operator selects as one thing: which legs it
+    # stands on, where those feet sit, and how far and how fast the walk steps.
+    # `hexa_teleop`/`hexa_webteleop` carry the operator half of the same ids —
+    # label, gait rotation, entry gait — and this file owns the physical half.
+    #
+    # leg_set — hexapod (all six) or quadruped (the four corners, middle pair
+    # parked at geometry.yaml's folded_pose). Declared here, not derived from
+    # the gait: two presets can offer the same gaits and differ only in stance.
+    #
+    # standing_pose.tip_reach — coxa axis to foot tip in the ground plane.
+    # standing_pose.coxa_deg — leg rotation off-centre; positive splays feet
+    # outward (rearward for the middle legs).
+    #
+    # Every preset carries its own stride/swing bundle; there is no global
+    # fallback, so an omitted key is a load error rather than a silent
+    # inheritance. A fifth preset is an edit here plus a row in the two teleop
+    # configs.
+    default_preset: normal
 
-    # Stance for quadruped mode — the four corners only. The middle pair does
-    # not stand in this mode: it is held at geometry.yaml's folded_pose, so
-    # there is no middle entry here.
+    presets:
+      - id: normal
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.06
+          front:
+            tip_reach: 0.135
+            coxa_deg: 25
+          middle:
+            tip_reach: 0.135
+            coxa_deg: 0
+          rear:
+            tip_reach: 0.135
+            coxa_deg: 0
+        stride_length: 0.105
+        # Most a leg's own coxa-to-foot reach may close over one half stride.
+        # Every direction is priced against the worst-placed leg. Set equal to
+        # stride_length to disable (isotropic stride).
+        stride_length_radial: 0.085
+        # Airborne time per foot, fast and slow ends. Past max_swing_time the
+        # robot shortens its stride instead. Keep within ~25% of each other.
+        min_swing_time: 0.6
+        max_swing_time: 0.8
+        step_height: 0.04
 
-    quad_standing_pose:
-      body_height: 0.06
-      front:
-        tip_reach: 0.119
-        coxa_deg: 25
-      rear:
-        tip_reach: 0.119
-        coxa_deg: 25
+      # Stands lower and reaches further, and spends the extra reach on a
+      # longer stride at a quicker cadence — roughly twice normal's top speed.
+      - id: fast
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.055
+          front:
+            tip_reach: 0.138
+            coxa_deg: 10
+          middle:
+            tip_reach: 0.138
+            coxa_deg: 0
+          rear:
+            tip_reach: 0.138
+            coxa_deg: 10
+        stride_length: 0.125
+        stride_length_radial: 0.100
+        min_swing_time: 0.45
+        max_swing_time: 0.60
+        step_height: 0.015
 
-    stride_length: 0.105
-    # Most a leg's own coxa-to-foot reach may close over one half stride. Every
-    # direction is priced against the worst-placed leg. Set equal to
-    # stride_length to disable (isotropic stride).
-    stride_length_radial: 0.085
-    step_height: 0.04
+      # Tall and deliberate: belly clearance for what the robot is walking
+      # over, a foot that clears far more than it needs on flat ground, and a
+      # short slow stride to pay for both.
+      - id: offroad
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.095
+          front:
+            tip_reach: 0.125
+            coxa_deg: 25
+          middle:
+            tip_reach: 0.125
+            coxa_deg: 0
+          rear:
+            tip_reach: 0.125
+            coxa_deg: 0
+        stride_length: 0.085
+        stride_length_radial: 0.070
+        min_swing_time: 0.75
+        max_swing_time: 1.00
+        step_height: 0.065
+
+      # The four corners only. The middle pair does not stand in this preset:
+      # it is held at geometry.yaml's folded_pose, so there is no middle entry
+      # in its standing pose.
+      - id: quad
+        leg_set: quadruped
+        standing_pose:
+          body_height: 0.06
+          front:
+            tip_reach: 0.119
+            coxa_deg: 25
+          rear:
+            tip_reach: 0.119
+            coxa_deg: 25
+        stride_length: 0.105
+        stride_length_radial: 0.085
+        min_swing_time: 0.6
+        max_swing_time: 0.8
+        step_height: 0.04
+
     # Sideways shift of the foot's arc. 0 = straight fore/aft steps.
     swing_width: 0.02
 
@@ -56,11 +129,6 @@ gait_node:
     # touchdown_velocity. Probe height = touchdown_velocity x fraction x
     # swing_time. Hard-capped at 0.4; 0 restores a zero-speed landing.
     touchdown_probe_fraction: 0.4
-
-    # Airborne time per foot, fast and slow ends. Past max_swing_time the robot
-    # shortens its stride instead. Keep within ~25% of each other.
-    min_swing_time: 0.6
-    max_swing_time: 0.8
 
     # Share of each gait's swing window handed back to the ground at the
     # touchdown end, so legs overlap. Costs top speed.
@@ -131,6 +199,11 @@ gait_node:
       pair_swing_time: 0.35
       pair_dwell_time: 0.05
       swing_clearance: 0.02
+      # The body's own half of a preset change: how long it takes to ease onto
+      # the new preset's body height once the ladder has the feet on the new
+      # footprint. All six are planted for it, so this is one body translation
+      # and not a rung at a time.
+      plane_ramp_time: 0.5
 
 control_node:
   ros__parameters:

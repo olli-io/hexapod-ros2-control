@@ -2,16 +2,18 @@
 
 Web-app teleop — an HTTP + WebSocket server hosting a phone/tablet control
 UI that publishes the **same** ROS topics as the gamepad teleop
-(`hexa_teleop`): `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/animation/mode`,
-`/gait/initialize`, plus `/teleop/owner`. Subscribes `/gait/state` for
-switch gating, and the latched `/cmd_gait` + `/animation/mode` themselves —
-the only truth for the current *selection* (locomotion publishes no gait-name
-feedback), heard from **both** teleops and from its own publishes via
-loopback. It also subscribes `/gait/leg_set`, which is the engine's own report
-of the leg set it has applied and the Mode view's only source of truth. `/cmd_gait` does double duty: it drives the UI's status strip
-*and* resyncs the node's stick velocity caps and gait cycler when the
-gamepad switches gaits (`web_mapping.resync_gait`), so the two teleops
-agree on more than the display. `/animation/mode` is display-only —
+(`hexa_teleop`): `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/cmd_preset`,
+`/animation/mode`, `/gait/initialize`, plus `/teleop/owner`. Subscribes
+`/gait/state` for switch gating, and the latched `/cmd_gait` + `/cmd_preset` +
+`/animation/mode` themselves — the only truth for the current *selection*
+(locomotion publishes no gait-name feedback), heard from **both** teleops and
+from its own publishes via loopback. It also subscribes the engine's two report
+topics: `/gait/preset`, the preset it has applied and the Mode view's only source
+of truth, and `/gait/leg_set`, which drives the navbar icon alone — three of the
+four presets stand on six legs, so the leg set cannot tell them apart.
+`/cmd_gait` does double duty: it drives the UI's status strip *and* resyncs the
+node's stick velocity caps and gait cycler when the gamepad switches gaits
+(`web_mapping.resync_gait`), so the two teleops agree on more than the display. `/animation/mode` is display-only —
 syncing the animation cycler would be dead code, since the shared
 `map_joy` resets it to 0 on every ANIMATION-mode entry.
 
@@ -34,18 +36,22 @@ syncing the animation cycler would be dead code, since the shared
   — wifi connection indicator, controller icon (green while a controller
   owns `/cmd_vel`; tap for a switch toggle), **mode** icon (a six-legged
   body whose middle pair dims on four legs, so the navbar carries the
-  current mode without the view being open; tap toggles the Mode view),
-  log icon.
+  current leg set without the view being open; tap toggles the Mode view. It
+  shows the leg set rather than the preset, so NORMAL, FAST and OFFROAD share
+  one icon), log icon.
 - **Control area** — two touch joysticks flanking a 3×3 button grid; top 3
   buttons select mode (Gait / Posture / Anim), bottom 6 are
   mode-dependent (node pushes labels on mode change). While a controller
   owns control the grid becomes an inline "Take control" prompt and the
   sticks are disabled.
 - **Status strip** — a compact readout above the button grid showing the
-  current gait, animation mode (em dash until an animation is first
-  latched) and pack voltage/current. Gait and animation are fed by the node
-  from the latched command topics, so the strip follows gamepad-initiated
-  switches too, and it stays visible while the take-control prompt replaces
+  current **preset**, gait, animation mode (em dash until an animation is first
+  latched) and pack voltage/current. The preset is here because the navbar icon
+  cannot carry it: that icon shows the leg set, and NORMAL, FAST and OFFROAD all
+  stand on six legs. It reads `/gait/preset`, so it is a dash until the engine
+  has spoken — the Mode view lights no row then either. Gait and animation are
+  fed by the node from the latched command topics, so the strip follows
+  gamepad-initiated switches too, and it stays visible while the take-control prompt replaces
   the grid — a controller owner switching gaits is exactly when the passive
   observer wants to see it.
 
@@ -62,22 +68,26 @@ four-legged half of the init button: from the belly it stands the robot up
 with the middle pair left folded, and off the belly it folds like init does.
 It takes gait mode's second slot because `record` only does anything in
 posture mode, and it is bound in the gait section alone, which is what
-confines it to gait mode. It selects the QUAD preset's gait, which lives in
-that preset's own rotation and never in the six-leg one — so prev/next can
-never ask a standing robot for a leg set it is not on. Once on four legs,
-prev/next walks the QUAD rotation instead; the six-leg selection keeps its own
+confines it to gait mode. It asks for the four-corner **leg set**, which the
+engine resolves to the QUAD preset — so prev/next can never ask a standing robot
+for a leg set it is not on. Once on four legs, prev/next walks the QUAD rotation
+instead; the six-leg selection keeps its own
 slot and is waiting when the robot comes back. The Mode view is the other way
 in, and unlike this button it does not need the belly. Posture mode still poses the body on four feet; only `record`
 goes inert there, for the reason `hexa_teleop`'s README gives.
 
 ## Mode view
 
-A navbar icon opening a view that lists the operator **presets** — `NORMAL`
-(six legs) and `QUAD` (four corners, middle pair parked) today, more later — and
-switches between them. Tapping one publishes that preset's remembered gait on
-`/cmd_gait`; the engine runs a **leg-set change** in place, without folding to
-the belly. See `hexa_teleop`'s README for what a preset is and
-`docs/leg-phases.md` for what the robot actually does.
+A navbar icon opening a view that lists the operator **presets** — `NORMAL` (six
+legs, everyday stance), `FAST` (low, long-striding), `OFFROAD` (tall, short
+steps, high clearance) and `QUAD` (four corners, middle pair parked) — and
+switches between them. Tapping one publishes its id on `/cmd_preset` and that
+preset's remembered gait on `/cmd_gait`, in that order, since the engine measures
+a gait against the preset in force. The engine then runs a **preset change** in
+place, without folding to the belly: a reseat onto the new footprint, plus the
+middle pair's own move on either side of it where the two presets differ in leg
+set. See `hexa_teleop`'s README for what a preset is and `docs/leg-phases.md`
+for what the robot actually does.
 
 A view that **replaces the control area** in `index.html` — not an overlay over
 it, and not a page like `logs.html`. Full-screen because the list is the whole
@@ -89,20 +99,32 @@ view and the back arrow leaves it, and both sticks are re-centred on the way in 
 they leave the screen, and a knob held at that moment never sees its own
 touchend.
 
-- **The active row comes from `/gait/leg_set` and nothing else** — never the
-  tap, never the latched `/cmd_gait`. That command topic keeps a refused name
-  forever, so a view reading it would show a mode the robot never took, with
-  nothing to correct it. Before the first `/gait/leg_set` arrives no row is lit,
-  which is honest rather than a guess.
+- **The active row comes from `/gait/preset` and nothing else** — never the tap,
+  never the latched `/cmd_preset`. That command topic keeps a refused id forever,
+  so a view reading it would show a mode the robot never took, with nothing to
+  correct it. Nor can it come from `/gait/leg_set`: `NORMAL`, `FAST` and
+  `OFFROAD` all stand on six legs. Before the first `/gait/preset` arrives no row
+  is lit, which is honest rather than a guess.
 - The client sets no optimistic state. During the ~2 s change the current row
   stays filled and the target row goes dashed — "on six, going to four" — and
   every row is inert until it lands.
+- **On the belly the rows are inert and a `STAND` button takes their place.**
+  Off the belly a mode is a preset change; on it, the leg set is chosen by the
+  stand itself — every init edge asks for a leg set, and the engine resolves that
+  to a preset — so a four-corner mode tapped here would be overwritten the moment
+  the robot got up.
+  The button presses the grid's own `init` slot (found by label, not by a
+  hardcoded index) rather than reaching for `/gait/initialize` directly, so
+  standing up stays one path through `map_joy`, two-press revert and all. It is
+  exempt from arbitration exactly as a mode switch is (below), which also makes
+  it the only stand a webapp can reach while a controller drives — the grid it
+  presses is a take-control prompt in that state.
 - A switch is **refused** where the engine would not take one: the node gates on
-  `/gait/state` before publishing (a leg-set change is legal only from a stand,
+  `/gait/state` before publishing (a preset change is legal only from a stand,
   unlike a plain gait switch), and it holds a deadline for the cases it cannot
   predict — the state moved between the tap and the tick, or the operator's body
-  pose never came back to neutral. `/gait/leg_set` publishes on change, so
-  silence past the deadline is the answer. Either way a reason appears under the
+  pose never came back to neutral. `/gait/preset` publishes on change, so silence
+  past the deadline is the answer. Either way a reason appears under the
   list and the active row does not move.
 
 ## Pack telemetry
@@ -149,9 +171,15 @@ node writes it.
 
 A **Mode view switch is exempt**, deliberately: it touches neither `/cmd_vel`
 nor `/body/pose` — the two continuous streams arbitration exists to stop from
-fighting — and is one idempotent write to a latched selection topic the gamepad
-already writes without asking anyone. So the Mode view works while a controller
-drives, which is the point of it. The gamepad node follows the result by
+fighting — and is two idempotent writes to latched selection topics both teleops
+already read without asking anyone. So the Mode view works while a controller
+drives, which is the point of it. **An init — a stand or a fold — is exempt for
+the same reason**: one `Empty` on `/gait/initialize` plus the gait naming the leg
+set it wants, discrete rather than streamed. Without that the Mode view's `STAND`
+would be dead in the one state it exists for, since the button grid it presses is
+replaced by the take-control prompt whenever a controller owns. The mapping's
+bookkeeping stays honest either way — the gait publish loops back through
+`/cmd_gait` into `resync`, in both teleops. The gamepad node follows the result by
 subscribing `/cmd_gait` itself (see its README), so its D-pad never ends up
 rotating a list the robot is not standing on. Webapp connects as a passive observer, then **Take
 control** → `request_control` → owner `web`, gamepad goes dormant.
@@ -184,14 +212,16 @@ port 80 — arrive at all. Best-effort: a privileged port needs a root container
 
 ## Config
 
-Operator presets (the Mode view's list and each one's gait rotation), server
-port/heartbeat, safety watchdog timeout, pack-telemetry topic and poll period,
-stick deadband, and per-mode button→function bindings live in
-[`config/webteleop.yaml`](config/webteleop.yaml) (documented inline). A preset's
-leg set is derived from `hexa_common.gait_catalog`, never declared, and adding a
-third preset is an edit to that file alone.
-Velocity caps, the animation list, and the posture-mode scalar limits come
-from `hexa_description/config/tuning.yaml` (SSoT — `gait_node`,
+The **operator** half of each preset (the Mode view's list, each one's label and
+gait rotation), server port/heartbeat, safety watchdog timeout, pack-telemetry
+topic and poll period, stick deadband, and per-mode button→function bindings live
+in [`config/webteleop.yaml`](config/webteleop.yaml) (documented inline). The
+**physical** half — the leg set, the standing pose and the stride/swing bundle —
+is `hexa_description/config/tuning.yaml`'s `gait_node.presets` list under the
+same ids, and is never restated here; adding a preset is an edit to those two
+files. Velocity caps (per preset now, since a preset owns the stride, the swing
+time and the stance they are derived from), the animation list, and the
+posture-mode scalar limits come from that same `tuning.yaml` (SSoT — `gait_node`,
 `posture_node` and `teleop_node` blocks), not from here. The scalar limits
 being shared is what makes the webapp pose the body over the same range a
 gamepad does.

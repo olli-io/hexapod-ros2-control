@@ -28,7 +28,7 @@ def _write_geometry(tmp_path: Path, **standing_overrides) -> Path:
 
 
 def _standing_pose(tip_reach=0.135, body_height=0.04, coxa_deg=0) -> dict:
-    """A default_standing_pose block with all three groups alike."""
+    """A preset ``standing_pose`` block with all three groups alike."""
     return dict(
         body_height=body_height,
         **{
@@ -38,21 +38,49 @@ def _standing_pose(tip_reach=0.135, body_height=0.04, coxa_deg=0) -> dict:
     )
 
 
-def _write_yaml(tmp_path: Path, **overrides) -> Path:
-    # Duty factors are sourced from the gait descriptors in
-    # ``hexa_common.gait_catalog``, not YAML. The YAML only carries the
-    # gait-agnostic knobs. default_standing_pose is here because the angular cap
-    # is derived from the stance it describes, not from a knob.
-    base = dict(
+# The five knobs a PRESET owns; anything else in an override goes in the flat
+# gait_node block. `default_standing_pose` is accepted as an alias for the
+# preset's `standing_pose`, since that is what these cases are about.
+_PRESET_KEYS = (
+    "stride_length",
+    "stride_length_radial",
+    "min_swing_time",
+    "max_swing_time",
+    "step_height",
+    "standing_pose",
+)
+
+
+def _preset(pid="normal", leg_set="hexapod", **overrides) -> dict:
+    entry = dict(
+        id=pid,
+        leg_set=leg_set,
+        standing_pose=_standing_pose(),
         stride_length=0.12,
+        stride_length_radial=0.12,
         min_swing_time=0.30,
         max_swing_time=1.0,
         step_height=0.035,
+    )
+    entry.update(overrides)
+    return entry
+
+
+def _write_yaml(tmp_path: Path, presets=None, **overrides) -> Path:
+    # Duty factors are sourced from the gait descriptors in
+    # ``hexa_common.gait_catalog``, not YAML. The YAML carries the gait-agnostic
+    # knobs, and the preset carries the rest — the stance the angular cap's
+    # lever arm is derived from included, since that is a stance and not a knob.
+    if "default_standing_pose" in overrides:
+        overrides["standing_pose"] = overrides.pop("default_standing_pose")
+    preset_overrides = {k: overrides.pop(k) for k in _PRESET_KEYS if k in overrides}
+    base = dict(
         swing_width=0.0,
         controller_dt=0.02,
         cmd_zero_tol=1.0e-4,
         yaw_bias=0.75,
-        default_standing_pose=_standing_pose(),
+        default_preset="normal",
+        presets=presets or [_preset(**preset_overrides)],
         # No margin by default, so these cases pin the plain duty-factor
         # arithmetic; test_linear_max_drops_with_swing_phase_margin covers the
         # margined form.
@@ -65,9 +93,9 @@ def _write_yaml(tmp_path: Path, **overrides) -> Path:
     return path
 
 
-def _caps(tmp_path: Path, **overrides) -> VelocityCaps:
+def _caps(tmp_path: Path, preset=None, **overrides) -> VelocityCaps:
     return load_velocity_caps(
-        _write_yaml(tmp_path, **overrides), _write_geometry(tmp_path)
+        _write_yaml(tmp_path, **overrides), _write_geometry(tmp_path), preset
     )
 
 
@@ -257,16 +285,83 @@ def test_angular_max_unknown_gait_raises(tmp_path):
         caps.angular_max("gallop")
 
 
-def test_missing_default_standing_pose_raises(tmp_path):
+def test_missing_standing_pose_raises(tmp_path):
     # The angular cap has no fallback: without a stance there is no lever arm.
-    raw = {
-        "stride_length": 0.12,
-        "min_swing_time": 0.30,
-        "yaw_bias": 0.75,
-    }
+    entry = _preset()
+    del entry["standing_pose"]
+    path = _write_yaml(tmp_path, presets=[entry])
+    with pytest.raises(KeyError):
+        load_velocity_caps(path, _write_geometry(tmp_path))
+
+
+def test_missing_presets_raises(tmp_path):
+    raw = {"yaw_bias": 0.75, "default_preset": "normal"}
     path = tmp_path / "gait.yaml"
     path.write_text(yaml.safe_dump({"gait_node": {"ros__parameters": raw}}))
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="presets"):
+        load_velocity_caps(path, _write_geometry(tmp_path))
+
+
+def test_an_unknown_preset_raises(tmp_path):
+    with pytest.raises(KeyError, match="offroad"):
+        _caps(tmp_path, preset="offroad")
+
+
+def test_caps_are_per_preset(tmp_path):
+    # Three of the four inputs to a cap ride the preset: its stride, its swing
+    # time, and the stance the angular cap divides by. Nothing else does.
+    path = _write_yaml(
+        tmp_path,
+        presets=[
+            _preset("normal"),
+            _preset("fast", stride_length=0.24, min_swing_time=0.15),
+        ],
+    )
+    geo = _write_geometry(tmp_path)
+    normal = load_velocity_caps(path, geo, "normal")
+    fast = load_velocity_caps(path, geo, "fast")
+    # Twice the stride in half the swing time is four times the cap.
+    assert math.isclose(fast.linear_max("tripod"),
+                        4.0 * normal.linear_max("tripod"), rel_tol=1e-9)
+    # yaw_bias is a feel knob keyed to the gait's duty, so no preset moves it.
+    assert math.isclose(fast.yaw_bias("tripod"), normal.yaw_bias("tripod"))
+    # No preset argument means the boot preset.
+    assert math.isclose(
+        load_velocity_caps(path, geo).linear_max("tripod"),
+        normal.linear_max("tripod"),
+    )
+
+
+def test_a_parked_pair_preset_needs_no_middle_group(tmp_path):
+    # Those legs stand on nothing, so their lever arm is irrelevant and the
+    # block simply has no middle entry to read.
+    quad_pose = _standing_pose()
+    del quad_pose["middle"]
+    path = _write_yaml(
+        tmp_path,
+        presets=[
+            _preset("normal"),
+            _preset("quad", leg_set="quadruped", standing_pose=quad_pose),
+        ],
+    )
+    caps = load_velocity_caps(path, _write_geometry(tmp_path), "quad")
+    assert caps.linear_max("quad_walk") > 0.0
+
+
+def test_a_bad_leg_set_is_a_load_error(tmp_path):
+    path = _write_yaml(tmp_path, presets=[_preset("normal", leg_set="tripedal")])
+    with pytest.raises(ValueError, match="leg_set"):
+        load_velocity_caps(path, _write_geometry(tmp_path))
+
+
+def test_a_non_hexapod_default_preset_is_a_load_error(tmp_path):
+    # The cold start is folded on six, and it is what FAULT recovers to.
+    path = _write_yaml(
+        tmp_path,
+        default_preset="quad",
+        presets=[_preset("quad", leg_set="quadruped")],
+    )
+    with pytest.raises(ValueError, match="six"):
         load_velocity_caps(path, _write_geometry(tmp_path))
 
 
@@ -308,10 +403,7 @@ def test_yaw_bias_unknown_gait_raises(tmp_path):
 
 
 def test_missing_yaw_bias_raises(tmp_path):
-    raw = {
-        "stride_length": 0.12,
-        "min_swing_time": 0.30,
-    }
+    raw = {"default_preset": "normal", "presets": [_preset()]}
     path = tmp_path / "gait.yaml"
     path.write_text(yaml.safe_dump({"gait_node": {"ros__parameters": raw}}))
     with pytest.raises(KeyError):

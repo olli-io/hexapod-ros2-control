@@ -5,6 +5,11 @@ Downstream nodes (``hexa_teleop`` for stick scaling, ``hexa_control`` for
 angular maxima. They drift in practice and hide the relationship to the
 gait's actual physical reach. This module replaces those copies.
 
+Both caps are also **per preset**: the stride, the swing time and the
+standing pose the three formulas below read all ride the preset the
+operator has selected, so ``load_velocity_caps`` builds one table per
+preset and the control layer swaps between them on a preset change.
+
 Linear cap is **per-gait** because the per-leg velocity ceiling depends
 on the active strategy's duty factor (β):
 
@@ -35,7 +40,8 @@ limited anything; all it did was skew the two things that scale off it
 (joystick full-scale deflection and the yaw acceleration ramp). A
 derived value cannot drift like that. To change turn rate, change what
 actually governs it: ``stride_length``, ``min_swing_time``, the gait's
-duty factor, or the stance width (``default_standing_pose.<group>.tip_reach``).
+duty factor, or the stance width
+(``presets.<id>.standing_pose.<group>.tip_reach``).
 
 ``scale_to_envelope`` cuts ``(v_x, v_y, omega_z)`` so the implied
 per-leg planar speed never exceeds ``linear_max``. This is the right
@@ -78,6 +84,7 @@ from typing import Mapping, Sequence
 import yaml
 
 from .gait_catalog import GAIT_DESCRIPTORS
+from .preset_config import default_preset_id, gait_params, preset_table
 
 # Standing-pose leg groups, in the order the C++ LegGroup enum uses.
 LEG_GROUPS = ("front", "middle", "rear")
@@ -124,7 +131,9 @@ class VelocityCaps:
 
 
 def standing_stance_xy(
-    geometry_yaml: str | Path, envelope_yaml: str | Path
+    geometry_yaml: str | Path,
+    envelope_yaml: str | Path,
+    preset: str | None = None,
 ) -> dict[str, tuple[float, float]]:
     """Planar body-frame position of each standing foot.
 
@@ -137,8 +146,12 @@ def standing_stance_xy(
     free of a kinematics dependency.
     """
     geo = yaml.safe_load(Path(geometry_yaml).read_text())
-    tuning = yaml.safe_load(Path(envelope_yaml).read_text())
-    standing = tuning["gait_node"]["ros__parameters"]["default_standing_pose"]
+    params = gait_params(envelope_yaml)
+    table = preset_table(params)
+    pid = preset if preset is not None else default_preset_id(params)
+    if pid not in table:
+        raise KeyError(f"tuning.yaml has no preset {pid!r}; have {sorted(table)}")
+    standing = table[pid]["standing_pose"]
 
     mounts = geo["mounts"]
     out: dict[str, tuple[float, float]] = {}
@@ -155,8 +168,13 @@ def standing_stance_xy(
             if side == "r":
                 yaw = -yaw
 
-            tip_reach = float(standing[name]["tip_reach"])
-            splay = group_splay(name, side, float(standing[name]["coxa_deg"]))
+            # A preset that parks the middle pair declares no middle group.
+            # Those legs stand on nothing, so their lever arm is irrelevant, and
+            # borrowing the front one keeps the six-entry shape every caller
+            # expects. Nothing downstream reads a parked leg's entry.
+            grp = standing.get(name, standing["front"])
+            tip_reach = float(grp["tip_reach"])
+            splay = group_splay(name, side, float(grp["coxa_deg"]))
 
             out[f"{side}_{name}"] = (
                 x + tip_reach * math.cos(yaw + splay),
@@ -166,7 +184,9 @@ def standing_stance_xy(
 
 
 def outer_stance_radius(
-    geometry_yaml: str | Path, envelope_yaml: str | Path
+    geometry_yaml: str | Path,
+    envelope_yaml: str | Path,
+    preset: str | None = None,
 ) -> float:
     """Planar radius of the outermost standing foot.
 
@@ -176,14 +196,16 @@ def outer_stance_radius(
     """
     radii = [
         math.hypot(x, y)
-        for x, y in standing_stance_xy(geometry_yaml, envelope_yaml).values()
+        for x, y in standing_stance_xy(
+            geometry_yaml, envelope_yaml, preset
+        ).values()
     ]
     r_outer = max(radii, default=0.0)
     if r_outer <= 0.0:
         raise ValueError(
             "outer stance radius is zero — every foot sits on the body axis, "
-            "so the standing pose has no yaw authority; check tuning.yaml "
-            "default_standing_pose"
+            "so the standing pose has no yaw authority; check that preset's "
+            "standing_pose in tuning.yaml"
         )
     return r_outer
 
@@ -200,6 +222,14 @@ def unit_stance_xy(
     constraint, because every gait's angular cap is its linear cap over
     that radius. One table therefore serves every gait.
 
+    Deliberately the DEFAULT preset's stance, not the active one's, and
+    that is why it takes no preset argument. The table is normalised by
+    ``r_outer``, so it barely moves between presets that scale reach and
+    body height together, and its C++ twin ``kStanceUnit`` is baked into
+    ``fit_drive_to_envelope``, which is parity-locked to the golden joy
+    trace. The velocity *caps* — the thing that actually clamps
+    ``/cmd_vel`` — do follow the preset; this is stick shaping.
+
     Returned as a tuple of pairs, not a name-keyed mapping: the consumer
     only ever takes a max across the legs, so which leg is which never
     comes up.
@@ -210,7 +240,9 @@ def unit_stance_xy(
 
 
 def load_velocity_caps(
-    envelope_yaml: str | Path, geometry_yaml: str | Path
+    envelope_yaml: str | Path,
+    geometry_yaml: str | Path,
+    preset: str | None = None,
 ) -> VelocityCaps:
     """Build per-gait caps from the velocity-envelope YAML and the catalog.
 
@@ -221,26 +253,32 @@ def load_velocity_caps(
     contributes the gait-agnostic knobs (``stride_length``,
     ``min_swing_time``, ``yaw_bias``).
 
+    The caps are also **per preset**, which is what ``preset`` selects
+    (default: the boot preset). Three of the four inputs ride the preset —
+    the stride it lays down, the swing time it lays it down in, and the
+    stance the angular cap divides by. Only ``yaw_bias`` and the two phase
+    margins are global.
+
     ``envelope_yaml`` is hexa_description's ``tuning.yaml`` (or any ros2
     params file carrying a ``gait_node`` block); the caps are read from
     that block. ``geometry_yaml`` is its sibling ``geometry.yaml`` — needed
     for the leg mounts, since the angular cap is the linear one divided by
     the outermost foot's standing radius.
     """
-    path = Path(envelope_yaml)
-    with path.open() as f:
-        raw = yaml.safe_load(f)
-    # tuning.yaml is a ros2 params file; unwrap to the flat knob block the caps
-    # are derived from (mirrors the gait node's ros params).
-    raw = raw["gait_node"]["ros__parameters"]
+    raw = gait_params(envelope_yaml)
+    table = preset_table(raw)
+    pid = preset if preset is not None else default_preset_id(raw)
+    if pid not in table:
+        raise KeyError(f"tuning.yaml has no preset {pid!r}; have {sorted(table)}")
+    entry = table[pid]
 
-    stride_length = float(raw["stride_length"])
-    min_swing_time = float(raw["min_swing_time"])
+    stride_length = float(entry["stride_length"])
+    min_swing_time = float(entry["min_swing_time"])
     yaw_bias = float(raw["yaw_bias"])
     margin = float(raw.get("swing_phase_margin", 0.0))
     # Per leg set: the quadruped creep runs a longer overlap, and so a lower cap.
     quad_margin = float(raw.get("quadruped_swing_phase_margin", margin))
-    r_outer = outer_stance_radius(geometry_yaml, envelope_yaml)
+    r_outer = outer_stance_radius(geometry_yaml, envelope_yaml, pid)
 
     linear_max_by_gait: dict[str, float] = {}
     angular_max_by_gait: dict[str, float] = {}

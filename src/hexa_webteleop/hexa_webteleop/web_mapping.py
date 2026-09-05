@@ -46,8 +46,8 @@ from hexa_teleop.presets import (
     QUADRUPED,
     PresetRegistry,
     load_presets,
-    resync,
 )
+from hexa_teleop.presets import resync_gait as _resync_gait
 
 from hexa_teleop.joy_mapping import (
     ALL_FUNCTIONS,
@@ -93,7 +93,7 @@ def load_web_config(
     # webteleop.yaml. Used only to saturate the height integrator.
     height_min, height_max = load_body_height_offsets(gait_yaml, posture_yaml)
 
-    registry = load_presets(raw)
+    registry = load_presets(raw, gait_yaml, geometry_yaml)
     hexapod_preset = registry.active(HEXAPOD)
     quadruped_preset = registry.active(QUADRUPED)
     if hexapod_preset is None or quadruped_preset is None:
@@ -255,17 +255,17 @@ def resync_gait(
     name: str,
     cfg: JoyConfig,
     state: JoyState,
-    caps: VelocityCaps,
     registry: PresetRegistry,
 ) -> JoyConfig | None:
-    """Resync stick caps, the cycler and the active preset to a commanded gait.
+    """Resync stick caps and the cycler slot to a commanded gait.
 
-    A thin wrapper over ``hexa_teleop.presets.resync`` for callers that only
-    want the rebuilt config. The shared version lives in ``hexa_teleop`` because
-    the gamepad node needs the same bookkeeping — without it, a preset switch
-    made from the web app leaves its D-pad rotating the wrong list.
+    A thin wrapper over ``hexa_teleop.presets.resync_gait`` for callers that
+    only want the rebuilt config. The shared version lives in ``hexa_teleop``
+    because the gamepad node needs the same bookkeeping — without it, a gait
+    switch made from the web app leaves its D-pad rotating the wrong list. The
+    LEG SET is not here: the preset owns it, and ``resync_preset`` follows it.
     """
-    result = resync(name, cfg, state, caps, registry)
+    result = _resync_gait(name, cfg, state, registry)
     return None if result is None else result.cfg
 
 
@@ -277,18 +277,19 @@ def preset_payload(
 ) -> dict:
     """The webapp's ``preset`` message: which preset is actually in force.
 
-    ``leg_set`` is what ``/gait/leg_set`` last reported — the set the engine has
-    APPLIED — and is the only thing the active row is derived from. Never the
-    click, and never the latched ``/cmd_gait``: that topic keeps a refused name
-    forever, so a UI reading it would show a preset the robot never took, with
-    nothing to correct it.
+    The active row is what ``/gait/preset`` last reported — the preset the
+    engine has APPLIED — and nothing else. Never the tap, and never the latched
+    ``/cmd_preset``: that topic keeps a refused id forever, so a UI reading it
+    would show a preset the robot never took, with nothing to correct it. It
+    cannot come off ``/gait/leg_set`` either, now that three of the four presets
+    stand on six legs.
 
-    ``None`` before the first ``/gait/leg_set`` arrives, which is honest — the
-    webapp shows no row lit rather than guessing at one.
+    ``None`` before the first ``/gait/preset`` arrives, which is honest — the
+    webapp shows no row lit rather than guessing at one. ``leg_set`` rides along
+    for the navbar icon, which dims the middle pair on four legs.
     """
-    active = registry.active_id(leg_set) if leg_set else None
     return {
-        "active": active,
+        "active": registry.current_id(),
         "leg_set": leg_set or None,
         "pending": pending,
         "refused": refused,
@@ -313,7 +314,7 @@ def preset_pending_expired(
 ) -> bool:
     """True if a pending preset switch has outlived its deadline.
 
-    ``/gait/leg_set`` publishes on change only, so a refusal the node could not
+    ``/gait/preset`` publishes on change only, so a refusal the node could not
     predict — the engine's state moved between the click and the tick, or the
     body pose never came back to neutral — arrives as silence. Silence past the
     deadline is what the webapp reads as "it did not happen".

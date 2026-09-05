@@ -79,6 +79,14 @@
            gaits is exactly when the passive observer wants to see it. -->
       <div id="center-panel">
         <div id="status-bar">
+          <!-- The preset, because the navbar icon cannot carry it: that icon
+               shows the LEG SET, and NORMAL / FAST / OFFROAD all stand on six
+               legs, so without this the operator cannot tell which is in
+               force without opening the Mode view. -->
+          <span class="status-item">
+            <span class="status-key">Mode</span>
+            <span class="status-value" id="status-preset">&mdash;</span>
+          </span>
           <span class="status-item">
             <span class="status-key">Gait</span>
             <span class="status-value" id="status-gait">&mdash;</span>
@@ -141,6 +149,17 @@
         <span class="view-title">Mode</span>
       </div>
       <div id="preset-list"></div>
+
+      <!-- Folded only. On the belly the leg set the next stand comes up on is
+           chosen by the stand itself (the init button republishes the gait that
+           walks the set it asked for), so the mode rows there would move a
+           highlight the stand immediately overrides. The rows go inert and the
+           view offers the one thing that is meaningful on the belly. -->
+      <button id="preset-stand" class="preset-item hidden">
+        <span class="preset-label">STAND</span>
+        <span class="preset-sub" id="preset-stand-sub"></span>
+      </button>
+
       <p id="preset-note"></p>
     </div>
   </div>

@@ -40,6 +40,11 @@ presets:
       sub: six legs
       gait_cycle: [tripod, surf, tetrapod, crawl, ripple]
       default_gait: tripod
+    - id: fast
+      label: FAST
+      sub: low and long-striding
+      gait_cycle: [tripod, surf]
+      default_gait: tripod
     - id: quad
       label: QUAD
       sub: four corners, middle pair parked
@@ -118,25 +123,51 @@ arbitration:
   enabled: true
 """
 
+# The PHYSICAL half of each preset, keyed by the same ids the webteleop config
+# above uses. `fast` is the longer stride at the quicker cadence, so a test can
+# tell its caps from normal's.
 _GAIT_YAML = """
 gait_node:
   ros__parameters:
-    stride_length: 0.1
-    min_swing_time: 0.30
-    max_swing_time: 0.4
     yaw_bias: 0.6
     default_gait: tripod
-    default_standing_pose:
-      body_height: 0.04
-      front:
-        tip_reach: 0.135
-        coxa_deg: 0
-      middle:
-        tip_reach: 0.135
-        coxa_deg: 0
-      rear:
-        tip_reach: 0.135
-        coxa_deg: 0
+    default_preset: normal
+    presets:
+      - id: normal
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.04
+          front: {tip_reach: 0.135, coxa_deg: 0}
+          middle: {tip_reach: 0.135, coxa_deg: 0}
+          rear: {tip_reach: 0.135, coxa_deg: 0}
+        stride_length: 0.1
+        stride_length_radial: 0.1
+        min_swing_time: 0.30
+        max_swing_time: 0.4
+        step_height: 0.04
+      - id: fast
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.035
+          front: {tip_reach: 0.138, coxa_deg: 0}
+          middle: {tip_reach: 0.138, coxa_deg: 0}
+          rear: {tip_reach: 0.138, coxa_deg: 0}
+        stride_length: 0.15
+        stride_length_radial: 0.12
+        min_swing_time: 0.20
+        max_swing_time: 0.3
+        step_height: 0.035
+      - id: quad
+        leg_set: quadruped
+        standing_pose:
+          body_height: 0.04
+          front: {tip_reach: 0.119, coxa_deg: 0}
+          rear: {tip_reach: 0.119, coxa_deg: 0}
+        stride_length: 0.1
+        stride_length_radial: 0.1
+        min_swing_time: 0.30
+        max_swing_time: 0.4
+        step_height: 0.04
 """
 
 # The angular stick cap is derived from the standing stance, so the caps loader
@@ -556,7 +587,7 @@ def test_resync_gait_updates_caps_and_cycler(cfg_and_caps):
     loaded_cfg, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
-    new_cfg = resync_gait("ripple", loaded_cfg, state, caps, registry)
+    new_cfg = resync_gait("ripple", loaded_cfg, state, registry)
     assert new_cfg is not None
     assert state.current_gait_idx == loaded_cfg.gait_cycle.index("ripple")
     assert math.isclose(new_cfg.gait_linear_max, caps.linear_max("ripple"))
@@ -568,7 +599,7 @@ def test_resync_gait_unknown_name_returns_none(cfg_and_caps):
     loaded_cfg, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=1)
-    assert resync_gait("moonwalk", loaded_cfg, state, caps, registry) is None
+    assert resync_gait("moonwalk", loaded_cfg, state, registry) is None
     assert state.current_gait_idx == 1
 
 
@@ -580,7 +611,7 @@ def test_resync_gait_outside_cycle_updates_caps_only(cfg_and_caps):
     assert "crawl" not in loaded_cfg.gait_cycle
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=2)
-    new_cfg = resync_gait("crawl", loaded_cfg, state, caps, registry)
+    new_cfg = resync_gait("crawl", loaded_cfg, state, registry)
     assert new_cfg is not None
     assert state.current_gait_idx == 2
     assert math.isclose(new_cfg.gait_linear_max, caps.linear_max("crawl"))
@@ -596,7 +627,7 @@ def test_resync_gait_own_loopback_is_idempotent(cfg_and_caps):
     out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)  # gait_next
     assert out.gait_select is not None
     idx_after_press = state.current_gait_idx
-    new_cfg = resync_gait(out.gait_select, loaded_cfg, state, caps, registry)
+    new_cfg = resync_gait(out.gait_select, loaded_cfg, state, registry)
     assert new_cfg is not None
     assert state.current_gait_idx == idx_after_press
 
@@ -694,20 +725,26 @@ def test_neutral_inputs_map_to_zero_velocity(cfg):
 
 # ─── Mode view payloads ─────────────────────────────────────────────
 
-def test_preset_payload_reads_the_applied_leg_set(cfg_and_caps):
+def test_preset_payload_reads_the_applied_preset(cfg_and_caps):
+    # The active row comes off /gait/preset and nothing else. It cannot come off
+    # /gait/leg_set: normal and fast both stand on six legs, so the leg set
+    # cannot tell them apart — it rides along only for the navbar icon.
     _, _, _, _, registry = cfg_and_caps
+    registry.note_preset("quad")
     payload = preset_payload(registry, "quadruped", None, None)
     assert payload["active"] == "quad"
     assert payload["leg_set"] == "quadruped"
     assert payload["pending"] is None
     assert payload["refused"] is None
 
+    registry.note_preset("fast")
     payload = preset_payload(registry, "hexapod", None, None)
-    assert payload["active"] == "normal"
+    assert payload["active"] == "fast"
+    assert payload["leg_set"] == "hexapod"
 
 
-def test_preset_payload_is_blank_before_the_first_leg_set(cfg_and_caps):
-    # /gait/leg_set is latched, but nothing has published it yet in sim before
+def test_preset_payload_is_blank_before_the_first_report(cfg_and_caps):
+    # /gait/preset is latched, but nothing has published it yet in sim before
     # the locomotion node starts. Showing no row beats guessing at one.
     _, _, _, _, registry = cfg_and_caps
     payload = preset_payload(registry, "", None, None)
@@ -717,6 +754,7 @@ def test_preset_payload_is_blank_before_the_first_leg_set(cfg_and_caps):
 
 def test_preset_payload_carries_pending_and_refused(cfg_and_caps):
     _, _, _, _, registry = cfg_and_caps
+    registry.note_preset("normal")
     payload = preset_payload(registry, "hexapod", "quad", None)
     assert payload["active"] == "normal"
     assert payload["pending"] == "quad"
@@ -730,9 +768,9 @@ def test_preset_payload_carries_pending_and_refused(cfg_and_caps):
 def test_preset_descriptors_list_every_preset(cfg_and_caps):
     _, _, _, _, registry = cfg_and_caps
     rows = preset_descriptors(registry)
-    assert [r["id"] for r in rows] == ["normal", "quad"]
+    assert [r["id"] for r in rows] == ["normal", "fast", "quad"]
     assert rows[0]["label"] == "NORMAL"
-    assert rows[1]["leg_set"] == "quadruped"
+    assert rows[2]["leg_set"] == "quadruped"
 
 
 def test_preset_pending_expired():

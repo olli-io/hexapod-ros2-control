@@ -1,5 +1,6 @@
 #include "pipeline_config.hpp"
 
+#include <cstddef>
 #include <string>
 
 #include "config_generated.hpp"
@@ -15,18 +16,21 @@ PipelineConfig PipelineConfig::baked() {
   c.leg_specs = cfg::kLegSpecs;
   c.coxa_to_bottom = cfg::kCoxaToBottom;
   c.foot_radius = cfg::kFootRadius;
-  c.standing_pose = cfg::kStandingPose;
-  c.quad_standing_pose = cfg::kQuadStandingPose;
+  c.presets = ::hexa::gait::preset_specs_from_config();
+  c.default_preset = cfg::kDefaultPreset;
   c.folded_pose = cfg::kFoldedPose;
   c.initialized_pose = cfg::kInitializedPose;
   // tuning.yaml
   c.engine = ::hexa::gait::engine_config_from_config();
-  // The angular cap needs the standing foot positions. Solved here rather than
-  // inside load_velocity_caps_from_config, to keep gait/limits.cpp free of the
+  // The angular cap needs each preset's standing foot positions, and the linear
+  // one its stride and swing time. Solved here rather than inside
+  // load_velocity_caps_from_config, to keep gait/limits.cpp free of the
   // IK/engine translation units.
-  c.caps = ::hexa::gait::load_velocity_caps_from_config(
-      ::hexa::gait::outer_stance_radius(
-          ::hexa::gait::nominal_stance_from_config()));
+  const auto setups = ::hexa::gait::preset_setups_from_config();
+  for (std::size_t i = 0; i < setups.size(); ++i) {
+    c.caps_by_preset[setups[i].id] = ::hexa::gait::load_velocity_caps_from_config(
+        i, ::hexa::gait::outer_stance_radius(setups[i].nominal_stance));
+  }
   c.default_gait = std::string(cfg::kDefaultGait);
   c.control = cfg::kControl;
   c.posture = cfg::kPosture;

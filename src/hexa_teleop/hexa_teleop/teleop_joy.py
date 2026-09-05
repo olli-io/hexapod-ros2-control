@@ -49,7 +49,15 @@ from .joy_mapping import (
     map_joy,
     validate_bindings,
 )
-from .presets import HEXAPOD, QUADRUPED, PresetRegistry, load_presets, resync
+from .presets import (
+    HEXAPOD,
+    QUADRUPED,
+    PresetRegistry,
+    load_presets,
+    resync_gait,
+    resync_preset,
+    resync_preset_request,
+)
 from .teleop_arbitration import GAMEPAD, ArbitrationState, on_owner_msg, should_publish
 
 # Matches the gamepad's polling rate (8BitDo and most modern pads: 250 Hz).
@@ -123,7 +131,7 @@ def _load_config(
     # offsets. Teleop uses it only to saturate the height integrator.
     height_min, height_max = load_body_height_offsets(gait_yaml, posture_yaml)
 
-    registry = load_presets(raw)
+    registry = load_presets(raw, gait_yaml, geometry_yaml)
     hexapod_preset = registry.active(HEXAPOD)
     quadruped_preset = registry.active(QUADRUPED)
     if hexapod_preset is None or quadruped_preset is None:
@@ -242,18 +250,22 @@ class TeleopJoyNode(Node):
             f"gait rotation: {list(self._cfg.gait_cycle)}; "
             f"quadruped rotation: {list(self._cfg.quadruped_gait_cycle)}"
         )
-        cap_summary = ", ".join(
-            f"{n}={v:.2f}" for n, v in sorted(self._caps.linear_max_by_gait.items())
-        )
-        angular_summary = ", ".join(
-            f"{n}={v:.2f}" for n, v in sorted(self._caps.angular_max_by_gait.items())
-        )
-        self.get_logger().info(
-            f"velocity caps from {tuning_yaml_path}: "
-            f"linear_max=({cap_summary}) m/s, "
-            f"angular_max=({angular_summary}) rad/s, "
-            f"active gait={self._active_gait!r}"
-        )
+        # Per preset now: the stride, the swing time and the stance a cap is
+        # derived from all ride the preset, so one summary per declared one.
+        for preset in self._presets.presets:
+            caps = self._presets.caps(preset.id)
+            cap_summary = ", ".join(
+                f"{n}={v:.2f}" for n, v in sorted(caps.linear_max_by_gait.items())
+            )
+            angular_summary = ", ".join(
+                f"{n}={v:.2f}" for n, v in sorted(caps.angular_max_by_gait.items())
+            )
+            self.get_logger().info(
+                f"velocity caps for preset {preset.id!r} from "
+                f"{tuning_yaml_path}: linear_max=({cap_summary}) m/s, "
+                f"angular_max=({angular_summary}) rad/s"
+            )
+        self.get_logger().info(f"active gait={self._active_gait!r}")
         self.get_logger().info(f"mode={self._state.mode}")
 
         self._latest_axes: tuple[float, ...] = ()
@@ -286,9 +298,8 @@ class TeleopJoyNode(Node):
         self._pub_body_pose = self.create_publisher(BodyPoseMsg, "/body/pose", 10)
         # One-shot trigger on a rising edge of either init binding (start
         # for six legs, select for four). hexa_locomotion routes it to
-        # start_initialize (FOLDED → STAND, on the leg set the latched
-        # /cmd_gait asks for) or to a fold request; a stray press
-        # mid-ladder is a no-op.
+        # start_initialize (FOLDED → STAND, on the leg set the init edge itself
+        # carries) or to a fold request; a stray press mid-ladder is a no-op.
         self._pub_init = self.create_publisher(Empty, "/gait/initialize", 10)
         # transient_local so a late-starting control node still picks
         # up the latest gait selection; depth 1 because the value
@@ -302,6 +313,23 @@ class TeleopJoyNode(Node):
         # via loopback, so both initiators take one bookkeeping path.
         self._sub_cmd_gait = self.create_subscription(
             String, "/cmd_gait", self._on_cmd_gait, gait_qos
+        )
+        # The operator preset. Latched like /cmd_gait, and the same
+        # read-your-own-writes arrangement: the request tells both teleops to
+        # ease their posture out, and only the web app's Mode view ever writes
+        # it — nothing on the pad asks for a preset change, only the init
+        # buttons' leg set.
+        self._pub_cmd_preset = self.create_publisher(
+            String, "/cmd_preset", gait_qos
+        )
+        self._sub_cmd_preset = self.create_subscription(
+            String, "/cmd_preset", self._on_cmd_preset, gait_qos
+        )
+        # And the engine's report of the preset it has APPLIED — the honest
+        # source for the caps and the leg-set flag, since /cmd_preset keeps a
+        # refused id forever.
+        self._sub_gait_preset = self.create_subscription(
+            String, "/gait/preset", self._on_gait_preset, state_qos
         )
         # Animation-mode selection (``""`` = default stack, otherwise
         # the name of the selected animation). transient_local so a
@@ -325,15 +353,16 @@ class TeleopJoyNode(Node):
     def _on_cmd_gait(self, msg: String) -> None:
         """Every gait on the wire — ours, heard back, or the web app's.
 
-        All the bookkeeping lives here (``_tick`` only gates and publishes):
-        stick caps, the cycler slot, the active preset, and the leg-set flag the
-        cycler picks its rotation off. Runs on the same single-threaded executor
-        as ``_tick``, so ``_cfg`` / ``_state`` need no lock.
+        The gait half of the bookkeeping (``_tick`` only gates and publishes):
+        stick caps and the cycler slot. The LEG SET is not here any more — the
+        preset owns it, and ``_on_gait_preset`` follows it. Runs on the same
+        single-threaded executor as ``_tick``, so ``_cfg`` / ``_state`` need no
+        lock.
         """
         name = msg.data
         if name == self._active_gait:
             return
-        result = resync(name, self._cfg, self._state, self._caps, self._presets)
+        result = resync_gait(name, self._cfg, self._state, self._presets)
         if result is None:
             self.get_logger().warning(
                 f"/cmd_gait={name!r} unknown to velocity caps — keeping "
@@ -347,11 +376,45 @@ class TeleopJoyNode(Node):
             f"angular_max={result.cfg.gait_angular_z_max:.3f} rad/s for gait "
             f"{name!r}"
         )
-        if result.leg_set_changed:
-            self.get_logger().info(
-                f"leg-set change to {name!r} — reverting the recorded posture "
-                f"(the engine holds the middle pair until the body is neutral)"
+
+    def _on_cmd_preset(self, msg: String) -> None:
+        """A preset REQUEST — ours, heard back, or the web app's.
+
+        Its one job is to ease the operator's recorded posture out: the engine
+        will not start the change until the body pose is back at neutral, and
+        this decay is the only thing that puts it there. Following the request
+        rather than the report is the whole point; by the time /gait/preset
+        answers it would be far too late.
+        """
+        if resync_preset_request(msg.data, self._state, self._presets) is None:
+            return
+        self.get_logger().info(
+            f"preset change to {msg.data!r} requested — reverting the recorded "
+            f"posture (the engine holds the change until the body is neutral)"
+        )
+
+    def _on_gait_preset(self, msg: String) -> None:
+        """The preset the engine has APPLIED.
+
+        The other half of the gait bookkeeping: the caps (every one is derived
+        from the preset's stride, swing time and stance), the two rotations the
+        cycler picks from, and the leg-set flag ``map_joy`` reads.
+        """
+        result = resync_preset(
+            msg.data, self._active_gait, self._cfg, self._state, self._presets
+        )
+        if result is None:
+            self.get_logger().warning(
+                f"/gait/preset={msg.data!r} is not declared in this config — "
+                f"keeping preset {self._presets.current_id()!r}"
             )
+            return
+        self._cfg = result.cfg
+        self.get_logger().info(
+            f"preset -> {msg.data!r}: stick linear_max="
+            f"{result.cfg.gait_linear_max:.3f} m/s, angular_max="
+            f"{result.cfg.gait_angular_z_max:.3f} rad/s"
+        )
         if result.left_animation_mode:
             # Animations are six-leg only, so arriving on four has to leave the
             # mode — and tell the pipeline, which is still holding the last

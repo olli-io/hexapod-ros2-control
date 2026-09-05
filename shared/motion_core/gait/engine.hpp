@@ -1,16 +1,17 @@
-// Gait engine — orchestrates clock, strategy, and the engagement / reseat
-// controllers, and is the only stateful component in the gait chain. update()
-// routes the commanded body velocity through the
-// FOLDED/INITIALIZE/STAND/ENGAGING/GAIT/SETTLING/FOLDING/RESEATING machine.
+// Gait engine — the only stateful component in the gait chain: clock, strategy
+// and the engagement / reseat controllers, driven by a command-velocity state
+// machine.
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "gait/clock.hpp"
 #include "gait/engagement.hpp"
@@ -30,25 +31,23 @@ enum class EngineState {
   ENGAGING,
   GAIT,
   // Command gone to zero (or a gait change pending): the gait runs on at a
-  // hard-zero stride, so every touchdown lands on nominal and the walk re-plants
-  // its own feet. Ends when all six are down — at most one cycle.
+  // hard-zero stride, so the walk re-plants its own feet onto nominal.
   SETTLING,
   FOLDING,
   RESEATING,
-  // The two halves of a leg-set change the reseat does not cover: the middle
-  // pair on its way to the folded pose, and on its way back down. The leg set
-  // is HEXAPOD throughout both — it flips only once the pair has arrived.
+  // The middle pair on its way to the folded pose, and on its way back down.
+  // leg_set_ is HEXAPOD throughout both — it flips only once the pair arrives.
   FOLDING_PAIR,
   UNFOLDING_PAIR,
   FAULT,
 };
 
-// Engine-internal knobs, from tuning.yaml's gait_node block. None are on the wire.
+// Engine-internal knobs, from tuning.yaml's gait_node block. The first five are
+// the ACTIVE PRESET's — rewritten on every preset change; the rest are global.
 struct EngineConfig {
   float stride_length = 0.0f;
   // Most a leg's coxa-to-foot reach may close over one half stride; the tick's
-  // stride is cut to what the worst-placed leg affords. Equal to stride_length
-  // disables it.
+  // stride is cut to what the worst-placed leg affords. == stride_length is off.
   float stride_length_radial = 0.0f;
   float min_swing_time = 0.0f;
   float max_swing_time = 0.0f;
@@ -59,20 +58,16 @@ struct EngineConfig {
   // Share of the nominal swing window handed back to stance at the touchdown
   // end, so every handover has a stretch with all six feet planted.
   float swing_phase_margin = 0.0f;
-  // The same, for the quadruped leg set. Its own knob because the two leg sets
-  // buy different things with it: on six feet the overlap is insurance and costs
-  // top speed, on four it is the window the support shift has to carry the body
-  // across into the next triangle. Selected on the APPLIED leg set — see
-  // swing_phase_margin_for.
+  // The same for the quadruped leg set, where the overlap is the window the
+  // support shift needs rather than mere insurance. Selected on the APPLIED leg
+  // set — see swing_phase_margin_for.
   float quadruped_swing_phase_margin = 0.0f;
-  // Quadruped mode only: how long a ladder holds all four feet planted before it
-  // lifts one, while the support shift carries the body into the triangle the
-  // other three make. The walk buys the same thing with the phase margin; a
-  // ladder has no phase circle to buy it from, so it waits instead.
+  // Quadruped only: how long a ladder holds all four feet planted before lifting
+  // one, so the support shift can carry the body. A ladder has no phase circle
+  // to buy that window from, so it waits instead.
   float quadruped_shift_time = 0.0f;
-  // posture's support_shift_lead. The reseat ladder writes the phases the
-  // support shift reads, and only the last `lead` of a phase moves a foot's
-  // weight, so a handover between rungs has to be written inside that window.
+  // posture's support_shift_lead: the reseat ladder writes the phases the support
+  // shift reads, and a handover between rungs must land inside that window.
   float support_shift_lead = 0.0f;
   float controller_dt = 0.0f;
   float cmd_zero_tol = 0.0f;
@@ -88,16 +83,15 @@ struct EngineConfig {
   float reseat_pair_swing_time = 0.0f;
   float reseat_pair_dwell_time = 0.0f;
   float reseat_swing_clearance = 0.0f;
-  // The middle pair between the folded pose and the ground, standing on the four
-  // corners — the half of a leg-set change the reseat does not cover.
+  float reseat_plane_ramp_time = 0.0f;
+  // The middle pair between the folded pose and the ground.
   float pair_fold_swing_time = 0.0f;
   // All six feet planted for this long before the pair moves, either way.
   float pair_fold_dwell_time = 0.0f;
 
   // Shared with the engagement controller so a swing looks the same however the
-  // leg got airborne. effective_stride is the stride this tick actually lays
-  // down, which the radial budget may have cut; the headroom tracks it so it
-  // stays the same share of the half-stride in every direction.
+  // leg got airborne. effective_stride is what this tick actually lays down —
+  // the radial budget may have cut it.
   SwingProfile swing_profile(float effective_stride) const {
     SwingProfile p;
     p.clearance = step_height;
@@ -112,9 +106,8 @@ struct EngineConfig {
 
   SwingProfile swing_profile() const { return swing_profile(stride_length); }
 
-  // Its own clearance (a re-plant lifts far less than a step) but the gait's
-  // touchdown probe, since the landing is the same. No ride_headroom: a reseat
-  // lands on still ground.
+  // Its own clearance (a re-plant lifts far less than a step), the gait's own
+  // touchdown probe. No ride_headroom: a reseat lands on still ground.
   SwingProfile reseat_profile() const {
     SwingProfile p;
     p.clearance = reseat_swing_clearance;
@@ -123,13 +116,10 @@ struct EngineConfig {
     return p;
   }
 
-  // The pair's move between the folded pose and the ground. Zero clearance, and
-  // not because nobody has tuned it: swing_arc measures clearance from the
-  // higher of the two ends, which here is always the folded one, whose femur
-  // sits ON its lower joint limit — so any climb over that end is unreachable.
-  // At zero the arc degenerates to a plain eased chord, which is what this move
-  // wants anyway. Zero clearance also zeroes the granted probe time, so the
-  // unfold's landing is a segment of its own rather than the profile's tail.
+  // Zero clearance deliberately: swing_arc measures clearance from the higher
+  // end, here always the folded one, whose femur sits ON its lower joint limit,
+  // so any climb over it is unreachable. The arc degenerates to an eased chord,
+  // and the zeroed probe time makes the unfold's landing a segment of its own.
   SwingProfile pair_fold_profile() const {
     SwingProfile p;
     p.clearance = 0.0f;
@@ -138,9 +128,8 @@ struct EngineConfig {
     return p;
   }
 
-  // How far above its target the unfold hands over to the braked descent.
-  // Derived, not configured: the same expression the gait's own probe band uses,
-  // so the pair lands at exactly the speed every other touchdown does.
+  // How far above its target the unfold hands over to the braked descent — the
+  // gait's own probe-band expression, so the pair lands at the same speed.
   float pair_fold_probe_band() const {
     return touchdown_velocity * touchdown_probe_fraction * pair_fold_swing_time;
   }
@@ -178,19 +167,12 @@ class SwingPlanner {
                std::pair<float, float> v_leg, float swing_time,
                int identity_y_sign_val);
   // Re-aim the touchdown end at the live AEP / stance velocity and refresh the
-  // swing duration — a stale one would scale every realized velocity by
-  // latched / live whenever cycle_time moved mid-swing. No-op outside a swing.
+  // swing duration. No-op outside a swing.
   //
-  // Rate-bounded from the probe on, where the target's own motion *is* slip: the
-  // arc has become the touchdown ground line, so the foot's ground velocity is
-  // exactly d(target)/dt while it may be touching. A command ramping through low
-  // speed slides the AEP faster than the robot walks. The budget is the foot's
-  // descent speed, so integrated over the probe it comes to the probe band's
-  // height — the drag can never exceed the height it may land within. What the
-  // target gives up is aim, not softness.
-  //
-  // v_target_ stays live and unbounded: it sets the arc's slope, and its own
-  // slip contribution carries a (1 - t) factor that vanishes at touchdown.
+  // Rate-bounded from the probe on, where the arc has become the touchdown ground
+  // line and the target's own motion *is* slip. The budget is the foot's descent
+  // speed, so the drag can never exceed the height it may land within. v_target_
+  // stays unbounded: its slip contribution vanishes at touchdown.
   void retarget(const std::string& name, const Vec3& target,
                 std::pair<float, float> v_leg, float swing_time,
                 float phase_in_swing, float dt, const SwingProfile& profile);
@@ -212,18 +194,39 @@ class SwingPlanner {
   std::map<std::string, bool> is_swing_;
 };
 
-// Everything the quadruped leg set needs, supplied together or not at all.
-// Absent leaves the mode unavailable and set_strategy refuses a quadruped gait.
-// The parked middle pair is not in here: it is held at the folded pose the
-// engine already carries, which is also where it powered up.
-struct QuadrupedSetup {
-  // Where the four corners stand while the middle pair is parked, at a zero
-  // height offset.
+// One preset as CONFIGURED: leg set, standing pose, and the stride/swing bundle
+// the walk lays down on it. tuning.yaml's `presets:` list and the baked kPresets
+// table both land here; solve_preset turns one into the PresetSetup the engine
+// consumes. The operator half — label, gait rotation, entry gait — is the
+// teleops' and never reaches here.
+struct PresetSpec {
+  std::string id;
+  LegSet leg_set = LegSet::HEXAPOD;
+  // Always three groups. A preset that parks the middle pair carries a
+  // placeholder there — solve_preset replaces those rows outright.
+  ::hexa::config::StandingPose standing{};
+  float stride_length = 0.0f;
+  float stride_length_radial = 0.0f;
+  float min_swing_time = 0.0f;
+  float max_swing_time = 0.0f;
+  float step_height = 0.0f;
+};
+
+struct PresetSetup {
+  std::string id;
+  LegSet leg_set = LegSet::HEXAPOD;
+  // Where the walking feet stand at a zero height offset.
   std::map<std::string, Vec3> nominal_stance;
-  // Solved from the QUADRUPED standing pose, not the hexapod one: the two
-  // stances reach out different distances, so sharing a snapshot would re-solve
-  // a raised body onto the wrong footprint.
+  // Solved from THIS preset's standing pose: two presets lean their tibias
+  // differently, so a shared snapshot would re-solve onto the wrong footprint.
   ReseatGeometryByLeg reseat_geometry{};
+  // The active preset's copy of these five lands in EngineConfig on every
+  // apply_preset.
+  float stride_length = 0.0f;
+  float stride_length_radial = 0.0f;
+  float min_swing_time = 0.0f;
+  float max_swing_time = 0.0f;
+  float step_height = 0.0f;
 };
 
 class Engine {
@@ -238,28 +241,41 @@ class Engine {
          std::optional<std::map<std::string, kin::LegSpec>> leg_specs =
              std::nullopt,
          std::optional<ReseatGeometryByLeg> reseat_geometry = std::nullopt,
-         std::optional<QuadrupedSetup> quadruped = std::nullopt);
+         // The preset table, in declaration order. Empty synthesizes a single
+         // unnamed hexapod preset from the arguments above.
+         std::vector<PresetSetup> presets = {},
+         std::size_t default_preset = 0);
 
   EngineState state() const { return state_; }
   float master_phase() const;
-  // The leg set the robot is standing on. Equal to strategy_->leg_set() off the
-  // belly; while FOLDED the strategy may already name the set the next
-  // start_initialize() will stand up on.
+  // The leg set the robot is standing on. While FOLDED the strategy may already
+  // name the set the next start_initialize() will stand up on.
   LegSet leg_set() const { return leg_set_; }
+  // The preset the robot is standing on — what /gait/preset carries. Equal to
+  // the requested one except while a preset change is still running.
+  const std::string& preset_id() const { return presets_[preset_].id; }
   const std::string& strategy_name() const { return strategy_name_; }
   std::optional<std::string> pending_strategy_name() const {
     return pending_strategy_name_;
   }
   float applied_height() const { return applied_height_; }
 
-  // Accepted from FOLDED / FAULT, where it also fixes the leg set the next
-  // stand comes up on, and from a stand or a walk as long as the leg set does
-  // not change. A strategy that DOES change it is accepted from STAND alone,
-  // where it arms a leg-set change; from anywhere else it is refused, which is
-  // what makes "refused while walking" total.
+  // Accepted from FOLDED / FAULT, and from a stand or a walk as long as the gait
+  // walks the leg set in force — or the one an armed preset change is heading
+  // for, since preset and gait arrive in the same tick. Otherwise refused: only
+  // /cmd_preset moves the robot between leg sets.
   bool set_strategy(const std::string& name);
-  // Stands up on the leg set the applied strategy asks for: hexapod on all six,
-  // quadruped on the four corners with the middle pair left folded where it is.
+  // Select a preset by id. Accepted from FOLDED / FAULT, where it fixes what the
+  // next stand comes up on, and from a stand, where it arms a preset change.
+  // Refused everywhere else, so "refused while walking" is total. Naming the
+  // preset already in force is accepted and does nothing.
+  bool request_preset(const std::string& id);
+  // The same, naming a LEG SET rather than a preset — what the init buttons ask
+  // for. HEXAPOD resolves to the last six-leg preset applied, QUADRUPED to the
+  // first declared four-corner one. False if no preset stands on that set, or if
+  // request_preset would refuse.
+  bool request_leg_set(LegSet set);
+  // Stands up on the applied preset; a quadruped one leaves the pair folded.
   bool start_initialize();
   bool start_fold();
   bool request_fold();
@@ -274,23 +290,20 @@ class Engine {
 
   // Shape a command that reverses the robot's travel (gait/reversal.hpp). Call
   // once per tick with the raw command *before* the velocity shaping whose output
-  // goes to update(); the return is what to shape. Skipping it entirely gives the
-  // old behaviour, not a broken one.
+  // goes to update(); the return is what to shape. Optional.
   std::tuple<float, float, float> shape_reversal(
       float dt, std::pair<float, float> v_body_xy, float omega_z);
 
 
  private:
   void apply_strategy(const std::string& name);
-  // Swap the walking leg set alone, leaving every nominal where it is. Whoever
-  // calls this owes the feet a stance that matches — either commit_new_nominal
-  // in the same breath (apply_leg_set, below) or a ladder that walks them there.
-  void set_leg_set(LegSet set);
-  // set_leg_set plus the nominal stance that goes with it, committed on the
-  // spot. A teleport of nominal_, so it is only safe where no foot is standing
-  // on the old one: the two ends of the stand ladder, and the fault revert. A
-  // leg-set change from a stand uses set_leg_set and lets its reseat commit.
-  void apply_leg_set(LegSet set);
+  // Swap the applied preset alone, leaving every nominal where it is. The caller
+  // owes the feet a matching stance — commit_new_nominal, or a ladder.
+  void set_leg_set(std::size_t preset);
+  // set_leg_set plus the stance that goes with it. A teleport of nominal_, so
+  // only safe where no foot stands on the old one: the two ends of the stand
+  // ladder, and the fault revert. A change from a stand reseats instead.
+  void apply_preset(std::size_t preset);
   std::unique_ptr<InitializeController> build_initialize();
   std::unique_ptr<FoldController> build_fold();
   std::unique_ptr<EngagementController> build_engagement();
@@ -298,14 +311,22 @@ class Engine {
       const std::map<std::string, Vec3>& target_stance);
   void commit_new_nominal(const std::map<std::string, Vec3>& new_nominal,
                           float applied_height);
-  bool quadruped_available() const { return quadruped_.has_value(); }
-  // The frozen standing-pose snapshot the reseat solve reads. Per leg set: the
-  // two stances lean their tibias differently, so one snapshot would drag a
-  // height change onto the other footprint's radius.
-  const ReseatGeometryByLeg& geometry_for(LegSet set) const {
-    return (set == LegSet::QUADRUPED && quadruped_.has_value())
-               ? quadruped_->reseat_geometry
-               : *reseat_geometry_;
+  // The first preset standing on `set`, if any. Absent for QUADRUPED leaves the
+  // four-corner mode unavailable.
+  std::optional<std::size_t> preset_for_leg_set(LegSet set) const;
+  // Copy the active preset's five knobs into config_, which is where every
+  // consumer reads them.
+  void apply_preset_knobs();
+  // A legal gait for `set`, for the one case a caller can leave the preset and
+  // the strategy naming different leg sets.
+  std::string default_strategy_for(LegSet set) const;
+  bool quadruped_available() const {
+    return preset_for_leg_set(LegSet::QUADRUPED).has_value();
+  }
+  // The frozen standing-pose snapshot the reseat solve reads — per preset, since
+  // one snapshot would drag a height change onto another footprint's radius.
+  const ReseatGeometryByLeg& geometry_for(std::size_t preset) const {
+    return presets_[preset].reseat_geometry;
   }
   bool is_parked(const std::string& name) const {
     return leg_is_parked(leg_set_, name);
@@ -316,24 +337,20 @@ class Engine {
     return swing_phase_margin_for(leg_set_, config_.swing_phase_margin,
                                   config_.quadruped_swing_phase_margin);
   }
-  // What a ladder waits before lifting, off the APPLIED leg set for the same
-  // reason the margin is: on six feet a mirrored pair leaves the body inside
-  // what is left, and there is nothing to wait for.
+  // What a ladder waits before lifting. Zero on six feet, where a mirrored pair
+  // leaves the body inside what is left and there is nothing to wait for.
   float ladder_shift_time() const {
     return leg_set_ == LegSet::QUADRUPED ? config_.quadruped_shift_time : 0.0f;
   }
   // legs_ with the parked pair dropped: what every per-leg velocity, stride and
-  // reversal computation is priced against. Rebuilt whenever leg_set_ or the
-  // nominal stance changes.
+  // reversal computation is priced against.
   void refresh_active_legs();
-  // The base stance for a leg set, re-solved to the current applied height. The
-  // bases are stored at zero height offset, so a leg-set swap that happens while
-  // a height offset is still applied lands on the right footprint.
-  std::map<std::string, Vec3> stance_for(LegSet set) const;
-  // Overwrite the parked pair's entries with their held position. Applied to
-  // every walking sub-controller's output, so none of them has to know about
-  // parking. The two stand ladders pin the pair themselves — they are the ones
-  // that know it is folded rather than merely held.
+  // A preset's stance re-solved to the applied height; the bases are stored at a
+  // zero height offset.
+  std::map<std::string, Vec3> stance_for(std::size_t preset) const;
+  // Overwrite the parked pair's entries with their held position, so no walking
+  // sub-controller has to know about parking. The two stand ladders pin the pair
+  // themselves.
   void overlay_parked(std::map<std::string, LegOutput>& out) const;
 
   bool cmd_is_zero(std::pair<float, float> v_body_xy, float omega_z) const;
@@ -351,34 +368,46 @@ class Engine {
   bool all_planted() const;
   // Every walking foot standing where its phase says. See on_schedule_.
   bool feet_on_schedule() const;
-  // Whether letting the gait finish the settle beats the reseat ladder's three
-  // mirrored pairs. Tripod wins; the longer duty factors, walking their legs home
-  // in many small groups, do not.
+  // Whether letting the gait finish the settle beats the reseat ladder. Tripod
+  // wins; the longer duty factors do not.
   bool settle_beats_reseat() const;
   void reset_swing_state();
   // Stand if the feet are home, hand over to the reseat ladder if the gait would
   // be slower at it, else keep settling.
   void finish_or_hand_off_settle();
   void finish_settling();
-  // The only correct way to reach a stand from a stance the gait did not
-  // re-plant itself: the ladder arcs each foot home from where it is, where
-  // assigning nominal_ would teleport it.
+  // The only way to reach a stand from a stance the gait did not re-plant
+  // itself: the ladder arcs each foot home, where assigning nominal_ would
+  // teleport it.
   void hand_off_to_reseat();
   // The one way into RESEATING: sets the ladder, the target it commits on
   // arrival, and the state, so the five callers cannot drift apart.
   void begin_reseat(const std::map<std::string, Vec3>& target_stance,
                     float target_height);
   std::map<std::string, LegOutput> tick_reseat(float dt);
-  // The middle pair's own move. Refuses unless leg_set_ is HEXAPOD, which is
-  // what makes "the reseat already ran on six feet" structural rather than a
-  // property of how the states happen to be wired.
+  // A preset change is two moves: the footprint first, at the plane the feet
+  // already stand on, then the plane as one body translation with all six down.
+  // A ladder handed a new plane would step the height down a pair at a time, or
+  // read the stance as six airborne feet and land it in one move. Both halves
+  // live inside RESEATING, so nothing reading /gait/state has to learn them.
+  void begin_preset_reseat(std::size_t preset);
+  // `preset`'s footprint at the plane the feet stand on now — the ladder's
+  // target, and where the plane ramp starts from.
+  std::map<std::string, Vec3> lateral_stance_for(std::size_t preset) const;
+  std::map<std::string, LegOutput> tick_plane_ramp(float dt);
+  // The RESEATING -> STAND handoff, shared by the ladder arriving with no plane
+  // owed and by the plane ramp arriving after it.
+  std::map<std::string, LegOutput> finish_reseat(
+      std::map<std::string, LegOutput> out);
+  // The middle pair's own move. Refuses unless leg_set_ is HEXAPOD, which makes
+  // "the reseat already ran on six feet" structural.
   std::unique_ptr<PairFoldController> build_pair_fold(
       PairFoldDirection direction);
   std::map<std::string, LegOutput> tick_pair_fold(float dt);
   // The single commit point for a leg-set change: the set and the strategy that
   // walks it move together, or the engagement is rebuilt on the wrong swing
   // margin for as long as the pair is in the air.
-  void commit_leg_set_change();
+  void commit_preset_change();
   std::map<std::string, LegOutput> tick_fold(float dt);
   std::map<std::string, LegOutput> tick_engagement(
       float dt, std::pair<float, float> v_body_xy, float omega_z);
@@ -397,18 +426,17 @@ class Engine {
   std::optional<std::map<std::string, kin::LegSpec>> leg_specs_;
   std::optional<ReseatGeometryByLeg> reseat_geometry_;
 
-  // QUADRUPED iff the middle pair is at the folded pose. That biconditional is
-  // what a leg-set change is built around: the whole change — both reseats and
-  // the pair's own move — runs HEXAPOD, and the flip happens on the one tick
-  // where the pair is actually at the pose the flag claims for it.
+  // QUADRUPED iff the middle pair is at the folded pose. The whole leg-set
+  // change runs HEXAPOD; the flip happens on the one tick where the pair is
+  // actually at the pose the flag claims for it.
   LegSet leg_set_ = LegSet::HEXAPOD;
-  // The hexapod stance at a zero height offset; nominal_ tracks whichever leg
-  // set is applied, at the applied height. The quadruped half lives in
-  // quadruped_.
-  std::map<std::string, Vec3> hexa_nominal_base_;
-  std::optional<QuadrupedSetup> quadruped_;
-  // The last hexapod strategy applied. FAULT recovery reverts to it, so the
-  // pristine folded baseline is never left paired with a four-leg strategy.
+  // Every preset, in declaration order. Each holds its stance at a zero height
+  // offset; nominal_ tracks whichever one is applied, at the applied height.
+  std::vector<PresetSetup> presets_;
+  std::size_t preset_ = 0;
+  // The last hexapod preset and strategy applied. FAULT recovery reverts to
+  // both, so the folded baseline is never paired with a four-leg stance.
+  std::size_t fallback_preset_ = 0;
   std::string fallback_strategy_name_;
 
   std::optional<GaitClock> clock_;
@@ -425,19 +453,17 @@ class Engine {
   std::map<std::string, bool> last_stance_;
   float cmd_zero_elapsed_ = 0.0f;
   // Gain on the commanded velocity, eased 1 -> 0 across the debounce once the
-  // command is inside cmd_zero_tol (or a gait change is waiting), and back again
-  // if it returns. Zeroing in one tick snapped every airborne foot: stride_vector
-  // multiplies even 3 mm/s by a whole stance, and half that stride is live AEP.
-  // The settle is entered only once this reaches zero.
+  // command is inside cmd_zero_tol (or a gait change is waiting), and back if it
+  // returns. Zeroing it in one tick snapped every airborne foot. The settle is
+  // entered only once this reaches zero.
   float cmd_gain_ = 1.0f;
   // Per-leg: lift-off came due while the settle was holding them, so the leg sits
   // this swing window out.
   std::map<std::string, bool> held_down_;
-  // Per-leg: is the foot where its phase says it is? Written false only at the
+  // Per-leg: is the foot where its phase says it is? Written false at the
   // ENGAGING -> GAIT handoff, from what the engagement reports of its own
   // velocity envelope, and back to true at the leg's next touchdown under the
-  // walk, where the planner lands it on the live AEP and the integrator anchors
-  // there. The reversal ladder's reflection is the only reader.
+  // walk. The reversal ladder's reflection is the only reader.
   std::map<std::string, bool> on_schedule_;
 
   ReversalGate reversal_;
@@ -451,21 +477,33 @@ class Engine {
   float height_stable_elapsed_ = 0.0f;
   bool pending_fold_ = false;
   std::optional<std::string> pending_strategy_name_;
-  // The leg set a change is moving TO, live for the whole transition. A pair
-  // fold is owed exactly when it differs from leg_set_, which is true only in
-  // the reseat that runs ahead of the fold — that one bit is what tells the two
-  // leg-set reseats apart without a second flag.
-  std::optional<LegSet> pending_leg_set_;
+  // The preset a change is moving TO, live for the whole transition. A pair fold
+  // is owed exactly when its leg set differs from leg_set_ — that one bit tells
+  // the two leg-set reseats apart without a second flag.
+  std::optional<std::size_t> pending_preset_;
 
   std::map<std::string, Vec3> reseat_target_stance_;
   float reseat_target_height_ = 0.0f;
+  // The stance the plane ramp eases onto, set only while a preset change still
+  // owes the body its height. plane_ramping_ says the ramp is the thing
+  // RESEATING is currently running.
+  std::optional<std::map<std::string, Vec3>> plane_target_;
+  std::map<std::string, Vec3> plane_origin_;
+  float plane_elapsed_ = 0.0f;
+  bool plane_ramping_ = false;
 };
 
 // Config builders reading the baked config_generated.hpp; no filesystem access.
 
 EngineConfig engine_config_from_config();
 std::array<JointAngles, kNumLegs> standing_pose_from_config();
-std::array<JointAngles, kNumLegs> quad_standing_pose_from_config();
+// The baked kPresets table, as configured and as solved.
+std::vector<PresetSpec> preset_specs_from_config();
+std::vector<PresetSetup> preset_setups_from_config();
+// One baked preset's solved standing pose, by id — the joint triples rather
+// than the feet. Throws std::invalid_argument on an unknown id.
+std::array<JointAngles, kNumLegs> preset_standing_pose_from_config(
+    const std::string& id);
 std::map<std::string, Vec3> nominal_stance_from_config();
 std::map<std::string, Vec3> folded_stance_from_config();
 std::map<std::string, Vec3> initialized_stance_from_config();
@@ -481,25 +519,38 @@ std::unique_ptr<Engine> make_default_engine(
 // values (hexa_locomotion's YAML). The no-arg versions above delegate to these
 // with the baked constants.
 
-// Per-leg resting joint angles: one belly clearance for the body, plus a per-
-// group tip reach and splay. The coxa carries the splay, negated for rear legs
-// and again for right ones, so a positive value splays outward everywhere.
-// Throws hexa::UnreachableTarget on an impossible reach / height pair, and
-// std::invalid_argument if an angle falls outside config::kJointLimits.
+// Per-leg standing joint angles from one body height plus a per-group tip reach
+// and splay. Throws hexa::UnreachableTarget on an impossible reach / height
+// pair, and std::invalid_argument outside config::kJointLimits; `pose_key` names
+// the config block in that message.
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
-    float foot_radius, const ::hexa::config::StandingPose& standing);
+    float foot_radius, const ::hexa::config::StandingPose& standing,
+    const std::string& pose_key = "presets");
 
-// The same for quadruped mode, which stands on the four corners alone. The
-// middle rows are copied from `standing_pose` as a placeholder: that pair never
-// stands in this mode — it is parked at the folded pose — but the six-leg
-// helpers this feeds (nominal_stance_from / reseat_geometry_from) want a full
-// array, and a row that is reachable at every body height keeps their per-leg
-// solves from throwing on a leg nobody is standing on.
-std::array<JointAngles, kNumLegs> quad_standing_pose_from(
+// The same for a preset that parks the middle pair. Those rows are copied from
+// `middle_fallback`: the pair never stands here, but the six-leg helpers this
+// feeds want a full array of rows that solve at every body height.
+std::array<JointAngles, kNumLegs> parked_pair_standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
-    float foot_radius, const ::hexa::config::CornerStandingPose& quad_standing,
-    const std::array<JointAngles, kNumLegs>& standing_pose);
+    float foot_radius, const ::hexa::config::StandingPose& standing,
+    const std::array<JointAngles, kNumLegs>& middle_fallback,
+    const std::string& pose_key = "presets");
+
+// Solve one configured preset into the form the engine consumes: its stance as
+// feet, and the frozen geometry snapshot its own reseats read.
+PresetSetup solve_preset(
+    const PresetSpec& spec,
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    float foot_radius,
+    const std::array<JointAngles, kNumLegs>& middle_fallback);
+
+// Solve a whole table. The middle-row fallback is the DEFAULT preset's solved
+// pose, which is the one preset guaranteed to stand on all six.
+std::vector<PresetSetup> solve_presets(
+    const std::vector<PresetSpec>& specs_in,
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    float foot_radius, std::size_t default_preset);
 
 std::map<std::string, Vec3> nominal_stance_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
@@ -517,6 +568,11 @@ ReseatGeometryByLeg reseat_geometry_from(
 std::map<std::string, LegContext> build_leg_contexts_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& standing_pose);
+// The same from an already-solved stance, for a caller holding a PresetSetup
+// rather than the joint triples it came from.
+std::map<std::string, LegContext> leg_contexts_from_stance(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const std::map<std::string, Vec3>& nominal_stance);
 
 std::unique_ptr<Engine> make_default_engine(
     const std::string& strategy_name,
@@ -526,12 +582,13 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<JointAngles, kNumLegs>& folded_pose,
     const std::array<JointAngles, kNumLegs>& initialized_pose,
     float coxa_to_bottom, float foot_radius,
-    // Quadruped mode's stance, solved by the caller from quad_standing_pose.
-    // Its parked middle pair needs nothing here — that is folded_pose.
-    const std::array<JointAngles, kNumLegs>& quad_standing_pose);
+    // The preset table, already solved to feet (solve_presets). `standing_pose`
+    // above must be the default preset's, since it is what the leg contexts and
+    // the six-leg reseat geometry come from.
+    std::vector<PresetSetup> presets, std::size_t default_preset);
 
-// Wire string for /gait/leg_set. The same two words hexa_common's gait catalog
-// uses, so the topic and the catalog need no mapping table between them.
+// Wire string for /gait/leg_set — the same two words hexa_common's gait catalog
+// uses, so no mapping table is needed between them.
 std::string leg_set_value(LegSet set);
 
 // Wire string for /gait/state.

@@ -488,9 +488,15 @@ int grounded_corners(const std::array<hexa::Vec3, hexa::kNumLegs>& feet) {
   return n;
 }
 
+// The preset a gait can legally be walked on. The preset owns the leg set now,
+// so a four-corner gait is only accepted against the four-corner preset.
+std::string_view preset_of(std::string_view gait) {
+  return (gait == "quad_walk" || gait == "quad_canter") ? "quad" : "normal";
+}
+
 // Stand up on four legs from the belly and run the ladder out. Both commands
-// ride one tick, the way the ROS node publishes them: the gait is what carries
-// the leg set, and the init that follows it is what climbs the ladder for it.
+// ride one tick, the way the ROS node publishes them: `select` carries the leg
+// set, the gait names what walks it, and the init climbs the ladder for both.
 // Fails the calling test if the engine never reaches a parked stand.
 void enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us,
                      std::string_view gait = "quad_walk") {
@@ -877,6 +883,10 @@ std::vector<pl::TickResult> run_change(pl::Pipeline& p, std::uint64_t& now_us,
                                        int max_ticks = 6000) {
   std::vector<pl::TickResult> steps;
   pl::CommandIntent first = hold;
+  // The preset is what carries the robot between the stands; the gait that
+  // walks it rides the same tick, the way the teleops publish the pair.
+  first.has_preset_select = true;
+  first.preset_select = preset_of(gait);
   first.has_gait_select = true;
   first.gait_select = gait;
   steps.push_back(tick_cmd(p, first, now_us));
@@ -1008,10 +1018,12 @@ TEST(LegSetChange, WaitsForThePoseToRevert) {
   posed.pose_y = 0.03f;
 
   pl::CommandIntent ask = posed;
+  ask.has_preset_select = true;
+  ask.preset_select = "quad";
   ask.has_gait_select = true;
   ask.gait_select = "quad_walk";
   const pl::TickResult first = tick_cmd(p, ask, now_us);
-  EXPECT_TRUE(first.gait_accepted);
+  EXPECT_TRUE(first.preset_accepted);
 
   for (int i = 0; i < 400; ++i) {
     tick_cmd(p, posed, now_us);
@@ -1038,6 +1050,8 @@ TEST(LegSetChange, GivesUpIfThePoseNeverComesBack) {
   pl::CommandIntent posed;
   posed.pose_y = 0.03f;
   pl::CommandIntent ask = posed;
+  ask.has_preset_select = true;
+  ask.preset_select = "quad";
   ask.has_gait_select = true;
   ask.gait_select = "quad_walk";
   tick_cmd(p, ask, now_us);
@@ -1071,6 +1085,8 @@ TEST(LegSetChange, ABodyPosePushedMidChangeDoesNotReachTheMiddles) {
     std::vector<std::array<float, 6>> middles;
 
     pl::CommandIntent ask;
+    ask.has_preset_select = true;
+    ask.preset_select = "quad";
     ask.has_gait_select = true;
     ask.gait_select = "quad_walk";
     tick_cmd(p, ask, now_us);

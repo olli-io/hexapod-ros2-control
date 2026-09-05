@@ -72,6 +72,10 @@ let refusedTimer = null;
 let packVoltage = null;
 let packCurrent = null;
 let packTimer = null;
+// The active mode's button functions, as sent with "init" and every "mode".
+// Kept so the Mode view's STAND can find the grid slot bound to `init` instead
+// of hardcoding an index the config owns.
+let buttonLabels = [];
 // Set once in init(); module-scoped because the Mode view re-centres them on
 // the way in — the sticks leave the screen, and a knob held at that moment
 // would otherwise never see its own touchend.
@@ -85,6 +89,10 @@ let joysticks = [];
 // the tab suspends (the timer suspends too), so the watchdog still guards
 // a dropped link.
 const KEEPALIVE_MS = 50;
+
+// How long the Mode view's STAND holds the init button down (ms). Several node
+// ticks, and well under the input watchdog.
+const STAND_PRESS_MS = 150;
 
 // ── DOM helpers ────────────────────────────────────────────────────
 
@@ -192,6 +200,7 @@ function handleMessage(msg) {
     case "gait_state":
       currentGaitState = msg.state;
       updateStatusDisplay();
+      updatePresetDisplay();
       break;
     case "preset":
       activePreset = msg.active || null;
@@ -223,12 +232,16 @@ function updateModeDisplay() {
 }
 
 function updateButtonLabels(labels) {
+  buttonLabels = labels || [];
   for (let i = 0; i < 9; i++) {
     const btn = document.querySelector('button[data-index="' + i + '"]');
-    if (btn && i < labels.length) {
-      btn.textContent = labelFor(labels[i]);
+    if (btn && i < buttonLabels.length) {
+      btn.textContent = labelFor(buttonLabels[i]);
     }
   }
+  // The Mode view's STAND presses one of these, and which slot carries `init`
+  // is per-mode config.
+  updatePresetDisplay();
 }
 
 function updateOwnerDisplay() {
@@ -245,6 +258,7 @@ function updateOwnerDisplay() {
 
 function updateStatusDisplay() {
   const folded = currentGaitState === "folded";
+  $("status-preset").textContent = presetLabel(activePreset) || "—";
   $("status-gait").textContent = (!folded && currentGait) || "—";
   $("status-animation").textContent = animationLabel(currentAnimation) || "—";
   $("status-battery").textContent = packText();
@@ -329,19 +343,59 @@ function renderPresetList() {
 }
 
 function updatePresetDisplay() {
-  const rows = document.querySelectorAll(".preset-item");
+  const folded = currentGaitState === "folded";
+  const rows = document.querySelectorAll("#preset-list .preset-item");
   rows.forEach(function (row) {
     const id = row.dataset.preset;
     row.classList.toggle("active", id === activePreset);
     row.classList.toggle("pending", id === pendingPreset);
     // Everything is inert while a switch is in flight: the robot is moving its
-    // legs, and a second request would be refused anyway.
-    row.disabled = pendingPreset !== null;
+    // legs, and a second request would be refused anyway. Inert on the belly
+    // too — a stand carries its own LEG SET, which the engine resolves to a
+    // preset, so a four-corner mode picked here would be overwritten the moment
+    // the robot got up.
+    row.disabled = folded || pendingPreset !== null;
   });
+  updateStandButton(folded);
   // The navbar icon doubles as the readout, so the current mode is legible
   // without opening anything.
   $("preset-btn").classList.toggle("quad", activeLegSet === "quadruped");
   $("preset-btn").classList.toggle("active", pendingPreset !== null);
+  // The strip carries the name the icon cannot: the icon is the leg set, and
+  // three of the four presets share one.
+  updateStatusDisplay();
+}
+
+// A preset id -> the label the descriptors gave it. A dash until /gait/preset
+// has spoken, which is honest — the view lights no row then either.
+function presetLabel(id) {
+  if (!id) return "";
+  for (let i = 0; i < presets.length; i++) {
+    if (presets[i].id === id) return presets[i].label;
+  }
+  return id;
+}
+
+// The belly's one action, in place of the inert rows. It presses the grid's
+// `init` button rather than talking to the node directly: standing up IS that
+// button, two-press revert and all, and duplicating it here would be a second
+// path into the same state machine.
+//
+// Not gated on ownership, like the mode rows either side of it: the node
+// publishes an init whoever owns /cmd_vel, because a stand is one discrete
+// command and not a stream to fight over. It is also the only stand reachable
+// while a controller drives — the grid it presses is a take-control prompt then.
+function updateStandButton(folded) {
+  const btn = $("preset-stand");
+  btn.classList.toggle("hidden", !folded);
+  if (!folded) return;
+  btn.disabled = standIndex() < 0;
+  $("preset-stand-sub").textContent = "stand up to choose a mode";
+}
+
+// The grid slot bound to `init` in the mode now showing. -1 if none is.
+function standIndex() {
+  return buttonLabels.indexOf("init");
 }
 
 function showPresetRefusal(reason) {
@@ -475,6 +529,19 @@ function setupButtons() {
       if (btn.classList.contains("pressed")) release(e);
     });
   }
+
+  // The Mode view's STAND (folded only). Held for a beat rather than released
+  // in the same breath: the node samples the button state on its 60 Hz tick, so
+  // a press and release inside one tick window is no press at all.
+  $("preset-stand").addEventListener("click", function () {
+    const idx = standIndex();
+    if (idx < 0) return;
+    buzz(15);
+    send({ type: "button", index: idx, pressed: true });
+    setTimeout(function () {
+      send({ type: "button", index: idx, pressed: false });
+    }, STAND_PRESS_MS);
+  });
 
   // Inline take-control prompt (shown in place of the button grid).
   $("take-control-btn").addEventListener("click", function () {

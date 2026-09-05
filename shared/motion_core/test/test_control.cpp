@@ -37,7 +37,8 @@ std::map<std::string, hexa::Vec3> test_stance() {
 }
 
 hexa::gait::VelocityCaps test_caps() {
-  return hexa::gait::load_velocity_caps_from_config(kStanceRadius);
+  return hexa::gait::load_velocity_caps_from_config(
+      ::hexa::config::kDefaultPreset, kStanceRadius);
 }
 
 ctl::Control make_control() {
@@ -46,8 +47,8 @@ ctl::Control make_control() {
   // empty map leaves the radial budget inert and the envelope cut isotropic,
   // which is what these tests are about.
   return ctl::Control(::hexa::config::kControl, test_caps(), test_stance(), {},
-                      ::hexa::config::kEngine.stride_length,
-                      ::hexa::config::kEngine.stride_length_radial,
+                      hexa::config::kPresets[hexa::config::kDefaultPreset].stride_length,
+                      hexa::config::kPresets[hexa::config::kDefaultPreset].stride_length_radial,
                       std::string(::hexa::config::kDefaultGait));
 }
 

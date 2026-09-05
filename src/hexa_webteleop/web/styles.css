@@ -200,6 +200,17 @@ button.nav-icon:active {
 
 .preset-item:disabled { opacity: 0.5; pointer-events: none; }
 
+/* The folded view's one action, so it reads as the thing to press rather than
+   a third row: centred and drawn in the accent the rows only take when active. */
+#preset-stand {
+  align-items: center;
+  border-color: var(--accent);
+  color: var(--accent);
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
 /* Empty until the node refuses something, so it reserves no space. */
 #preset-note {
   width: 100%;

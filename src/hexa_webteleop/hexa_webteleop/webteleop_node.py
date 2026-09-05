@@ -66,7 +66,12 @@ from hexa_teleop.teleop_arbitration import (
     web_release,
 )
 
-from hexa_teleop.presets import leg_set_switch_allowed, resync
+from hexa_teleop.presets import (
+    preset_switch_allowed,
+    resync_gait,
+    resync_preset,
+    resync_preset_request,
+)
 
 from . import captive_portal
 from .web_mapping import (
@@ -219,6 +224,12 @@ class WebTeleopNode(Node):
         self._pub_init = self.create_publisher(Empty, "/gait/initialize", 10)
         latched_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._pub_cmd_gait = self.create_publisher(String, "/cmd_gait", latched_qos)
+        # The operator preset. The Mode view is the only thing that writes it —
+        # nothing on either pad asks for a preset change, only the init buttons'
+        # leg set — and both teleops read it back for the posture revert.
+        self._pub_cmd_preset = self.create_publisher(
+            String, "/cmd_preset", latched_qos
+        )
         self._pub_animation_mode = self.create_publisher(
             String, "/animation/mode", latched_qos
         )
@@ -237,11 +248,21 @@ class WebTeleopNode(Node):
         self._sub_cmd_gait = self.create_subscription(
             String, "/cmd_gait", self._on_cmd_gait, latched_qos
         )
-        # The leg set the engine has APPLIED. The Mode view's only source of
-        # truth: /cmd_gait is latched, so a request the engine refused would sit
-        # on it forever and the view would show a preset the robot never took.
+        self._sub_cmd_preset = self.create_subscription(
+            String, "/cmd_preset", self._on_cmd_preset, latched_qos
+        )
+        # The leg set the engine has APPLIED — the navbar icon's source, and
+        # only that: three of the four presets stand on six legs, so it cannot
+        # say which preset is in force.
         self._sub_leg_set = self.create_subscription(
             String, "/gait/leg_set", self._on_leg_set, latched_qos
+        )
+        # The PRESET the engine has applied. The Mode view's only source of
+        # truth: /cmd_preset is latched, so a request the engine refused would
+        # sit on it forever and the view would show a preset the robot never
+        # took.
+        self._sub_gait_preset = self.create_subscription(
+            String, "/gait/preset", self._on_gait_preset, latched_qos
         )
         self._sub_animation_mode = self.create_subscription(
             String, "/animation/mode", self._on_animation_mode, latched_qos
@@ -297,7 +318,7 @@ class WebTeleopNode(Node):
         name = msg.data
         if name == self._active_gait:
             return
-        result = resync(name, self._cfg, self._state, self._caps, self._presets)
+        result = resync_gait(name, self._cfg, self._state, self._presets)
         if result is None:
             self.get_logger().warning(
                 f"/cmd_gait={name!r} unknown to velocity caps — keeping "
@@ -310,6 +331,62 @@ class WebTeleopNode(Node):
             f"stick linear_max={result.cfg.gait_linear_max:.3f} m/s, "
             f"angular_max={result.cfg.gait_angular_z_max:.3f} rad/s for gait "
             f"{name!r}"
+        )
+        self._broadcast_to_clients({"type": "gait", "gait": name})
+
+    def _on_leg_set(self, msg: String) -> None:
+        """The engine's applied leg set.
+
+        The navbar icon's source — it dims the middle pair on four legs — and
+        nothing else. Which PRESET is in force is /gait/preset's answer, below:
+        three of the four presets stand on six legs, so the leg set cannot tell
+        them apart.
+        """
+        if msg.data == self._latest_leg_set:
+            return
+        self._latest_leg_set = msg.data
+        self.get_logger().info(f"leg set is now {msg.data!r}")
+        self._broadcast_preset()
+
+    def _on_cmd_preset(self, msg: String) -> None:
+        """A preset REQUEST — ours, heard back, or the gamepad's.
+
+        Eases the operator's recorded posture out. The engine will not start the
+        change until the body pose is back at neutral, and this decay is the
+        only thing that puts it there — so it has to follow the request, not the
+        report.
+        """
+        if resync_preset_request(msg.data, self._state, self._presets) is None:
+            return
+        self.get_logger().info(
+            f"preset change to {msg.data!r} requested — reverting the recorded "
+            f"posture (the engine holds the change until the body is neutral)"
+        )
+
+    def _on_gait_preset(self, msg: String) -> None:
+        """The engine's applied preset — what the Mode view actually shows.
+
+        A change here is the only thing that says a preset switch happened, so
+        it is also what clears the pending state the view is holding. And it is
+        where the caps swap: every one is derived from the preset's stride,
+        swing time and stance.
+        """
+        result = resync_preset(
+            msg.data, self._active_gait, self._cfg, self._state, self._presets
+        )
+        if result is None:
+            self.get_logger().warning(
+                f"/gait/preset={msg.data!r} is not declared in this config — "
+                f"keeping preset {self._presets.current_id()!r}"
+            )
+            return
+        self._cfg = result.cfg
+        self._pending_preset = None
+        self._pending_deadline = None
+        self.get_logger().info(
+            f"preset is now {msg.data!r}: stick linear_max="
+            f"{result.cfg.gait_linear_max:.3f} m/s, angular_max="
+            f"{result.cfg.gait_angular_z_max:.3f} rad/s"
         )
         if result.left_animation_mode:
             # Animations are six-leg only, and map_joy only blocks *entering*
@@ -324,20 +401,6 @@ class WebTeleopNode(Node):
                     button_labels_for_mode(self._cfg, self._state.mode)
                 ),
             })
-        self._broadcast_to_clients({"type": "gait", "gait": name})
-
-    def _on_leg_set(self, msg: String) -> None:
-        """The engine's applied leg set — what the Mode view actually shows.
-
-        A change here is the only thing that says a preset switch happened, so
-        it is also what clears the pending state the view is holding.
-        """
-        if msg.data == self._latest_leg_set:
-            return
-        self._latest_leg_set = msg.data
-        self._pending_preset = None
-        self._pending_deadline = None
-        self.get_logger().info(f"leg set is now {msg.data!r}")
         self._broadcast_preset()
 
     def _broadcast_preset(self, refused: str | None = None) -> None:
@@ -398,8 +461,28 @@ class WebTeleopNode(Node):
                 "button_labels": list(button_labels_for_mode(self._cfg, self._state.mode)),
             })
 
-        # Arbitration: map_web always runs (keeps prev_* fresh), but
-        # publishes are gated on ownership.
+        # Ahead of the ownership gate, and exempt from it for the reason a
+        # Mode-view switch is: a stand or fold is discrete and supervisory — one
+        # Empty on /gait/initialize plus the gait naming the leg set it wants —
+        # and it touches neither /cmd_vel nor /body/pose, the two continuous
+        # streams arbitration exists to stop from fighting. Gated, it would be a
+        # dead button in exactly the state the Mode view's STAND exists for: the
+        # button grid an init press comes from is swapped for the take-control
+        # prompt while a controller drives, so that view is the only way in.
+        if out.init_request:
+            # Gait first, not after: hexa_locomotion reads the leg set off the
+            # strategy that is applied by the time it starts the ladder.
+            if out.gait_select is not None:
+                self._publish_gait_select(out.gait_select)
+            which = "quadruped" if out.init_quadruped else "hexapod"
+            self.get_logger().info(
+                f"webapp init ({which}) — publishing /gait/initialize"
+            )
+            self._pub_init.publish(Empty())
+
+        # Arbitration: map_web always runs (keeps prev_* fresh), but the
+        # continuous streams and the plain cycler publishes are gated on
+        # ownership.
         if self._arbitration_enabled and not web_owns:
             return
 
@@ -408,28 +491,9 @@ class WebTeleopNode(Node):
                 f"publishing /animation/mode={out.animation_name!r}"
             )
             self._pub_animation_mode.publish(String(data=out.animation_name))
-        if out.gait_select is not None:
-            if self._latest_gait_state in _GAIT_SWITCH_STATES:
-                self.get_logger().info(f"switching gait to {out.gait_select!r}")
-                # Caps + cycler bookkeeping happens in _on_cmd_gait when
-                # this publish loops back — the path gamepad switches
-                # already take. Sticks run on the old cap for the tick or
-                # two until then, invisible at 60 Hz.
-                self._pub_cmd_gait.publish(String(data=out.gait_select))
-            else:
-                self.get_logger().info(
-                    f"gait switch to {out.gait_select!r} dropped — "
-                    f"engine in {self._latest_gait_state!r} (gait locked)"
-                )
-        # After the gait publish, not before: an init request carries its leg
-        # set as the gait it publishes, and hexa_locomotion reads the leg set
-        # off the strategy that is applied by the time it starts the ladder.
-        if out.init_request:
-            which = "quadruped" if out.init_quadruped else "hexapod"
-            self.get_logger().info(
-                f"webapp init ({which}) — publishing /gait/initialize"
-            )
-            self._pub_init.publish(Empty())
+        # An init request's own gait already went out above.
+        if out.gait_select is not None and not out.init_request:
+            self._publish_gait_select(out.gait_select)
 
         stamp = self.get_clock().now().to_msg()
         twist = Twist()
@@ -447,6 +511,20 @@ class WebTeleopNode(Node):
         pose.roll = out.pose_roll
         pose.pitch = out.pose_pitch
         self._pub_body_pose.publish(pose)
+
+    def _publish_gait_select(self, name: str) -> None:
+        """Publish a gait the mapping picked, unless the engine has it locked."""
+        if self._latest_gait_state not in _GAIT_SWITCH_STATES:
+            self.get_logger().info(
+                f"gait switch to {name!r} dropped — engine in "
+                f"{self._latest_gait_state!r} (gait locked)"
+            )
+            return
+        self.get_logger().info(f"switching gait to {name!r}")
+        # Caps + cycler bookkeeping happens in _on_cmd_gait when this publish
+        # loops back — the path gamepad switches already take. Sticks run on
+        # the old cap for the tick or two until then, invisible at 60 Hz.
+        self._pub_cmd_gait.publish(String(data=name))
 
     # ── Server thread ─────────────────────────────────────────────────
 
@@ -714,14 +792,17 @@ class WebTeleopNode(Node):
             self.get_logger().warning(f"unknown preset {preset_id!r} requested")
             self._broadcast_preset(refused="no such mode")
             return
-        if preset.leg_set == self._latest_leg_set:
+        if preset.id == self._presets.current_id():
             # Already there. Not an error, and not worth a wire round trip.
+            # Compared on the PRESET, never on the leg set: three of the four
+            # stand on six legs, so a leg-set comparison would make every switch
+            # between them a silent no-op.
             self._broadcast_preset()
             return
-        if not leg_set_switch_allowed(self._latest_gait_state):
-            # Pre-gated here rather than left to the engine, because /cmd_gait
-            # is latched: a name the engine refuses would stay on the wire and
-            # every late subscriber would read a leg set the robot never took.
+        if not preset_switch_allowed(self._latest_gait_state):
+            # Pre-gated here rather than left to the engine, because /cmd_preset
+            # is latched: an id the engine refuses would stay on the wire and
+            # every late subscriber would read a preset the robot never took.
             self.get_logger().info(
                 f"preset -> {preset_id!r} refused — engine in "
                 f"{self._latest_gait_state!r}"
@@ -743,13 +824,18 @@ class WebTeleopNode(Node):
         self._pending_deadline = (
             time.monotonic() + self._presets.switch_timeout_s
         )
+        # Preset first, then the gait that walks it. The engine measures a gait
+        # against the preset in force, so on the other order a four-corner gait
+        # would be refused before its preset had been asked for. Both are
+        # latched, and both loop back for the bookkeeping.
+        self._pub_cmd_preset.publish(String(data=preset.id))
         self._pub_cmd_gait.publish(String(data=gait))
         self._broadcast_preset()
 
     def _expire_pending_preset(self) -> None:
         """Silence past the deadline is a refusal.
 
-        /gait/leg_set publishes on change only, so a switch the node could not
+        /gait/preset publishes on change only, so a switch the node could not
         rule out — the engine's state moved between the tap and the tick, or the
         operator's body pose never came back to neutral — arrives as nothing at
         all. This is what turns that into an answer.

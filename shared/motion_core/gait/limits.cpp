@@ -18,17 +18,18 @@ float outer_stance_radius(const std::map<std::string, Vec3>& nominal_stance) {
   if (max_r <= 0.0f) {
     throw std::invalid_argument(
         "outer stance radius is zero — every foot sits on the body axis, so the "
-        "standing pose has no yaw authority; check tuning.yaml "
-        "default_standing_pose");
+        "standing pose has no yaw authority; check the preset's "
+        "standing_pose in tuning.yaml");
   }
   return max_r;
 }
 
-VelocityCaps load_velocity_caps_from_config(float r_outer) {
+VelocityCaps load_velocity_caps_from_config(std::size_t preset,
+                                            float r_outer) {
   VelocityCaps caps;
-  // linear_max / yaw_bias are baked by gen_config.py; only the angular cap is
-  // derived here, by dividing the linear one by the lever arm.
-  for (const auto& g : ::hexa::config::kGaits) {
+  // linear_max / yaw_bias are baked by gen_config.py, per preset; only the
+  // angular cap is derived here, by dividing the linear one by the lever arm.
+  for (const auto& g : ::hexa::config::kGaitsByPreset.at(preset)) {
     const std::string name(g.name.data());
     caps.linear_max_by_gait[name] = g.linear_max;
     caps.angular_max_by_gait[name] = g.linear_max / r_outer;

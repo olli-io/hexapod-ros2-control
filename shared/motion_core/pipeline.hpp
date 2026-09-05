@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "bt_teleop.hpp"
 #include "config_generated.hpp"
@@ -100,12 +101,17 @@ struct TickResult {
   std::string animation_name;            // requested animation mode
   bool animation_accepted = false;       // known animation (else warn-and-ignore)
 
-  // The leg set the engine has actually applied — what the operator is standing
-  // on, as opposed to what the last /cmd_gait asked for. A refused request
-  // leaves the command topic latched at a name the engine never took, so this
-  // is the only honest source for a UI.
+  bool has_preset_select = false;
+  std::string preset_select;             // requested preset (accepted or not)
+  bool preset_accepted = false;          // switch allowed in the current state
+
+  // The leg set and the PRESET the engine has actually applied — what the
+  // operator is standing on, as opposed to what the last /cmd_preset asked for.
+  // A refused request leaves the command topic latched at a name the engine
+  // never took, so these are the only honest source for a UI.
   hexa::gait::LegSet leg_set = hexa::gait::LegSet::HEXAPOD;
-  // A leg-set change was asked for and dropped because the operator's body pose
+  std::string preset;
+  // A preset change was asked for and dropped because the operator's body pose
   // never came back to neutral. Distinct from a plain refusal, which is about
   // the engine state — this one is about the sticks, and the caller says so.
   bool gait_blocked_by_posture = false;
@@ -158,7 +164,13 @@ class Pipeline {
   // Joint angles compose_gait writes straight out for a parked leg. Declared
   // before engine_ so it is initialized first.
   std::array<hexa::JointAngles, hexa::kNumLegs> folded_pose_;
+  // Every preset, solved to feet once at construction and shared with the
+  // engine, plus each one's caps. The active preset's caps are copied into caps_
+  // whenever the engine commits a change; control_ gets the rest of the bundle
+  // at the same moment. Declared before engine_, which is built from it.
+  std::vector<hexa::gait::PresetSetup> preset_setups_;
   std::unique_ptr<hexa::gait::Engine> engine_;
+  std::map<std::string, hexa::gait::VelocityCaps> caps_by_preset_;
   hexa::gait::VelocityCaps caps_;
   hexa::control::Control control_;
   hexa::teleop::JoyConfig joycfg_;
@@ -172,8 +184,17 @@ class Pipeline {
   // femur, and a good part of the pose envelope is outside the joint limits
   // outright. The teleops ease their own posture out when they see the request
   // on /cmd_gait; this waits for the result and gives up if it never comes.
-  std::optional<std::string> pending_leg_set_gait_;
-  float pending_leg_set_elapsed_ = 0.0f;
+  std::optional<std::string> pending_preset_;
+  // The gait that walks the pending preset, held with it. The engine measures a
+  // gait against the preset actually in force, so a name for the preset the
+  // robot is on its way to would be refused if it were handed over early; the
+  // two go in on the same commit instead.
+  std::optional<std::string> pending_preset_gait_;
+  float pending_preset_elapsed_ = 0.0f;
+  // The preset the engine reported last tick. A change means it committed one,
+  // whichever path it took — a belly apply, the end of a change ladder, or a
+  // fault revert — and that is where caps_ and control_ follow it.
+  std::string applied_preset_;
   // The pose compose_gait actually applied last tick. The gait-select block runs
   // before posture_.update, so it reads one tick stale, which at 200 Hz is not a
   // distinction worth making.

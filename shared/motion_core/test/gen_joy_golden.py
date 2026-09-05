@@ -257,7 +257,9 @@ def main() -> int:
     # Absolute belly clearance in tuning.yaml, converted to the pose offsets
     # pose_z carries. Mirrors joy_mapping.cpp's posture_limits(); sourcing it
     # anywhere else would drift the golden from the C++ mapper.
-    nominal_height = float(gait["default_standing_pose"]["body_height"])
+    presets_by_id = {str(e["id"]): e for e in gait["presets"]}
+    default_preset = presets_by_id[str(gait["default_preset"])]
+    nominal_height = float(default_preset["standing_pose"]["body_height"])
     pn = posture["posture_node"]["ros__parameters"]
     posture_cfg = jm.PostureConfig(
         bindings={str(k): str(v) for k, v in posture_raw["bindings"].items()},
@@ -278,14 +280,22 @@ def main() -> int:
     # the two presets the init buttons stand up on — the same two gen_config.py
     # bakes for the firmware. A third preset is a web-teleop affair and does not
     # reach this mapping.
+    # Which legs a preset stands on is tuning.yaml's to say now, so the two are
+    # picked off that rather than off the gait names here — the same rule
+    # gen_config.py applies. The hexapod one is the boot preset's, which is the
+    # only non-arbitrary answer once several six-leg presets exist.
     def preset_for(leg_set):
         for entry in teleop["presets"]["list"]:
-            names = [str(g) for g in entry["gait_cycle"]]
-            if names and (names[0] in quad_names) == (leg_set == "quadruped"):
+            pid = str(entry["id"])
+            if str(presets_by_id[pid]["leg_set"]) == leg_set:
                 return entry
-        raise ValueError(f"presets: none walks the {leg_set} leg set")
+        raise ValueError(f"presets: none stands on the {leg_set} leg set")
 
-    hexapod_preset = preset_for("hexapod")
+    teleop_by_id = {str(e["id"]): e for e in teleop["presets"]["list"]}
+    default_id = str(teleop["presets"]["default"])
+    hexapod_preset = (teleop_by_id[default_id]
+                      if str(presets_by_id[default_id]["leg_set"]) == "hexapod"
+                      else preset_for("hexapod"))
     quadruped_preset = preset_for("quadruped")
     gait_cycle = jm.resolve_gait_cycle(
         tuple(str(n) for n in hexapod_preset["gait_cycle"]), known, unstable,
@@ -297,8 +307,10 @@ def main() -> int:
     default_quadruped_gait = str(quadruped_preset["default_gait"])
     default_gait = str(hexapod_preset["default_gait"])
     duty = {n: d for n, d, _ in GAITS}[default_gait]
-    stride = float(gait["stride_length"])
-    min_swing = float(gait["min_swing_time"])
+    # The DEFAULT preset's, matching the JoyConfig the pipeline seeds itself
+    # with. map_joy never learns presets exist; the trace is the boot state.
+    stride = float(default_preset["stride_length"])
+    min_swing = float(default_preset["min_swing_time"])
     # The hexapod margin unconditionally: the quadruped gaits are deliberately
     # kept out of GAITS above, so the default gait is always a six-leg one and
     # the quadruped margin can never be the one in play here.

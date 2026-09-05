@@ -95,20 +95,55 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
         static_cast<float>(to_urdf_rad("coxa", grp["coxa_deg"].as<double>()))};
   };
   {
-    const YAML::Node sp = g["default_standing_pose"];
-    cfg.standing_pose.body_height = f(sp["body_height"]);
-    for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
-      cfg.standing_pose.groups[gi] =
-          leg_group_stance(sp[std::string(hexa::LEG_GROUP_NAMES[gi])]);
+    // One entry per preset, in declaration order — the order /gait/preset
+    // reports and the order the baked kPresets table is indexed by, so the
+    // loaded-vs-baked parity test compares them position by position.
+    const YAML::Node list = g["presets"];
+    if (!list || !list.IsSequence() || list.size() == 0) {
+      throw std::runtime_error(
+          "tuning.yaml gait_node.presets: must be a non-empty list");
     }
-  }
-  {
-    // The corners only: quadruped mode's middle pair does not stand, it is held
-    // at folded_pose, so the block has no middle entry to read.
-    const YAML::Node sp = g["quad_standing_pose"];
-    cfg.quad_standing_pose.body_height = f(sp["body_height"]);
-    cfg.quad_standing_pose.front = leg_group_stance(sp["front"]);
-    cfg.quad_standing_pose.rear = leg_group_stance(sp["rear"]);
+    const auto default_id = g["default_preset"].as<std::string>();
+    for (const auto& entry : list) {
+      hexa::gait::PresetSpec spec;
+      spec.id = entry["id"].as<std::string>();
+      const auto leg_set = entry["leg_set"].as<std::string>();
+      if (leg_set == "quadruped") {
+        spec.leg_set = hexa::gait::LegSet::QUADRUPED;
+      } else if (leg_set == "hexapod") {
+        spec.leg_set = hexa::gait::LegSet::HEXAPOD;
+      } else {
+        throw std::runtime_error("tuning.yaml presets." + spec.id +
+                                 ".leg_set must be 'hexapod' or 'quadruped'");
+      }
+      const YAML::Node sp = entry["standing_pose"];
+      spec.standing.body_height = f(sp["body_height"]);
+      for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
+        const std::string name(hexa::LEG_GROUP_NAMES[gi]);
+        // A preset that parks the middle pair has no middle entry to read: that
+        // pair does not stand, it is held at folded_pose. The row is filled
+        // from the front group so the table keeps a uniform shape, exactly as
+        // gen_config.py does; solve_preset then replaces it outright with the
+        // default preset's solved middles.
+        spec.standing.groups[gi] =
+            leg_group_stance(sp[name] ? sp[name] : sp["front"]);
+      }
+      // No global fallback for any of these five: an omitted key is a load
+      // error rather than a silent inheritance.
+      spec.stride_length = f(entry["stride_length"]);
+      spec.stride_length_radial = f(entry["stride_length_radial"]);
+      spec.min_swing_time = f(entry["min_swing_time"]);
+      spec.max_swing_time = f(entry["max_swing_time"]);
+      spec.step_height = f(entry["step_height"]);
+      if (spec.id == default_id) {
+        cfg.default_preset = cfg.presets.size();
+      }
+      cfg.presets.push_back(std::move(spec));
+    }
+    if (cfg.presets[cfg.default_preset].id != default_id) {
+      throw std::runtime_error("tuning.yaml default_preset: no preset '" +
+                               default_id + "'");
+    }
   }
 
   // ── the two belly-rest poses (geometry.yaml folded_pose /
@@ -154,11 +189,16 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
 
   // ── tuning.yaml gait_node → gait::EngineConfig ──
   auto& e = cfg.engine;
-  e.stride_length = f(g["stride_length"]);
-  e.stride_length_radial = f(g["stride_length_radial"]);
-  e.min_swing_time = f(g["min_swing_time"]);
-  e.max_swing_time = f(g["max_swing_time"]);
-  e.step_height = f(g["step_height"]);
+  // The five preset-owned knobs, seeded from the default preset. The engine
+  // rewrites them on every preset change.
+  {
+    const auto& d = cfg.presets[cfg.default_preset];
+    e.stride_length = d.stride_length;
+    e.stride_length_radial = d.stride_length_radial;
+    e.min_swing_time = d.min_swing_time;
+    e.max_swing_time = d.max_swing_time;
+    e.step_height = d.step_height;
+  }
   e.swing_width = f(g["swing_width"]);
   e.touchdown_velocity = f(g["touchdown_velocity"]);
   e.touchdown_probe_fraction = f(g["touchdown_probe_fraction"]);
@@ -178,6 +218,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.reseat_pair_swing_time = f(g["reseat"]["pair_swing_time"]);
   e.reseat_pair_dwell_time = f(g["reseat"]["pair_dwell_time"]);
   e.reseat_swing_clearance = f(g["reseat"]["swing_clearance"]);
+  e.reseat_plane_ramp_time = f(g["reseat"]["plane_ramp_time"]);
   e.quadruped_shift_time = f(g["quadruped"]["shift_time"]);
   e.pair_fold_swing_time = f(g["pair_fold"]["swing_time"]);
   e.pair_fold_dwell_time = f(g["pair_fold"]["dwell_time"]);
@@ -186,41 +227,42 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   // ── velocity caps (tuning.yaml gait_node, port of load_velocity_caps) ──
   // Duty factor is not in YAML; enumerate the linked firmware gait registry so a
   // new gait shows up in the caps map as soon as it is registered.
-  const float stride = f(g["stride_length"]);
-  const float min_swing = f(g["min_swing_time"]);
   const float yaw_bias = f(g["yaw_bias"]);
-  // Lever arm a yaw rate acts through: the outermost standing foot's planar
-  // radius. Solved from the geometry above through the same helpers the pipeline
-  // uses, so this matches the pose the engine actually walks in. There is no
-  // angular knob in YAML — the cap is the linear one over this radius.
-  const float r_outer = hexa::gait::outer_stance_radius(
-      hexa::gait::nominal_stance_from(
-          cfg.leg_specs, hexa::gait::standing_pose_from(
-                             cfg.leg_specs, cfg.coxa_to_bottom, cfg.foot_radius,
-                             cfg.standing_pose)));
-  cfg.caps.linear_max_by_gait.clear();
-  cfg.caps.angular_max_by_gait.clear();
-  cfg.caps.yaw_bias_by_gait.clear();
-  for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
-    const auto strategy = factory();
-    const float duty = strategy->duty_factor();
-    // The cap is stride_length covered in one stance, so it keys off the
-    // realized swing/stance split, not the nominal duty factor — and off the
-    // margin the gait's own LEG SET walks on. Must stay identical to
-    // gen_config.py's velocity_caps(), or the loader-vs-baked parity test in
-    // test_config_loader.cpp fails.
-    const float swing_end = hexa::gait::swing_end_phase(
-        duty, hexa::gait::swing_phase_margin_for(
-                  strategy->leg_set(), e.swing_phase_margin,
-                  e.quadruped_swing_phase_margin));
-    const float linear_max =
-        stride * swing_end / (min_swing * (1.0f - swing_end));
-    cfg.caps.linear_max_by_gait[gait_name] = linear_max;
-    cfg.caps.angular_max_by_gait[gait_name] = linear_max / r_outer;
-    // yaw_bias stays keyed to the gait's nominal duty: it is a feel knob, not a
-    // timing budget.
-    cfg.caps.yaw_bias_by_gait[gait_name] =
-        0.5f + (yaw_bias - 0.5f) * (1.5f - duty);
+  // Per preset: the stride it lays down and the swing time it lays it down in
+  // are its own, and so is the lever arm a yaw rate acts through — the outermost
+  // standing foot's planar radius. The stances are solved from the geometry
+  // above through the same helpers the pipeline uses, so these match the poses
+  // the engine actually walks in. There is no angular knob in YAML — the cap is
+  // the linear one over that radius.
+  const auto setups =
+      hexa::gait::solve_presets(cfg.presets, cfg.leg_specs, cfg.coxa_to_bottom,
+                                cfg.foot_radius, cfg.default_preset);
+  cfg.caps_by_preset.clear();
+  for (const auto& setup : setups) {
+    const float r_outer = hexa::gait::outer_stance_radius(setup.nominal_stance);
+    hexa::gait::VelocityCaps caps;
+    for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
+      const auto strategy = factory();
+      const float duty = strategy->duty_factor();
+      // The cap is stride_length covered in one stance, so it keys off the
+      // realized swing/stance split, not the nominal duty factor — and off the
+      // margin the gait's own LEG SET walks on. Must stay identical to
+      // gen_config.py's velocity_caps(), or the loader-vs-baked parity test in
+      // test_config_loader.cpp fails.
+      const float swing_end = hexa::gait::swing_end_phase(
+          duty, hexa::gait::swing_phase_margin_for(
+                    strategy->leg_set(), e.swing_phase_margin,
+                    e.quadruped_swing_phase_margin));
+      const float linear_max = setup.stride_length * swing_end /
+                               (setup.min_swing_time * (1.0f - swing_end));
+      caps.linear_max_by_gait[gait_name] = linear_max;
+      caps.angular_max_by_gait[gait_name] = linear_max / r_outer;
+      // yaw_bias stays keyed to the gait's nominal duty: it is a feel knob, not
+      // a timing budget, and no preset moves it.
+      caps.yaw_bias_by_gait[gait_name] =
+          0.5f + (yaw_bias - 0.5f) * (1.5f - duty);
+    }
+    cfg.caps_by_preset[setup.id] = std::move(caps);
   }
   cfg.default_gait = g["default_gait"].as<std::string>();
 
@@ -276,12 +318,17 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   // above — carried here, not re-sourced.
   ps.body_height_max = f(p["body_height_max_m"]);
   ps.body_height_min = f(p["body_height_min_m"]);
-  ps.nominal_body_height = cfg.standing_pose.body_height;
-  if (!(ps.body_height_min < ps.nominal_body_height &&
-        ps.nominal_body_height < ps.body_height_max)) {
-    throw std::runtime_error(
-        "posture_node body_height_min_m/body_height_max_m must bracket "
-        "gait_node default_standing_pose.body_height");
+  ps.nominal_body_height = cfg.presets[cfg.default_preset].standing.body_height;
+  // Every preset's nominal has to sit strictly inside the envelope, not just the
+  // default one's: a preset change re-plants onto that height, and a clamped
+  // nominal would put the body somewhere the operator never asked for.
+  for (const auto& preset : cfg.presets) {
+    const float h = preset.standing.body_height;
+    if (!(ps.body_height_min < h && h < ps.body_height_max)) {
+      throw std::runtime_error(
+          "posture_node body_height_min_m/body_height_max_m must bracket "
+          "gait_node presets." + preset.id + ".standing_pose.body_height");
+    }
   }
 
   return cfg;

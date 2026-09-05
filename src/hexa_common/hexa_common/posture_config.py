@@ -10,6 +10,8 @@ from pathlib import Path
 
 import yaml
 
+from .preset_config import default_preset_id, preset_table
+
 
 def load_animation_mode_animations(posture_yaml: str | Path) -> tuple[str, ...]:
     """Return ``posture_node.ros__parameters.animation_mode_animations``.
@@ -50,14 +52,22 @@ def load_body_height_offsets(
         posture_raw = yaml.safe_load(f)
 
     gait_params = gait_raw["gait_node"]["ros__parameters"]
-    nominal = float(gait_params["default_standing_pose"]["body_height"])
+    presets = preset_table(gait_params)
+    nominal = float(
+        presets[default_preset_id(gait_params)]["standing_pose"]["body_height"]
+    )
     pn = posture_raw["posture_node"]["ros__parameters"]
     height_max = float(pn["body_height_max_m"])
     height_min = float(pn["body_height_min_m"])
-    if not height_min < nominal < height_max:
-        raise ValueError(
-            f"body_height_min_m = {height_min} m / body_height_max_m = "
-            f"{height_max} m must bracket default_standing_pose.body_height = "
-            f"{nominal} m"
-        )
+    # Every preset's nominal, not just the boot one's: a preset change re-plants
+    # onto that height, and a clamped nominal would put the body somewhere the
+    # operator never asked for.
+    for pid, entry in presets.items():
+        h = float(entry["standing_pose"]["body_height"])
+        if not height_min < h < height_max:
+            raise ValueError(
+                f"body_height_min_m = {height_min} m / body_height_max_m = "
+                f"{height_max} m must bracket presets.{pid}."
+                f"standing_pose.body_height = {h} m"
+            )
     return height_min - nominal, height_max - nominal

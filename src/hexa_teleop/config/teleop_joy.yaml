@@ -5,25 +5,47 @@ initial_mode: gait # gait | posture | animation
 allow_unstable_gaits: true # when false, surf and crawl are skipped
 
 # Operator presets: what the Mode view offers, and what the D-pad rotates
-# through once one is in force. A preset's LEG SET is derived from
-# hexa_common.gait_catalog, never declared here — that catalog already owns
-# which legs a gait walks. Rotations must be pairwise disjoint, so a bare gait
-# name on /cmd_gait says which preset is in force without a second field.
+# through once one is in force. This is the OPERATOR half of a preset — its id,
+# label, gait rotation and entry gait. The physical half — which legs it stands
+# on, where those feet sit, and the stride and swing times the walk lays down —
+# lives in hexa_description's tuning.yaml under the same ids, and is not
+# restated here. In particular a preset's LEG SET is read from there, never
+# declared here.
 #
-# Adding a third preset is an edit here and nothing else: the active preset's
+# Rotations may OVERLAP: normal, fast and offroad all stand on six legs and all
+# offer the same gaits, and it is /cmd_preset that says which preset is in
+# force, not the gait name. What load-time validation does require is that every
+# gait in a rotation walks the legs its preset stands on, so a prev/next press
+# can never ask a standing robot for a leg set the engine would refuse.
+#
+# Adding a preset is an edit here plus one in tuning.yaml: the active preset's
 # rotation is projected onto the one gait_cycle map_joy reads, so the mapping's
 # state machine never learns how many there are.
 presets:
   default: normal
-  # How long the web app's Mode view waits for /gait/leg_set to change before
+  # How long the web app's Mode view waits for /gait/preset to change before
   # calling a switch refused. Comfortably over the ~2 s the change takes.
   switch_timeout_s: 4.0
   list:
     - id: normal
       label: NORMAL
-      sub: six legs
+      sub: six legs, everyday stance
       gait_cycle: [tripod, surf, tetrapod, crawl, ripple] # fastest → slowest
       default_gait: tripod
+    - id: fast
+      label: FAST
+      sub: low and long-striding
+      # The slow gaits are pointless here — the preset exists for speed, and
+      # crawl on a 0.125 m stride is still crawl.
+      gait_cycle: [tripod, surf]
+      default_gait: tripod
+    - id: offroad
+      label: OFFROAD
+      sub: tall, short steps, high clearance
+      # No tripod: three feet down is the wrong trade on ground rough enough to
+      # want this preset, so the rotation starts at the four-down gaits.
+      gait_cycle: [tetrapod, ripple, crawl]
+      default_gait: tetrapod
     - id: quad
       label: QUAD
       sub: four corners, middle pair parked

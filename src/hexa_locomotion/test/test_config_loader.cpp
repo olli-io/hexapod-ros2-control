@@ -60,28 +60,36 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   }
   EXPECT_NEAR(loaded.coxa_to_bottom, baked.coxa_to_bottom, kTol);
   EXPECT_NEAR(loaded.foot_radius, baked.foot_radius, kTol);
-  EXPECT_NEAR(loaded.standing_pose.body_height, baked.standing_pose.body_height,
-              kTol);
-  for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
-    const auto group = hexa::LEG_GROUP_NAMES[gi];
-    EXPECT_NEAR(loaded.standing_pose.groups[gi].tip_reach,
-                baked.standing_pose.groups[gi].tip_reach, kTol)
-        << group << ".tip_reach";
-    EXPECT_NEAR(loaded.standing_pose.groups[gi].coxa,
-                baked.standing_pose.groups[gi].coxa, kTol)
-        << group << ".coxa";
+  // ── the preset table, position by position ──
+  // Order is load-bearing: the baked table is indexed and the YAML list is
+  // read in declaration order, so a reordered `presets:` block has to show up
+  // here rather than silently renumbering what the firmware boots on.
+  ASSERT_EQ(loaded.presets.size(), baked.presets.size());
+  EXPECT_EQ(loaded.default_preset, baked.default_preset);
+  for (std::size_t pi = 0; pi < baked.presets.size(); ++pi) {
+    const auto& lp = loaded.presets[pi];
+    const auto& bp = baked.presets[pi];
+    ASSERT_EQ(lp.id, bp.id) << "preset " << pi << " is out of order";
+    EXPECT_EQ(lp.leg_set, bp.leg_set) << lp.id;
+    EXPECT_NEAR(lp.stride_length, bp.stride_length, kTol) << lp.id;
+    EXPECT_NEAR(lp.stride_length_radial, bp.stride_length_radial, kTol) << lp.id;
+    EXPECT_NEAR(lp.min_swing_time, bp.min_swing_time, kTol) << lp.id;
+    EXPECT_NEAR(lp.max_swing_time, bp.max_swing_time, kTol) << lp.id;
+    EXPECT_NEAR(lp.step_height, bp.step_height, kTol) << lp.id;
+    EXPECT_NEAR(lp.standing.body_height, bp.standing.body_height, kTol) << lp.id;
+    // All three groups, including the placeholder a parked-pair preset carries:
+    // the loader fills it from the front group and gen_config.py does the same,
+    // so a drift in that rule is a drift here.
+    for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
+      const auto group = hexa::LEG_GROUP_NAMES[gi];
+      EXPECT_NEAR(lp.standing.groups[gi].tip_reach,
+                  bp.standing.groups[gi].tip_reach, kTol)
+          << lp.id << "." << group << ".tip_reach";
+      EXPECT_NEAR(lp.standing.groups[gi].coxa, bp.standing.groups[gi].coxa,
+                  kTol)
+          << lp.id << "." << group << ".coxa";
+    }
   }
-  // The quadruped stance is the corners alone — no middle group to compare.
-  EXPECT_NEAR(loaded.quad_standing_pose.front.tip_reach,
-              baked.quad_standing_pose.front.tip_reach, kTol);
-  EXPECT_NEAR(loaded.quad_standing_pose.front.coxa,
-              baked.quad_standing_pose.front.coxa, kTol);
-  EXPECT_NEAR(loaded.quad_standing_pose.rear.tip_reach,
-              baked.quad_standing_pose.rear.tip_reach, kTol);
-  EXPECT_NEAR(loaded.quad_standing_pose.rear.coxa,
-              baked.quad_standing_pose.rear.coxa, kTol);
-  EXPECT_NEAR(loaded.quad_standing_pose.body_height,
-              baked.quad_standing_pose.body_height, kTol);
 
   // ── gait engine ──
   const auto& le = loaded.engine;
@@ -112,6 +120,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.reseat_pair_swing_time, be.reseat_pair_swing_time, kTol);
   EXPECT_NEAR(le.reseat_pair_dwell_time, be.reseat_pair_dwell_time, kTol);
   EXPECT_NEAR(le.reseat_swing_clearance, be.reseat_swing_clearance, kTol);
+  EXPECT_NEAR(le.reseat_plane_ramp_time, be.reseat_plane_ramp_time, kTol);
   EXPECT_NEAR(le.quadruped_shift_time, be.quadruped_shift_time, kTol);
   EXPECT_NEAR(le.pair_fold_swing_time, be.pair_fold_swing_time, kTol);
   EXPECT_NEAR(le.pair_fold_dwell_time, be.pair_fold_dwell_time, kTol);
@@ -122,21 +131,24 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   // stance from geometry.yaml + tuning.yaml and divides each gait's linear cap
   // by the outermost foot's radius, so this leg of the parity check is what
   // catches a drift in that derivation.
-  ASSERT_EQ(loaded.caps.linear_max_by_gait.size(),
-            baked.caps.linear_max_by_gait.size());
-  ASSERT_EQ(loaded.caps.angular_max_by_gait.size(),
-            baked.caps.angular_max_by_gait.size());
-  for (const auto& [name, v] : baked.caps.linear_max_by_gait) {
-    ASSERT_TRUE(loaded.caps.linear_max_by_gait.count(name)) << name;
-    EXPECT_NEAR(loaded.caps.linear_max_by_gait.at(name), v, kTol)
-        << "linear_max[" << name << "]";
-    ASSERT_TRUE(loaded.caps.angular_max_by_gait.count(name)) << name;
-    EXPECT_NEAR(loaded.caps.angular_max_by_gait.at(name),
-                baked.caps.angular_max_by_gait.at(name), kTol)
-        << "angular_max[" << name << "]";
-    EXPECT_NEAR(loaded.caps.yaw_bias_by_gait.at(name),
-                baked.caps.yaw_bias_by_gait.at(name), kTol)
-        << "yaw_bias[" << name << "]";
+  // One table per preset: three of the four inputs to a cap ride the preset.
+  ASSERT_EQ(loaded.caps_by_preset.size(), baked.caps_by_preset.size());
+  for (const auto& [preset, bcaps] : baked.caps_by_preset) {
+    ASSERT_TRUE(loaded.caps_by_preset.count(preset)) << preset;
+    const auto& lcaps = loaded.caps_by_preset.at(preset);
+    ASSERT_EQ(lcaps.linear_max_by_gait.size(), bcaps.linear_max_by_gait.size())
+        << preset;
+    for (const auto& [name, v] : bcaps.linear_max_by_gait) {
+      ASSERT_TRUE(lcaps.linear_max_by_gait.count(name)) << preset << "/" << name;
+      EXPECT_NEAR(lcaps.linear_max_by_gait.at(name), v, kTol)
+          << "linear_max[" << preset << "/" << name << "]";
+      EXPECT_NEAR(lcaps.angular_max_by_gait.at(name),
+                  bcaps.angular_max_by_gait.at(name), kTol)
+          << "angular_max[" << preset << "/" << name << "]";
+      EXPECT_NEAR(lcaps.yaw_bias_by_gait.at(name),
+                  bcaps.yaw_bias_by_gait.at(name), kTol)
+          << "yaw_bias[" << preset << "/" << name << "]";
+    }
   }
   EXPECT_EQ(loaded.default_gait, baked.default_gait);
 
@@ -201,10 +213,12 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.pose_limit_yaw, bp.pose_limit_yaw, kTol);
   EXPECT_NEAR(lp.body_height_max, bp.body_height_max, kTol);
   EXPECT_NEAR(lp.body_height_min, bp.body_height_min, kTol);
-  // The loader carries the standing-pose height it already read rather than
-  // re-sourcing it; codegen reads the same key. Both must equal the stance.
+  // The loader carries the DEFAULT preset's standing height it already read
+  // rather than re-sourcing it; codegen reads the same key. Both must equal
+  // that preset's stance.
   EXPECT_NEAR(lp.nominal_body_height, bp.nominal_body_height, kTol);
-  EXPECT_NEAR(lp.nominal_body_height, loaded.standing_pose.body_height, kTol);
+  EXPECT_NEAR(lp.nominal_body_height,
+              loaded.presets[loaded.default_preset].standing.body_height, kTol);
   EXPECT_EQ(lp.gait_body_animations_enabled, bp.gait_body_animations_enabled);
 }
 

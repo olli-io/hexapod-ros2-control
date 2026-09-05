@@ -10,17 +10,38 @@ from hexa_common import load_body_height_offsets
 _GAIT_YAML = """
 gait_node:
   ros__parameters:
-    default_standing_pose:
-      body_height: 0.05
-      front:
-        tip_reach: 0.135
-        coxa_deg: 0
-      middle:
-        tip_reach: 0.135
-        coxa_deg: 0
-      rear:
-        tip_reach: 0.135
-        coxa_deg: 0
+    default_preset: normal
+    presets:
+      - id: normal
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.05
+          front: {tip_reach: 0.135, coxa_deg: 0}
+          middle: {tip_reach: 0.135, coxa_deg: 0}
+          rear: {tip_reach: 0.135, coxa_deg: 0}
+        stride_length: 0.105
+        stride_length_radial: 0.085
+        min_swing_time: 0.6
+        max_swing_time: 0.8
+        step_height: 0.04
+"""
+
+# A second preset that stands somewhere else. The envelope has to bracket EVERY
+# preset's nominal, not just the boot one's: a preset change re-plants onto that
+# height, and a clamped nominal would put the body somewhere nobody asked for.
+_TWO_PRESET_YAML = _GAIT_YAML.rstrip() + """
+      - id: offroad
+        leg_set: hexapod
+        standing_pose:
+          body_height: 0.095
+          front: {tip_reach: 0.125, coxa_deg: 0}
+          middle: {tip_reach: 0.125, coxa_deg: 0}
+          rear: {tip_reach: 0.125, coxa_deg: 0}
+        stride_length: 0.085
+        stride_length_radial: 0.070
+        min_swing_time: 0.75
+        max_swing_time: 1.00
+        step_height: 0.065
 """
 
 _POSTURE_YAML = """
@@ -70,4 +91,20 @@ def test_stance_outside_its_own_envelope_is_rejected(tmp_path, body_height):
     """A stance at or beyond either end would be clamped away from rest."""
     bad = _GAIT_YAML.replace("body_height: 0.05", f"body_height: {body_height}")
     with pytest.raises(ValueError, match="must bracket"):
+        load_body_height_offsets(*_write(tmp_path, gait=bad))
+
+
+def test_the_nominal_is_the_boot_presets_stance(tmp_path):
+    # Several presets stand at different heights; the offsets are measured from
+    # the one the robot boots on, which is what PostureController rests at.
+    lo, hi = load_body_height_offsets(*_write(tmp_path, gait=_TWO_PRESET_YAML))
+    assert math.isclose(lo, 0.02 - 0.05)
+    assert math.isclose(hi, 0.14 - 0.05)
+
+
+def test_a_non_boot_preset_outside_the_envelope_is_rejected(tmp_path):
+    # The check is over every preset, not just the boot one: tapping OFFROAD
+    # would re-plant the body at a height the envelope clamps.
+    bad = _TWO_PRESET_YAML.replace("body_height: 0.095", "body_height: 0.15")
+    with pytest.raises(ValueError, match="presets.offroad"):
         load_body_height_offsets(*_write(tmp_path, gait=bad))

@@ -92,6 +92,11 @@ struct JoyOutput {
   bool init_quadruped = false;
   bool has_gait_select = false;
   std::string_view gait_select = "";
+  // The operator preset. map_joy NEVER sets this — the pad has no preset
+  // control, and the golden trace it is parity-locked to would move if it did.
+  // Only the ROS node fills it, from the latched /cmd_preset.
+  bool has_preset_select = false;
+  std::string_view preset_select = "";
   bool has_animation_name = false;
   std::string_view animation_name = "";
 };

@@ -1909,30 +1909,36 @@ def test_select_held_across_a_mode_change_does_not_fire():
     assert out.init_quadruped is False
 
 
-def test_the_shipped_cycles_are_partitioned_by_leg_set():
+def test_the_shipped_cycles_walk_the_legs_their_preset_stands_on():
     import pathlib
 
     import yaml
 
     from hexa_common.gait_catalog import GAIT_DESCRIPTORS
+    from hexa_common.preset_config import preset_leg_sets
 
-    # The cycler picks its rotation off the leg set it is standing on, so a
-    # name in the wrong list is a press the engine would refuse. Each preset's
-    # rotation therefore walks one leg set, and no two share a gait — which is
-    # also what lets a bare name on /cmd_gait say which preset is in force.
+    # The cycler picks its rotation off the leg set it is standing on, so a name
+    # in the wrong list is a press the engine would refuse. Each preset's
+    # rotation therefore walks exactly the legs that preset stands on — which
+    # tuning.yaml declares, not this file.
+    #
+    # Rotations across presets may OVERLAP: normal, fast and offroad all stand
+    # on six legs and all offer tripod. It is /cmd_preset that says which is in
+    # force, so no disjointness is required or wanted.
     here = pathlib.Path(__file__).resolve().parents[1]
     raw = yaml.safe_load((here / "config" / "teleop_joy.yaml").read_text())
-    seen: dict[str, str] = {}
-    leg_sets = set()
+    tuning = here.parents[0] / "hexa_description" / "config" / "tuning.yaml"
+    leg_set_of = preset_leg_sets(tuning)
+
+    seen_sets = set()
     for preset in raw["presets"]["list"]:
-        sets = {GAIT_DESCRIPTORS[n].leg_set for n in preset["gait_cycle"]}
-        assert len(sets) == 1, (preset["id"], sets)
-        leg_sets |= sets
-        assert preset["default_gait"] in preset["gait_cycle"], preset["id"]
+        pid = preset["id"]
+        assert pid in leg_set_of, pid
+        want = leg_set_of[pid]
+        seen_sets.add(want)
         for name in preset["gait_cycle"]:
-            assert name not in seen, (name, seen.get(name), preset["id"])
-            seen[name] = preset["id"]
-    # And one preset of each set ships, since the init buttons stand up on one
-    # of each straight off the belly.
-    assert leg_sets == {"hexapod", "quadruped"}
-    assert raw["presets"]["default"] in {p["id"] for p in raw["presets"]["list"]}
+            assert GAIT_DESCRIPTORS[name].leg_set == want, (pid, name)
+        assert preset["default_gait"] in preset["gait_cycle"], pid
+
+    # One of each set, because the init buttons stand up on one of each.
+    assert seen_sets == {"hexapod", "quadruped"}

@@ -78,9 +78,21 @@ class Control {
   // air. Cheap to call every tick: a no-op unless the set actually changed.
   void set_leg_set(hexa::gait::LegSet set);
 
+  // Re-seed everything a preset owns: the caps its stride and swing time
+  // produced, the footprint its feet stand on, and the stride the radial budget
+  // prices a heading against. Called by the pipeline on every applied preset
+  // change, which is the one thing that moves any of them.
+  void set_preset(const hexa::gait::VelocityCaps& caps,
+                  const std::map<std::string, hexa::Vec3>& nominal_stance,
+                  const std::map<std::string, hexa::gait::LegContext>& legs,
+                  float stride_length, float stride_length_radial);
+
   const BodyVelocityLimiter& limiter() const { return limiter_; }
 
  private:
+  // Push the active gait's accel caps into the limiter. Both the gait and the
+  // preset move them, so both go through here.
+  void rearm_limiter();
   float accel_linear_for(const std::string& gait) const;
   float accel_angular_for(const std::string& gait) const;
 
@@ -92,11 +104,9 @@ class Control {
   // The full six-leg stance, and the walking subset shape() actually prices
   // against. The full one is kept so a leg-set change can rebuild the subset.
   //
-  // Both are frozen at construction: a reseat that moves the nominal stance (a
-  // body-height change) is not reflected here. Quadruped mode's stance was
-  // chosen to have the same outer radius as the hexapod one so the derived caps
-  // do not drift, but a future footprint change would need a setter before it
-  // could be trusted.
+  // Re-seeded by set_preset, which is the only thing that moves the footprint
+  // between two declared stances. A reseat that moves the nominal stance WITHIN
+  // one preset (a body-height change) is still not reflected here.
   std::map<std::string, hexa::Vec3> stance_xy_all_;
   std::map<std::string, hexa::gait::LegContext> legs_all_;
   std::map<std::string, hexa::Vec3> stance_xy_;

@@ -22,9 +22,7 @@ constexpr float kSettledEpsilon = 1e-5f;
 // Does this gait ever have every walking foot down at once? A leg lifts at
 // master pymod(-offset, 1) and lands swing_end later, so the window exists
 // exactly where two successive lift-offs are further apart than one swing.
-// Tripod has one at every handover; crawl, whose swings run end to end, has
-// none. Parked legs are filtered out before the sort — leaving them in would
-// invent gaps that no foot actually walks.
+// Parked legs are filtered out: they would invent gaps no foot walks.
 bool has_all_down_window(const PhaseOffsets& offsets, float swing_end,
                          LegSet leg_set) {
   // Fixed-size and sorted in place: no heap allocation on the control tick.
@@ -51,9 +49,8 @@ bool has_all_down_window(const PhaseOffsets& offsets, float swing_end,
   return false;
 }
 
-// Per-gait cycle-time bounds from the swing-time bounds. Both ends scale by
-// 1 / swing_end, so a leg gets a full min_swing_time..max_swing_time in the air
-// whatever the gait and however the margin shortened its window.
+// Per-gait cycle-time bounds from the swing-time bounds: both ends scale by
+// 1 / swing_end, so a leg gets its full airborne window whatever the gait.
 std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
                                           float swing_end) {
   if (swing_end <= 0.0f) {
@@ -189,7 +186,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
                std::map<std::string, LegContext> leg_contexts,
                std::optional<std::map<std::string, kin::LegSpec>> leg_specs,
                std::optional<ReseatGeometryByLeg> reseat_geometry,
-               std::optional<QuadrupedSetup> quadruped)
+               std::vector<PresetSetup> presets, std::size_t default_preset)
     : config_(config),
       strategy_(std::move(strategy)),
       strategy_name_(std::move(strategy_name)),
@@ -198,7 +195,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
       legs_(std::move(leg_contexts)),
       leg_specs_(std::move(leg_specs)),
       reseat_geometry_(std::move(reseat_geometry)),
-      quadruped_(std::move(quadruped)) {
+      presets_(std::move(presets)) {
   require_all_legs(nominal_stance, "nominal_stance");
   require_all_legs(folded_stance, "folded_stance");
   require_all_legs(initialized_stance, "initialized_stance");
@@ -207,13 +204,46 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
     throw std::invalid_argument(
         "leg_specs and reseat_geometry must be supplied together");
   }
-  if (quadruped_.has_value()) {
-    if (!reseat_geometry_.has_value()) {
-      throw std::invalid_argument(
-          "the quadruped leg set needs its own reseat geometry: a height "
-          "change on four feet re-solves that footprint, not the hexapod one");
+  if (presets_.empty()) {
+    // No table: one unnamed hexapod preset from the caller's stance and config.
+    PresetSetup only;
+    only.leg_set = LegSet::HEXAPOD;
+    only.nominal_stance = nominal_stance;
+    if (reseat_geometry_.has_value()) {
+      only.reseat_geometry = *reseat_geometry_;
     }
-    require_all_legs(quadruped_->nominal_stance, "quad nominal_stance");
+    only.stride_length = config_.stride_length;
+    only.stride_length_radial = config_.stride_length_radial;
+    only.min_swing_time = config_.min_swing_time;
+    only.max_swing_time = config_.max_swing_time;
+    only.step_height = config_.step_height;
+    presets_.push_back(std::move(only));
+    default_preset = 0;
+  }
+  if (default_preset >= presets_.size()) {
+    throw std::invalid_argument("default_preset is out of range");
+  }
+  if (presets_[default_preset].leg_set != LegSet::HEXAPOD) {
+    throw std::invalid_argument(
+        "the default preset must stand on all six legs — the cold-start "
+        "baseline is folded on six, and it is what FAULT recovers to");
+  }
+  {
+    std::map<std::string, std::size_t> seen;
+    for (std::size_t i = 0; i < presets_.size(); ++i) {
+      if (!seen.emplace(presets_[i].id, i).second) {
+        throw std::invalid_argument("duplicate preset id: " + presets_[i].id);
+      }
+      require_all_legs(presets_[i].nominal_stance,
+                       "preset " + presets_[i].id + " nominal_stance");
+      if (presets_[i].leg_set != LegSet::HEXAPOD &&
+          !reseat_geometry_.has_value()) {
+        throw std::invalid_argument(
+            "the quadruped leg set needs its own reseat geometry: a height "
+            "change on four feet re-solves that footprint, not the hexapod "
+            "one");
+      }
+    }
   }
   if (strategy_->leg_set() != LegSet::HEXAPOD) {
     throw std::invalid_argument(
@@ -226,7 +256,10 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
     folded_[n] = folded_stance.at(n);
     initialized_[n] = initialized_stance.at(n);
   }
-  hexa_nominal_base_ = nominal_;
+  preset_ = default_preset;
+  fallback_preset_ = default_preset;
+  leg_set_ = presets_[preset_].leg_set;
+  apply_preset_knobs();
   fallback_strategy_name_ = strategy_name_;
   refresh_active_legs();
 
@@ -252,22 +285,36 @@ void Engine::refresh_active_legs() {
   }
 }
 
-std::map<std::string, Vec3> Engine::stance_for(LegSet set) const {
-  const std::map<std::string, Vec3>& base =
-      (set == LegSet::QUADRUPED && quadruped_.has_value())
-          ? quadruped_->nominal_stance
-          : hexa_nominal_base_;
-  // The bases are stored at a zero height offset, so a set chosen while a height
-  // offset is still applied re-solves the footprint through the same helper the
-  // height reseat uses. Without the reseat geometry there is nothing to correct.
+std::optional<std::size_t> Engine::preset_for_leg_set(LegSet set) const {
+  for (std::size_t i = 0; i < presets_.size(); ++i) {
+    if (presets_[i].leg_set == set) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+void Engine::apply_preset_knobs() {
+  const PresetSetup& p = presets_[preset_];
+  config_.stride_length = p.stride_length;
+  config_.stride_length_radial = p.stride_length_radial;
+  config_.min_swing_time = p.min_swing_time;
+  config_.max_swing_time = p.max_swing_time;
+  config_.step_height = p.step_height;
+}
+
+std::map<std::string, Vec3> Engine::stance_for(std::size_t preset) const {
+  const std::map<std::string, Vec3>& base = presets_[preset].nominal_stance;
+  // Without the reseat geometry there is nothing to re-solve against, so the
+  // zero-offset base stands.
   if (!reseat_geometry_.has_value() || !leg_specs_.has_value() ||
       applied_height_ == 0.0f) {
     return base;
   }
   try {
-    // The geometry is the target set's, not the applied one's: this is asking
-    // where that set stands at the current height.
-    return reseat_nominal_stance(applied_height_, geometry_for(set),
+    // The geometry is the target preset's, not the applied one's: this is
+    // asking where that preset stands at the current height.
+    return reseat_nominal_stance(applied_height_, geometry_for(preset),
                                  *leg_specs_, base);
   } catch (const std::invalid_argument&) {
     return base;
@@ -275,11 +322,10 @@ std::map<std::string, Vec3> Engine::stance_for(LegSet set) const {
 }
 
 void Engine::overlay_parked(std::map<std::string, LegOutput>& out) const {
-  if (leg_set_ != LegSet::QUADRUPED || !quadruped_.has_value()) {
+  if (leg_set_ != LegSet::QUADRUPED) {
     return;
   }
-  // Parked is the folded pose: the middle pair holds the same belly-rest angles
-  // it powers up in, and in this mode it simply never left them.
+  // Parked is the folded pose — the belly-rest angles the pair powers up in.
   for (const auto& n : PARKED_LEGS) {
     out[n] = LegOutput{folded_.at(n), 0.0f, false, true};
   }
@@ -304,25 +350,21 @@ std::tuple<float, float, float> Engine::shape_reversal(
   in.request_xy = v_body_xy;
   in.request_omega = omega_z;
   // The engagement is a walk too: it re-plans off the live command every tick, so
-  // the ladder can hold it at the knee the same way it holds the gait. What it
-  // cannot do there is reflect, which is what `engaging` says.
+  // the ladder can hold it at the knee. What it cannot do there is reflect.
   in.walking =
       state_ == EngineState::GAIT || state_ == EngineState::ENGAGING;
   in.engaging = state_ == EngineState::ENGAGING;
   // Left honest: quadruped SHIFTING stands on all four with nothing moved yet,
-  // and it is `engaging` that must stop the gate firing there, not a lie about
-  // where the feet are.
+  // and it is `engaging` that must stop the gate firing there.
   in.all_planted = all_planted();
   // GAIT only: inside the engagement the answer is the engagement's to give, and
   // it gives it once, at the handoff.
   in.feet_on_schedule = state_ == EngineState::GAIT && feet_on_schedule();
   in.can_mirror = clock_.has_value() &&
                   has_all_down_window(clock_->offsets(), swing_end, leg_set_);
-  // The knee, read off the stride the *held* travel lays down rather than the
-  // configured one: on a direction the radial budget has cut, the isotropic knee
-  // sits above that direction's own velocity cap and every reversal would read
-  // as already below it. The budget reads direction unsigned, so this is the same
-  // knee on both sides of the mirror.
+  // The knee, read off the stride the *held* travel lays down: on a direction the
+  // radial budget has cut, the isotropic knee sits above that direction's own
+  // velocity cap and every reversal would read as already below it.
   const float knee_stride = effective_stride_length(
       active_legs_, applied_xy_, applied_omega_, config_.stride_length,
       config_.stride_length_radial);
@@ -338,9 +380,8 @@ std::tuple<float, float, float> Engine::shape_reversal(
   in.dt = dt;
 
   const ReversalGate::Output out = reversal_.step(active_legs_, in);
-  // Spelled GAIT rather than in.walking, which now spans the engagement too: this
-  // reflects clock_, which the engagement does not run. The gate refuses to
-  // reflect while engaging; this is the belt to that braces.
+  // GAIT rather than in.walking, which now spans the engagement: this reflects
+  // clock_, which the engagement does not run.
   if (out.mirror && state_ == EngineState::GAIT && in.all_planted) {
     clock_->mirror(swing_end);
   }
@@ -350,8 +391,8 @@ std::tuple<float, float, float> Engine::shape_reversal(
 void Engine::apply_strategy(const std::string& name) {
   strategy_ = strategies().at(name)();
   strategy_name_ = name;
-  // What FAULT recovery reverts to, so the folded baseline is never left paired
-  // with a strategy that walks four legs. Only a six-leg gait can serve.
+  // What FAULT recovery reverts to, so the folded baseline is never paired with
+  // a strategy that walks four legs.
   if (strategy_->leg_set() == LegSet::HEXAPOD) {
     fallback_strategy_name_ = name;
   }
@@ -365,36 +406,24 @@ bool Engine::set_strategy(const std::string& name) {
     return false;
   }
   const LegSet want = factory->second()->leg_set();
-  // A quadruped gait needs the stance its four corners stand on. Without it the
-  // mode is simply unavailable, which is a refused switch rather than a stand
-  // onto a footprint nobody supplied.
-  if (want != LegSet::HEXAPOD && !quadruped_available()) {
+  // The preset owns the leg set, so a gait that walks a different one is refused
+  // rather than read as a request to change it. Measured against the PENDING
+  // preset when a change is armed: both arrive in the same tick, preset first.
+  const LegSet target =
+      pending_preset_.has_value() ? presets_[*pending_preset_].leg_set : leg_set_;
+  if (want != target) {
     return false;
   }
-  // From the belly the leg set is still open: this is what start_initialize()
-  // reads to decide which ladder it climbs.
+  // From the belly nothing is standing yet, so the switch is immediate.
   if (state_ == EngineState::FOLDED || state_ == EngineState::FAULT) {
     if (name != strategy_name_) {
       apply_strategy(name);
     }
     return true;
   }
-  // Off the belly a change of set is a change of stance and a move of the
-  // middle pair, so it is only taken from a stand — never mid-ladder, never
-  // mid-engagement, and never from a walk, which is what makes "refused while
-  // walking" total rather than a matter of timing. The ladder itself is armed
-  // in update()'s STAND branch; this only latches the request.
-  if (want != leg_set_) {
-    if (state_ != EngineState::STAND) {
-      return false;
-    }
-    if (!quadruped_available() || !leg_specs_.has_value() ||
-        !reseat_geometry_.has_value()) {
-      // No four-corner stance, or no geometry to reseat through: there is no
-      // ladder to run, so this is a refusal rather than a half-done change.
-      return false;
-    }
-    pending_leg_set_ = want;
+  // Hand the strategy to the armed change's commit, so the set and the gait that
+  // walks it move together.
+  if (pending_preset_.has_value()) {
     pending_strategy_name_ = name;
     return true;
   }
@@ -415,39 +444,131 @@ bool Engine::set_strategy(const std::string& name) {
   return false;
 }
 
+std::string Engine::default_strategy_for(LegSet set) const {
+  // Only reached when a /cmd_preset arrives with no /cmd_gait behind it. Registry
+  // order is alphabetical and stable, and a stable gait is preferred so the
+  // accidental pairing is never the risky one.
+  std::string fallback;
+  for (const auto& [name, factory] : strategies()) {
+    auto strategy = factory();
+    if (strategy->leg_set() != set) {
+      continue;
+    }
+    if (!strategy->unstable()) {
+      return name;
+    }
+    if (fallback.empty()) {
+      fallback = name;
+    }
+  }
+  if (fallback.empty()) {
+    throw std::invalid_argument("no strategy walks the requested leg set");
+  }
+  return fallback;
+}
+
+bool Engine::request_leg_set(LegSet set) {
+  if (set == LegSet::HEXAPOD) {
+    return request_preset(presets_[fallback_preset_].id);
+  }
+  const auto want = preset_for_leg_set(set);
+  if (!want.has_value()) {
+    return false;
+  }
+  return request_preset(presets_[*want].id);
+}
+
+bool Engine::request_preset(const std::string& id) {
+  std::optional<std::size_t> want;
+  for (std::size_t i = 0; i < presets_.size(); ++i) {
+    if (presets_[i].id == id) {
+      want = i;
+      break;
+    }
+  }
+  if (!want.has_value()) {
+    return false;
+  }
+  // Already there, and nothing armed: idempotent, so a latched topic re-read on
+  // every tick costs nothing.
+  if (*want == preset_ && !pending_preset_.has_value()) {
+    return true;
+  }
+  // From the belly the choice is still open — this is what start_initialize()
+  // reads to decide which stance it climbs to, and which ladder it climbs.
+  if (state_ == EngineState::FOLDED || state_ == EngineState::FAULT) {
+    pending_preset_.reset();
+    if (*want != preset_) {
+      apply_preset(*want);
+      // A legal pairing is all this owes; what the operator wants arrives on
+      // the next latched /cmd_gait.
+      if (strategy_->leg_set() != leg_set_) {
+        apply_strategy(default_strategy_for(leg_set_));
+      }
+    }
+    return true;
+  }
+  // Off the belly a preset change re-plants every foot, so it is only taken from
+  // a stand, which is what makes "refused while walking" total. The ladder itself
+  // is armed in update()'s STAND branch; this only latches the request.
+  if (state_ != EngineState::STAND) {
+    return false;
+  }
+  if (!leg_specs_.has_value() || !reseat_geometry_.has_value()) {
+    // No geometry to reseat through, so there is no ladder to run.
+    return false;
+  }
+  if (*want == preset_) {
+    // Cancelling a change that has not started yet.
+    pending_preset_.reset();
+    return true;
+  }
+  pending_preset_ = *want;
+  if (strategy_->leg_set() != presets_[*want].leg_set) {
+    pending_strategy_name_ = default_strategy_for(presets_[*want].leg_set);
+  }
+  return true;
+}
+
 bool Engine::start_initialize() {
   // FAULT recovery reuses the cold start exactly.
   if (state_ != EngineState::FOLDED && state_ != EngineState::FAULT) {
     return false;
   }
-  // The one place the leg set is chosen. Everything below it — the ladder's
-  // rungs, the stance it places the feet on, the legs the walk is priced
-  // against — follows from the strategy that is applied right now.
-  apply_leg_set(strategy_->leg_set());
+  // The preset is already chosen — request_preset applies it outright from the
+  // belly — so this only commits the stance that goes with it.
+  apply_preset(preset_);
   initialize_ = build_initialize();
   state_ = EngineState::INITIALIZE;
   return true;
 }
 
-void Engine::set_leg_set(LegSet set) {
-  if (set == leg_set_) {
+void Engine::set_leg_set(std::size_t preset) {
+  if (preset == preset_) {
     return;
   }
-  leg_set_ = set;
-  // Both read the set: which legs walk, and what swing margin the engagement is
-  // priced against.
+  preset_ = preset;
+  leg_set_ = presets_[preset].leg_set;
+  if (leg_set_ == LegSet::HEXAPOD) {
+    fallback_preset_ = preset;
+  }
+  // All three read the preset in force.
+  apply_preset_knobs();
   refresh_active_legs();
   engagement_ = build_engagement();
 }
 
-void Engine::apply_leg_set(LegSet set) {
-  if (set == leg_set_) {
+void Engine::apply_preset(std::size_t preset) {
+  if (preset == preset_) {
     return;
   }
-  // Before the commit: refresh_active_legs() and the engagement rebuild both
-  // read it.
-  leg_set_ = set;
-  commit_new_nominal(stance_for(set), applied_height_);
+  preset_ = preset;
+  leg_set_ = presets_[preset].leg_set;
+  if (leg_set_ == LegSet::HEXAPOD) {
+    fallback_preset_ = preset;
+  }
+  apply_preset_knobs();
+  commit_new_nominal(stance_for(preset), applied_height_);
 }
 
 void Engine::enter_fault() {
@@ -468,16 +589,15 @@ void Engine::enter_fault() {
   reversal_.reset();
   pending_fold_ = false;
   pending_strategy_name_.reset();
-  // A change the operator asked for before the board tripped means nothing on
-  // the far side of a fault: recovery is the cold start, on six legs.
-  pending_leg_set_.reset();
-  // The folded baseline is a six-leg pose, so the leg set has to come back with
-  // it, and with it the strategy: recovering through start_initialize() reads
-  // the strategy's leg set, and a four-leg one would stand the robot up on a
-  // pair that is still lying under the chassis.
+  // Recovery is the cold start, on six legs; an armed change means nothing here.
+  pending_preset_.reset();
+  // The folded baseline is a six-leg pose, so the preset and the strategy come
+  // back with it — start_initialize() stands on the applied preset, and a
+  // four-leg one would stand the robot up on a pair still lying under the
+  // chassis. It reverts to the LAST six-leg preset applied, not the boot one.
   if (leg_set_ != LegSet::HEXAPOD) {
     applied_height_ = 0.0f;
-    apply_leg_set(LegSet::HEXAPOD);
+    apply_preset(fallback_preset_);
   }
   if (strategy_->leg_set() != LegSet::HEXAPOD) {
     apply_strategy(fallback_strategy_name_);
@@ -542,9 +662,8 @@ std::unique_ptr<EngagementController> Engine::build_engagement() {
 
 std::unique_ptr<ReseatController> Engine::build_reseat(
     const std::map<std::string, Vec3>& target_stance) {
-  // last_targets_ is rewritten every tick, so this is where the feet are. The
-  // rung order carries the leg set: a parked middle is not the ladder's to move,
-  // and on four feet a rung is one leg.
+  // last_targets_ is where the feet are. The rung order carries the leg set: a
+  // parked middle is not the ladder's to move.
   return std::make_unique<ReseatController>(
       last_targets_, target_stance, config_.reseat_pair_swing_time,
       config_.reseat_pair_dwell_time, config_.reseat_profile(),
@@ -557,16 +676,41 @@ void Engine::begin_reseat(const std::map<std::string, Vec3>& target_stance,
   reseat_ = build_reseat(target_stance);
   reseat_target_stance_ = target_stance;
   reseat_target_height_ = target_height;
+  plane_target_.reset();
+  plane_ramping_ = false;
   state_ = EngineState::RESEATING;
+}
+
+std::map<std::string, Vec3> Engine::lateral_stance_for(
+    std::size_t preset) const {
+  const std::map<std::string, Vec3> want = stance_for(preset);
+  std::map<std::string, Vec3> out;
+  for (const auto& n : LEG_NAMES) {
+    out[n] = Vec3(want.at(n).x, want.at(n).y, nominal_.at(n).z);
+  }
+  return out;
+}
+
+void Engine::begin_preset_reseat(std::size_t preset) {
+  const std::map<std::string, Vec3> want = stance_for(preset);
+  const std::map<std::string, Vec3> lateral = lateral_stance_for(preset);
+  begin_reseat(lateral, applied_height_);
+  // Same body height, no plane move. The threshold is the height reseat's, so
+  // "the same height" means the same thing to both.
+  for (const auto& n : LEG_NAMES) {
+    if (std::fabs(want.at(n).z - lateral.at(n).z) >
+        config_.reseat_height_change_threshold) {
+      plane_target_ = want;
+      return;
+    }
+  }
 }
 
 std::unique_ptr<PairFoldController> Engine::build_pair_fold(
     PairFoldDirection direction) {
   if (leg_set_ != LegSet::HEXAPOD) {
-    // The pair only moves with all four corners priced and rung as six-leg
-    // hardware. Reaching here on the quadruped set would mean the reseat ahead
-    // of it ran the four-corner ladder, which is the thing the ordering exists
-    // to prevent.
+    // Reaching here on the quadruped set would mean the reseat ahead of it ran
+    // the four-corner ladder, which the ordering exists to prevent.
     throw std::invalid_argument("pair fold requires the hexapod leg set");
   }
   return std::make_unique<PairFoldController>(
@@ -576,14 +720,14 @@ std::unique_ptr<PairFoldController> Engine::build_pair_fold(
       config_.controller_dt);
 }
 
-void Engine::commit_leg_set_change() {
-  if (!pending_leg_set_.has_value()) {
+void Engine::commit_preset_change() {
+  if (!pending_preset_.has_value()) {
     return;
   }
-  // The set first: apply_strategy rebuilds the engagement, which prices itself
-  // against the swing margin of whichever set is in force when it runs.
-  set_leg_set(*pending_leg_set_);
-  pending_leg_set_.reset();
+  // The preset first: apply_strategy rebuilds the engagement, which prices itself
+  // against whichever preset is in force when it runs.
+  set_leg_set(*pending_preset_);
+  pending_preset_.reset();
   if (pending_strategy_name_.has_value()) {
     apply_strategy(*pending_strategy_name_);
     pending_strategy_name_.reset();
@@ -630,17 +774,13 @@ std::map<std::string, LegOutput> Engine::update(
     float dt, std::pair<float, float> v_body_xy, float omega_z) {
   applied_xy_ = v_body_xy;
   applied_omega_ = omega_z;
-  // cmd_zero_tol reads operator intent — has the stick been let go — where the
-  // ladder's hold means the opposite: the engine asking to keep walking. On a
-  // slow gait's derated axis that hold sits below the tolerance, and reading it
-  // as a release would decay cmd_gain_, slowing the feet and speeding the clock,
-  // which the reflection's premise forbids. The gate bounds the exemption.
+  // cmd_zero_tol reads operator intent, where the ladder's hold means the
+  // opposite: the engine asking to keep walking. Reading that hold as a release
+  // would decay cmd_gain_ and speed the clock, which the reflection forbids.
   //
-  // reversing(), not armed(): the velocity limiter slews the planar command
-  // through the origin, so every sign flip spends a tenth of a second or more
-  // inside the tolerance whether or not the ladder took the reversal on. Where
-  // GAIT would only have lost a little cmd_gain_ to that, ENGAGING re-plants on
-  // the first such tick.
+  // reversing(), not armed(): the limiter slews the planar command through the
+  // origin, so every sign flip spends a tenth of a second inside the tolerance —
+  // and ENGAGING re-plants on the first such tick.
   const bool cmd_zero =
       cmd_is_zero(v_body_xy, omega_z) && !reversal_.reversing();
   if (cmd_zero) {
@@ -688,11 +828,10 @@ std::map<std::string, LegOutput> Engine::update(
 
   if (state_ == EngineState::STAND) {
     if (!cmd_zero) {
-      // Walking takes priority over a pending reseat / fold. It also drops a
-      // leg-set change outright rather than banking it: a request only ever
-      // runs from the stand it was made at, or "refused while walking" would
-      // mean "deferred until you stop", which is a different promise.
-      pending_leg_set_.reset();
+      // Walking takes priority over a pending reseat / fold, and drops an armed
+      // preset change outright: banking it would turn "refused while walking"
+      // into "deferred until you stop".
+      pending_preset_.reset();
       pending_strategy_name_.reset();
       engagement_->begin(*strategy_, active_legs_);
       state_ = EngineState::ENGAGING;
@@ -704,27 +843,33 @@ std::map<std::string, LegOutput> Engine::update(
       pending_fold_ = false;
       // The fold is where the operator wants to be; it reaches a leg-set-
       // neutral FOLDED on its own, so an unstarted change is just dropped.
-      pending_leg_set_.reset();
+      pending_preset_.reset();
       pending_strategy_name_.reset();
       fold_ = build_fold();
       state_ = EngineState::FOLDING;
       return tick_fold(dt);
     }
-    // A leg-set change, ahead of the height reseat: both want the ladder, and
-    // this one has a pair of legs to move as well. The order is fixed by which
-    // way it is going — the reseat always runs on six planted feet.
-    if (pending_leg_set_.has_value() && *pending_leg_set_ != leg_set_) {
-      if (*pending_leg_set_ == LegSet::QUADRUPED) {
-        // Corners onto the four-corner footprint first, with the middle pair
-        // still down. It agrees with the six-leg stance on the middles, so the
-        // ladder skips their rung outright.
-        begin_reseat(stance_for(LegSet::QUADRUPED), applied_height_);
+    // A preset change, ahead of the height reseat: both want the ladder. Where
+    // the leg sets differ the middle pair moves too, ordered by which way it is
+    // going so the reseat always runs on six planted feet.
+    if (pending_preset_.has_value() && *pending_preset_ != preset_) {
+      const LegSet want = presets_[*pending_preset_].leg_set;
+      if (want == leg_set_) {
+        // Same legs, new footprint: the ladder and, where the two presets stand
+        // at different heights, the plane move behind it. Committed on arrival.
+        begin_preset_reseat(*pending_preset_);
+        return tick_reseat(dt);
+      }
+      if (want == LegSet::QUADRUPED) {
+        // Corners onto the four-corner footprint first, middle pair still down.
+        // Both stances agree on the middles, so the ladder skips their rung.
+        begin_preset_reseat(*pending_preset_);
         return tick_reseat(dt);
       }
       // The other way the pair comes down first, so the reseat that follows it
-      // also runs on six. Commit the set now: nominal_ still holds the quad
+      // also runs on six. Commit the preset now: nominal_ still holds the quad
       // stance, whose middle entries are exactly where the pair is headed.
-      commit_leg_set_change();
+      commit_preset_change();
       pair_fold_ = build_pair_fold(PairFoldDirection::UNFOLD);
       state_ = EngineState::UNFOLDING_PAIR;
       return tick_pair_fold(dt);
@@ -736,11 +881,10 @@ std::map<std::string, LegOutput> Engine::update(
       std::map<std::string, Vec3> target_stance;
       try {
         target_stance = reseat_nominal_stance(
-            target_height_, geometry_for(leg_set_), *leg_specs_, nominal_);
+            target_height_, geometry_for(preset_), *leg_specs_, nominal_);
       } catch (const std::invalid_argument&) {
-        // Geometrically infeasible target — drop the reseat silently. One leg
-        // out of range aborts all six: a partial re-plant would leave the body
-        // resting on a stance it was never solved for.
+        // Infeasible target: one leg out of range aborts all six, or the body
+        // would rest on a stance it was never solved for.
         return emit_stand();
       }
       begin_reseat(target_stance, target_height_);
@@ -761,14 +905,11 @@ std::map<std::string, LegOutput> Engine::update(
   }
 
   if (state_ == EngineState::ENGAGING) {
-    // A command *withdrawn* mid-engagement goes straight to the reseat ladder: the
-    // engagement cannot be run out at a zero command. A command merely turned
-    // around no longer arrives here — the reversal gate latches it, so the
-    // crossing through zero is not read as a release. Its stance legs integrate
-    // the commanded velocity, so a zero freezes each one where the walk left it,
-    // while its swing branch evaluates the strategy closed form — which at a zero
-    // stride is nominal — and teleports every leg home at its own lift-off. No
-    // all_planted() window to wait for: the ladder lands the airborne feet itself.
+    // A command *withdrawn* mid-engagement goes straight to the reseat ladder:
+    // the engagement cannot be run out at a zero command, where its swing branch
+    // would teleport every leg home at its own lift-off. A command merely turned
+    // around does not arrive here — the reversal gate latches it. No all_planted()
+    // window to wait for: the ladder lands the airborne feet itself.
     if (cmd_zero) {
       hand_off_to_reseat();
       return tick_reseat(dt);
@@ -826,12 +967,11 @@ std::map<std::string, LegOutput> Engine::update(
 
 std::map<std::string, LegOutput> Engine::tick_gait(
     float dt, std::pair<float, float> v_body_xy, float omega_z, bool settling) {
-  // A zero command is not a special case: stride_vector collapses to zero and
+  // A zero command is not a special case: stride_vector collapses and
   // AEP == PEP == nominal, so the gait steps in place until the debounce arms the
-  // settle. Holding the targets instead would freeze an airborne leg mid-arc and
-  // put a step in the velocity -> foot-target map at cmd_zero_tol. By the time
-  // settling is reached cmd_gain_ has already eased the command to a standstill,
-  // so the hard zero here only lands the AEP on nominal to the last bit.
+  // settle. Holding the targets instead would freeze an airborne leg mid-arc. By
+  // the time settling is reached cmd_gain_ has already eased the command out, so
+  // the hard zero here only lands the AEP on nominal to the last bit.
   if (settling) {
     v_body_xy = {0.0f, 0.0f};
     omega_z = 0.0f;
@@ -843,9 +983,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
       swing_end_phase(strategy_->duty_factor(), swing_margin());
   const float stance_fraction = 1.0f - swing_end;
 
-  // Parked legs are excluded from every velocity and stride computation: they
-  // lay nothing down, and their lever arms are the longest on the chassis, so
-  // counting them would overstate the fastest foot and slow the whole walk.
+  // Parked legs are excluded from every velocity and stride computation: their
+  // lever arms are the longest on the chassis, so counting them would overstate
+  // the fastest foot and slow the whole walk.
   const auto leg_velocities =
       per_leg_planar_velocity(active_legs_, v_body_xy, omega_z);
   float max_leg_v = 0.0f;
@@ -854,9 +994,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     max_leg_v = std::max(max_leg_v, std::hypot(v.first, v.second));
   }
 
-  // The stride this tick can actually lay down: the worst-placed leg sets it for
-  // every walking leg, since they share one stance_time. Everything downstream
-  // reads this rather than config_.stride_length.
+  // The stride this tick can actually lay down; the worst-placed leg sets it for
+  // all of them, since they share one stance_time. Everything downstream reads
+  // this rather than config_.stride_length.
   const float stride_length =
       effective_stride_length(active_legs_, leg_velocities,
                               config_.stride_length,
@@ -865,9 +1005,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
 
   const auto [min_cycle_time, max_cycle_time] =
       cycle_time_bounds(config_, swing_end);
-  // Scaled by 1 / swing_end as cycle_time_bounds scales the walk's, so every gait
-  // gets the same airborne time out of one settle_swing_time. Faded in on the
-  // command's gain, so the clock never changes rate under an airborne foot.
+  // Scaled by 1 / swing_end like the walk's, so every gait gets the same airborne
+  // time out of one settle_swing_time. Faded in on cmd_gain_ so the clock never
+  // changes rate under an airborne foot.
   const float settle_cycle_time =
       config_.settle_swing_time / std::max(swing_end, 1.0e-6f);
   const float walk_cycle_time =
@@ -880,10 +1020,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   const float stance_time = cycle_time * stance_fraction;
   const float swing_time = cycle_time * swing_end;
 
-  // On the ladder's route the gait only lands what is already in the air: if a
-  // planted leg could start a swing, a gait whose swings overlap end to end would
-  // never give the ladder its all-planted moment. A held leg does not move — the
-  // command is zero, so its stance target was standing still anyway.
+  // On the ladder's route the gait only lands what is already in the air, or a
+  // gait whose swings overlap end to end would never give the ladder its
+  // all-planted moment. A held leg does not move: the command is zero.
   const bool hold_liftoffs = settling && !settle_beats_reseat();
 
   // A steady walk rides exactly on `stance_band` at AEP and PEP, so the bound is
@@ -936,8 +1075,8 @@ std::map<std::string, LegOutput> Engine::tick_gait(
         // stride it is nominal, which is how a settle re-plants with no extra pass.
         touchdown_anchor = swing_.target(name);
         swing_.touchdown(name);
-        // Landed on the live AEP with the integrator anchored there: whatever the
-        // engagement left this leg owing, it is square with its phase now.
+        // Landed on the live AEP with the integrator anchored there: whatever
+        // the engagement left this leg owing, it is square with its phase now.
         on_schedule_[name] = true;
       } else {
         touchdown_anchor = strategy_target;
@@ -954,9 +1093,8 @@ std::map<std::string, LegOutput> Engine::tick_gait(
       }
       const float phase_in_swing =
           swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
-      // Re-aim at the live AEP and stance velocity: the integrator picks this
-      // target up at touchdown, so a latched one would step the foot's velocity
-      // at the seam whenever cmd_vel moved mid-swing. Bounded from the probe on.
+      // Re-aimed every tick and bounded from the probe on; see
+      // SwingPlanner::retarget.
       swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f),
                       phase_in_swing, dt, swing_profile);
       target = swing_.evaluate(name, phase_in_swing, swing_profile);
@@ -971,9 +1109,8 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   return out;
 }
 
-// Standing is a position, not a sequence. Testing for it rather than counting
-// touchdowns since the settle armed is what keeps the debounce free: a leg that
-// re-planted while the command ramped out does not have to do it again.
+// Standing is a position, not a sequence: a leg that re-planted while the
+// command ramped out does not have to do it again.
 bool Engine::all_settled() const {
   for (const auto& n : LEG_NAMES) {
     if (is_parked(n)) {
@@ -1030,8 +1167,7 @@ bool Engine::settle_beats_reseat() const {
   const float natural = config_.settle_swing_time / swing_end;
   // Worst case for the ladder: one swing waiting for the airborne legs to land,
   // then its rungs with a dwell between them, each preceded by whatever shift
-  // hold the leg set owes. The quadruped ladder has four rungs of one leg, and
-  // every one of them waits on the body.
+  // hold the leg set owes.
   const float rungs = static_cast<float>(reseat_rungs(leg_set_).size());
   const float ladder = config_.settle_swing_time +
                        rungs * (config_.reseat_pair_swing_time +
@@ -1061,12 +1197,9 @@ void Engine::finish_or_hand_off_settle() {
 }
 
 void Engine::hand_off_to_reseat() {
-  // build_reseat reads last_targets_, so the ladder starts from where the feet
-  // are, and its first stage lands anything airborne before lifting a foot that
-  // is down — which is why this needs no all_planted() check.
-  //
-  // The gate self-clears on the next tick out of the walk, but its latch suppresses
-  // cmd_zero, and state that can suppress a stop is torn down where the walk is.
+  // The ladder starts from last_targets_, and its first stage lands anything
+  // airborne before lifting a foot that is down — hence no all_planted() check.
+  // The reversal latch suppresses cmd_zero, so it is torn down with the walk.
   reversal_.reset();
   stance_.reset();
   reset_swing_state();
@@ -1089,63 +1222,101 @@ void Engine::finish_settling() {
 }
 
 std::map<std::string, LegOutput> Engine::tick_reseat(float dt) {
+  if (plane_ramping_) {
+    return tick_plane_ramp(dt);
+  }
   auto out = reseat_->update(dt);
-  // The ladder reports only the legs its pair order owns, so the parked pair is
-  // filled in here rather than inside a controller that knows nothing about it.
+  // The ladder reports only the legs its rung order owns.
   overlay_parked(out);
   capture_state(out);
-  if (reseat_->done()) {
-    // The corners have arrived; the footprint they arrived on is now nominal.
-    commit_new_nominal(reseat_target_stance_, reseat_target_height_);
-    // A leg-set change still owing its pair fold: this was the reseat that runs
-    // AHEAD of it, so the pair goes up next rather than the robot standing. The
-    // pending strategy is deliberately left alone — it names a gait of the set
-    // the robot is not on yet, and commit_leg_set_change applies the two
-    // together on the far side.
-    if (pending_leg_set_.has_value() && *pending_leg_set_ != leg_set_) {
-      pair_fold_ = build_pair_fold(PairFoldDirection::FOLD);
-      state_ = EngineState::FOLDING_PAIR;
-      return out;
-    }
-    // Commit a pending gait change at the RESEATING -> STAND handoff.
-    std::optional<std::string> pending = pending_strategy_name_;
-    pending_strategy_name_.reset();
-    if (pending.has_value() && *pending != strategy_name_) {
-      apply_strategy(*pending);
-    }
-    // Nothing owing: either there never was a change, or this was the reseat
-    // that ran after the unfold and the set was committed before it started.
-    pending_leg_set_.reset();
-    state_ = EngineState::STAND;
-    last_targets_ = nominal_;
-    for (const auto& n : LEG_NAMES) last_stance_[n] = true;
+  if (!reseat_->done()) {
+    return out;
   }
+  // The corners have arrived; the footprint they arrived on is now nominal.
+  commit_new_nominal(reseat_target_stance_, reseat_target_height_);
+  if (plane_target_.has_value()) {
+    // Every foot on its final x-y and all six down: the calmest moment to move
+    // the body, and ahead of the pair fold so it crosses on six feet, not four.
+    plane_origin_ = nominal_;
+    plane_elapsed_ = 0.0f;
+    plane_ramping_ = true;
+    return out;
+  }
+  return finish_reseat(std::move(out));
+}
+
+std::map<std::string, LegOutput> Engine::tick_plane_ramp(float dt) {
+  plane_elapsed_ += dt;
+  const float tau = config_.reseat_plane_ramp_time > 0.0f
+                        ? plane_elapsed_ / config_.reseat_plane_ramp_time
+                        : 1.0f;
+  const float s = eased_ramp(tau);
+  const std::map<std::string, Vec3>& want = *plane_target_;
+  std::map<std::string, LegOutput> out;
+  for (const auto& n : LEG_NAMES) {
+    const Vec3& a = plane_origin_.at(n);
+    out[n] = LegOutput{a + (want.at(n) - a) * s, 0.0f, true};
+  }
+  overlay_parked(out);
+  capture_state(out);
+  if (tau < 1.0f) {
+    return out;
+  }
+  const std::map<std::string, Vec3> arrived = want;
+  plane_target_.reset();
+  plane_ramping_ = false;
+  commit_new_nominal(arrived, applied_height_);
+  return finish_reseat(std::move(out));
+}
+
+std::map<std::string, LegOutput> Engine::finish_reseat(
+    std::map<std::string, LegOutput> out) {
+  // A preset change still owing its pair fold: the pair goes up next rather than
+  // the robot standing. The pending strategy is left alone — it names a gait of
+  // the set the robot is not on yet, and commit_preset_change applies both.
+  if (pending_preset_.has_value() &&
+      presets_[*pending_preset_].leg_set != leg_set_) {
+    pair_fold_ = build_pair_fold(PairFoldDirection::FOLD);
+    state_ = EngineState::FOLDING_PAIR;
+    return out;
+  }
+  // Either a same-leg-set change whose whole move has just arrived, or nothing
+  // owing — a no-op, since the reseat after an unfold had its preset committed
+  // before it started.
+  commit_preset_change();
+  // Commit a pending gait change at the RESEATING -> STAND handoff.
+  std::optional<std::string> pending = pending_strategy_name_;
+  pending_strategy_name_.reset();
+  if (pending.has_value() && *pending != strategy_name_) {
+    apply_strategy(*pending);
+  }
+  state_ = EngineState::STAND;
+  last_targets_ = nominal_;
+  for (const auto& n : LEG_NAMES) last_stance_[n] = true;
   return out;
 }
 
 std::map<std::string, LegOutput> Engine::tick_pair_fold(float dt) {
   auto out = pair_fold_->update(dt);
   // No overlay_parked: leg_set_ is HEXAPOD for the whole move, and the pair is
-  // the one thing this controller is emitting itself. capture_state matters
-  // more than usual here — on the way down it is what makes last_targets_
-  // honest for all six before the reseat that follows reads it as the stance
-  // the feet are actually standing on.
+  // what this controller emits itself. capture_state is what makes last_targets_
+  // honest for all six before the reseat that follows reads it.
   capture_state(out);
   if (!pair_fold_->done()) {
     return out;
   }
   if (pair_fold_->direction() == PairFoldDirection::FOLD) {
-    // The pair is at the folded pose, so the flag may now say so. This is the
-    // one tick where leg_set_ and the pair's actual position change together.
-    commit_leg_set_change();
+    // The one tick where leg_set_ and the pair's actual position change
+    // together.
+    commit_preset_change();
     state_ = EngineState::STAND;
     last_targets_ = nominal_;
     for (const auto& n : LEG_NAMES) last_stance_[n] = true;
   } else {
     // Down and planted on the middle nominal, which both stances agree on. The
-    // corners are still out on the quadruped footprint; the reseat walks them
-    // in, and commits the six-leg stance when they arrive.
-    begin_reseat(stance_for(LegSet::HEXAPOD), applied_height_);
+    // corners are still out on the quadruped footprint; the reseat walks them in
+    // and the plane ramp rides behind it, on all six.
+    begin_preset_reseat(preset_);
   }
   return out;
 }
@@ -1157,10 +1328,10 @@ std::map<std::string, LegOutput> Engine::tick_fold(float dt) {
     state_ = EngineState::FOLDED;
     last_targets_ = folded_;
     for (const auto& n : LEG_NAMES) last_stance_[n] = true;
-    // Folded is one pose whichever set walked into it — all six legs tucked
-    // under the chassis. Handing FOLDED back leg-set-neutral is what lets the
-    // next start_initialize() read the choice off the strategy alone.
-    apply_leg_set(LegSet::HEXAPOD);
+    // Folded is one pose whichever set walked into it, so FOLDED is handed back
+    // on the last six-leg preset applied. The next stand's preset is chosen from
+    // the belly, where request_preset applies it outright.
+    apply_preset(fallback_preset_);
   }
   return out;
 }
@@ -1185,11 +1356,14 @@ void Engine::capture_state(const std::map<std::string, LegOutput>& out) {
 EngineConfig engine_config_from_config() {
   const auto& c = ::hexa::config::kEngine;
   EngineConfig cfg;
-  cfg.stride_length = c.stride_length;
-  cfg.stride_length_radial = c.stride_length_radial;
-  cfg.min_swing_time = c.min_swing_time;
-  cfg.max_swing_time = c.max_swing_time;
-  cfg.step_height = c.step_height;
+  // The five preset-owned knobs, seeded from the default preset. The engine
+  // rewrites them on every preset change.
+  const auto& p = ::hexa::config::kPresets[::hexa::config::kDefaultPreset];
+  cfg.stride_length = p.stride_length;
+  cfg.stride_length_radial = p.stride_length_radial;
+  cfg.min_swing_time = p.min_swing_time;
+  cfg.max_swing_time = p.max_swing_time;
+  cfg.step_height = p.step_height;
   cfg.swing_width = c.swing_width;
   cfg.touchdown_velocity = c.touchdown_velocity;
   cfg.touchdown_probe_fraction = c.touchdown_probe_fraction;
@@ -1211,6 +1385,7 @@ EngineConfig engine_config_from_config() {
   cfg.reseat_pair_swing_time = c.reseat_pair_swing_time;
   cfg.reseat_pair_dwell_time = c.reseat_pair_dwell_time;
   cfg.reseat_swing_clearance = c.reseat_swing_clearance;
+  cfg.reseat_plane_ramp_time = c.reseat_plane_ramp_time;
   cfg.pair_fold_swing_time = c.pair_fold_swing_time;
   cfg.pair_fold_dwell_time = c.pair_fold_dwell_time;
   return cfg;
@@ -1254,7 +1429,7 @@ float standing_target_z(float coxa_to_bottom, float body_height,
 // the tuning.yaml block for the joint-limit message.
 JointAngles standing_leg_from(const kin::LegSpec& spec, Leg leg,
                               const ::hexa::config::LegGroupStance& grp,
-                              float target_z, const char* pose_key) {
+                              float target_z, const std::string& pose_key) {
   const LegGroup group = leg_group(leg);
   // The configured splay is the left leg's, positive outward, so it takes two
   // negations: rear legs face the other way, right legs mirror left ones. Keep
@@ -1280,7 +1455,7 @@ JointAngles standing_leg_from(const kin::LegSpec& spec, Leg leg,
           LEG_NAMES[static_cast<std::size_t>(leg)] + " is " +
           std::to_string(out[j]) + " rad, outside the joint limit window [" +
           std::to_string(lim.lower) + ", " + std::to_string(lim.upper) +
-          "] rad — check tuning.yaml " + pose_key + "." +
+          "] rad — check tuning.yaml " + pose_key + ".standing_pose." +
           std::string(leg_group_name(group)));
     }
   }
@@ -1291,7 +1466,8 @@ JointAngles standing_leg_from(const kin::LegSpec& spec, Leg leg,
 
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
-    float foot_radius, const ::hexa::config::StandingPose& standing) {
+    float foot_radius, const ::hexa::config::StandingPose& standing,
+    const std::string& pose_key) {
   const float target_z =
       standing_target_z(coxa_to_bottom, standing.body_height, foot_radius);
 
@@ -1300,31 +1476,79 @@ std::array<JointAngles, kNumLegs> standing_pose_from(
     const Leg leg = static_cast<Leg>(i);
     const auto& grp = standing.groups[static_cast<std::size_t>(
         group_index(leg_group(leg)))];
-    out[i] = standing_leg_from(specs[i], leg, grp, target_z,
-                               "default_standing_pose");
+    out[i] = standing_leg_from(specs[i], leg, grp, target_z, pose_key);
   }
   return out;
 }
 
-std::array<JointAngles, kNumLegs> quad_standing_pose_from(
+std::array<JointAngles, kNumLegs> parked_pair_standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
-    float foot_radius, const ::hexa::config::CornerStandingPose& quad_standing,
-    const std::array<JointAngles, kNumLegs>& standing_pose) {
+    float foot_radius, const ::hexa::config::StandingPose& standing,
+    const std::array<JointAngles, kNumLegs>& middle_fallback,
+    const std::string& pose_key) {
   const float target_z =
-      standing_target_z(coxa_to_bottom, quad_standing.body_height, foot_radius);
+      standing_target_z(coxa_to_bottom, standing.body_height, foot_radius);
 
   std::array<JointAngles, kNumLegs> out{};
   for (std::size_t i = 0; i < kNumLegs; ++i) {
     const Leg leg = static_cast<Leg>(i);
-    const LegGroup group = leg_group(leg);
-    if (group == LegGroup::MIDDLE) {
-      out[i] = standing_pose[i];
+    if (leg_group(leg) == LegGroup::MIDDLE) {
+      out[i] = middle_fallback[i];
       continue;
     }
-    out[i] = standing_leg_from(
-        specs[i], leg,
-        group == LegGroup::FRONT ? quad_standing.front : quad_standing.rear,
-        target_z, "quad_standing_pose");
+    const auto& grp = standing.groups[static_cast<std::size_t>(
+        group_index(leg_group(leg)))];
+    out[i] = standing_leg_from(specs[i], leg, grp, target_z, pose_key);
+  }
+  return out;
+}
+
+PresetSetup solve_preset(
+    const PresetSpec& spec,
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    float foot_radius,
+    const std::array<JointAngles, kNumLegs>& middle_fallback) {
+  const std::string key = "presets." + spec.id;
+  const auto pose =
+      spec.leg_set == LegSet::QUADRUPED
+          ? parked_pair_standing_pose_from(specs, coxa_to_bottom, foot_radius,
+                                           spec.standing, middle_fallback, key)
+          : standing_pose_from(specs, coxa_to_bottom, foot_radius,
+                               spec.standing, key);
+  PresetSetup out;
+  out.id = spec.id;
+  out.leg_set = spec.leg_set;
+  out.nominal_stance = nominal_stance_from(specs, pose);
+  // Its own snapshot; see PresetSetup::reseat_geometry.
+  out.reseat_geometry = reseat_geometry_from(specs, pose);
+  out.stride_length = spec.stride_length;
+  out.stride_length_radial = spec.stride_length_radial;
+  out.min_swing_time = spec.min_swing_time;
+  out.max_swing_time = spec.max_swing_time;
+  out.step_height = spec.step_height;
+  return out;
+}
+
+std::vector<PresetSetup> solve_presets(
+    const std::vector<PresetSpec>& specs_in,
+    const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,
+    float foot_radius, std::size_t default_preset) {
+  if (specs_in.empty()) {
+    throw std::invalid_argument("the preset table is empty");
+  }
+  if (default_preset >= specs_in.size()) {
+    throw std::invalid_argument("default_preset is out of range");
+  }
+  // The middle rows a parked-pair preset borrows come from the default one,
+  // which is the single preset guaranteed to stand on all six.
+  const auto fallback = standing_pose_from(
+      specs, coxa_to_bottom, foot_radius, specs_in[default_preset].standing,
+      "presets." + specs_in[default_preset].id);
+  std::vector<PresetSetup> out;
+  out.reserve(specs_in.size());
+  for (const auto& spec : specs_in) {
+    out.push_back(
+        solve_preset(spec, specs, coxa_to_bottom, foot_radius, fallback));
   }
   return out;
 }
@@ -1353,8 +1577,8 @@ std::map<std::string, kin::LegSpec> leg_specs_from(
 ReseatGeometryByLeg reseat_geometry_from(
     const std::array<kin::LegSpec, kNumLegs>& specs,
     const std::array<JointAngles, kNumLegs>& standing_pose) {
-  // One snapshot per leg: the lean is not shared, since legs in different groups
-  // reach out different distances and stand with different femur/tibia pairs.
+  // One snapshot per leg: groups reach out different distances and stand with
+  // different femur/tibia pairs.
   ReseatGeometryByLeg out{};
   for (std::size_t i = 0; i < static_cast<std::size_t>(kNumLegs); ++i) {
     out[i] = default_geometry_from_pose(standing_pose[i], specs[i]);
@@ -1379,17 +1603,73 @@ std::map<std::string, LegContext> build_leg_contexts_from(
   return out;
 }
 
-std::array<JointAngles, kNumLegs> standing_pose_from_config() {
-  return standing_pose_from(baked_leg_specs(), ::hexa::config::kCoxaToBottom,
-                            ::hexa::config::kFootRadius,
-                            ::hexa::config::kStandingPose);
+std::map<std::string, LegContext> leg_contexts_from_stance(
+    const std::array<kin::LegSpec, kNumLegs>& specs,
+    const std::map<std::string, Vec3>& nominal_stance) {
+  std::map<std::string, LegContext> out;
+  for (int i = 0; i < 6; ++i) {
+    const auto& spec = specs[static_cast<std::size_t>(i)];
+    LegContext ctx;
+    ctx.name = LEG_NAMES[i];
+    ctx.mount_xyz = spec.mount_xyz;
+    ctx.mount_yaw = spec.mount_yaw;
+    ctx.nominal_stance = nominal_stance.at(LEG_NAMES[i]);
+    out[LEG_NAMES[i]] = ctx;
+  }
+  return out;
 }
 
-std::array<JointAngles, kNumLegs> quad_standing_pose_from_config() {
-  return quad_standing_pose_from(
-      baked_leg_specs(), ::hexa::config::kCoxaToBottom,
-      ::hexa::config::kFootRadius, ::hexa::config::kQuadStandingPose,
-      standing_pose_from_config());
+std::array<JointAngles, kNumLegs> standing_pose_from_config() {
+  const auto& p = ::hexa::config::kPresets[::hexa::config::kDefaultPreset];
+  return standing_pose_from(baked_leg_specs(), ::hexa::config::kCoxaToBottom,
+                            ::hexa::config::kFootRadius, p.standing,
+                            "presets." + std::string(p.id));
+}
+
+std::vector<PresetSpec> preset_specs_from_config() {
+  std::vector<PresetSpec> out;
+  out.reserve(::hexa::config::kPresets.size());
+  for (const auto& p : ::hexa::config::kPresets) {
+    PresetSpec spec;
+    spec.id = std::string(p.id);
+    spec.leg_set = p.leg_set;
+    spec.standing = p.standing;
+    spec.stride_length = p.stride_length;
+    spec.stride_length_radial = p.stride_length_radial;
+    spec.min_swing_time = p.min_swing_time;
+    spec.max_swing_time = p.max_swing_time;
+    spec.step_height = p.step_height;
+    out.push_back(std::move(spec));
+  }
+  return out;
+}
+
+std::array<JointAngles, kNumLegs> preset_standing_pose_from_config(
+    const std::string& id) {
+  const auto specs = preset_specs_from_config();
+  for (const auto& spec : specs) {
+    if (spec.id != id) {
+      continue;
+    }
+    const auto fallback = standing_pose_from_config();
+    return spec.leg_set == LegSet::QUADRUPED
+               ? parked_pair_standing_pose_from(
+                     baked_leg_specs(), ::hexa::config::kCoxaToBottom,
+                     ::hexa::config::kFootRadius, spec.standing, fallback,
+                     "presets." + id)
+               : standing_pose_from(baked_leg_specs(),
+                                    ::hexa::config::kCoxaToBottom,
+                                    ::hexa::config::kFootRadius, spec.standing,
+                                    "presets." + id);
+  }
+  throw std::invalid_argument("unknown preset: " + id);
+}
+
+std::vector<PresetSetup> preset_setups_from_config() {
+  return solve_presets(preset_specs_from_config(), baked_leg_specs(),
+                       ::hexa::config::kCoxaToBottom,
+                       ::hexa::config::kFootRadius,
+                       ::hexa::config::kDefaultPreset);
 }
 
 std::map<std::string, Vec3> nominal_stance_from_config() {
@@ -1425,7 +1705,7 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<JointAngles, kNumLegs>& folded_pose,
     const std::array<JointAngles, kNumLegs>& initialized_pose,
     float coxa_to_bottom, float foot_radius,
-    const std::array<JointAngles, kNumLegs>& quad_standing_pose) {
+    std::vector<PresetSetup> presets, std::size_t default_preset) {
   auto factory = strategies().find(strategy_name);
   if (factory == strategies().end()) {
     throw std::invalid_argument("unknown strategy: " + strategy_name);
@@ -1436,12 +1716,8 @@ std::unique_ptr<Engine> make_default_engine(
       rest_stance_from(specs, folded_pose),
       rest_stance_from(specs, initialized_pose), coxa_to_bottom, foot_radius,
       build_leg_contexts_from(specs, standing_pose), leg_specs_from(specs),
-      reseat_geometry_from(specs, standing_pose),
-      QuadrupedSetup{
-          nominal_stance_from(specs, quad_standing_pose),
-          // Its own snapshot: the quadruped stance reaches out a different
-          // distance, so it leans its tibias differently.
-          reseat_geometry_from(specs, quad_standing_pose)});
+      reseat_geometry_from(specs, standing_pose), std::move(presets),
+      default_preset);
 }
 
 std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
@@ -1449,7 +1725,8 @@ std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
       strategy_name, baked_leg_specs(), engine_config_from_config(),
       standing_pose_from_config(), ::hexa::config::kFoldedPose,
       ::hexa::config::kInitializedPose, ::hexa::config::kCoxaToBottom,
-      ::hexa::config::kFootRadius, quad_standing_pose_from_config());
+      ::hexa::config::kFootRadius, preset_setups_from_config(),
+      ::hexa::config::kDefaultPreset);
 }
 
 std::string leg_set_value(LegSet set) {

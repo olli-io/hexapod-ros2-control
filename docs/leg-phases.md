@@ -234,9 +234,16 @@ other two gaits.
 **Quadruped mode** parks the middle pair (`l_middle` / `r_middle`) in the air and
 walks the four corner legs one at a time. The vocabulary:
 
-- **leg set** — which legs the strategy walks. A property of the strategy, so
-  selecting one of the four-corner gaits (`quad_walk`, `quad_canter`) *is*
-  selecting the mode.
+- **leg set** — which legs the robot stands on. A property of the **preset**,
+  which declares it, so selecting the `quad` preset *is* selecting the mode. Each
+  strategy carries one too, and the two must agree: a `/cmd_gait` naming a gait
+  of the other set is refused rather than read as a request to change it.
+- **preset** — the bundle the operator selects as one thing: the leg set, the
+  standing pose, and the stride and swing times the walk lays down on it.
+  `normal`, `fast`, `offroad` and `quad` ship. It rides `/cmd_preset`, and the
+  engine reports the one it has APPLIED on `/gait/preset`. It needs a channel of
+  its own because three of the four stand on six legs: neither the gait name nor
+  the leg set can tell them apart.
 - **park** — a leg held clear of the walk. Neither stance nor swing: it carries
   no weight and takes no phase. The parked pose is the **folded** pose
   (`geometry.yaml folded_pose`) — the same angles the robot powers up in. From
@@ -245,13 +252,15 @@ walks the four corner legs one at a time. The vocabulary:
   and taken back by the **fold the pair** / **unfold the pair** moves, the two
   halves of a leg-set change below.
 - **choosing the set** — from the belly by the init buttons, or from a stand by
-  a leg-set change. Start stands the robot up on six legs, select on four; off
-  the belly either one is still a fold. What has changed is that folding is no
-  longer the *only* way between the two: a `/cmd_gait` naming a gait of the
-  other leg set, sent from a stand, runs the change in place. The engine still
-  refuses one from anywhere else — mid-ladder, mid-engagement, walking or
-  settling — so nothing downstream has to guard against a middle pair caught in
-  the wrong place.
+  a **preset change**. Start stands the robot up on six legs, select on four;
+  off the belly either one is still a fold. The init edge carries the leg set
+  itself rather than a gait: start resolves to the last six-leg preset applied,
+  select to the four-corner one. What has changed is that folding is no longer
+  the *only* way between the two: a `/cmd_preset` naming a preset of the other
+  leg set, sent from a stand, runs the change in place. The engine still refuses
+  one from anywhere else — mid-ladder, mid-engagement, walking or settling — so
+  nothing downstream has to guard against a middle pair caught in the wrong
+  place.
 
 Both gaits are creeps at duty factor 3/4. Lift-offs are a quarter cycle apart
 and the swing window is
@@ -304,17 +313,39 @@ budget is what carries the body into the next triangle, and the static margin
 there is millimetres. Body height is exempt; it never competed for the x-y
 budget in the first place.
 
-### Changing the leg set from a stand
+### Changing the preset from a stand
 
-Folding to the belly is no longer the only way between the two stands. A
-`/cmd_gait` naming a gait of the other leg set, sent while the engine is at
-`stand`, runs the change in place. It is refused from every other state, so a
-walking robot ignores it rather than stopping for it.
+Folding to the belly is no longer the only way between two stances. A
+`/cmd_preset`, sent while the engine is at `stand`, runs the change in place. It
+is refused from every other state, so a walking robot ignores it rather than
+stopping for it.
 
-The two footprints are not the same. The corners stand at `tip_reach` 0.135 on
-six legs and 0.119 on four, and the rear pair's splay goes from 0° to 25° — 16 mm
-of travel at the front and 57 mm at the rear. So the corners have to be
-**reseated** onto the new footprint, and the middle pair has to travel the 111 mm
+No two presets stand on the same footprint, so **every** preset change reseats
+the walking feet onto the new one. Where the two presets share a leg set —
+`normal` → `offroad`, say, which raises the body from 0.06 m to 0.095 m and pulls
+`tip_reach` in from 0.135 to 0.125 — the reseat and the **plane ramp** behind it
+are the whole change and the middle pair never moves. What follows is the harder
+case, the **leg-set change**, where it does.
+
+The footprint and the body height are two moves, in that order, and not one.
+A preset's `tip_reach` is a ground-plane radius and its `body_height` is a depth,
+so the two are independent — and the ladder can only carry the first. Handed a
+target plane it would get the height wrong in both directions: below the feet
+each rung lands its own pair a third of the way down, so the body steps down one
+mirrored pair at a time; above them every foot reads as airborne to the landing
+stage, which brings all six down together and leaves the robot momentarily on
+nothing. So the ladder re-plants the feet on the new footprint at the height they
+already stand at, and the **plane ramp** then eases every foot from that plane to
+the new preset's with all six planted — one body translation, the feet fixed on
+the ground where they will stay. Both halves run inside `RESEATING`; the ramp is
+part of the re-plant, not a state of its own. Where the two presets stand at the
+same height (`normal` → `quad`, both 0.06 m) there is no plane to move and the
+ladder is the whole of it.
+
+The two leg sets' footprints differ more. The corners stand at `tip_reach` 0.135
+on six legs and 0.119 on four, and the rear pair's splay goes from 0° to 25° —
+16 mm of travel at the front and 57 mm at the rear. So the corners have to be
+reseated onto the new footprint, and the middle pair has to travel the 111 mm
 between the ground and the folded pose. The ordering is fixed by which of those
 two the body can afford at a time:
 

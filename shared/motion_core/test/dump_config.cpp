@@ -70,7 +70,8 @@ int main() {
   std::printf("  outer stance radius = %.4f m (yaw lever arm)\n",
               (double)r_outer);
 
-  const auto caps = hexa::gait::load_velocity_caps_from_config(r_outer);
+  const auto caps = hexa::gait::load_velocity_caps_from_config(hexa::config::kDefaultPreset,
+                                                 r_outer);
   std::printf("\nGait velocity caps:\n");
   for (const auto& g : cfg::kGaits) {
     const std::string name(g.name.data());

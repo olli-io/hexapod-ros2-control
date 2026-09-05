@@ -176,8 +176,9 @@ TEST(VelocityCaps, DerivedFromEngineKnobs) {
     const float margin = quadruped ? cfg::kEngine.quadruped_swing_phase_margin
                                    : cfg::kEngine.swing_phase_margin;
     const float swing_end = (1.0f - g.duty_factor) * (1.0f - margin);
-    const float want = cfg::kEngine.stride_length * swing_end /
-                       (cfg::kEngine.min_swing_time * (1.0f - swing_end));
+    const auto& preset = cfg::kPresets[cfg::kDefaultPreset];
+    const float want = preset.stride_length * swing_end /
+                       (preset.min_swing_time * (1.0f - swing_end));
     EXPECT_NEAR(g.linear_max, want, 1e-6f) << gait_name(g);
     EXPECT_GT(g.linear_max, 0.0f) << gait_name(g);
   }
@@ -400,13 +401,66 @@ TEST(FacePanel, GpiosAreDistinctAndUnclaimed) {
 // to share a reach and a splay: standing_pose_from negates the rear splay, and
 // cos(150 deg - t) = -cos(30 deg + t) makes the two cancel exactly.
 TEST(QuadStance, FrontAndRearAreSymmetric) {
-  const auto& front = cfg::kQuadStandingPose.front;
-  const auto& rear = cfg::kQuadStandingPose.rear;
+  const auto& quad = cfg::kPresets[cfg::preset_index("quad")].standing;
+  const auto& front = quad.groups[0];
+  const auto& rear = quad.groups[2];
   EXPECT_NEAR(front.tip_reach, rear.tip_reach, kTol);
   EXPECT_NEAR(front.coxa, rear.coxa, kTol);
   // Pulled in from the six-leg stance to buy leg reach for the support shift.
   EXPECT_LT(front.tip_reach, cfg::kStandingPose.groups[0].tip_reach);
-  EXPECT_NEAR(cfg::kQuadStandingPose.body_height,
-              cfg::kStandingPose.body_height, kTol);
+  EXPECT_NEAR(quad.body_height, cfg::kStandingPose.body_height, kTol);
+}
+
+// Every preset's stance and bundle has to be usable on its own: the operator
+// selects one as a unit, and a preset the codegen would emit but the robot
+// could not stand on is a fault waiting for a Mode-view tap.
+TEST(Presets, EveryOneIsWellFormed) {
+  EXPECT_LT(cfg::kDefaultPreset, cfg::kPresets.size());
+  // The boot preset must stand on all six: the cold start is folded on six, and
+  // it is what FAULT recovers to.
+  EXPECT_EQ(cfg::kPresets[cfg::kDefaultPreset].leg_set,
+            hexa::gait::LegSet::HEXAPOD);
+  for (const auto& p : cfg::kPresets) {
+    EXPECT_FALSE(p.id.empty());
+    EXPECT_EQ(cfg::preset_index(p.id), static_cast<std::size_t>(&p - cfg::kPresets.data()))
+        << p.id << " is not uniquely named";
+    EXPECT_GT(p.stride_length, 0.0f) << p.id;
+    EXPECT_GT(p.step_height, 0.0f) << p.id;
+    // The radial budget is a cut of the stride, never a stretch of it.
+    EXPECT_GT(p.stride_length_radial, 0.0f) << p.id;
+    EXPECT_LE(p.stride_length_radial, p.stride_length) << p.id;
+    // Past max_swing_time the robot shortens its stride instead, so the pair has
+    // to be ordered for that branch to exist at all.
+    EXPECT_GT(p.min_swing_time, 0.0f) << p.id;
+    EXPECT_LE(p.min_swing_time, p.max_swing_time) << p.id;
+    // Inside the posture envelope, or the body is clamped away from rest the
+    // moment the preset is applied.
+    EXPECT_GT(p.standing.body_height, cfg::kPosture.body_height_min) << p.id;
+    EXPECT_LT(p.standing.body_height, cfg::kPosture.body_height_max) << p.id;
+    for (const auto& grp : p.standing.groups) {
+      EXPECT_GT(grp.tip_reach, 0.0f) << p.id;
+    }
+  }
+}
+
+// Each preset gets its own row, and the caps track the stride and swing time
+// that produced them: a longer stride at a quicker cadence is a faster robot.
+TEST(Presets, CapsFollowTheBundle) {
+  ASSERT_EQ(cfg::kGaitsByPreset.size(), cfg::kPresets.size());
+  for (std::size_t i = 0; i < cfg::kPresets.size(); ++i) {
+    const auto& p = cfg::kPresets[i];
+    const float ratio = (p.stride_length / p.min_swing_time) /
+                        (cfg::kPresets[cfg::kDefaultPreset].stride_length /
+                         cfg::kPresets[cfg::kDefaultPreset].min_swing_time);
+    for (std::size_t g = 0; g < cfg::kGaits.size(); ++g) {
+      EXPECT_NEAR(cfg::kGaitsByPreset[i][g].linear_max,
+                  cfg::kGaits[g].linear_max * ratio, 1e-6f)
+          << p.id << " / " << gait_name(cfg::kGaits[g]);
+      // yaw_bias is a feel knob keyed to the gait's duty, not a timing budget,
+      // so no preset moves it.
+      EXPECT_NEAR(cfg::kGaitsByPreset[i][g].yaw_bias, cfg::kGaits[g].yaw_bias,
+                  1e-6f);
+    }
+  }
 }
 

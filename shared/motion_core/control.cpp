@@ -117,32 +117,59 @@ float Control::accel_angular_for(const std::string& gait) const {
   return caps_.angular_max(gait) / vmax_ramp_time_angular_;
 }
 
+void Control::rearm_limiter() {
+  limiter_.set_accel_linear(accel_linear_for(active_gait_));
+  limiter_.set_accel_angular(accel_angular_for(active_gait_));
+}
+
 void Control::set_gait(const std::string& gait) {
   if (gait == active_gait_) {
     return;
   }
   active_gait_ = gait;
-  limiter_.set_accel_linear(accel_linear_for(gait));
-  limiter_.set_accel_angular(accel_angular_for(gait));
+  rearm_limiter();
 }
+
+namespace {
+
+// The walking subset of a full-stance map, for whichever legs `set` walks.
+template <typename Map>
+Map walking_subset(const Map& all, hexa::gait::LegSet set) {
+  Map out;
+  for (const auto& [name, v] : all) {
+    if (!hexa::gait::leg_is_parked(set, name)) {
+      out[name] = v;
+    }
+  }
+  return out;
+}
+
+}  // namespace
 
 void Control::set_leg_set(hexa::gait::LegSet set) {
   if (set == leg_set_) {
     return;
   }
   leg_set_ = set;
-  stance_xy_.clear();
-  legs_.clear();
-  for (const auto& [name, p] : stance_xy_all_) {
-    if (!hexa::gait::leg_is_parked(leg_set_, name)) {
-      stance_xy_[name] = p;
-    }
-  }
-  for (const auto& [name, leg] : legs_all_) {
-    if (!hexa::gait::leg_is_parked(leg_set_, name)) {
-      legs_[name] = leg;
-    }
-  }
+  stance_xy_ = walking_subset(stance_xy_all_, leg_set_);
+  legs_ = walking_subset(legs_all_, leg_set_);
+}
+
+void Control::set_preset(
+    const hexa::gait::VelocityCaps& caps,
+    const std::map<std::string, hexa::Vec3>& nominal_stance,
+    const std::map<std::string, hexa::gait::LegContext>& legs,
+    float stride_length, float stride_length_radial) {
+  caps_ = caps;
+  stance_xy_all_ = nominal_stance;
+  legs_all_ = legs;
+  stance_xy_ = walking_subset(stance_xy_all_, leg_set_);
+  legs_ = walking_subset(legs_all_, leg_set_);
+  stride_length_ = stride_length;
+  stride_length_radial_ = stride_length_radial;
+  // The accel caps are the new preset's linear/angular maxima over the ramp
+  // times, so the limiter is re-armed even though the gait has not changed.
+  rearm_limiter();
 }
 
 std::tuple<float, float, float> Control::shape(
