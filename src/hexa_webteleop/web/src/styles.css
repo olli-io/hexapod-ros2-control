@@ -483,9 +483,21 @@ html, body {
      viewport fraction so it shrinks, leaving the joysticks at a stable size
      instead of the panel claiming full height and squeezing them. */
   #center-panel { --panel-size: min(52vh, 30vw, 500px); }
+
+  /* The label hangs under the pad, so a column centred as pad + label puts the
+     circle half a label high — the slack the eye reads as the view sitting
+     above its own middle. Reserving the label's height above the pad as well
+     centres the circle itself, which is what the corner buttons hang off. */
+  .joystick { padding-top: var(--joy-label); }
+
   /* Equal max-width/height so a clamp on either axis keeps the pad square
-     (aspect-ratio alone won't prevent an oval when the two caps differ). */
-  .joystick-pad { max-width: min(60vh, 24vw, 200px); max-height: min(60vh, 24vw, 200px); }
+     (aspect-ratio alone won't prevent an oval when the two caps differ). The
+     flat cap is the binding one on a phone — the two viewport terms only bite
+     on a short or narrow window — and it is tighter than portrait's on purpose:
+     landscape spends the screen's SHORT axis on the circle, and the pad plus
+     the half corner button hanging off its top and bottom edges is already most
+     of a phone's landscape height. */
+  .joystick-pad { max-width: min(60vh, 24vw, 170px); max-height: min(60vh, 24vw, 170px); }
 }
 
 /* Portrait stacks the two joysticks and the mode bar vertically, so a circle
@@ -494,14 +506,24 @@ html, body {
    the pad takes the height its own row was given instead: `.joystick` is a
    flex item with a definite height, the pad fills what the label leaves of it,
    and `aspect-ratio: 1` derives the width, so the circle is only ever as big as
-   the column can afford. The row's padding is the half corner button that hangs
-   off the pad's top and bottom edges — slack the pad must not eat, since the
-   topmost one has the screen edge right above it. The two caps stay equal so a
-   clamp on either axis keeps the pad square rather than oval. */
+   the column can afford. The row's padding starts from the half corner button
+   that hangs off the pad's top and bottom edges — slack the pad must not eat,
+   since the topmost one has the screen edge right above it. The two caps stay
+   equal so a clamp on either axis keeps the pad square rather than oval. */
 @media (orientation: portrait) {
   #control-area { flex-direction: column; }
   #center-panel { --panel-size: min(52vw, 30vh, 500px); }
-  .joystick { padding-block: calc(var(--corner-btn) / 2); }
+  /* Half a corner button top and bottom, plus the label's height on top only:
+     the label hangs under the pad either way, so a row padded evenly centres
+     pad + label and leaves the circle half a label high. With the extra reserve
+     above, the circle is centred in its own row — and it is centred whether the
+     pad is sized by the row (`height` below) or held at the cap, since the two
+     cases put the label's cost on the same side. It costs the pad nothing on a
+     phone, where the cap is what binds. */
+  .joystick {
+    padding-top: calc(var(--corner-btn) / 2 + var(--joy-label));
+    padding-bottom: calc(var(--corner-btn) / 2);
+  }
   .joystick-pad {
     width: auto;
     height: calc(100% - var(--joy-label));
