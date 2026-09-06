@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { Joystick, ScrollText, SlidersHorizontal, Wifi, WifiOff } from "lucide-react";
 import { VIEW_PATHS, viewOfPath } from "../utils/views";
 import type { ViewName } from "../utils/views";
 
@@ -9,7 +10,6 @@ interface Props {
   usableOnly: boolean;
   connected: boolean;
   controllerActive: boolean;
-  quad: boolean;
   presetPending: boolean;
 }
 
@@ -23,7 +23,6 @@ export default function NavBar({
   usableOnly,
   connected,
   controllerActive,
-  quad,
   presetPending,
 }: Props) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -41,7 +40,7 @@ export default function NavBar({
       .join(" ");
   };
 
-  const tab = (view: ViewName, label: string, className: string, svg: ReactNode) => (
+  const tab = (view: ViewName, label: string, className: string, icon: ReactNode) => (
     <Link
       id={`tab-${view}`}
       to={VIEW_PATHS[view]}
@@ -52,7 +51,7 @@ export default function NavBar({
       activeProps={{}}
       aria-label={label}
     >
-      {svg}
+      {icon}
     </Link>
   );
 
@@ -65,63 +64,31 @@ export default function NavBar({
         "control",
         "Control",
         cls("control", controllerActive && "controlled"),
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-             strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="7.5" r="3.5" />
-          <line x1="12" y1="11" x2="12" y2="16.5" />
-          <ellipse cx="12" cy="18.5" rx="7" ry="2.5" />
-        </svg>,
+        <Joystick aria-hidden />,
       )}
 
-      {/* Mode: the operator preset (NORMAL / QUAD). The icon doubles as a
-          leg-set readout — the two middle legs dim when the robot is standing
-          on four — so the current mode is visible without opening the view. */}
+      {/* Mode: the operator preset. Accent while a switch is in flight; which
+          preset is in force is the status strip's to say, since the tab is a
+          symbol and NORMAL / FAST / OFFROAD / QUAD are four of them. */}
       {tab(
         "preset",
         "Mode",
-        cls("preset", quad && "quad", presetPending && "pending"),
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-             strokeLinecap="round" strokeLinejoin="round">
-          <rect x="8" y="6" width="8" height="12" rx="2" />
-          <line x1="8" y1="8.5" x2="4" y2="6" />
-          <line x1="16" y1="8.5" x2="20" y2="6" />
-          <line className="preset-mid-leg" x1="8" y1="12" x2="3.5" y2="12" />
-          <line className="preset-mid-leg" x1="16" y1="12" x2="20.5" y2="12" />
-          <line x1="8" y1="15.5" x2="4" y2="18" />
-          <line x1="16" y1="15.5" x2="20" y2="18" />
-        </svg>,
+        cls("preset", presetPending && "pending"),
+        <SlidersHorizontal aria-hidden />,
       )}
 
       {/* Network: link state and who holds control. The wifi symbol keeps its
-          connection colour (slash shows when disconnected) so the link is
-          legible from any tab. */}
+          connection colour (the struck-through glyph shows when disconnected)
+          so the link is legible from any tab. */}
       {tab(
         "network",
         "Network",
         cls("network", connected ? "connected" : "disconnected"),
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-             strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 11.5a12 12 0 0 1 16 0" />
-          <path d="M7.5 15a7 7 0 0 1 9 0" />
-          <path d="M10.5 18.3a2.5 2.5 0 0 1 3 0" />
-          <circle cx="12" cy="20.5" r="0.6" fill="currentColor" stroke="none" />
-          <line className="wifi-slash" x1="3" y1="3" x2="21" y2="21" />
-        </svg>,
+        connected ? <Wifi aria-hidden /> : <WifiOff aria-hidden />,
       )}
 
       {/* Log */}
-      {tab(
-        "log",
-        "Log",
-        cls("log"),
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-             strokeLinecap="round" strokeLinejoin="round">
-          <rect x="4" y="3" width="16" height="18" rx="2" />
-          <line x1="8" y1="8" x2="16" y2="8" />
-          <line x1="8" y1="12" x2="16" y2="12" />
-          <line x1="8" y1="16" x2="13" y2="16" />
-        </svg>,
-      )}
+      {tab("log", "Log", cls("log"), <ScrollText aria-hidden />)}
     </nav>
   );
 }

@@ -266,6 +266,19 @@ def test_entry_gait_starts_at_the_preset_default(registry):
     assert registry.entry_gait("quad") == "quad_canter"
 
 
+def test_entry_gait_keeps_a_gait_the_new_preset_offers(registry):
+    # A preset change is a change of stance. The operator did not ask for a
+    # different walk, so they do not get one where the new rotation has it.
+    assert registry.entry_gait("fast", "tripod") == "tripod"
+
+
+def test_entry_gait_falls_back_where_the_new_preset_lacks_it(registry):
+    # ripple is normal's and not fast's; and no six-leg gait at all survives the
+    # crossing to the four corners.
+    assert registry.entry_gait("fast", "ripple") == "tripod"
+    assert registry.entry_gait("quad", "tripod") == "quad_canter"
+
+
 def test_caps_are_per_preset(registry):
     # Three of the four inputs to a cap ride the preset: the stride it lays
     # down, the swing time it lays it down in, and the stance the angular cap
@@ -388,15 +401,17 @@ def test_resync_gait_updates_the_right_cycler_index(registry, joy_cfg):
     )
 
 
-def test_resync_remembers_each_presets_slot(registry, joy_cfg):
+def test_resync_remembers_the_quadruped_stand_up_gait(registry, joy_cfg):
+    # The four-corner slot rides into default_quadruped_gait, which is what the
+    # `select` init button stands up on — so coming off the belly lands where
+    # the operator last was. The six-leg presets keep no such memory any more:
+    # a preset change enters on the gait in force (see entry_gait).
     state = _state(current_gait_idx=0)
     cfg = resync_gait("ripple", joy_cfg, state, registry).cfg
     resync_preset("quad", "quad_canter", cfg, state, registry)
     cfg = resync_gait("quad_walk", cfg, state, registry).cfg
-    # Selecting NORMAL again should offer the gait it was left on, not the
-    # preset's cold default — the round trip lands where the operator was.
-    assert registry.entry_gait("normal") == "ripple"
-    assert registry.entry_gait("quad") == "quad_walk"
+    assert cfg.default_quadruped_gait == "quad_walk"
+    assert registry.entry_gait("normal") == "tripod"
 
 
 def test_resync_gait_updates_the_caps(registry, joy_cfg):

@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useTeleop } from "../session";
+import { useTeleop } from "../providers/TeleopProvider";
 
 // Link state and the controller handover, in one view because they are one
 // question: which input the robot is listening to, and whether this device can

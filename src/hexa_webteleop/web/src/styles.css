@@ -155,24 +155,18 @@ html, body {
   color: var(--accent);
 }
 
-/* Connection: wifi on/off. Slash appears only when disconnected. */
-.wifi-slash { display: none; }
-
+/* Connection: wifi on/off. The glyph itself swaps to the struck-through one
+   when disconnected; only the tint is CSS's. */
 #tab-network.connected { color: var(--green); }
 
 #tab-network.disconnected { color: var(--red); }
-#tab-network.disconnected .wifi-slash { display: block; }
 
 /* Control tab: green while a controller owns /cmd_vel — the tab whose contents
    change, since its mode column becomes the take-control prompt. */
 #tab-control.controlled { color: var(--green); }
 
-/* Mode icon: accent while a switch is in flight. The two middle legs dim when
-   the robot is standing on four, so the bar carries the current mode without
-   the view being open. */
+/* Mode icon: accent while a preset switch is in flight. */
 #tab-preset.pending { color: var(--accent); }
-.preset-mid-leg { transition: opacity 0.2s ease; }
-#tab-preset.quad .preset-mid-leg { opacity: 0.2; }
 
 /* The tab now showing. Last, and carrying two classes to every status rule's
    one, so it outranks the green/red/accent tints above: which view you are
@@ -228,14 +222,6 @@ html, body {
   min-height: 0;
 }
 
-@media (orientation: landscape) {
-  #preset-list {
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
-    grid-template-columns: none;
-    max-width: 760px;
-  }
-}
 
 .preset-item {
   display: flex;
@@ -252,7 +238,7 @@ html, body {
   padding: clamp(0.4rem, 1.8vh, 1rem) 0.6rem;
   border: 1px solid var(--muted);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--fg);
   font: inherit;
   text-align: center;
@@ -263,6 +249,34 @@ html, body {
 .preset-label { font-size: clamp(0.8rem, 2vh, 1rem); font-weight: 700; }
 .preset-sub { font-size: clamp(0.65rem, 1.5vh, 0.78rem); color: var(--muted); }
 
+/* One word over each row, naming the choice it makes. The rule runs out to both
+   edges of the row it heads, so the four sections read as four bands rather
+   than one column of tiles — the tiles themselves are deliberately identical
+   across the rows, so the heading is the only thing telling them apart. */
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 420px;
+  /* Pulled toward the row it heads and pushed off the one above, so the pair
+     reads as a band: the view's own gap is otherwise the same above and below. */
+  margin: 0.25rem auto -0.15rem;
+  font-size: clamp(0.6rem, 1.4vh, 0.72rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.section-heading::before,
+.section-heading::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--muted);
+  opacity: 0.35;
+}
+
 /* Active is the mode the robot is actually standing in — from /gait/leg_set,
    never from the tap. Same solid fill the active teleop mode button uses. */
 .preset-item.active {
@@ -270,32 +284,27 @@ html, body {
   border-color: var(--accent);
   color: var(--bg-dim);
 }
-.preset-item.active .preset-sub { color: var(--bg-dim); }
 
 /* Asked for, not yet arrived. Dashed rather than filled, so during the couple
-   of seconds the change takes both tiles are legible: "on six, going to four".
-   The word rides under the label rather than after it — a tile is too narrow to
-   grow a suffix without reflowing. */
+   of seconds the change takes both tiles are legible behind the switching
+   modal: "on six, going to four". The word itself is that modal's to say — a
+   tile is too narrow to grow a suffix without reflowing. */
 .preset-item.pending {
   border-style: dashed;
   border-color: var(--accent);
   color: var(--accent);
 }
-.preset-item.pending .preset-label::after {
-  content: "\Aswitching…";
-  white-space: pre;
-  font-weight: 400;
-  font-size: 0.75rem;
-}
 
 .preset-item:disabled { opacity: 0.5; pointer-events: none; }
 
-/* The gaits of the preset in force: the same tiles the presets are, on the same
-   grid, so the view reads as one choice made twice rather than a list and a row
-   of pills. A rotation is two to five long, so the last row of a portrait 2x2
-   may be half empty — the alternative is a column count that changes with the
-   preset, which would move every tile on a preset switch. */
-#gait-row {
+/* The gaits of the preset in force, and under them its animations: the same
+   tiles the presets are, on the same grid, so the view reads as one choice made
+   three times rather than a list and two rows of pills. A rotation is two to
+   five long, so the last row of a portrait 2x2 may be half empty — the
+   alternative is a column count that changes with the preset, which would move
+   every tile on a preset switch. */
+#gait-row,
+#anim-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 0.5rem;
@@ -303,28 +312,44 @@ html, body {
   min-height: 0;
   width: 100%;
   max-width: 420px;
-  /* The top margin is on top of the view's own gap, so the two grids read as
-     two choices rather than one long list of tiles. */
-  margin: 0.5rem auto 0;
+  margin: 0 auto;
 }
 
-@media (orientation: landscape) {
-  #gait-row {
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
-    grid-template-columns: none;
-    max-width: 760px;
-  }
+/* The mode row, above the presets: same tiles again, but three fixed slots in
+   both orientations — three short words abreast fit a phone, and a 2x2 with a
+   gap in it would read as a fourth mode gone missing. */
+#preset-modes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
 }
 
-.gait-item {
+/* Three abreast in both orientations, matching the mode row above: the gaits
+   are the one row with a whole vocabulary in it — seven tiles, where every
+   other row is two to four — and seven in a line are slivers while two abreast
+   are four rows deep. The animations take the same three so the two rows under
+   the presets keep one column grid between them. */
+#gait-row,
+#anim-row {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+
+.gait-item,
+.anim-item,
+.preset-mode {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   padding: clamp(0.4rem, 1.8vh, 1rem) 0.6rem;
   border: 1px solid var(--muted);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--fg);
   font: inherit;
   font-size: clamp(0.8rem, 2vh, 1rem);
@@ -334,54 +359,72 @@ html, body {
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
-/* The gait latched on /cmd_gait. Same solid accent an active preset takes, so
-   "what the robot is on" reads the same both times it appears in the view. */
-.gait-item.active {
+/* The gait latched on /cmd_gait, the animation latched on /animation/mode, the
+   mode the node's state machine is in. Same solid accent an active preset takes,
+   so "what the robot is on" reads the same everywhere it appears in the view. */
+.gait-item.active,
+.anim-item.active,
+.preset-mode.active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--bg-dim);
 }
 
-.gait-item:disabled { opacity: 0.5; pointer-events: none; }
+/* Dimmed, not gone: the animation row is inert outside animation mode, and the
+   mode row plus everything else goes inert while a preset change is in flight. */
+.gait-item:disabled,
+.anim-item:disabled,
+.preset-mode:disabled { opacity: 0.4; pointer-events: none; }
 
-/* The folded view's one action, standing where the preset grid does — the grid
-   is not rendered at all on the belly, so this is not a third thing below two
-   inert ones. Drawn in the accent a preset tile only takes when active, and
-   given the height the grid it replaces would have had, so it reads as the
-   thing to press. */
+/* Inert is not the same as off: an animation that is actually running keeps its
+   fill while the row around it is dimmed — the row goes inert for the duration
+   of a preset change, and the body is still being animated through it. */
+.anim-item.active:disabled,
+.gait-item.active:disabled { opacity: 1; }
+
+/* The one word each of these rows carries is a name, so it is set the way the
+   preset labels are rather than the way a gait name is. */
+.preset-mode { text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* The stand/fold press, the mode group's last row and the full width of its
+   three slots — it is not a fourth mode, and a mode tile is too narrow to carry
+   two words anyway. Drawn in the border the inactive tiles carry from a stand,
+   where folding is available rather than the thing to do next, and in the
+   accent a preset tile only takes when active on the belly, where nothing else
+   on the view does anything until it is pressed. */
 #preset-stand {
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
-  flex: 0 1 auto;
+  gap: 0.15rem;
   min-height: 0;
   overflow: hidden;
-  width: 100%;
-  max-width: 420px;
-  margin: 0 auto;
-  padding: clamp(0.8rem, 5vh, 2.5rem) 1rem;
+  padding: clamp(0.4rem, 1.4vh, 0.75rem) 1rem;
   background: var(--surface);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  color: var(--accent);
+  color: var(--fg);
   font: inherit;
   text-align: center;
   cursor: pointer;
 }
 
-/* Same footprint the preset grid it stands in for has, in both orientations. */
-@media (orientation: landscape) {
-  #preset-stand { max-width: 760px; }
+#preset-stand.folded {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 #preset-stand:active {
   background: var(--accent);
+  border-color: var(--accent);
   color: var(--bg-dim);
 }
 
 #preset-stand:active .preset-sub { color: var(--bg-dim); }
+
+#preset-stand:disabled { opacity: 0.5; pointer-events: none; }
 
 /* Empty until the node refuses something, so it reserves no space. */
 #preset-note {
@@ -395,6 +438,47 @@ html, body {
 }
 
 #preset-note.refused { color: var(--red); }
+
+/* Landscape puts the four sections on two columns instead of one long stack: a
+   landscape phone is wide and short, and a stack of four headed rows does not
+   fit one without shrinking every tile. MODE over PRESET reads down the left —
+   what the robot stands as — and GAIT over ANIM down the right — what it walks.
+   Placed explicitly on one grid
+   rather than in two column boxes, so the two columns' headings share a row and
+   their divider rules line up straight across the view; a section shorter than
+   its opposite number sits at the top of the band rather than stretching to
+   fill it. */
+@media (orientation: landscape) {
+  #preset-view {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: min-content;
+    align-content: center;
+    column-gap: 1.2rem;
+    width: 100%;
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  /* The rows carry their own centring cap for the single-column stack; here the
+     column they sit in is the cap. */
+  #preset-view > * {
+    max-width: none;
+    align-self: start;
+  }
+
+  [data-section="mode"] { grid-area: 1 / 1; }
+  #preset-modes { grid-area: 2 / 1; }
+  [data-section="preset"] { grid-area: 3 / 1; }
+  #preset-list { grid-area: 4 / 1; }
+
+  [data-section="gait"] { grid-area: 1 / 2; }
+  #gait-row { grid-area: 2 / 2; }
+  [data-section="anim"] { grid-area: 3 / 2; }
+  #anim-row { grid-area: 4 / 2; }
+
+  #preset-note { grid-area: 5 / 1 / 6 / 3; }
+}
 
 /* ── Network view panels ────────────────────────────────────────── */
 
@@ -734,6 +818,14 @@ html, body {
   background: var(--surface-2);
 }
 
+/* A mode this leg set cannot be in — animation on four legs. Dimmed the same
+   amount the Mode view's inert tiles are, so "offered but not now" reads the
+   same on both views. */
+#mode-stack .mode-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* ── Inline control prompt (replaces the mode selector) ─────────── */
 /* Shown in place of the mode column while a controller owns /cmd_vel. */
 
@@ -816,9 +908,12 @@ html, body {
   pointer-events: none;
 }
 
-/* ── Busy overlay ───────────────────────────────────────────────── */
-/* The one modal left: another device holds the server's single client slot,
-   which is a state the operator cannot act on from any tab. */
+/* ── Modals ─────────────────────────────────────────────────────── */
+/* The shell `useModal()` renders, and which BusyOverlay writes by hand: a
+   backdrop over the whole viewport and one centred box. Fixed to the viewport
+   rather than to any view, which is why the markup goes through
+   ModalProvider's host on <body> — a fixed child of #preset-view's landscape
+   grid is sized to a grid area instead. */
 
 .overlay {
   position: fixed;
@@ -847,6 +942,23 @@ html, body {
 .dialog-sub {
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+/* ── Spinner ────────────────────────────────────────────────────── */
+/* The dialogs' busy ring. CSS-driven, so a dialog that comes and goes runs no
+   timer of its own. */
+
+.spinner {
+  display: block;
+  margin: 0 auto 0.8rem;
+  color: var(--accent);
+  animation: spinner-rotate 900ms linear infinite;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ── Utility ────────────────────────────────────────────────────── */

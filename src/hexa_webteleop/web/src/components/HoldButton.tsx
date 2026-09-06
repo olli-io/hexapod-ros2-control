@@ -5,6 +5,10 @@ interface Props {
   // May carry a newline (\n): the CSS breaks it onto a second line.
   label: string;
   pressed: boolean;
+  // Inert and dimmed. The listeners stay attached — a disabled button fires no
+  // events — so the caller must not disable one that is currently held: the
+  // release would never arrive. Callers that can are careful about it.
+  disabled?: boolean;
   onPress: () => void;
   onRelease: () => void;
 }
@@ -17,6 +21,7 @@ export default function HoldButton({
   className,
   label,
   pressed,
+  disabled = false,
   onPress,
   onRelease,
 }: Props) {
@@ -62,7 +67,7 @@ export default function HoldButton({
   }, []);
 
   return (
-    <button ref={ref} className={className}>
+    <button ref={ref} className={className} disabled={disabled}>
       {label}
     </button>
   );

@@ -46,7 +46,14 @@ export interface InitMessage {
   gait: string;
   animation: string;
   gait_state: string;
+  // The animation-mode rotation, fixed at load. The Mode view offers it as a
+  // button apiece, the same way it offers the preset's gaits.
+  animations?: string[];
   presets?: PresetDescriptor[];
+  // The preset animation mode is pinned to (`presets.animation`), or null where
+  // the config names none. The Mode view greys the other tiles out while
+  // animation mode is in force.
+  preset_animation?: string | null;
   preset_active?: string | null;
   preset_leg_set?: LegSet | null;
   preset_pending?: string | null;
@@ -119,6 +126,9 @@ export type ClientMessage =
   // A gait by name, not a step through a rotation. The node still checks it
   // against the preset in force before it reaches /cmd_gait.
   | { type: "select_gait"; gait: string }
+  // Likewise an animation by name rather than a step through the rotation. The
+  // node still checks the mode before it reaches /animation/mode.
+  | { type: "select_animation"; animation: string }
   | { type: "request_control" }
   | { type: "release_control" };
 

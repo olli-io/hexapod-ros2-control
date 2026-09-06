@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-router";
 import NavBar from "../components/NavBar";
 import BusyOverlay from "../components/BusyOverlay";
-import { controllerActive, useTeleop } from "../session";
+import { controllerActive, useTeleop } from "../providers/TeleopProvider";
 import { VIEW_PATHS } from "../utils/views";
 
 // The shell every route renders inside: the tab bar, which never leaves the
@@ -44,7 +44,6 @@ function RootLayout() {
         usableOnly={!connected}
         connected={connected}
         controllerActive={controllerActive(state)}
-        quad={state.activeLegSet === "quadruped"}
         presetPending={state.pendingPreset !== null}
       />
 

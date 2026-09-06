@@ -18,9 +18,21 @@ export const MODES: readonly { action: ActionName; mode: Mode; label: string }[]
 
 interface Props {
   mode: Mode;
+  // Animation mode may be entered — `animationAvailable` in
+  // `TeleopProvider.tsx` says when, and why not. False dims the ANIM button rather than hiding it: the
+  // mode exists, this is not where it lives, and the way in is a preset change,
+  // which is the Mode view's.
+  animationAllowed: boolean;
   pressed: ReadonlySet<ActionName>;
   onPress: (action: ActionName) => void;
   onRelease: (action: ActionName) => void;
+}
+
+// True where `mode` is one the robot cannot be in as it stands. Exported so the
+// pass in `app/index.tsx` that releases what leaves the screen agrees with what
+// the stack actually renders.
+export function modeLocked(mode: Mode, animationAllowed: boolean): boolean {
+  return mode === "animation" && !animationAllowed;
 }
 
 // The mode selector: three buttons on one line — a column between the circles
@@ -29,6 +41,7 @@ interface Props {
 // screen in a mode that dropped it.
 export default function ModeStack({
   mode,
+  animationAllowed,
   pressed,
   onPress,
   onRelease,
@@ -41,6 +54,7 @@ export default function ModeStack({
           className={`mode-btn${slot.mode === mode ? " active" : ""}`}
           label={slot.label}
           pressed={pressed.has(slot.action)}
+          disabled={modeLocked(slot.mode, animationAllowed)}
           onPress={() => onPress(slot.action)}
           onRelease={() => onRelease(slot.action)}
         />

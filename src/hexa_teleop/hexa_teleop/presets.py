@@ -148,8 +148,11 @@ class PresetRegistry:
         for p in self._presets:
             self._active.setdefault(p.leg_set, p.id)
         self._active[self._by_id[default_id].leg_set] = default_id
-        # Each preset's remembered slot in its own rotation, seeded from its
-        # default_gait so the first selection matches the init button exactly.
+        # The last gait seen in each preset's rotation. Read by ``project``
+        # alone, and only for the four-corner one: it becomes
+        # ``default_quadruped_gait``, the gait the `select` init button stands
+        # up on, so coming off the belly lands where the operator last was.
+        # NOT what a preset change enters on — see ``entry_gait``.
         self._slot: dict[str, str] = {p.id: p.default_gait for p in self._presets}
         # Nothing until /gait/preset speaks. Deliberately not seeded from the
         # default: showing a preset the robot may not be on is exactly what the
@@ -190,13 +193,27 @@ class PresetRegistry:
     def active_id(self, leg_set: str) -> str | None:
         return self._active.get(leg_set)
 
-    def entry_gait(self, preset_id: str) -> str:
+    def entry_gait(self, preset_id: str, current_gait: str | None = None) -> str:
         """The gait selecting ``preset_id`` should publish.
 
-        Its remembered slot, so NORMAL -> QUAD -> NORMAL lands on the gait the
-        operator left, and a first selection lands on ``default_gait``.
+        The one already in force where the new preset offers it: a preset change
+        is a change of stance, and an operator who did not ask for a different
+        walk should not get one. Its ``default_gait`` where it does not — which
+        is also the answer for the leg-set change, where no six-leg gait can
+        survive the crossing.
+
+        Not a remembered per-preset slot, which this used to be: it brought back
+        a gait the operator picked minutes ago on other ground, and it was fed
+        by the /cmd_gait loopback, which lands while the OLD preset is still the
+        one in force — so a switch recorded its own entry gait against the
+        preset it was leaving, and one preset's default leaked into another's
+        memory. ``current_gait`` is optional so a caller with nothing in force
+        yet (config load) still gets the cold default.
         """
-        return self._slot[preset_id]
+        preset = self._by_id[preset_id]
+        if current_gait is not None and current_gait in preset.gait_cycle:
+            return current_gait
+        return preset.default_gait
 
     def for_gait(self, gait: str) -> Preset | None:
         """A preset whose rotation contains ``gait``.
@@ -215,7 +232,12 @@ class PresetRegistry:
         return None
 
     def note_gait(self, gait: str) -> Preset | None:
-        """Record that ``gait`` is now in force. Returns its preset, if any."""
+        """Record that ``gait`` is now in force. Returns its preset, if any.
+
+        Feeds ``default_quadruped_gait`` only; a preset change reads the gait in
+        force instead, so the loopback's timing (this lands while the preset
+        being left is still the current one) cannot misdirect a selection.
+        """
         preset = self.for_gait(gait)
         if preset is None:
             return None

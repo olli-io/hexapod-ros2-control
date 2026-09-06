@@ -1,6 +1,6 @@
 import { Bug, BugPlay, CarBattery, Settings2, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { animationLabel } from "../utils/labels";
+import { animationLabel, gaitLabel } from "../utils/labels";
 
 interface Props {
   presetLabel: string;
@@ -34,10 +34,10 @@ export default function StatusBar({
 }: Props) {
   return (
     <div id="status-bar">
-      {/* The preset, because the tab icon cannot carry it: that icon shows the
-          LEG SET, and NORMAL / FAST / OFFROAD all stand on six legs. */}
+      {/* The preset by name — the Mode tab's icon is a symbol for the view and
+          cannot tell NORMAL / FAST / OFFROAD / QUAD apart. */}
       <Item icon={Settings2} value={presetLabel || "—"} />
-      <Item icon={Bug} value={gait || "—"} />
+      <Item icon={Bug} value={gaitLabel(gait) || "—"} />
       <Item icon={BugPlay} value={animationLabel(animation) || "—"} />
       {/* Pack voltage and current, polled over the WebSocket. Real robot only;
           a dash on each where nothing publishes telemetry — two items rather

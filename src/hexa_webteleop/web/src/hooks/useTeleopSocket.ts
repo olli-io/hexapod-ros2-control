@@ -25,11 +25,17 @@ export interface TeleopState {
   // Latest /gait/state. Only the folded case is read: no gait is running on the
   // belly, so the strategy the next stand will use is not a status.
   gaitState: string;
+  // The animation-mode rotation, fixed at connect like `presets`. The Mode
+  // view's animation row is one button per entry; `animation` above says which
+  // of them the pipeline is on.
+  animations: string[];
   // `presets` is fixed at connect; `activePreset` / `activeLegSet` come from the
   // engine's report topics and NOTHING else — never from the tap, never from the
   // latched /cmd_gait, which keeps a refused name forever. `pendingPreset` is
   // what was asked for and has not landed yet.
   presets: PresetDescriptor[];
+  // The preset animation mode is pinned to; null where the config names none.
+  animationPreset: string | null;
   activePreset: string | null;
   activeLegSet: LegSet | null;
   pendingPreset: string | null;
@@ -53,7 +59,9 @@ const INITIAL: TeleopState = {
   gait: "",
   animation: "",
   gaitState: "",
+  animations: [],
   presets: [],
+  animationPreset: null,
   activePreset: null,
   activeLegSet: null,
   pendingPreset: null,
@@ -95,7 +103,9 @@ function reduce(state: TeleopState, action: Action): TeleopState {
         gait: msg.gait,
         animation: msg.animation,
         gaitState: msg.gait_state,
+        animations: msg.animations ?? [],
         presets: msg.presets ?? [],
+        animationPreset: msg.preset_animation ?? null,
         activePreset: msg.preset_active ?? null,
         activeLegSet: msg.preset_leg_set ?? null,
         pendingPreset: msg.preset_pending ?? null,

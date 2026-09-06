@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect } from "react";
 import type { ReactNode } from "react";
-import { useTeleopSocket } from "./hooks/useTeleopSocket";
-import type { TeleopSocket, TeleopState } from "./hooks/useTeleopSocket";
+import { useTeleopSocket } from "../hooks/useTeleopSocket";
+import type { TeleopSocket, TeleopState } from "../hooks/useTeleopSocket";
 
 // How long a refusal note stays on the Mode view before clearing itself (ms).
 const REFUSAL_MS = 4000;
@@ -38,6 +38,20 @@ export function useTeleop(): TeleopSocket {
   const session = useContext(SessionContext);
   if (!session) throw new Error("useTeleop() outside <TeleopProvider>");
   return session;
+}
+
+// Whether animation mode may be entered at all. Two reasons it may not, and
+// they are different facts: the robot stands on four legs (every animation is
+// written for six, and the shared mapping refuses the mode there off its own
+// leg-set flag), or it stands on a six-leg preset the animations are not
+// written for — `presets.animation` names the one that carries them, and no key
+// means no restriction. Both read the ENGINE's reports, never the tap: before
+// the first `/gait/preset` there is no preset in force and the answer is no,
+// which is the same honesty the unlit tiles show.
+export function animationAvailable(state: TeleopState): boolean {
+  if (state.activeLegSet === "quadruped") return false;
+  if (state.animationPreset === null) return true;
+  return state.activePreset === state.animationPreset;
 }
 
 // A controller is active whenever arbitration is on and the web app does not

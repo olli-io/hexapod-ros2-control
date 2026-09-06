@@ -10,6 +10,7 @@ from hexa_webteleop import (
     battery_payload,
     gait_selectable,
     input_is_stale,
+    load_animation_preset,
     load_web_config,
     map_web,
     neutral_inputs,
@@ -773,6 +774,28 @@ def test_preset_descriptors_carry_each_rotation(cfg_and_caps):
     rows = {r["id"]: r["gaits"] for r in preset_descriptors(registry)}
     assert rows["normal"] == ["tripod", "tetrapod", "ripple"]
     assert rows["quad"] == ["quad_canter", "quad_walk"]
+
+
+def test_animation_preset_is_read_from_the_config(cfg_and_caps):
+    _, _, _, _, _, registry = cfg_and_caps
+    raw = dict(_RAW)
+    raw["presets"] = {**_RAW["presets"], "animation": "normal"}
+    assert load_animation_preset(raw, registry) == "normal"
+
+
+def test_no_animation_preset_key_pins_nothing(cfg_and_caps):
+    # Absent is not an error: animation mode then runs on whatever preset is in
+    # force, which is what it did before the key existed.
+    _, _, _, _, _, registry = cfg_and_caps
+    assert load_animation_preset(_RAW, registry) is None
+
+
+def test_animation_preset_must_name_a_declared_preset(cfg_and_caps):
+    _, _, _, _, _, registry = cfg_and_caps
+    raw = dict(_RAW)
+    raw["presets"] = {**_RAW["presets"], "animation": "nosuch"}
+    with pytest.raises(ValueError, match="presets.animation"):
+        load_animation_preset(raw, registry)
 
 
 def test_gait_selectable_only_inside_the_preset_in_force(cfg_and_caps):

@@ -3,9 +3,9 @@
 // Routes, but never page loads: the WebSocket is the session, and the server
 // hands its one client slot to whoever reconnects, so a navigation that fetched
 // a document would cost the operator control of the robot. The router keeps
-// every switch in the client and the socket lives above it (see session.tsx),
-// which is what makes these four independent routes instead of one page holding
-// four hidden divs.
+// every switch in the client and the socket lives above it (see
+// TeleopProvider.tsx), which is what makes these four independent routes
+// instead of one page holding four hidden divs.
 export const VIEW_NAMES = ["control", "preset", "network", "log"] as const;
 
 export type ViewName = (typeof VIEW_NAMES)[number];

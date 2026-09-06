@@ -57,7 +57,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Empty, String
 
-from hexa_teleop.joy_mapping import JoyState
+from hexa_teleop.joy_mapping import ANIMATION, GAIT, JoyState
 from hexa_teleop.teleop_arbitration import (
     GAMEPAD,
     WEB,
@@ -79,6 +79,7 @@ from .web_mapping import (
     battery_payload,
     gait_selectable,
     input_is_stale,
+    load_animation_preset,
     load_web_config,
     map_web,
     neutral_inputs,
@@ -163,6 +164,13 @@ class WebTeleopNode(Node):
             import yaml
 
             raw = yaml.safe_load(f)
+        # The preset animation mode is pinned to. Read from the raw config
+        # rather than threaded through ``load_web_config``'s tuple: it is the
+        # web node's own policy, not part of the shared JoyConfig the mapping
+        # runs on.
+        self._animation_preset: str | None = load_animation_preset(
+            raw, self._presets
+        )
         server_cfg = raw.get("server", {}) or {}
         self._port = int(server_cfg.get("port", 8080))
         self._portal_port = int(server_cfg.get("portal_port", 80))
@@ -196,6 +204,11 @@ class WebTeleopNode(Node):
         self.get_logger().info(
             f"animation list: {list(self._cfg.animation_list)}"
         )
+        if self._animation_preset is not None:
+            self.get_logger().info(
+                f"animation mode is available on preset "
+                f"{self._animation_preset!r} only"
+            )
 
         # Shared input state (WS thread writes, timer reads)
         self._lock = threading.Lock()
@@ -395,12 +408,46 @@ class WebTeleopNode(Node):
             # the mode — arriving on four legs has to leave it, and tell the
             # pipeline, which is still holding the last selected animation.
             self.get_logger().info("animation mode left (quadruped leg set)")
-            self._pub_animation_mode.publish(String(data=""))
-            self._broadcast_to_clients({
-                "type": "mode",
-                "mode": self._state.mode,
-            })
+            self._leave_animation_mode()
+        elif self._state.mode == ANIMATION and not self._animation_mode_allowed():
+            # Same shape, one preset finer: a six-leg preset the animations are
+            # not written for. Only reachable from outside — the mode cannot be
+            # entered from one of these, and the Mode view will not switch preset
+            # while it is in force — but /cmd_preset is a public topic, so
+            # arriving on one has to leave the mode rather than sit in a state
+            # the two rules above exist to prevent.
+            self.get_logger().info(
+                f"animation mode left (preset {msg.data!r} is not "
+                f"{self._animation_preset!r})"
+            )
+            self._state.mode = GAIT
+            self._leave_animation_mode()
         self._broadcast_preset()
+
+    def _leave_animation_mode(self) -> None:
+        """Drop the animation and tell both ends the mode moved.
+
+        The pipeline is still holding the last selected animation, so the empty
+        publish is not optional; the client is showing ANIM lit, so neither is
+        the broadcast.
+        """
+        self._pub_animation_mode.publish(String(data=""))
+        self._broadcast_to_clients({
+            "type": "mode",
+            "mode": self._state.mode,
+        })
+
+    def _animation_mode_allowed(self) -> bool:
+        """True where animation mode may be in force: on its own preset.
+
+        ``presets.animation`` names the one preset the animations are written
+        for; without the key nothing is gated and any preset will do. The
+        four-legged case is not this function's — the shared mapping already
+        refuses to enter the mode there, off ``JoyState.quadruped``.
+        """
+        if self._animation_preset is None:
+            return True
+        return self._presets.current_id() == self._animation_preset
 
     def _broadcast_preset(self, refused: str | None = None) -> None:
         self._broadcast_to_clients({
@@ -415,6 +462,18 @@ class WebTeleopNode(Node):
         if msg.data == self._latest_animation_mode:
             return
         self._latest_animation_mode = msg.data
+        # Cycler bookkeeping, the way /cmd_gait's loopback does the gait's: a
+        # name selected by the Mode view has to leave the prev/next index where
+        # the operator can step off it, or the next animation_next press would
+        # jump back to wherever the cycler last was. Here rather than in
+        # ``_select_animation`` because this runs on the executor thread, which
+        # is the only thread ``_state`` belongs to. An empty name is the mapping
+        # leaving animation mode; it has already cleared its own state.
+        if msg.data in self._cfg.animation_list:
+            self._state.current_animation_idx = self._cfg.animation_list.index(
+                msg.data
+            )
+            self._state.animation_name = msg.data
         self._broadcast_to_clients({
             "type": "animation",
             "animation": msg.data,
@@ -702,6 +761,8 @@ class WebTeleopNode(Node):
             # so a client reconnecting mid-switch inherits the truth instead of
             # a blank view.
             "presets": preset_descriptors(self._presets),
+            # Which preset the Mode view leaves selectable in animation mode.
+            "preset_animation": self._animation_preset,
             **{
                 f"preset_{k}": v
                 for k, v in preset_payload(
@@ -771,6 +832,31 @@ class WebTeleopNode(Node):
             if action not in ACTIONS:
                 self.get_logger().warning(f"unknown action {action!r} ignored")
                 return
+            # The one action the node refuses outright rather than passing to
+            # the mapping. The button is already dimmed on a preset that does
+            # not carry animation mode, so this is only ever a stale client —
+            # but the mapping has no preset to check against (that gate would
+            # have to go in the parity-locked half), and it is easier to not
+            # enter the mode than to back out of it: entry snaps an animation
+            # and forces tripod on the way through.
+            if (
+                pressed
+                and action == "animation_mode"
+                and not self._animation_mode_allowed()
+            ):
+                self.get_logger().info(
+                    f"animation mode refused — preset is "
+                    f"{self._presets.current_id()!r}, not "
+                    f"{self._animation_preset!r}"
+                )
+                # The label, not the id: it is the word on the tile the
+                # operator has to press. Non-None whenever the guard above
+                # says no.
+                wanted = self._presets.get(self._animation_preset)
+                self._broadcast_preset(
+                    refused=f"animation mode needs the {wanted.label} preset"
+                )
+                return
             with self._lock:
                 self._actions = (
                     self._actions | {action}
@@ -793,6 +879,8 @@ class WebTeleopNode(Node):
             self._select_preset(str(data.get("preset", "")))
         elif msg_type == "select_gait":
             self._select_gait(str(data.get("gait", "")))
+        elif msg_type == "select_animation":
+            self._select_animation(str(data.get("animation", "")))
         elif msg_type == "request_control":
             self._claim_control()
         elif msg_type == "release_control":
@@ -826,6 +914,36 @@ class WebTeleopNode(Node):
             return
         if not self._publish_gait_select(gait):
             self._broadcast_preset(refused="the robot is busy")
+
+    def _select_animation(self, animation: str) -> None:
+        """Ask for an animation by name, from the Mode view's animation row.
+
+        The cycler's counterpart to ``_select_gait``, and guarded the same way:
+        the name must be one the config offers, and the state machine must
+        actually be in ANIMATION mode — outside it nothing is driving the body,
+        ``map_functions`` holds ``animation_name`` empty, and a name published
+        anyway would sit latched on /animation/mode as an animation the operator
+        cannot see running. The row is already dimmed there; this is the same
+        answer for a client that asks regardless.
+
+        Not gated on ownership, for the reason ``_select_gait`` is not: one
+        idempotent write to a latched selection topic, not a drive stream. The
+        index the prev/next presses walk is resynced by the loopback in
+        ``_on_animation_mode``, on the thread that owns ``_state``.
+        """
+        if animation not in self._cfg.animation_list:
+            self.get_logger().warning(f"unknown animation {animation!r} requested")
+            self._broadcast_preset(refused="no such animation")
+            return
+        if self._state.mode != ANIMATION:
+            self._broadcast_preset(refused="not in animation mode")
+            return
+        if animation == self._latest_animation_mode:
+            # Already there: the latched topic would carry the same name, and a
+            # refusal would be a lie.
+            return
+        self.get_logger().info(f"publishing /animation/mode={animation!r}")
+        self._pub_animation_mode.publish(String(data=animation))
 
     def _select_preset(self, preset_id: str) -> None:
         """Ask the engine for a preset. Deliberately NOT gated on ownership.
@@ -864,7 +982,9 @@ class WebTeleopNode(Node):
             )
             return
 
-        gait = self._presets.entry_gait(preset.id)
+        # The gait in force where the new preset walks it, its default where it
+        # does not. The operator asked for a stance, not a different walk.
+        gait = self._presets.entry_gait(preset.id, self._active_gait)
         owner = "web" if self._web_owns else "gamepad"
         self.get_logger().info(
             f"preset -> {preset_id!r} (gait {gait!r}), requested by the webapp "

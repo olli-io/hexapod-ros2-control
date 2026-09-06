@@ -3,10 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import Joystick from "../components/Joystick";
 import type { JoystickHandle } from "../components/Joystick";
 import StatusBar from "../components/StatusBar";
-import ModeStack, { MODES } from "../components/ModeStack";
+import ModeStack, { MODES, modeLocked } from "../components/ModeStack";
 import HoldButton from "../components/HoldButton";
 import ControlPrompt from "../components/ControlPrompt";
-import { controllerActive, useTeleop } from "../session";
+import {
+  animationAvailable,
+  controllerActive,
+  useTeleop,
+} from "../providers/TeleopProvider";
 import type { ActionName, Mode } from "../types/protocol";
 
 // Re-send held input this often (ms) so the server's input watchdog
@@ -68,6 +72,8 @@ function ControlRoute() {
   const { state, send } = useTeleop();
   const [pressed, setPressed] = useState<ReadonlySet<ActionName>>(new Set());
 
+  const animationAllowed = animationAvailable(state);
+
   const leftJoyRef = useRef<JoystickHandle | null>(null);
   const rightJoyRef = useRef<JoystickHandle | null>(null);
   const pressedRef = useRef(pressed);
@@ -119,11 +125,15 @@ function ControlRoute() {
   // animation mode keeps stand and takes the height pair off for its own. A
   // button the new mode does not offer is gone from the screen, so its release
   // event never arrives, and the keepalive would hold that function down for
-  // good. The three mode buttons are offered in every mode, so they can never
-  // be the stale one.
+  // good. The mode buttons are offered in every mode, so a mode change can
+  // never leave one of them stale — but a preset the animations are not written
+  // for disables the animation one, and a disabled button fires no events
+  // either, so that is watched here alongside the mode.
   useEffect(() => {
     const offered = new Set<ActionName>([
-      ...MODES.map((m) => m.action),
+      ...MODES.filter((m) => !modeLocked(m.mode, animationAllowed)).map(
+        (m) => m.action,
+      ),
       ...CORNERS[state.mode],
     ]);
     const stale = [...pressedRef.current].filter((a) => !offered.has(a));
@@ -134,7 +144,7 @@ function ControlRoute() {
       return next;
     });
     for (const action of stale) send({ type: "action", action, pressed: false });
-  }, [state.mode, send]);
+  }, [state.mode, animationAllowed, send]);
 
   // Safety stop: if the page is hidden, reset joys to zero
   useEffect(() => {
@@ -176,10 +186,11 @@ function ControlRoute() {
       onRelease={() => releaseAction(action)}
     />
   );
-  // Stand is the only stand on this view: it stands the robot on the last
-  // six-leg preset from the belly and folds it from a stand, so it needs no
-  // leg-set qualifier, and the four-legged stand is the Mode view's QUAD
-  // preset rather than a second button here.
+  // Stand/Fold is the only stand on this view: one `init` press, which stands
+  // the robot on the last six-leg preset from the belly and folds it from a
+  // stand — so it needs no leg-set qualifier, and the four-legged stand is the
+  // Mode view's QUAD preset rather than a second button here. The Mode view's
+  // own button is the same press under the same two words.
   //
   // A controller owning /cmd_vel takes every corner along with the sticks and
   // the grid, which is the one condition the table above does not carry.
@@ -200,8 +211,17 @@ function ControlRoute() {
         {offers("wiggle_left") && corner("wiggle_left", "bl", "Wiggle\n\u25c0")}
         {/* Red on the belly: the one press that has to happen before anything
             else on screen does anything, and the only state the operator can
-            read off the button itself. */}
-        {offers("init") && corner("init", "br", "Stand", folded ? "folded" : "")}
+            read off the button itself. The word follows /gait/state for the
+            same reason — one press does both halves, and a button labelled
+            Stand from a stand would fold the robot under a hand reaching for
+            the opposite. */}
+        {offers("init") &&
+          corner(
+            "init",
+            "br",
+            folded ? "Stand" : "Fold",
+            folded ? "folded" : "",
+          )}
       </Joystick>
 
       {/* Center column: status strip over the mode selector. */}
@@ -222,6 +242,7 @@ function ControlRoute() {
         ) : (
           <ModeStack
             mode={state.mode}
+            animationAllowed={animationAllowed}
             pressed={pressed}
             onPress={pressAction}
             onRelease={releaseAction}

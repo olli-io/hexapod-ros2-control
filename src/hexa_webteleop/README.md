@@ -128,11 +128,18 @@ gives.
 A tab opening a view that offers the operator **presets** — `NORMAL` (six
 legs, everyday stance), `FAST` (low, long-striding), `OFFROAD` (tall, short
 steps, high clearance) and `QUAD` (four corners, middle pair parked) — switches
-between them, and offers the **gaits** the one in force walks. The two live in
-one view because they are one choice made in two steps: a preset is a leg set and
-a stance, and its rotation is the gaits that walk it. Tapping one publishes its id on `/cmd_preset` and that
-preset's remembered gait on `/cmd_gait`, in that order, since the engine measures
-a gait against the preset in force. The engine then runs a **preset change** in
+between them, and offers the **gaits** the one in force walks and the
+**animations** animation mode offers, under a row of the three **modes**. They
+live in one view because a preset is a leg set and a stance, its rotation is the
+gaits that walk it, and everything a name can be picked from is picked here —
+the Control view holds sticks and the corners a thumb reaches without leaving
+one, and nothing that has to be read to be chosen. Tapping one publishes its id on `/cmd_preset` and its
+**entry gait** on `/cmd_gait`, in that order, since the engine measures a gait
+against the preset in force. The entry gait is the one already in force where the
+new preset walks it — a preset change is a change of stance, and an operator who
+did not ask for a different walk does not get one — and the new preset's
+`default_gait` (tripod, on all three six-leg presets) where it does not, which is
+every leg-set change and every gait outside the new rotation. The engine then runs a **preset change** in
 place, without folding to the belly: a reseat onto the new footprint, plus the
 middle pair's own move on either side of it where the two presets differ in leg
 set. See `hexa_teleop`'s README for what a preset is and `docs/leg-phases.md`
@@ -175,24 +182,71 @@ its own touchend, so each canvas commands zero as it goes.
   exempt from arbitration exactly as a mode switch is (below), which also makes
   it the only stand a webapp can reach while a controller drives — the grid it
   presses is a take-control prompt in that state.
-- **A second grid under the presets, a tile per gait in the preset in force.**
-  Same size and shape as a preset tile, so the view reads as one choice made
-  twice. The column count does not follow the rotation's length — a rotation is
-  two to five long, and a count that changed with it would move every tile on a
-  preset switch — so a portrait rotation of five ends on a half-empty row. One
-  press to any of them, where the grid's old prev/next pair took up to four and
-  never said what the choices were. The names come from that preset's
-  `gait_cycle`, shipped with the grid in the `init` message and indexed by
-  `/gait/preset`, so the grid can only ever offer gaits that walk the legs the
-  robot is standing on — the guarantee the cycler's arithmetic used to give for
-  free. Tapping one publishes it on `/cmd_gait`, and the lit tile is what that
-  topic last carried, never the tap. Live on the belly too: no gait runs there,
+- **A second grid under the presets, a tile per gait — every declared gait, not
+  just the rotation in force.** Same size and shape as a preset tile, so the view
+  reads as one choice made twice. The gaits the preset in force does not walk are
+  **dimmed in place** rather than dropped: the row then never changes shape, a
+  tile stays where it is across a preset switch, and a greyed `quad_walk` says
+  where that gait lives — pick the preset that offers it — where a vanished one
+  said nothing. One press to any of them, where the grid's old prev/next pair
+  took up to four and never said what the choices were. The names come from the
+  presets' own `gait_cycle`s, shipped with the grid in the `init` message and
+  indexed by `/gait/preset`, so the grid can only ever *offer* gaits that walk
+  the legs the robot is standing on — the guarantee the cycler's arithmetic used
+  to give for free. Tapping one publishes it on `/cmd_gait`, and the lit tile is
+  what that topic last carried, never the tap. Live on the belly too: no gait runs there,
   but `/cmd_gait` is latched, so the lit tile is what the next stand will come up
   walking — worth picking before standing rather than after. The grid is inert
   while a preset change is in flight, since that switch has already published the
   new preset's entry gait and one from the old rotation landing behind it would
   sit latched as a gait the engine refuses. The node re-checks both rules before
   publishing; the client's job is only to not offer what it knows is wrong.
+- **A third grid under the gaits, a tile per animation.** The names are the
+  `animation_mode_animations` list, shipped with the grid in the `init` message
+  and shown by the short labels the status strip uses (`wave`, `snake`,
+  `spiral`) rather than the long wire names. Tapping one publishes it on
+  `/animation/mode`, and the lit tile is what that topic last carried — the same
+  rule the gait grid follows. Dimmed rather than hidden outside animation mode:
+  nothing is driving the body there, so there is nothing to select, but a grid
+  that came and went would move the gaits under a thumb already reaching for
+  them. The node refuses a selection from another mode regardless, and its
+  `/animation/mode` loopback resyncs the cycler index, so the corner
+  prev/next pair steps off whatever the grid last picked instead of jumping back
+  to where it last was.
+- **The three modes, in a row above the presets.** The same table the Control
+  view's column reads, so the two can never disagree about which modes exist,
+  and the same tile the rest of the view is built from. Here because the
+  animation grid is inert outside animation mode and the way into that mode was
+  on the other view — a choice offered next to the switch that enables it.
+  Every button on this view is a **tap**, not a hold: press, then release a
+  moment later. There is no keepalive here, since this is not the view a thumb
+  sits on, so a press sent from it would otherwise stay in the node's action set
+  until the input watchdog cleared it.
+- **`ANIM` is dimmed wherever the robot cannot be in animation mode**, on this
+  view and on the Control view's column both, off one predicate
+  (`animationAvailable`) so the two can never disagree. Two reasons, and they are
+  different facts: the robot stands on four legs — every animation is written for
+  six, and the shared mapping already refuses the mode there off its own leg-set
+  flag — or it stands on a six-leg preset that does not carry the mode (below).
+  Both read the engine's reports, never the tap, so before the first
+  `/gait/preset` the answer is no. The way in is a preset change, which is the
+  grid right underneath.
+- **Animation mode lives on one preset**, `presets.animation` in
+  [`config/webteleop.yaml`](config/webteleop.yaml) — `normal`. The animations are
+  written for that stance, and there is nothing to be gained from swinging the
+  body around on a preset picked for speed or for clearance, so `ANIM` is dimmed
+  on `FAST`, `OFFROAD` and `QUAD` alike and the mode is simply unavailable there.
+  Enforced on both sides of the same rule, which is what keeps them from ever
+  being true at once: `ANIM` is locked unless the preset in force carries the
+  mode, and while the mode *is* in force every other preset tile is inert — the
+  way to another preset is to leave the mode first. The node re-checks on the way
+  in (it drops an `animation_mode` press from a preset that does not carry it,
+  rather than backing the mapping out of a mode whose entry has already snapped
+  an animation and forced tripod) and on the way back (a `/gait/preset` arriving
+  from outside at a preset that does not carry the mode leaves it, the same way
+  arriving on four legs already did). None of it is the gamepad's: `map_joy`
+  deliberately has no preset control at all, and its own animation gate is the
+  leg set.
 - A switch is **refused** where the engine would not take one: the node gates on
   `/gait/state` before publishing (a preset change is legal only from a stand,
   unlike a plain gait switch), and it holds a deadline for the cases it cannot
@@ -362,10 +416,18 @@ correctness — it is a compile step, not a design.
   (one case per `/ws` message type); `types/protocol.ts` types the wire contract
   both ways; `utils/views.ts` is the tab order and each tab's path, so the bar
   and the routes agree by construction, and `utils/labels.ts` is the display
-  strings. `session.tsx` — that socket held **above the router**, since the
-  server has a single client slot and a link owned by a route would drop the
-  robot every time somebody looked at the log — stays at the top beside
-  `main.tsx`, with the routes it wraps. `components/Joystick.tsx` is
+  strings. `providers/` holds the two contexts `main.tsx` wraps the router in,
+  both of them things a route may not own. `TeleopProvider.tsx` is the socket,
+  held **above the router** since the server has a single client slot and a link
+  owned by a route would drop the robot every time somebody looked at the log.
+  `ModalProvider.tsx` puts a host on `<body>`, above every view box, and the
+  `useModal()` a route calls hands back the backdrop-plus-dialog shell as a
+  component rendering into that host: a modal written inside a view is a child
+  of the view's box, and `#preset-view` is a grid in landscape — which sizes a
+  `position: fixed` child to the grid area it lands in rather than to the
+  screen, leaving the switching dialog one row tall and clipped. Through the
+  host it stays written where the state that raises it lives and still centres
+  on the viewport in both orientations. `components/Joystick.tsx` is
   deliberately imperative — canvas drawing and hand-attached listeners, no React state — because a
   touchmove fires per frame and its handlers need `preventDefault`, which
   React's passive synthetic events cannot do; `components/HoldButton.tsx` is

@@ -35,17 +35,20 @@ presets:
     - id: fast
       label: FAST
       sub: low and long-striding
-      # The slow gaits are pointless here — the preset exists for speed, and
-      # crawl on a 0.125 m stride is still crawl.
-      gait_cycle: [tripod, surf]
+      # The three stable six-leg gaits. Surf and crawl are the ones left out:
+      # the preset exists for speed, and crawl on a 0.125 m stride is still
+      # crawl.
+      gait_cycle: [tripod, tetrapod, ripple] # fastest → slowest
       default_gait: tripod
     - id: offroad
       label: OFFROAD
       sub: tall, short steps, high clearance
-      # No tripod: three feet down is the wrong trade on ground rough enough to
-      # want this preset, so the rotation starts at the four-down gaits.
-      gait_cycle: [tetrapod, ripple, crawl]
-      default_gait: tetrapod
+      # Two gaits, at the ends of the range: ripple for the ground the preset is
+      # for, tripod for getting across the easy stretch between two bits of it.
+      gait_cycle: [tripod, ripple]
+      # Only reached when the gait in force does not survive the switch — a
+      # preset change keeps the walk where the new preset offers it.
+      default_gait: tripod
     - id: quad
       label: QUAD
       sub: four corners, middle pair parked

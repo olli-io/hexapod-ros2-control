@@ -375,6 +375,32 @@ def preset_descriptors(registry: PresetRegistry) -> list[dict]:
     ]
 
 
+def load_animation_preset(raw: Mapping, registry: PresetRegistry) -> str | None:
+    """``presets.animation``: the one preset animation mode is available on.
+
+    ``None`` where the key is absent, which leaves animation mode available on
+    every preset — the behaviour before the key existed. Validated here
+    rather than at the point of use so a typo fails at load with the declared
+    ids in the message, instead of silently never forcing anything.
+
+    Web-only: the pad has no preset control, so the same key in the gamepad's
+    config would be a dead value.
+    """
+    block = raw.get("presets")
+    if not isinstance(block, Mapping):
+        return None
+    pid = block.get("animation")
+    if pid is None:
+        return None
+    pid = str(pid)
+    if registry.get(pid) is None:
+        raise ValueError(
+            f"presets.animation={pid!r} names no preset; have "
+            f"{sorted(p.id for p in registry.presets)}"
+        )
+    return pid
+
+
 def gait_selectable(registry: PresetRegistry, gait: str) -> bool:
     """True if ``gait`` is one the preset in force offers.
 

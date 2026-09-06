@@ -5,7 +5,8 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
-import { TeleopProvider } from "./session";
+import { ModalProvider } from "./providers/ModalProvider";
+import { TeleopProvider } from "./providers/TeleopProvider";
 import "./styles.css";
 
 const router = createRouter({
@@ -23,6 +24,8 @@ const container = document.getElementById("app");
 if (!container) throw new Error("#app not found");
 createRoot(container).render(
   <TeleopProvider>
-    <RouterProvider router={router} />
+    <ModalProvider>
+      <RouterProvider router={router} />
+    </ModalProvider>
   </TeleopProvider>,
 );
