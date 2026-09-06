@@ -38,8 +38,8 @@ machine resets it to 0 on every ANIMATION-mode entry.
 
 - **Tab bar** (symbols only, bottom bar in portrait / left strip in landscape)
   — four tabs, each swapping the view above it: **Control** (a joystick; green
-  while a controller owns `/cmd_vel`, since that is the view whose grid becomes
-  the take-control prompt), **Mode** (a six-legged body whose middle pair dims on
+  while a controller owns `/cmd_vel`, since that is the view whose mode column
+  becomes the take-control prompt), **Mode** (a six-legged body whose middle pair dims on
   four legs, so the bar carries the current leg set without the view being open;
   it shows the leg set rather than the preset, so NORMAL, FAST and OFFROAD share
   one icon), **Network** (a wifi symbol keeping its connection colour) and
@@ -47,22 +47,56 @@ machine resets it to 0 on every ANIMATION-mode entry.
   tints — which view you are looking at is the one thing the bar must not get
   wrong, and each view says the rest in words. The bar never leaves the screen,
   so no view carries a back arrow and Control is the way back from all of them.
-- **Control area** — two touch joysticks flanking a 3×3 button grid; top 3
-  buttons select mode (Gait / Posture / Anim), bottom 6 are mode-dependent.
-  Each slot names the **function** it asks for and carries its own caption
-  (`web/src/utils/actions.ts`), so there is no binding elsewhere for the text
-  to drift from. While a controller owns control the grid becomes an inline
-  "Take control" prompt and the sticks are disabled.
-- **Status strip** — a compact readout above the button grid showing the
+- **Control area** — two touch joysticks flanking **three mode buttons** (Gait /
+  Posture / Anim) — a column between the circles in landscape, a row in
+  portrait, where the circles are stacked and a square in the middle would spend
+  height they want — and that is all the middle of the screen holds: every other
+  function is at a joystick corner, and preset and gait selection are the Mode
+  view's. Each button names the **function** it asks for and carries its own
+  caption (`web/src/components/ModeStack.tsx`), so there is no binding elsewhere
+  for the text to drift from. While a controller owns control the mode buttons
+  become an inline "Take control" prompt and the sticks are disabled.
+- **Corner buttons** — the functions a thumb must reach without leaving its
+  stick sit at the corners of the joystick circles: body up / body down on the
+  right circle's left corners, yaw left and yaw right on the outer **top**
+  corner of the left and right circle, wiggle left and wiggle right on the outer
+  **bottom** corner of those same two, **stand** on the left circle's
+  bottom-right and **save pose** (the `record` function) on the left circle's
+  top-right. They are positioned against each circle's own bounding square
+  (`.joystick-pad`), so they follow the sticks in both orientations. Which
+  corners a mode offers is one table, `CORNERS` in `web/src/app/index.tsx`, read
+  both by the JSX and by the pass that releases what a mode change takes off the
+  screen — a corner cannot be on screen in a mode the release pass thinks it is
+  gone from. Stand is offered in every mode; height, yaw and wiggle in **gait and
+  posture**; record in **posture** alone. **Animation mode keeps stand, and
+  spends the right circle's two bottom corners on animation prev / next** — the
+  animation pair and the height-down / wiggle pair are never on screen together,
+  since that is the one mode offering neither: the animation is driving the
+  body, so a pose trimmed, wiggled or saved underneath it is a pose fighting the
+  animation.
+  Yaw's and wiggle's absence there also matches the gamepad, which leaves
+  `l1`/`r1`/`l2`/`r2` unbound in that mode; height is a deliberate divergence,
+  still live on the gamepad and still acted on by `map_web`, just not offered
+  here. All of them are gone with the sticks while a controller owns control.
+- **Stand** is the plain stand button, not a leg-set one: from the belly it
+  stands the robot on the last six-leg preset it applied, and off the belly it
+  folds. It is **red while the robot is folded** — the one press that has to
+  happen before anything else on screen does anything, and the only piece of
+  robot state a button here reports about itself. It is the **only** stand on
+  the Control view: the four-legged one is gone, and the quadruped leg set is
+  reached by picking the QUAD preset in the Mode view, from a stand.
+- **Status strip** — a compact readout above the mode column showing the
   current **preset**, gait, animation mode (em dash until an animation is first
-  latched) and pack voltage/current. The preset is here because the Mode tab icon
+  latched) and pack voltage/current. Each item is keyed by a lucide icon rather
+  than a word: the strip is held to the mode column's width, and MODE / GAIT /
+  ANIM / PACK spent a third of it repeating what a reader learns once. The preset is here because the Mode tab icon
   cannot carry it: that icon shows the leg set, and NORMAL, FAST and OFFROAD all
   stand on six legs. It reads `/gait/preset`, so it is a dash until the engine
-  has spoken — the Mode view lights no row then either. Gait and animation are
+  has spoken — the Mode view lights no tile then either. Gait and animation are
   fed by the node from the latched command topics, so the strip follows
-  gamepad-initiated switches too, and it stays visible while the take-control prompt replaces
-  the grid — a controller owner switching gaits is exactly when the passive
-  observer wants to see it.
+  gamepad-initiated switches too, and it stays visible while the take-control
+  prompt replaces the mode column — a controller owner switching gaits is
+  exactly when the passive observer wants to see it.
 
 Default stick mapping (config): left = forward/strafe (gait) or x/y
 translation (posture); right = turn, plus forward on its Y axis so either
@@ -70,27 +104,33 @@ pad alone is a complete drive control (gait), or roll/pitch (posture). The
 two forward sources sum, and the resulting velocity triple is fitted to the
 reachable envelope by the shared `hexa_teleop` mapping — see that package's
 README for what that does to the feel.
-Default bottom-6 buttons: init, then per mode — quadruped init + gait
-prev/next (gait) / record + yaw left/right (posture) / record + animation
-prev/next (animation) — and height up/down. The quadruped init is the
-four-legged half of the init button: from the belly it stands the robot up
-with the middle pair left folded, and off the belly it folds like init does.
-It takes gait mode's second slot because `record` only does anything in
-posture mode; gait mode is the only layout that offers it, and the state
-machine acts on it there alone. It asks for the four-corner **leg set**, which the
-engine resolves to the QUAD preset — so prev/next can never ask a standing robot
-for a leg set it is not on. Once on four legs, prev/next walks the QUAD rotation
-instead; the six-leg selection keeps its own
-slot and is waiting when the robot comes back. The Mode view is the other way
-in, and unlike this button it does not need the belly. Posture mode still poses the body on four feet; only `record`
-goes inert there, for the reason `hexa_teleop`'s README gives.
+No function but the mode select is in the middle of the screen. Height, yaw,
+wiggle, stand, record and animation prev/next all sit at the joystick corners
+above — height, yaw and wiggle because they are held rather than tapped, the rest
+because they are what the operator reaches for mid-drive, and the middle of the
+screen is the one place a thumb on a stick cannot get to. Gait selection is the
+Mode view's, a button per gait rather than the prev/next pair that used to sit in
+a 3×3 grid here, and nothing filled the gaps that left in gait and posture mode —
+`record` is read only in posture mode, so a button for it in gait mode would be a
+button that does nothing. The column is what is left once the empty
+cells are admitted to be empty, and it makes each mode button a third of the
+panel to hit.
+The four-corner **leg set** has no button on this view. `map_web` still resolves
+the `quadruped_mode` function — the mapping is shared with the gamepad, whose
+select button is the producer — but nothing in the web UI asks for it, so a web
+operator on the belly stands on six legs and picks QUAD from the stand, one step
+further than the gamepad's route. Posture mode still poses the body on four
+feet; only `record` goes inert there, for the reason `hexa_teleop`'s README
+gives.
 
 ## Mode view
 
-A tab opening a view that lists the operator **presets** — `NORMAL` (six
+A tab opening a view that offers the operator **presets** — `NORMAL` (six
 legs, everyday stance), `FAST` (low, long-striding), `OFFROAD` (tall, short
-steps, high clearance) and `QUAD` (four corners, middle pair parked) — and
-switches between them. Tapping one publishes its id on `/cmd_preset` and that
+steps, high clearance) and `QUAD` (four corners, middle pair parked) — switches
+between them, and offers the **gaits** the one in force walks. The two live in
+one view because they are one choice made in two steps: a preset is a leg set and
+a stance, and its rotation is the gaits that walk it. Tapping one publishes its id on `/cmd_preset` and that
 preset's remembered gait on `/cmd_gait`, in that order, since the engine measures
 a gait against the preset in force. The engine then runs a **preset change** in
 place, without folding to the belly: a reseat onto the new footprint, plus the
@@ -98,9 +138,15 @@ middle pair's own move on either side of it where the two presets differ in leg
 set. See `hexa_teleop`'s README for what a preset is and `docs/leg-phases.md`
 for what the robot actually does.
 
+Both are **grids of tiles**, laid out to the screen rather than stacked: portrait
+puts them two abreast, landscape — which has the width and lacks the height —
+lays each grid out in a single row. A tile is what a thumb hits; a column of
+full-width rows wasted the width on a phone and did not fit at all on a landscape
+one.
+
 A **route** that replaces the control area — not an overlay over it, and not a
-page of its own. Full-screen because the list is the whole task while it is open
-and a preset row is a thing you tap on a phone; a client-side route because
+page of its own. Full-screen because the choice is the whole task while it is
+open and a preset tile is a thing you tap on a phone; a client-side route because
 pending and refused are live states and only the WebSocket carries them, and a
 navigation that fetched a document would drop the socket — the server hands its
 one client slot to whoever reconnects. The tab bar stays put, so the Mode tab
@@ -108,33 +154,52 @@ opens the view and the Control tab leaves it, and both sticks are re-centred on
 the way in: the Control route unmounts, and a knob held at that moment never sees
 its own touchend, so each canvas commands zero as it goes.
 
-- **The active row comes from `/gait/preset` and nothing else** — never the tap,
+- **The active tile comes from `/gait/preset` and nothing else** — never the tap,
   never the latched `/cmd_preset`. That command topic keeps a refused id forever,
   so a view reading it would show a mode the robot never took, with nothing to
   correct it. Nor can it come from `/gait/leg_set`: `NORMAL`, `FAST` and
-  `OFFROAD` all stand on six legs. Before the first `/gait/preset` arrives no row
+  `OFFROAD` all stand on six legs. Before the first `/gait/preset` arrives no tile
   is lit, which is honest rather than a guess.
-- The client sets no optimistic state. During the ~2 s change the current row
-  stays filled and the target row goes dashed — "on six, going to four" — and
-  every row is inert until it lands.
-- **On the belly the rows are inert and a `STAND` button takes their place.**
-  Off the belly a mode is a preset change; on it, the leg set is chosen by the
-  stand itself — every init edge asks for a leg set, and the engine resolves that
-  to a preset — so a four-corner mode tapped here would be overwritten the moment
-  the robot got up.
+- The client sets no optimistic state. During the ~2 s change the current tile
+  stays filled and the target tile goes dashed — "on six, going to four" — and
+  every tile is inert until it lands.
+- **On the belly a `STAND` button replaces the preset grid outright.** The grid
+  is not rendered there at all, rather than shown inert beside a third thing to
+  press: off the belly a mode is a preset change; on it, the leg set is chosen by
+  the stand itself — every init edge asks for a leg set, and the engine resolves
+  that to a preset — so a four-corner mode tapped here would be overwritten the
+  moment the robot got up.
   The button asks for the same `init` function the grid's stand slot does,
   rather than reaching for `/gait/initialize` directly, so standing up stays one
   path through the shared state machine, two-press revert and all. It is
   exempt from arbitration exactly as a mode switch is (below), which also makes
   it the only stand a webapp can reach while a controller drives — the grid it
   presses is a take-control prompt in that state.
+- **A second grid under the presets, a tile per gait in the preset in force.**
+  Same size and shape as a preset tile, so the view reads as one choice made
+  twice. The column count does not follow the rotation's length — a rotation is
+  two to five long, and a count that changed with it would move every tile on a
+  preset switch — so a portrait rotation of five ends on a half-empty row. One
+  press to any of them, where the grid's old prev/next pair took up to four and
+  never said what the choices were. The names come from that preset's
+  `gait_cycle`, shipped with the grid in the `init` message and indexed by
+  `/gait/preset`, so the grid can only ever offer gaits that walk the legs the
+  robot is standing on — the guarantee the cycler's arithmetic used to give for
+  free. Tapping one publishes it on `/cmd_gait`, and the lit tile is what that
+  topic last carried, never the tap. Live on the belly too: no gait runs there,
+  but `/cmd_gait` is latched, so the lit tile is what the next stand will come up
+  walking — worth picking before standing rather than after. The grid is inert
+  while a preset change is in flight, since that switch has already published the
+  new preset's entry gait and one from the old rotation landing behind it would
+  sit latched as a gait the engine refuses. The node re-checks both rules before
+  publishing; the client's job is only to not offer what it knows is wrong.
 - A switch is **refused** where the engine would not take one: the node gates on
   `/gait/state` before publishing (a preset change is legal only from a stand,
   unlike a plain gait switch), and it holds a deadline for the cases it cannot
   predict — the state moved between the tap and the tick, or the operator's body
   pose never came back to neutral. `/gait/preset` publishes on change, so silence
   past the deadline is the answer. Either way a reason appears under the
-  list and the active row does not move.
+  grids and the active tile does not move.
 
 ## Network view
 
@@ -152,6 +217,9 @@ handover is a state worth reading rather than a menu item to confirm.
   offers, which stays where it is: that one is the affordance in context, this
   one is the one that works from any tab and in either direction. With
   arbitration disabled the toggle is hidden and the view says why.
+- The two panels stack in portrait and stand **side by side in landscape**,
+  which is where the view is short and wide: two panels each ending in a button
+  spend height there is none of, across width there is plenty of.
 
 ## Log view
 
@@ -209,11 +277,12 @@ A **Mode view switch is exempt**, deliberately: it touches neither `/cmd_vel`
 nor `/body/pose` — the two continuous streams arbitration exists to stop from
 fighting — and is two idempotent writes to latched selection topics both teleops
 already read without asking anyone. So the Mode view works while a controller
-drives, which is the point of it. **An init — a stand or a fold — is exempt for
+drives, which is the point of it. Its **gait grid is exempt for the same reason**,
+and it is one write rather than two. **An init — a stand or a fold — is exempt for
 the same reason**: one `Empty` on `/gait/initialize` plus the gait naming the leg
 set it wants, discrete rather than streamed. Without that the Mode view's `STAND`
-would be dead in the one state it exists for, since the button grid it presses is
-replaced by the take-control prompt whenever a controller owns. The mapping's
+would be dead in the one state it exists for, since the Control view's own
+stand goes with the take-control prompt whenever a controller owns. The mapping's
 bookkeeping stays honest either way — the gait publish loops back through
 `/cmd_gait` into `resync`, in both teleops. The gamepad node follows the result by
 subscribing `/cmd_gait` itself (see its README), so its D-pad never ends up
@@ -252,9 +321,9 @@ The **operator** half of each preset (the Mode view's list, each one's label and
 gait rotation), server port/heartbeat, safety watchdog timeout, pack-telemetry
 topic and poll period, stick deadband, and the per-mode **stick** tables live
 in [`config/webteleop.yaml`](config/webteleop.yaml) (documented inline). There
-are no button bindings there: the webapp has no keys, so the grid sends the
-function name and its slot layout lives with its captions in
-`web/src/utils/actions.ts`. The sticks stay here because which function each
+are no button bindings there: the webapp has no keys, so a button sends the
+function name, and the mode column's layout lives with its captions in
+`web/src/components/ModeStack.tsx` (the joystick corners' in `CORNERS`). The sticks stay here because which function each
 drives depends on the mode, and the node is what knows the mode. The
 **physical** half — the leg set, the standing pose and the stride/swing bundle —
 is `hexa_description/config/tuning.yaml`'s `gait_node.presets` list under the
@@ -276,7 +345,7 @@ The build runs the **React Compiler** (`babel-plugin-react-compiler`, targeting
 19) and minifies with **terser** (`drop_console`, two passes — ~2.5 kB gzipped
 better than the esbuild default, on a page a phone pulls over the robot's own
 hotspot). The compiler is conservative by design and skips what it cannot prove
-safe: `Joystick`, `GridButton`, the Control route and `useTeleopSocket` all write
+safe: `Joystick`, `HoldButton`, the Control route and `useTeleopSocket` all write
 a ref during render so hand-attached listeners can read live values, and all four
 come out exactly as written. Nothing here depends on that memoization for
 correctness — it is a compile step, not a design.
@@ -299,7 +368,10 @@ correctness — it is a compile step, not a design.
   `main.tsx`, with the routes it wraps. `components/Joystick.tsx` is
   deliberately imperative — canvas drawing and hand-attached listeners, no React state — because a
   touchmove fires per frame and its handlers need `preventDefault`, which
-  React's passive synthetic events cannot do.
+  React's passive synthetic events cannot do; `components/HoldButton.tsx` is
+  there for the same reason — every button on the Control view reports the press
+  *and* the release, so the mode buttons and the joystick corners share one set
+  of hand-attached touch listeners.
 - **The router runs on a hash history.** The server serves one page and answers
   every other path with a 302 to `/` — deliberately, since that redirect is what
   makes a joining phone declare a captive portal — so a reload on `/network`
@@ -310,11 +382,14 @@ correctness — it is a compile step, not a design.
   hidden `<div>`s this replaced: each view's state is created and disposed with
   it. The Log fetches on mount instead of on a nonce the shell bumps; the Control
   route owns the keepalive, the set of held functions and the joystick handles,
-  and releases every one on the way out — a button under a thumb when the grid
+  and releases every one on the way out — a button under a thumb when the view
   leaves the screen never sees its own touchend, and each canvas commands zero in
-  its own cleanup. A mode change is the same hazard in miniature: six of the nine
-  slots are replaced, so anything held that the new mode does not offer is
-  released for the same reason.
+  its own cleanup. A mode change is the same hazard in miniature: every corner
+  the new mode does not offer is gone from the screen, so anything held there is
+  released for the same reason — in animation mode that is all of them but
+  stand; the right circle's two bottom corners are what the animation pair takes
+  over. The three mode
+  buttons are offered in every mode and so are never the stale one.
 - `web/dist/` — the built bundle, **committed to git**. It has to be: the ARM64
   robot image builds `robot.Dockerfile` from a bare checkout (`hexa deploy
   build`, and the release workflow), and its builder stage has no node. A

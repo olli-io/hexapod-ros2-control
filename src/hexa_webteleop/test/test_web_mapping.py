@@ -8,6 +8,7 @@ from hexa_webteleop import (
     ACTIONS,
     StickMap,
     battery_payload,
+    gait_selectable,
     input_is_stale,
     load_web_config,
     map_web,
@@ -762,6 +763,38 @@ def test_preset_descriptors_list_every_preset(cfg_and_caps):
     assert [r["id"] for r in rows] == ["normal", "fast", "quad"]
     assert rows[0]["label"] == "NORMAL"
     assert rows[2]["leg_set"] == "quadruped"
+
+
+def test_preset_descriptors_carry_each_rotation(cfg_and_caps):
+    # The rotation as the registry holds it — filtered by allow_unstable_gaits,
+    # not the raw config list: the webapp offers a button per gait, and a button
+    # for a gait the node would refuse is a button that does nothing.
+    _, _, _, _, _, registry = cfg_and_caps
+    rows = {r["id"]: r["gaits"] for r in preset_descriptors(registry)}
+    assert rows["normal"] == ["tripod", "tetrapod", "ripple"]
+    assert rows["quad"] == ["quad_canter", "quad_walk"]
+
+
+def test_gait_selectable_only_inside_the_preset_in_force(cfg_and_caps):
+    # The rotation of the preset the ENGINE reports, so a gait can never be
+    # asked for from the other leg set — the guarantee the cycler's arithmetic
+    # used to give for free.
+    _, _, _, _, _, registry = cfg_and_caps
+    registry.note_preset("normal")
+    assert gait_selectable(registry, "tripod") is True
+    assert gait_selectable(registry, "quad_walk") is False
+    assert gait_selectable(registry, "moonwalk") is False
+
+    registry.note_preset("quad")
+    assert gait_selectable(registry, "quad_walk") is True
+    assert gait_selectable(registry, "tripod") is False
+
+
+def test_gait_selectable_is_false_before_the_first_preset_report(cfg_and_caps):
+    # No preset in force is no rotation to be in — and the webapp offers no
+    # gait buttons there either.
+    _, _, _, _, _, registry = cfg_and_caps
+    assert gait_selectable(registry, "tripod") is False
 
 
 def test_preset_pending_expired():

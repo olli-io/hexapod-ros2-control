@@ -3,11 +3,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import Joystick from "../components/Joystick";
 import type { JoystickHandle } from "../components/Joystick";
 import StatusBar from "../components/StatusBar";
-import ButtonGrid from "../components/ButtonGrid";
+import ModeStack, { MODES } from "../components/ModeStack";
+import HoldButton from "../components/HoldButton";
 import ControlPrompt from "../components/ControlPrompt";
 import { controllerActive, useTeleop } from "../session";
-import { GRID } from "../utils/actions";
-import type { ActionName } from "../types/protocol";
+import type { ActionName, Mode } from "../types/protocol";
 
 // Re-send held input this often (ms) so the server's input watchdog
 // (safety.input_timeout_s, default 500 ms) doesn't zero /cmd_vel while a stick or
@@ -16,6 +16,50 @@ import type { ActionName } from "../types/protocol";
 // window (~10 sends per timeout); stops when the tab suspends (the timer suspends
 // too), so the watchdog still guards a dropped link.
 const KEEPALIVE_MS = 50;
+
+// The corner buttons each mode offers, by the function each one asks for. One
+// table, read twice below — by the effect that releases what a mode change
+// takes off the screen, and by the JSX that renders them — so a corner can
+// never be on screen in a mode the release pass thinks it is gone from. That
+// drift is not a cosmetic bug: a button that leaves under a thumb never sees
+// its own touchend, and the keepalive would hold the function down for good.
+//
+// Stand is offered everywhere. Height, yaw and wiggle are live offsets the
+// state machine adds to the pose it publishes, but animation mode offers none
+// of them, and no record either: the animation is driving the body there, so a
+// pose trimmed or saved underneath it is a pose fighting the animation. Gait
+// mode offers no record for the reason `hexa_teleop`'s README gives. Yaw and
+// wiggle being absent in animation mode also keeps the two teleops offering the
+// same functions, since that is the one mode where the gamepad leaves
+// `l1`/`r1`/`l2`/`r2` unbound. Height is the one place the two teleops now
+// differ on purpose: the gamepad keeps it live in animation mode and `map_web`
+// would still act on it — the web only stops offering the button.
+//
+// Animation prev/next take the right circle's two bottom corners in animation
+// mode, which is exactly the mode that gives them up: they are the height-down
+// and wiggle corners, and neither pair is ever on screen with the other.
+const CORNERS: Record<Mode, readonly ActionName[]> = {
+  gait: [
+    "init",
+    "yaw_left",
+    "yaw_right",
+    "wiggle_left",
+    "wiggle_right",
+    "height_up",
+    "height_down",
+  ],
+  posture: [
+    "init",
+    "yaw_left",
+    "yaw_right",
+    "wiggle_left",
+    "wiggle_right",
+    "height_up",
+    "height_down",
+    "record",
+  ],
+  animation: ["init", "animation_prev", "animation_next"],
+};
 
 // The home route, and the way back from every other one.
 export const Route = createFileRoute("/")({ component: ControlRoute });
@@ -71,11 +115,17 @@ function ControlRoute() {
     };
   }, [send]);
 
-  // ... and on a mode change, which swaps six of the nine slots. A slot the
-  // new mode does not offer is gone from the screen, so its release event
-  // never arrives — and the keepalive would hold that function down for good.
+  // ... and on a mode change, which swaps the corners the modes do not share —
+  // animation mode keeps stand and takes the height pair off for its own. A
+  // button the new mode does not offer is gone from the screen, so its release
+  // event never arrives, and the keepalive would hold that function down for
+  // good. The three mode buttons are offered in every mode, so they can never
+  // be the stale one.
   useEffect(() => {
-    const offered = new Set(GRID[state.mode].map((slot) => slot.action));
+    const offered = new Set<ActionName>([
+      ...MODES.map((m) => m.action),
+      ...CORNERS[state.mode],
+    ]);
     const stale = [...pressedRef.current].filter((a) => !offered.has(a));
     if (stale.length === 0) return;
     setPressed((prev) => {
@@ -105,6 +155,37 @@ function ControlRoute() {
     state.activePreset ??
     "";
 
+  // The functions a thumb needs without letting go of its stick sit at the
+  // corners of the circles the thumbs are already on: reaching the middle of
+  // the screen for body height means leaving the stick, and the middle now
+  // holds nothing but the mode column. Which corners each mode offers is
+  // `CORNERS` above.
+  const corner = (
+    action: ActionName,
+    position: string,
+    label: string,
+    extra = "",
+  ) => (
+    <HoldButton
+      className={`corner-btn ${position}${extra ? ` ${extra}` : ""}${
+        pressed.has(action) ? " pressed" : ""
+      }`}
+      label={label}
+      pressed={pressed.has(action)}
+      onPress={() => pressAction(action)}
+      onRelease={() => releaseAction(action)}
+    />
+  );
+  // Stand is the only stand on this view: it stands the robot on the last
+  // six-leg preset from the belly and folds it from a stand, so it needs no
+  // leg-set qualifier, and the four-legged stand is the Mode view's QUAD
+  // preset rather than a second button here.
+  //
+  // A controller owning /cmd_vel takes every corner along with the sticks and
+  // the grid, which is the one condition the table above does not carry.
+  const offers = (action: ActionName) =>
+    !controlled && CORNERS[state.mode].includes(action);
+
   return (
     <div id="control-area">
       <Joystick
@@ -113,9 +194,17 @@ function ControlRoute() {
         disabled={controlled}
         send={send}
         handleRef={leftJoyRef}
-      />
+      >
+        {offers("yaw_left") && corner("yaw_left", "tl", "Yaw\n\u25c0")}
+        {offers("record") && corner("record", "tr", "Save\npose")}
+        {offers("wiggle_left") && corner("wiggle_left", "bl", "Wiggle\n\u25c0")}
+        {/* Red on the belly: the one press that has to happen before anything
+            else on screen does anything, and the only state the operator can
+            read off the button itself. */}
+        {offers("init") && corner("init", "br", "Stand", folded ? "folded" : "")}
+      </Joystick>
 
-      {/* Center column: status strip over the button grid. */}
+      {/* Center column: status strip over the mode selector. */}
       <div id="center-panel">
         <StatusBar
           presetLabel={presetLabel}
@@ -131,7 +220,7 @@ function ControlRoute() {
             onTakeControl={() => send({ type: "request_control" })}
           />
         ) : (
-          <ButtonGrid
+          <ModeStack
             mode={state.mode}
             pressed={pressed}
             onPress={pressAction}
@@ -146,7 +235,19 @@ function ControlRoute() {
         disabled={controlled}
         send={send}
         handleRef={rightJoyRef}
-      />
+      >
+        {offers("yaw_right") && corner("yaw_right", "tr", "Yaw\n\u25b6")}
+        {offers("height_up") && corner("height_up", "tl", "Body\n\u25b2")}
+        {offers("height_down") && corner("height_down", "bl", "Body\n\u25bc")}
+        {offers("wiggle_right") &&
+          corner("wiggle_right", "br", "Wiggle\n\u25b6")}
+        {/* The height-down and wiggle corners, in the one mode that offers
+            neither. */}
+        {offers("animation_prev") &&
+          corner("animation_prev", "bl", "Prev\nAnim")}
+        {offers("animation_next") &&
+          corner("animation_next", "br", "Next\nAnim")}
+      </Joystick>
     </div>
   );
 }

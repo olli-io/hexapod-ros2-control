@@ -14,8 +14,8 @@ interface Props {
 }
 
 // Tab bar: symbols only, evenly spaced. Horizontal across the bottom in
-// portrait, vertical down the left in landscape (CSS-driven). Every item is a
-// route link: it swaps the view above the bar and the bar itself never leaves,
+// portrait, vertical down the right edge in landscape (CSS-driven). Every item
+// is a route link: it swaps the view above the bar and the bar itself never leaves,
 // which is why no view carries a back arrow. Which tab is lit comes from the
 // router rather than from a prop, so the bar cannot disagree with what is on
 // screen.

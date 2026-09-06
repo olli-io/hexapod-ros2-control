@@ -897,27 +897,32 @@ def map_functions(
     state.prev_gait_next = next_pressed
 
     # Yaw + wiggle: same shared yaw target so L1 + L2 doesn't double
-    # the yaw — L2 only adds the wiggle translation on top.
+    # the yaw — L2 only adds the wiggle translation on top. The yaw
+    # buttons are live in every mode, like height: the offset rides
+    # ``yaw_current``, which the gait/animation return below adds to the
+    # pose it publishes, so the body can be held turned while walking.
+    # Bindings still resolve against the active mode's config, so a mode
+    # that leaves them unbound has no yaw. Wiggle is live in GAIT and
+    # POSTURE the same way — its translation rides ``wiggle_amount`` and
+    # both returns add it — but not in ANIMATION, where the animation is
+    # driving the body and an offset held underneath it fights it.
+    wiggle_live = state.mode != ANIMATION
     yaw_btn_left = "yaw_left" in active.pressed
     yaw_btn_right = "yaw_right" in active.pressed
-    wiggle_left = "wiggle_left" in active.pressed
-    wiggle_right = "wiggle_right" in active.pressed
+    wiggle_left = wiggle_live and "wiggle_left" in active.pressed
+    wiggle_right = wiggle_live and "wiggle_right" in active.pressed
     push_left = yaw_btn_left or wiggle_left
     push_right = yaw_btn_right or wiggle_right
-    if state.mode == POSTURE and push_left != push_right:
+    if push_left != push_right:
         yaw_target = (
             posture_cfg.yaw_max if push_left else -posture_cfg.yaw_max
         )
     else:
-        # No active input, both sides cancelled, or non-POSTURE mode —
-        # ease back to zero so the offset bleeds off smoothly.
+        # No active input or both sides cancelled — ease back to zero so
+        # the offset bleeds off smoothly.
         yaw_target = 0.0
 
-    wiggle_target = (
-        1.0
-        if state.mode == POSTURE and (wiggle_left or wiggle_right)
-        else 0.0
-    )
+    wiggle_target = 1.0 if (wiggle_left or wiggle_right) else 0.0
     alpha = 1.0 - math.exp(-dt / posture_cfg.yaw_tau)
     state.yaw_current += (yaw_target - state.yaw_current) * alpha
     state.wiggle_amount += (wiggle_target - state.wiggle_amount) * alpha
@@ -1018,7 +1023,12 @@ def map_functions(
         )
     # GAIT or ANIMATION mode: sticks drive linear/angular velocity;
     # recorded posture baseline bleeds through on every posture axis
-    # so the robot walks at the recorded posture.
+    # so the robot walks at the recorded posture. Height, yaw and the
+    # wiggle translation are the live offsets that ride along: all are
+    # held functions the operator can work while walking, so each is
+    # added to its baseline here exactly as the posture return adds it.
+    # The x-y pair carries the wiggle alone — the sticks are driving
+    # here, so there is no live pose trim to add.
     # Forward has two sources so the yaw stick can drive arcade-style. They
     # add; the clip keeps the sum a deflection, which is what the envelope fit
     # below is defined on. The other two are clipped for the same reason —
@@ -1039,14 +1049,26 @@ def map_functions(
         linear_x=drive_x * cfg.gait_linear_max,
         linear_y=drive_y * cfg.gait_linear_max,
         angular_z=drive_yaw * cfg.gait_angular_z_max,
-        pose_x=state.recorded_x,
-        pose_y=state.recorded_y,
+        pose_x=_clip(
+            state.recorded_x + wx,
+            -posture_cfg.x_max,
+            posture_cfg.x_max,
+        ),
+        pose_y=_clip(
+            state.recorded_y + wy,
+            -posture_cfg.y_max,
+            posture_cfg.y_max,
+        ),
         pose_z=_clip(
             state.recorded_z + state.height_current,
             posture_cfg.height_min,
             posture_cfg.height_max,
         ),
-        pose_yaw=state.recorded_yaw,
+        pose_yaw=_clip(
+            state.recorded_yaw + state.yaw_current,
+            -posture_cfg.yaw_max,
+            posture_cfg.yaw_max,
+        ),
         pose_roll=state.recorded_roll,
         pose_pitch=state.recorded_pitch,
         mode_changed=mode_changed,

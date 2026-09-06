@@ -191,6 +191,31 @@ is stretched back over the full range, so output leaves centre
 continuously rather than stepping to a tenth of the cap, and full
 deflection still means the cap.
 
+### Body yaw and height while walking
+
+Two posture offsets are **held functions live in every mode**, not just in
+posture mode: `height_up` / `height_down` on their integrator, and
+`yaw_left` / `yaw_right` on the eased `yaw_current`. Both are added to the
+pose the gait/animation branch publishes, so the body can be held turned
+or raised while the robot walks, and both ease or integrate the same way
+whichever mode asked for them.
+
+- **the binding table still decides where they are reachable** — `l1`/`r1`
+  are bound in the `gait` and `posture` sections and left empty in
+  `animation`, so a gamepad has yaw in the first two and none in the
+  third. The webapp offers the same two, by the same reasoning.
+- **wiggle is live in gait and posture** — `l2`/`r2` translate the body
+  about a pivot ahead of centre, and both the wiggle and the yaw it pushes
+  ride along on the walk exactly as height and yaw do; the gait branch adds
+  the translation to the recorded x-y baseline, which is the only x-y
+  offset it carries, since the sticks are driving there. **Animation mode
+  is the exception**: the animation owns the body, so the mapping ignores
+  the function there and `l2`/`r2` are unbound in that section besides. An
+  offset already held still bleeds through and eases off.
+- **record is unchanged** — it folds `yaw_current` into `recorded_yaw` in
+  posture mode alone, and an init edge over a held yaw still arms the
+  revert rather than standing.
+
 ## Values owned elsewhere (SSoT in `hexa_description/config/tuning.yaml`)
 
 - **Velocity caps** — via `hexa_common.load_velocity_caps`. Both are

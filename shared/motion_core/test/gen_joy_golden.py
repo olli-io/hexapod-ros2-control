@@ -108,6 +108,14 @@ def build_trace():
     f.append(frame(dy=-32767))                         # height_up
     f.append(frame(dy=-32767))                         # hold, integrate
     f.append(frame(dy=-32767))
+    # ── yaw and wiggle on the walk: both are live in gait mode, like height ──
+    f.append(frame(buttons=1 << 4))                    # yaw_left (l1), ease
+    f.append(frame(buttons=1 << 4))                    # hold
+    f.append(frame(buttons=1 << 5))                    # yaw_right, the other way
+    f.append(frame(l2=-32767))                         # wiggle_left, pushes yaw
+    f.append(frame(l2=-32767))                         # hold, translation ramps
+    f.append(frame())                                  # release, ease back
+    f.append(frame())
     # ── to POSTURE (button y = idx 3) ──
     f.append(frame(buttons=1 << 3))
     f.append(frame(lx=22000, ly=-15000, rx=10000, ry=-12000))  # tilt + pose
@@ -131,6 +139,10 @@ def build_trace():
     f.append(frame())
     f.append(frame(dx=-32767))                         # animation_next again
     f.append(frame())
+    # Animation is the one mode wiggle is not live in, and l2/r2 are unbound
+    # there besides — the trigger must move neither the yaw nor the x-y pose.
+    f.append(frame(l2=-32767))                         # wiggle_left: inert here
+    f.append(frame(l2=-32767))
     f.append(frame(buttons=1 << 1))                    # toggle back to GAIT
     f.append(frame())
     return f

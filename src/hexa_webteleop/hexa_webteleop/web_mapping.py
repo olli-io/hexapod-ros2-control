@@ -354,16 +354,39 @@ def preset_payload(
 
 
 def preset_descriptors(registry: PresetRegistry) -> list[dict]:
-    """The preset list the webapp renders, sent once with ``init``."""
+    """The preset list the webapp renders, sent once with ``init``.
+
+    Each row carries its own gait rotation, because the webapp offers the gaits
+    of the preset in force as a button apiece. Sent per preset rather than as
+    one live list of the gaits currently on offer: the rotations are fixed at
+    load, the active preset is already live on ``/gait/preset``, and one static
+    list the client indexes by that report cannot disagree with it the way a
+    second live message could.
+    """
     return [
         {
             "id": p.id,
             "label": p.label,
             "sub": p.sub,
             "leg_set": p.leg_set,
+            "gaits": list(p.gait_cycle),
         }
         for p in registry.presets
     ]
+
+
+def gait_selectable(registry: PresetRegistry, gait: str) -> bool:
+    """True if ``gait`` is one the preset in force offers.
+
+    The webapp names a gait outright rather than stepping a cycler, so this is
+    what the cycler's arithmetic used to guarantee for free: a gait is only ever
+    asked for from the rotation of the preset the engine reports, so the request
+    can never carry the other leg set. ``False`` before the first
+    ``/gait/preset`` — with no preset in force there is no rotation to be in,
+    and the webapp offers no gait buttons either.
+    """
+    preset = registry.current()
+    return preset is not None and gait in preset.gait_cycle
 
 
 def preset_pending_expired(

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import type { SendFn, StickSide } from "../types/protocol";
 
 export interface JoystickHandle {
@@ -18,6 +18,8 @@ interface Props {
   disabled: boolean;
   send: SendFn;
   handleRef: RefObject<JoystickHandle | null>;
+  // Corner buttons, placed by the caller against the circle's bounding square.
+  children?: ReactNode;
 }
 
 // Canvas rather than DOM, and imperative rather than React state: a touchmove
@@ -30,6 +32,7 @@ export default function Joystick({
   disabled,
   send,
   handleRef,
+  children,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sendRef = useRef(send);
@@ -217,8 +220,15 @@ export default function Joystick({
   }, [side, handleRef]);
 
   return (
-    <div className={`joystick${disabled ? " disabled" : ""}`}>
-      <canvas ref={canvasRef} />
+    <div className="joystick">
+      {/* The square the circle is inscribed in, and the box the corner buttons
+          are positioned against. `disabled` is on the canvas alone: a
+          controller owning /cmd_vel takes the sticks, and the caller decides
+          for itself what to hang in the corners. */}
+      <div className={`joystick-pad${disabled ? " disabled" : ""}`}>
+        <canvas ref={canvasRef} />
+        {children}
+      </div>
       <span className="joystick-label">{label}</span>
     </div>
   );

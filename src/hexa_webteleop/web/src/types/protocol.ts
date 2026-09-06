@@ -29,10 +29,13 @@ export type Mode = "gait" | "posture" | "animation";
 export type LegSet = "hexapod" | "quadruped";
 
 // One row of the Mode view, as `presets.list` in webteleop.yaml declares it.
+// `gaits` is that preset's rotation, which the Mode view offers as a button
+// apiece once the preset is the one in force.
 export interface PresetDescriptor {
   id: string;
   label: string;
   sub?: string;
+  gaits?: string[];
 }
 
 export interface InitMessage {
@@ -113,6 +116,9 @@ export type ClientMessage =
   | { type: "action"; action: ActionName; pressed: boolean }
   | { type: "battery" }
   | { type: "select_preset"; preset: string }
+  // A gait by name, not a step through a rotation. The node still checks it
+  // against the preset in force before it reaches /cmd_gait.
+  | { type: "select_gait"; gait: string }
   | { type: "request_control" }
   | { type: "release_control" };
 

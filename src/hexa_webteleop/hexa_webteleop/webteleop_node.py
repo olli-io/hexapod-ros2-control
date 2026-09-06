@@ -77,6 +77,7 @@ from . import captive_portal
 from .web_mapping import (
     ACTIONS,
     battery_payload,
+    gait_selectable,
     input_is_stale,
     load_web_config,
     map_web,
@@ -511,19 +512,26 @@ class WebTeleopNode(Node):
         pose.pitch = out.pose_pitch
         self._pub_body_pose.publish(pose)
 
-    def _publish_gait_select(self, name: str) -> None:
-        """Publish a gait the mapping picked, unless the engine has it locked."""
+    def _publish_gait_select(self, name: str) -> bool:
+        """Publish a gait, unless the engine has it locked. True if it went.
+
+        The return is for the webapp's Mode view, which asks for a gait by name
+        and wants an answer; the mapping's own cycler calls this from the tick
+        and ignores it — a D-pad press the engine will not take is already
+        answered by the gait on the strip not changing.
+        """
         if self._latest_gait_state not in _GAIT_SWITCH_STATES:
             self.get_logger().info(
                 f"gait switch to {name!r} dropped — engine in "
                 f"{self._latest_gait_state!r} (gait locked)"
             )
-            return
+            return False
         self.get_logger().info(f"switching gait to {name!r}")
         # Caps + cycler bookkeeping happens in _on_cmd_gait when this publish
         # loops back — the path gamepad switches already take. Sticks run on
         # the old cap for the tick or two until then, invisible at 60 Hz.
         self._pub_cmd_gait.publish(String(data=name))
+        return True
 
     # ── Server thread ─────────────────────────────────────────────────
 
@@ -783,10 +791,41 @@ class WebTeleopNode(Node):
             })
         elif msg_type == "select_preset":
             self._select_preset(str(data.get("preset", "")))
+        elif msg_type == "select_gait":
+            self._select_gait(str(data.get("gait", "")))
         elif msg_type == "request_control":
             self._claim_control()
         elif msg_type == "release_control":
             self._release_control()
+
+    def _select_gait(self, gait: str) -> None:
+        """Ask the engine for a gait by name, from the Mode view's gait row.
+
+        The webapp names the gait it wants; the node still owns whether that is
+        a gait to be asking for. Two guards the cycler did not need: the name
+        must be in the rotation of the preset the engine reports (a cycler
+        walking that rotation could not leave it), and no preset change may be
+        in flight (the switch has already published the new preset's entry gait,
+        and a gait from the OLD rotation landing behind it would sit latched on
+        /cmd_gait as a gait the engine refuses).
+
+        Not gated on ownership, for the reason ``_select_preset`` is not: this
+        is one idempotent write to a latched selection topic, not a drive
+        stream, and the gamepad makes the same write without asking anyone.
+        """
+        if self._pending_preset is not None:
+            self._broadcast_preset(refused="switching mode — wait")
+            return
+        if not gait_selectable(self._presets, gait):
+            self.get_logger().warning(f"unknown gait {gait!r} requested")
+            self._broadcast_preset(refused="no such gait")
+            return
+        if gait == self._active_gait:
+            # Already there: the latched topic would carry the same name, and a
+            # refusal would be a lie. Nothing to say and nothing to publish.
+            return
+        if not self._publish_gait_select(gait):
+            self._broadcast_preset(refused="the robot is busy")
 
     def _select_preset(self, preset_id: str) -> None:
         """Ask the engine for a preset. Deliberately NOT gated on ownership.

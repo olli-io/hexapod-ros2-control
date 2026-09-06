@@ -687,16 +687,29 @@ def test_posture_yaw_eases_back_to_zero_on_release():
     assert math.isclose(out.pose_yaw, 0.0, abs_tol=1e-6)
 
 
-def test_posture_yaw_inactive_in_gait_mode():
-    # Pressing yaw buttons in gait mode must not produce a /body/pose
-    # yaw offset — output stays at zero regardless of yaw state.
+def test_yaw_active_in_gait_mode_when_bound():
+    # Yaw is a held function like height: bound in gait mode, it drives a
+    # /body/pose yaw offset there too, so the body can be held turned while
+    # the robot walks.
+    cfg = _cfg(gait_bindings={"l1": "yaw_left", "r1": "yaw_right"})
+    state = JoyState(mode=GAIT)
+    for _ in range(50):
+        out = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-3)
+
+
+def test_yaw_inactive_in_gait_mode_when_unbound():
+    # The binding table still decides: a mode that leaves l1/r1 unbound —
+    # animation does, in the shipped YAML — has no yaw. A held offset still
+    # bleeds through the output and eases off, the way height does.
     cfg = _cfg()
     state = JoyState(mode=GAIT, yaw_current=cfg.posture.yaw_max)
     out = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
-    assert out.pose_yaw == 0.0
-    # And the held state bleeds off so a mode flip back to posture
-    # doesn't resurrect a stale offset.
+    assert 0.0 < out.pose_yaw < cfg.posture.yaw_max
     assert state.yaw_current < cfg.posture.yaw_max
+    for _ in range(200):
+        out = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
+    assert math.isclose(out.pose_yaw, 0.0, abs_tol=1e-6)
 
 
 # ---- Wiggle (L2 / R2) ----------------------------------------------------
@@ -795,18 +808,42 @@ def test_wiggle_eases_back_on_release():
     assert math.isclose(out.pose_yaw, 0.0, abs_tol=1e-6)
 
 
-def test_wiggle_inactive_in_gait_mode_but_state_bleeds():
-    # In gait mode the trigger must not produce any pose output, and
-    # the wiggle_amount state should ease toward zero so a flip back
-    # to posture doesn't resurrect the wiggle.
-    cfg = _cfg()
-    state = JoyState(mode=GAIT, yaw_current=cfg.posture.yaw_max, wiggle_amount=1.0)
+def test_wiggle_live_in_gait_mode():
+    # Wiggle is a held offset the operator can work while walking, like height
+    # and yaw: in gait mode the trigger pushes the same shared yaw target and
+    # the same pivot-keeping translation, which the gait return adds to the
+    # recorded x-y baseline. Steady state matches the posture branch exactly.
+    cfg = _cfg(gait_bindings={"l2": "wiggle_left", "r2": "wiggle_right"})
+    state = JoyState(mode=GAIT)
+    for _ in range(400):
+        out = map_joy(_press_lt(), _buttons(), cfg, state, DT)
+    px = cfg.posture.wiggle_pivot_forward_m
+    assert math.isclose(state.wiggle_amount, 1.0, rel_tol=1e-6)
+    assert math.isclose(out.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
+    assert math.isclose(out.pose_x, px * (1.0 - math.cos(cfg.posture.yaw_max)))
+    assert math.isclose(out.pose_y, -px * math.sin(cfg.posture.yaw_max))
+
+
+def test_wiggle_inactive_in_animation_mode_but_state_bleeds():
+    # Animation mode is the one mode wiggle is not live in: the animation is
+    # driving the body there, so a trigger held under it arms nothing — neither
+    # the wiggle scalar nor the yaw it would push. An offset already held bleeds
+    # through the pose and eases off rather than snapping to zero, which is the
+    # height rule that yaw and now the wiggle translation both follow.
+    cfg = _cfg(animation_bindings={"l2": "wiggle_left", "r2": "wiggle_right"})
+    state = JoyState(
+        mode=ANIMATION, yaw_current=cfg.posture.yaw_max, wiggle_amount=1.0
+    )
     out = map_joy(_press_lt(), _buttons(), cfg, state, DT)
-    assert out.pose_x == 0.0
-    assert out.pose_y == 0.0
-    assert out.pose_yaw == 0.0
     assert state.wiggle_amount < 1.0
     assert state.yaw_current < cfg.posture.yaw_max
+    assert out.pose_y < 0.0  # the held offset, on its way out
+    for _ in range(400):
+        out = map_joy(_press_lt(), _buttons(), cfg, state, DT)
+    assert math.isclose(state.wiggle_amount, 0.0, abs_tol=1e-6)
+    assert math.isclose(out.pose_x, 0.0, abs_tol=1e-6)
+    assert math.isclose(out.pose_y, 0.0, abs_tol=1e-6)
+    assert math.isclose(out.pose_yaw, 0.0, abs_tol=1e-6)
 
 
 def test_wiggle_trigger_threshold_respected():

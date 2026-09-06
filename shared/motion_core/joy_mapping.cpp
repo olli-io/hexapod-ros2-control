@@ -382,19 +382,26 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   state.prev_gait_prev = gprev_pressed;
   state.prev_gait_next = gnext_pressed;
 
-  // One shared yaw target, so L1 + L2 does not double the yaw.
+  // One shared yaw target, so L1 + L2 does not double the yaw. The yaw buttons
+  // are live in every mode, like height — the offset rides yaw_current, which
+  // the gait/animation branch below adds to the pose it emits. Wiggle is live in
+  // gait and posture the same way, its translation riding wiggle_amount, but not
+  // in animation: the animation is driving the body there, and an offset held
+  // underneath it fights it.
+  const bool wiggle_live = state.mode != Mode::Animation;
   const bool yaw_btn_left = pressed(binding(*tbl, JoyFn::kYawLeft), axes, buttons);
   const bool yaw_btn_right = pressed(binding(*tbl, JoyFn::kYawRight), axes, buttons);
-  const bool wiggle_left = pressed(binding(*tbl, JoyFn::kWiggleLeft), axes, buttons);
-  const bool wiggle_right = pressed(binding(*tbl, JoyFn::kWiggleRight), axes, buttons);
+  const bool wiggle_left =
+      wiggle_live && pressed(binding(*tbl, JoyFn::kWiggleLeft), axes, buttons);
+  const bool wiggle_right =
+      wiggle_live && pressed(binding(*tbl, JoyFn::kWiggleRight), axes, buttons);
   const bool push_left = yaw_btn_left || wiggle_left;
   const bool push_right = yaw_btn_right || wiggle_right;
   float yaw_target = 0.0f;
-  if (state.mode == Mode::Posture && push_left != push_right) {
+  if (push_left != push_right) {
     yaw_target = push_left ? kP.yaw_max : -kP.yaw_max;
   }
-  const float wiggle_target =
-      (state.mode == Mode::Posture && (wiggle_left || wiggle_right)) ? 1.0f : 0.0f;
+  const float wiggle_target = (wiggle_left || wiggle_right) ? 1.0f : 0.0f;
   const float alpha = 1.0f - std::exp(-dt / kP.yaw_tau);
   state.yaw_current += (yaw_target - state.yaw_current) * alpha;
   state.wiggle_amount += (wiggle_target - state.wiggle_amount) * alpha;
@@ -451,7 +458,11 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
     return out;
   }
 
-  // GAIT / ANIMATION: sticks drive velocity; recorded posture bleeds through.
+  // GAIT / ANIMATION: sticks drive velocity; recorded posture bleeds through,
+  // and so do the live offsets the operator can work while walking — height,
+  // yaw and the wiggle translation, each added to its baseline as the posture
+  // branch adds it. The x-y pair carries the wiggle alone: the sticks are
+  // driving here, so there is no live pose trim to add.
   const float drive_x_raw =
       clipf(axis_value(binding(*tbl, JoyFn::kDriveX), axes) +
                 axis_value(binding(*tbl, JoyFn::kDriveXAux), axes),
@@ -465,11 +476,12 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
   out.linear_x = drive[0] * cfg.gait_linear_max;
   out.linear_y = drive[1] * cfg.gait_linear_max;
   out.angular_z = drive[2] * cfg.gait_angular_z_max;
-  out.pose_x = state.recorded_x;
-  out.pose_y = state.recorded_y;
+  out.pose_x = clipf(state.recorded_x + wx, -kP.x_max, kP.x_max);
+  out.pose_y = clipf(state.recorded_y + wy, -kP.y_max, kP.y_max);
   out.pose_z =
       clipf(state.recorded_z + state.height_current, kP.height_min, kP.height_max);
-  out.pose_yaw = state.recorded_yaw;
+  out.pose_yaw =
+      clipf(state.recorded_yaw + state.yaw_current, -kP.yaw_max, kP.yaw_max);
   out.pose_roll = state.recorded_roll;
   out.pose_pitch = state.recorded_pitch;
   return out;

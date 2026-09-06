@@ -13,6 +13,14 @@
   --red:       #ea6962; /* red — disconnected */
   --tab-active:#FABD2F; /* yellow — the tab now showing */
   --radius:    6px;
+
+  /* The corner buttons' diameter. A variable because the portrait joystick
+     sizing has to reserve the half of one that hangs off each edge of the pad
+     — a circle sized without that slack pushes its own top corners off the
+     screen. */
+  --corner-btn: clamp(3rem, 11vmin, 3.8rem);
+  /* What .joystick-label costs under the pad: its margin plus one line. */
+  --joy-label:  1.2rem;
 }
 
 * {
@@ -33,9 +41,10 @@ html, body {
   font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
 }
 
-/* Portrait: control area on top, navbar below (column; the navbar is ordered
-   last in the portrait rule below).
-   Landscape: navbar on the left, control area right (row). */
+/* Portrait: control area on top, navbar below (column).
+   Landscape: control area left, navbar on the right edge (row).
+   Both put the bar last with `order`, not a reversed flex direction, so the
+   control area and the mode view stay in DOM order. */
 #app {
   display: flex;
   flex-direction: column;
@@ -69,8 +78,7 @@ html, body {
 }
 
 /* Portrait: the bar sits at the BOTTOM, within thumb reach, and the joysticks
-   keep the top of the screen. `order` rather than column-reverse on #app so the
-   control area and the mode view stay in DOM order. */
+   keep the top of the screen. */
 @media (orientation: portrait) {
   #navbar {
     order: 1;
@@ -82,11 +90,13 @@ html, body {
   }
 }
 
+/* Landscape: the bar sits at the RIGHT edge. */
 @media (orientation: landscape) {
   #navbar {
+    order: 1;
     grid-auto-flow: row;
     width: var(--nav-thickness);
-    border-right: 1px solid var(--border);
+    border-left: 1px solid var(--border);
   }
 }
 
@@ -154,7 +164,7 @@ html, body {
 #tab-network.disconnected .wifi-slash { display: block; }
 
 /* Control tab: green while a controller owns /cmd_vel — the tab whose contents
-   change, since its grid becomes the take-control prompt. */
+   change, since its mode column becomes the take-control prompt. */
 #tab-control.controlled { color: var(--green); }
 
 /* Mode icon: accent while a switch is in flight. The two middle legs dim when
@@ -178,50 +188,80 @@ html, body {
 /* One route is mounted at a time and its view takes the same place in the #app
    flexbox, so they inherit one box in both orientations and the tab bar stays
    put. The control area brings its own layout rules below; these are for the
-   stacked list views. */
+   stacked list views.
+
+   A view is one screenful and never scrolls: what does not fit is made to fit —
+   the rows and panels below shrink, padding and type first — rather than moved
+   below a fold. A control that has to be scrolled into view is a control that is
+   not there, and the operator is holding a stick with the other thumb. The log's
+   <pre> is the one exception: the log is unbounded, so it scrolls inside the
+   view rather than moving it. */
 #preset-view,
 #network-view,
 #log-view {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 0.6rem;
   padding: 0.8rem;
   flex: 1;
   min-height: 0;
   min-width: 0;
-  overflow-y: auto;
-  touch-action: pan-y;
+  overflow: hidden;
 }
 
+/* The presets as tiles, not rows. Portrait puts them on a 2x2: a phone is
+   narrow, and four abreast would leave four slivers too thin for a label.
+   Landscape has the width, so they go inline in one row — where the view is
+   short, which is exactly where a stack of four rows does not fit. Both share
+   one column cap so the grid stays centred rather than spanning a tablet. */
 #preset-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 0.5rem;
-  /* Full-width rows read as a list on a phone but stretch absurdly on a
-     landscape tablet; cap and centre them. */
   width: 100%;
   max-width: 420px;
   margin: 0 auto;
+  /* Shrinks with the view but never grows into it: the view's own centring is
+     what places the grid. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+@media (orientation: landscape) {
+  #preset-list {
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    grid-template-columns: none;
+    max-width: 760px;
+  }
 }
 
 .preset-item {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
   gap: 0.15rem;
-  padding: 0.9rem 1rem;
+  /* vh-scaled padding and type: a short screen takes the tile down to a compact
+     chip instead of pushing the gaits — or the note below them — off the
+     bottom. */
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: clamp(0.4rem, 1.8vh, 1rem) 0.6rem;
   border: 1px solid var(--muted);
   border-radius: 8px;
   background: var(--surface);
   color: var(--fg);
   font: inherit;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
-.preset-label { font-size: 1rem; font-weight: 700; }
-.preset-sub { font-size: 0.78rem; color: var(--muted); }
+.preset-label { font-size: clamp(0.8rem, 2vh, 1rem); font-weight: 700; }
+.preset-sub { font-size: clamp(0.65rem, 1.5vh, 0.78rem); color: var(--muted); }
 
 /* Active is the mode the robot is actually standing in — from /gait/leg_set,
    never from the tap. Same solid fill the active teleop mode button uses. */
@@ -233,33 +273,119 @@ html, body {
 .preset-item.active .preset-sub { color: var(--bg-dim); }
 
 /* Asked for, not yet arrived. Dashed rather than filled, so during the couple
-   of seconds the change takes both rows are legible: "on six, going to four". */
+   of seconds the change takes both tiles are legible: "on six, going to four".
+   The word rides under the label rather than after it — a tile is too narrow to
+   grow a suffix without reflowing. */
 .preset-item.pending {
   border-style: dashed;
   border-color: var(--accent);
   color: var(--accent);
 }
 .preset-item.pending .preset-label::after {
-  content: " — switching…";
+  content: "\Aswitching…";
+  white-space: pre;
   font-weight: 400;
   font-size: 0.75rem;
 }
 
 .preset-item:disabled { opacity: 0.5; pointer-events: none; }
 
-/* The folded view's one action, so it reads as the thing to press rather than
-   a third row: centred and drawn in the accent the rows only take when active. */
-#preset-stand {
-  align-items: center;
+/* The gaits of the preset in force: the same tiles the presets are, on the same
+   grid, so the view reads as one choice made twice rather than a list and a row
+   of pills. A rotation is two to five long, so the last row of a portrait 2x2
+   may be half empty — the alternative is a column count that changes with the
+   preset, which would move every tile on a preset switch. */
+#gait-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 420px;
+  /* The top margin is on top of the view's own gap, so the two grids read as
+     two choices rather than one long list of tiles. */
+  margin: 0.5rem auto 0;
+}
+
+@media (orientation: landscape) {
+  #gait-row {
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    grid-template-columns: none;
+    max-width: 760px;
+  }
+}
+
+.gait-item {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: clamp(0.4rem, 1.8vh, 1rem) 0.6rem;
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: clamp(0.8rem, 2vh, 1rem);
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+/* The gait latched on /cmd_gait. Same solid accent an active preset takes, so
+   "what the robot is on" reads the same both times it appears in the view. */
+.gait-item.active {
+  background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--bg-dim);
+}
+
+.gait-item:disabled { opacity: 0.5; pointer-events: none; }
+
+/* The folded view's one action, standing where the preset grid does — the grid
+   is not rendered at all on the belly, so this is not a third thing below two
+   inert ones. Drawn in the accent a preset tile only takes when active, and
+   given the height the grid it replaces would have had, so it reads as the
+   thing to press. */
+#preset-stand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
   width: 100%;
   max-width: 420px;
   margin: 0 auto;
+  padding: clamp(0.8rem, 5vh, 2.5rem) 1rem;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
 }
+
+/* Same footprint the preset grid it stands in for has, in both orientations. */
+@media (orientation: landscape) {
+  #preset-stand { max-width: 760px; }
+}
+
+#preset-stand:active {
+  background: var(--accent);
+  color: var(--bg-dim);
+}
+
+#preset-stand:active .preset-sub { color: var(--bg-dim); }
 
 /* Empty until the node refuses something, so it reserves no space. */
 #preset-note {
+  flex: 0 0 auto;
   width: 100%;
   max-width: 420px;
   margin: 0 auto;
@@ -272,16 +398,21 @@ html, body {
 
 /* ── Network view panels ────────────────────────────────────────── */
 
-/* Same 420px column the preset rows use, so the two views read as one app. */
+/* Same 420px column the preset rows use, so the two views read as one app.
+   Sized by its content, but that content is vh-scaled below, so both panels and
+   their buttons fit a landscape phone without the view scrolling. */
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: clamp(0.2rem, 0.8vh, 0.4rem);
   align-items: flex-start;
   width: 100%;
   max-width: 420px;
   margin: 0 auto;
-  padding: 0.9rem 1rem;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: clamp(0.5rem, 1.8vh, 0.9rem) 1rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -294,17 +425,17 @@ html, body {
   color: var(--muted);
 }
 
-.panel p { font-size: 0.9rem; }
+.panel p { font-size: clamp(0.75rem, 1.9vh, 0.9rem); }
 
 .panel-sub {
-  font-size: 0.78rem;
+  font-size: clamp(0.68rem, 1.6vh, 0.78rem);
   color: var(--muted);
   word-break: break-all;
 }
 
 .panel-btn {
   margin-top: 0.3rem;
-  padding: 0.7rem 1.4rem;
+  padding: clamp(0.4rem, 1.4vh, 0.7rem) 1.4rem;
   background: var(--surface-2);
   border: 1px solid var(--accent);
   border-radius: var(--radius);
@@ -318,6 +449,17 @@ html, body {
 .panel-btn:active {
   background: var(--accent);
   color: var(--bg-dim);
+}
+
+/* Landscape stands the view's two panels side by side. Both are one screenful's
+   worth of the same question, and landscape is exactly where the view is short
+   and wide: two stacked panels, each ending in a button, spend height there is
+   none of, across width there is plenty of. Each still hugs its own content and
+   the pair is centred — stretching them to the view's height would leave two
+   tall boxes with their text along the top. */
+@media (orientation: landscape) {
+  #network-view { flex-direction: row; align-items: center; }
+  #network-view .panel { flex: 1 1 0; margin: 0; }
 }
 
 /* ── Control area ───────────────────────────────────────────────── */
@@ -337,34 +479,35 @@ html, body {
 
 @media (orientation: landscape) {
   #control-area { flex-direction: row; }
-  /* Mirror of the portrait sizing (axes swapped): the grid scales to a
+  /* Mirror of the portrait sizing (axes swapped): the panel scales to a
      viewport fraction so it shrinks, leaving the joysticks at a stable size
-     instead of the grid claiming full height and squeezing them. */
-  #button-grid,
-  #control-prompt {
-    height: min(52vh, 30vw);
-    width: auto;
-    max-width: min(500px, 30vw);
-  }
-  /* Equal max-width/height so a clamp on either axis keeps the canvas square
+     instead of the panel claiming full height and squeezing them. */
+  #center-panel { --panel-size: min(52vh, 30vw, 500px); }
+  /* Equal max-width/height so a clamp on either axis keeps the pad square
      (aspect-ratio alone won't prevent an oval when the two caps differ). */
-  .joystick canvas { max-width: min(60vh, 24vw, 200px); max-height: min(60vh, 24vw, 200px); }
+  .joystick-pad { max-width: min(60vh, 24vw, 200px); max-height: min(60vh, 24vw, 200px); }
 }
 
-/* Portrait stacks two square joysticks + a square grid vertically, so each
-   must be capped by viewport height too — otherwise they overflow on tall,
-   narrow screens. Widths are generous; heights keep the column inside 100vh. */
+/* Portrait stacks the two joysticks and the mode bar vertically, so a circle
+   sized off the viewport's width alone overruns the height the column has left
+   — which is what clipped the top pad's corner buttons on a short phone. Here
+   the pad takes the height its own row was given instead: `.joystick` is a
+   flex item with a definite height, the pad fills what the label leaves of it,
+   and `aspect-ratio: 1` derives the width, so the circle is only ever as big as
+   the column can afford. The row's padding is the half corner button that hangs
+   off the pad's top and bottom edges — slack the pad must not eat, since the
+   topmost one has the screen edge right above it. The two caps stay equal so a
+   clamp on either axis keeps the pad square rather than oval. */
 @media (orientation: portrait) {
   #control-area { flex-direction: column; }
-  #button-grid,
-  #control-prompt {
-    /* Definite width so the grid fills the square like the prompt does,
-       instead of shrinking to its button content. aspect-ratio sets height. */
-    width: min(52vw, 30vh);
-    height: auto;
-    max-height: min(500px, 30vh);
+  #center-panel { --panel-size: min(52vw, 30vh, 500px); }
+  .joystick { padding-block: calc(var(--corner-btn) / 2); }
+  .joystick-pad {
+    width: auto;
+    height: calc(100% - var(--joy-label));
+    max-width: min(60vw, 200px);
+    max-height: min(60vw, 200px);
   }
-  .joystick canvas { max-width: min(60vw, 24vh); max-height: 200px; }
 }
 
 /* ── Joysticks ──────────────────────────────────────────────────── */
@@ -379,13 +522,73 @@ html, body {
   min-height: 0;
 }
 
-.joystick canvas {
+/* The square the circle is inscribed in. It exists so the corner buttons have
+   the circle's own box to position against: .joystick is a flex item wider than
+   the canvas, and its corners are nowhere near the ring. */
+.joystick-pad {
+  position: relative;
   width: 100%;
   aspect-ratio: 1;
+}
+
+.joystick-pad canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   background: var(--surface);
   border: 1px solid var(--border);
   touch-action: none;
+}
+
+/* ── Corner buttons (height, yaw, stand, record) ─────────────────── */
+
+/* Centred on the corners of the pad, so each one nestles into the gap the
+   inscribed circle leaves and the thumb reaches it without leaving the stick.
+   Half of the button sits outside the pad box, in the slack .joystick keeps
+   around the circle in both orientations. */
+.corner-btn {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--corner-btn);
+  height: var(--corner-btn);
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: clamp(0.55rem, 2.2vmin, 0.72rem);
+  font-weight: 600;
+  line-height: 1.2;
+  /* Labels carry a newline: the caption over the glyph. */
+  white-space: pre-line;
+  text-align: center;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+.corner-btn.tl { top: 0; left: 0; transform: translate(-50%, -50%); }
+.corner-btn.tr { top: 0; right: 0; transform: translate(50%, -50%); }
+.corner-btn.bl { bottom: 0; left: 0; transform: translate(-50%, 50%); }
+.corner-btn.br { bottom: 0; right: 0; transform: translate(50%, 50%); }
+
+/* The stand button on the belly. Ahead of the pressed rule below, so a press
+   still flashes accent over the red rather than the red swallowing the
+   feedback. */
+.corner-btn.folded {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.corner-btn:active,
+.corner-btn.pressed {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .joystick-label {
@@ -396,7 +599,7 @@ html, body {
   color: var(--muted);
 }
 
-/* ── Center panel (status strip over grid / prompt) ─────────────── */
+/* ── Center panel (status strip over mode column / prompt) ──────── */
 
 #center-panel {
   flex: 0 0 auto;
@@ -408,33 +611,46 @@ html, body {
   min-height: 0;
 }
 
-/* Current gait, animation mode and pack telemetry. Compact so it doesn't
-   steal height from the joysticks; visible in both grid and prompt states.
-   Wraps rather than widening: the max-widths below hold it to the grid's
-   width (set per orientation, same viewport fractions), so a third item —
-   or a narrow phone — costs a second line instead of squeezing the
-   joysticks the panel sits between. */
+/* The square the mode column and the prompt both fill in landscape, sized per
+   orientation above. The column keeps the square rather than shrinking to three
+   buttons' worth of height, so the joysticks either side sit where they sit
+   whichever of the two is on screen. */
+#mode-stack,
+#control-prompt {
+  width: var(--panel-size);
+  height: var(--panel-size);
+}
+
+/* Current preset, gait, animation mode and pack telemetry. Compact so it
+   doesn't steal height from the joysticks; visible in both mode-column and
+   prompt states. Wraps rather than widening: the same --panel-size holds it to
+   the column's width, so a fourth item — or a narrow phone — costs a second line
+   instead of squeezing the joysticks the panel sits between. Each item is an
+   icon and a value, so what fits on one line is the values themselves. */
 #status-bar {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.15rem 1.2rem;
+  gap: 0.15rem 0.8rem;
+  max-width: var(--panel-size);
   font-size: 0.7rem;
   letter-spacing: 0.05em;
   white-space: nowrap;
 }
 
-@media (orientation: landscape) {
-  #status-bar { max-width: min(500px, 30vw); }
+.status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
-@media (orientation: portrait) {
-  #status-bar { max-width: min(52vw, 30vh); }
-}
-
-.status-key {
-  margin-right: 0.4rem;
-  text-transform: uppercase;
+/* Sized off the strip's own font so the icon and the value it keys stay the
+   same height on any phone. Muted like the words it replaced — the value is
+   what the eye should land on. */
+.status-icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
@@ -443,33 +659,25 @@ html, body {
   font-weight: 600;
 }
 
-/* ── Button grid (3x3, square cells) ────────────────────────────── */
+/* ── Mode selector (three buttons, one line) ────────────────────── */
 
-/* A real <table>: the rows and cells in ButtonGrid.tsx place the buttons, so
-   nothing here decides which slot a button lands in. table-layout: fixed is
-   what keeps the three columns even, and border-spacing replaces the old grid
-   gap (it also insets the outer edge by the same 0.5rem, which the grid gap
-   did not). */
-#button-grid {
+/* Three equal slots filling the panel box — a column in landscape, a row in
+   portrait (below): the buttons are the only thing in the middle of the screen
+   now, so each one is a whole third of it to hit. */
+#mode-stack {
   flex: 0 0 auto;
-  table-layout: fixed;
-  border-collapse: separate;
-  border-spacing: 0.5rem;
-  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
 }
 
-#button-grid td {
-  width: 33.333%;
-  height: 33.333%;
-  padding: 0;
-}
-
-#button-grid button {
+#mode-stack button {
+  flex: 1 1 0;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%;
   min-width: 0;
   padding: 0.25rem;
   background: var(--surface);
@@ -492,31 +700,23 @@ html, body {
 
 /* Active mode is the sole on-screen mode indicator: solid accent fill so it
    reads as "selected", distinct from the transient pressed/active flash.
-   Scoped under #button-grid so these win over the ID-specific base rule. */
-#button-grid .mode-btn.active {
+   Scoped under #mode-stack so these win over the ID-specific base rule. */
+#mode-stack .mode-btn.active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--bg-dim);
   font-weight: 700;
 }
 
-#button-grid .mode-btn:active {
+#mode-stack .mode-btn:active {
   background: var(--surface-2);
 }
 
-#button-grid .action-btn:active,
-#button-grid .action-btn.pressed {
-  background: var(--surface-2);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* ── Inline control prompt (replaces the button grid) ───────────── */
-/* Shown in place of the 3x3 grid while a controller owns /cmd_vel. */
+/* ── Inline control prompt (replaces the mode selector) ─────────── */
+/* Shown in place of the mode column while a controller owns /cmd_vel. */
 
 #control-prompt {
   flex: 0 0 auto;
-  aspect-ratio: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -551,9 +751,45 @@ html, body {
   color: var(--bg-dim);
 }
 
+/* Portrait lays the three modes out in a row instead, in a short wide bar — the
+   rule sits below both blocks it overrides, which is what an ID rule of equal
+   specificity needs to win. The joysticks are stacked above and below the panel
+   in portrait, not either side of it, so a square in the middle spends height
+   the two circles want; a bar gives it back and still leaves each button a
+   third of the screen's width to hit. The prompt that stands in for the bar
+   takes the same box, and turns its own text and button side by side to fit it,
+   so the circles still sit where they sit whichever of the two is on screen. */
+@media (orientation: portrait) {
+  #mode-stack,
+  #control-prompt {
+    width: min(92vw, 520px);
+  }
+
+  /* One landscape row, plus the padding above and below it: a mode button is
+     the same height in both orientations, and the height a portrait bar does
+     not spend is height the two circles get. The 2rem is what the landscape
+     square spends on its own padding and its two gaps. */
+  #mode-stack {
+    flex-direction: row;
+    height: calc((var(--panel-size) - 2rem) / 3 + 1rem);
+  }
+
+  /* The prompt takes the bar's box as a floor rather than a fixed height: its
+     sentence wraps to whatever a narrow screen makes of it, and the circles —
+     sized from the height their own rows are left with — give back the little
+     it needs beyond the bar. */
+  #control-prompt {
+    flex-direction: row;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    height: auto;
+    min-height: calc((var(--panel-size) - 2rem) / 3 + 1rem);
+  }
+}
+
 /* ── Disabled joysticks ─────────────────────────────────────────── */
 
-.joystick.disabled {
+.joystick-pad.disabled canvas {
   opacity: 0.4;
   pointer-events: none;
 }
@@ -600,7 +836,8 @@ html, body {
 /* ── Log view ───────────────────────────────────────────────────── */
 
 /* The refresh floats over the log, so the view is its positioning context.
-   #logs-view is what scrolls, not this box, so the button stays put. */
+   #logs-view is what scrolls — the log is unbounded and no screen holds it —
+   and this box, like every view, does not, so the button stays put. */
 #log-view {
   position: relative;
 }
