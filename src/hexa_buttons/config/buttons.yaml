@@ -57,6 +57,17 @@ button_node:
     # robot.launch.py overrides this with `server.port` from webteleop.yaml,
     # which is the source of truth; this is the hand-launch fallback.
     control_port: 8080
+    # mDNS name the panel points a browser at on a station network, e.g.
+    # "hexa.local". Empty means show the IP address instead, which is the
+    # behaviour without this set.
+    #
+    # Set it only after `./hexa robot install-mdns` has actually been run on the
+    # host: nothing in the container can tell whether avahi is publishing, and a
+    # name that does not resolve is worse on a 256x64 panel than the four
+    # numbers it replaced. The address stays on the line below either way, since
+    # ".local" is not answered on every network or by every phone. Ignored on
+    # the hotspot, which has control.hexa from its own DNS.
+    mdns_name: ""
     # Preferred in order; anything unlisted is used only if none of these has an
     # IPv4 address.
     ip_interfaces: ["wlan0", "eth0"]

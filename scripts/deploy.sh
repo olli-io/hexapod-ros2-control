@@ -210,6 +210,11 @@ cmd_push() {
         "systemd/hexa-network-spool.service" \
         "systemd/hexa-network-report.service" \
         "${host}:~/hexa-robot/systemd/"
+    # mDNS service record, same deal a third time: shipped, never installed, and
+    # `./hexa robot install-mdns` is the opt-in. It is the station-mode half of
+    # what the hotspot gets from network-mode.sh — a name to reach the robot at
+    # on a network the robot does not run.
+    scp "systemd/hexa-control.avahi-service" "${host}:~/hexa-robot/systemd/"
     # Runtime-tuning overlay. The compose bind-mounts ~/hexa-robot/tuning.yaml
     # over the image's copy so an on-Pi edit applies on a bare `hexa robot
     # restart` (no image rebuild). The repo stays the source of truth, so a

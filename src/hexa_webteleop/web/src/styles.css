@@ -49,6 +49,14 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* Added to the home screen the page owns the whole display, so the status bar
+     and the notch sit ON it rather than beside it (index.html asks for that
+     with viewport-fit=cover and a translucent status bar). The shell absorbs
+     the two insets no view can know about; the bar below takes the two that
+     land on itself, on the edge it happens to be sitting on. In an ordinary
+     browser tab every one of these is 0px and nothing moves. */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
 }
 
 @media (orientation: landscape) {
@@ -95,7 +103,14 @@ html, body {
   #navbar {
     order: 1;
     grid-auto-flow: row;
-    width: var(--nav-thickness);
+    /* Same trick as the portrait height: the inset is added to the width, not
+       taken out of it, so a notch on this side costs the bar no button. */
+    width: calc(var(--nav-thickness) + env(safe-area-inset-right, 0px));
+    padding-right: max(var(--nav-pad), env(safe-area-inset-right));
+    /* The home indicator runs along the bottom in landscape too, and the bar
+       spans the full height there — so its lowest button needs the clearance
+       the portrait bar gets from its own rule. */
+    padding-bottom: max(var(--nav-pad), env(safe-area-inset-bottom));
     border-left: 1px solid var(--border);
   }
 }
@@ -193,35 +208,89 @@ html, body {
 #preset-view,
 #network-view,
 #log-view {
+  /* One spacing for the view, the way a box has one for its tiles: the padding
+     off the screen edge is the same as the gap between two of the view's own
+     children, so nothing sits closer to its neighbour than to the edge. */
+  --view-gap: 0.6rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0.6rem;
-  padding: 0.8rem;
+  gap: var(--view-gap);
+  padding: var(--view-gap);
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
 }
 
-/* The presets as tiles, not rows. Portrait puts them on a 2x2: a phone is
-   narrow, and four abreast would leave four slivers too thin for a label.
-   Landscape has the width, so they go inline in one row — where the view is
-   short, which is exactly where a stack of four rows does not fit. Both share
-   one column cap so the grid stays centred rather than spanning a tablet. */
-#preset-list {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0.5rem;
+/* Each choice in its own rounded box, the same one the network view's panels
+   are drawn in, rather than a row under a ruled word: the tiles are
+   deliberately identical across the four sections, so the box — not a heading —
+   is what tells one group of them from the next, and a group keeps its shape
+   whether it holds two tiles or seven. The box is what carries the view's
+   centring column; the grids inside it just fill it. */
+.preset-section {
+  /* One spacing for the box: the gap between two tiles and the padding from a
+     tile to the box's edge are the same number in both orientations, so a tile
+     against the wall sits as far off it as it does off its neighbour. The grids
+     below read it too, which is what keeps the two from drifting apart. */
+  --tile-gap: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tile-gap);
   width: 100%;
   max-width: 420px;
   margin: 0 auto;
   /* Shrinks with the view but never grows into it: the view's own centring is
-     what places the grid. */
+     what places the boxes. */
   flex: 0 1 auto;
   min-height: 0;
+  overflow: hidden;
+  padding: var(--tile-gap);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
+/* The one word naming the choice the box makes, set like the network panels'
+   titles — the box already draws the division, so the word only has to label
+   it. */
+.preset-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: clamp(0.6rem, 1.4vh, 0.72rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+/* The one reason a whole box is dimmed, next to that box's heading.
+   Red, and set like the refusal note under the view, because it is the same
+   kind of thing: what the robot will not do right now — said before the press
+   rather than after it. Shares the heading's row, so a gate opening and
+   shutting moves no tile; the sentence-cased, unspaced type is what keeps it
+   from reading as a second heading. */
+.preset-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--red);
+}
+
+/* The presets as tiles, not rows, on a 2x2: a phone is narrow, and four abreast
+   would leave four slivers too thin for a label. The box around them is what
+   caps and centres the grid. */
+#preset-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--tile-gap);
+  min-height: 0;
+}
 
 .preset-item {
   display: flex;
@@ -248,34 +317,6 @@ html, body {
 
 .preset-label { font-size: clamp(0.8rem, 2vh, 1rem); font-weight: 700; }
 .preset-sub { font-size: clamp(0.65rem, 1.5vh, 0.78rem); color: var(--muted); }
-
-/* One word over each row, naming the choice it makes. The rule runs out to both
-   edges of the row it heads, so the four sections read as four bands rather
-   than one column of tiles — the tiles themselves are deliberately identical
-   across the rows, so the heading is the only thing telling them apart. */
-.section-heading {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex: 0 0 auto;
-  width: 100%;
-  max-width: 420px;
-  /* Pulled toward the row it heads and pushed off the one above, so the pair
-     reads as a band: the view's own gap is otherwise the same above and below. */
-  margin: 0.25rem auto -0.15rem;
-  font-size: clamp(0.6rem, 1.4vh, 0.72rem);
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: var(--muted);
-}
-
-.section-heading::before,
-.section-heading::after {
-  content: "";
-  flex: 1;
-  border-top: 1px solid var(--muted);
-  opacity: 0.35;
-}
 
 /* Active is the mode the robot is actually standing in — from /gait/leg_set,
    never from the tap. Same solid fill the active teleop mode button uses. */
@@ -307,12 +348,8 @@ html, body {
 #anim-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 0.5rem;
-  flex: 0 1 auto;
+  gap: var(--tile-gap);
   min-height: 0;
-  width: 100%;
-  max-width: 420px;
-  margin: 0 auto;
 }
 
 /* The mode row, above the presets: same tiles again, but three fixed slots in
@@ -321,12 +358,8 @@ html, body {
 #preset-modes {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
-  flex: 0 1 auto;
+  gap: var(--tile-gap);
   min-height: 0;
-  width: 100%;
-  max-width: 420px;
-  margin: 0 auto;
 }
 
 /* Three abreast in both orientations, matching the mode row above: the gaits
@@ -439,45 +472,60 @@ html, body {
 
 #preset-note.refused { color: var(--red); }
 
-/* Landscape puts the four sections on two columns instead of one long stack: a
-   landscape phone is wide and short, and a stack of four headed rows does not
-   fit one without shrinking every tile. MODE over PRESET reads down the left —
-   what the robot stands as — and GAIT over ANIM down the right — what it walks.
-   Placed explicitly on one grid
-   rather than in two column boxes, so the two columns' headings share a row and
-   their divider rules line up straight across the view; a section shorter than
-   its opposite number sits at the top of the band rather than stretching to
-   fill it. */
+/* The two stacks: MODE over PRESET — what the robot stands as — and GAIT over
+   ANIM — what it walks. One stack under the other in portrait, which is the same
+   single column of four boxes it has always been; side by side in landscape,
+   where a landscape phone is wide and short and four stacked boxes do not fit
+   one without shrinking every tile. Every box is sized by what it holds in both
+   orientations: the ANIM box holds one row of tiles and is one row tall, rather
+   than being stretched to match the three-row GAIT box above it. */
+#preset-stacks,
+.preset-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--view-gap);
+  min-height: 0;
+  min-width: 0;
+}
+
 @media (orientation: landscape) {
-  #preset-view {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-auto-rows: min-content;
-    align-content: center;
-    column-gap: 1.2rem;
+  #preset-stacks {
+    flex-direction: row;
+    align-items: stretch;
+    /* The view's own gap, kept: the space between the two stacks is the same
+       space as between two boxes in one, so the four read as one field of boxes
+       rather than as two columns set apart. */
     width: 100%;
     max-width: 1000px;
     margin: 0 auto;
+    /* Takes the view's height so each stack can centre its own boxes in it. */
+    flex: 1 1 auto;
   }
 
-  /* The rows carry their own centring cap for the single-column stack; here the
+  /* Equal halves, each with its boxes centred in the height rather than hung
+     from the top: the two stacks are rarely the same height, and a short one
+     against the top edge reads as a box gone missing rather than as a stack
+     with less in it. */
+  .preset-column {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  /* The boxes carry their own centring cap for the portrait stack; here the
      column they sit in is the cap. */
-  #preset-view > * {
-    max-width: none;
-    align-self: start;
+  .preset-section { max-width: none; }
+
+  /* The height a stack does not spend on boxes goes into the tiles instead: a
+     landscape screen is short, so the vh the portrait tiles scale by leaves
+     them squat here, and the room is there. */
+  .preset-item,
+  .gait-item,
+  .anim-item,
+  .preset-mode,
+  #preset-stand {
+    padding-top: clamp(0.5rem, 3.4vh, 1.2rem);
+    padding-bottom: clamp(0.5rem, 3.4vh, 1.2rem);
   }
-
-  [data-section="mode"] { grid-area: 1 / 1; }
-  #preset-modes { grid-area: 2 / 1; }
-  [data-section="preset"] { grid-area: 3 / 1; }
-  #preset-list { grid-area: 4 / 1; }
-
-  [data-section="gait"] { grid-area: 1 / 2; }
-  #gait-row { grid-area: 2 / 2; }
-  [data-section="anim"] { grid-area: 3 / 2; }
-  #anim-row { grid-area: 4 / 2; }
-
-  #preset-note { grid-area: 5 / 1 / 6 / 3; }
 }
 
 /* ── Network view panels ────────────────────────────────────────── */
@@ -518,6 +566,9 @@ html, body {
 }
 
 .panel-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   margin-top: 0.3rem;
   padding: clamp(0.4rem, 1.4vh, 0.7rem) 1.4rem;
   background: var(--surface-2);
@@ -528,6 +579,11 @@ html, body {
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+.panel-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
 .panel-btn:active {

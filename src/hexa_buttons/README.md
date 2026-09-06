@@ -104,6 +104,21 @@ and finishing a switch puts up the result — the credentials, or what went wron
     Could not start the hotspot
     Hold 3 seconds to retry
 
+With `mdns_name` set the station screens lead with the name instead, and keep
+the address on a line of its own:
+
+    Battery -> 50 %  ( 7.4 V )
+    Control -> hexa.local:8080
+       or  -> 192.168.172.42:8080
+
+The name goes first because it survives a phone locking and nobody has to read
+four numbers off a 64-pixel-tall panel. The address stays because `.local` is
+not answered on every network or by every phone, and a name that silently does
+not resolve, with no address beside it, is worse than the address alone. Station
+mode used two of the panel's four lines, so the third costs nothing. The hotspot
+ignores the setting: `control.hexa` is answered by the AP's own DNS, every name
+resolves there, and the third line is the credentials'.
+
 No pack reading yet renders as `-- %  ( --.- V )` rather than a fabricated 0 %,
 which would read as a dead battery. No address renders as `no network`.
 
@@ -274,6 +289,13 @@ pressed.
 `webteleop.yaml` — the port the screen advertises has to be the port the server
 actually binds. The value in `buttons.yaml` is only the fallback for a
 hand-launched node.
+
+`mdns_name` is empty by default and stays a hand edit, unlike `control_port`.
+Nothing in the container can tell whether the host actually runs avahi —
+`./hexa robot install-mdns` is a separate opt-in on the host side, and it is
+what makes the name resolve at all (see `docs/robot-environment.md` §14). A
+panel advertising a name that answers nowhere strands whoever reads it, so the
+default is the address that always works.
 
 The `battery_empty_v` / `battery_full_v` span drives **the number on the screen
 only**. It is not a safety threshold: the undervoltage ladder that beeps, folds

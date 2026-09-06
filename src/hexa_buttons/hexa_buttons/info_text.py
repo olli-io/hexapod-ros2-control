@@ -40,6 +40,13 @@ class InfoConfig:
     #: Port the web teleop UI listens on. Loaded from hexa_webteleop's
     #: webteleop.yaml at launch so the two can never disagree.
     control_port: int = 8080
+    #: mDNS name the robot answers to on a station network, e.g. ``hexa.local``.
+    #: Empty by default and left for a human to set, because only the host knows
+    #: whether ``hexa robot install-mdns`` has actually been run — and a name on
+    #: the panel that does not resolve strands whoever reads it, which is worse
+    #: than the address it replaced. Ignored on the hotspot, which has a name of
+    #: its own.
+    mdns_name: str = ""
     #: Separator between a label and its value. ASCII by default, and it has to
     #: be: the bundled Pixel Operator font covers ASCII + Latin-1 only, so a
     #: U+2192 arrow would come out blank. Widening the character set means
@@ -77,15 +84,42 @@ def _control_line(ip: str, config: InfoConfig, network: NetworkState | None) -> 
 
     On the hotspot that is the name the AP's own DNS answers (``control.hexa``),
     not an address and a port: the teleop server is on port 80 there, and a name
-    is what a person can retype after their phone locks. Anywhere else there is
-    no such name — the robot is a guest on somebody else's network — so it stays
-    the address a phone can actually route to.
+    is what a person can retype after their phone locks.
+
+    On somebody else's network the robot is a guest and has no DNS to write, but
+    mDNS needs none — avahi answers for ``<hostname>.local`` over multicast on
+    whatever network it finds itself on. So a configured ``mdns_name`` is
+    preferred for the same reason the portal name is: it survives a phone
+    locking, and nobody has to read four numbers off a 64-pixel-tall panel.
     """
     if network is not None and network.is_hotspot and network.portal:
         return f"Control {config.arrow} {network.portal}"
+    if config.mdns_name:
+        return f"Control {config.arrow} {config.mdns_name}:{config.control_port}"
     if ip:
         return f"Control {config.arrow} {ip}:{config.control_port}"
     return f"Control {config.arrow} no network"
+
+
+def _address_fallback_line(
+    ip: str, config: InfoConfig, network: NetworkState | None
+) -> str | None:
+    """The raw address, under a name that may not resolve for everyone.
+
+    ``.local`` is not universal — some Android builds and most managed networks
+    do not answer it — so the name never fully replaces the address, it only
+    goes first. Station mode uses two of the panel's four lines, so this one is
+    free; the hotspot already has three and needs no fallback anyway, since its
+    own DNS answers every name.
+    """
+    if network is not None and network.is_hotspot:
+        return None
+    if not config.mdns_name or not ip:
+        return None
+    # Indented under the line above rather than labelled again: it is the same
+    # answer to the same question, and a second "Control" reads as a second
+    # thing to try in a different place.
+    return f"   or  {config.arrow} {ip}:{config.control_port}"
 
 
 def battery_screen(
@@ -109,6 +143,9 @@ def battery_screen(
         pct = battery_percent(voltage, config)
         battery = f"Battery {config.arrow} {pct} %  ( {voltage:.1f} V )"
     lines = [battery, _control_line(ip, config, network)]
+    fallback = _address_fallback_line(ip, config, network)
+    if fallback is not None:
+        lines.append(fallback)
     if network is not None and network.is_hotspot and network.ssid:
         lines.append(f"WiFi {config.arrow} {network.ssid} / {network.psk}")
     return "\n".join(lines)
@@ -174,7 +211,11 @@ def network_screen(
             lines.append(f"Password {config.arrow} {state.psk}")
         lines.append(_control_line(ip, config, state))
         return "\n".join(lines)
-    return f"Hotspot off\n{_control_line(ip, config, state)}"
+    lines = ["Hotspot off", _control_line(ip, config, state)]
+    fallback = _address_fallback_line(ip, config, state)
+    if fallback is not None:
+        lines.append(fallback)
+    return "\n".join(lines)
 
 
 def screen_text(

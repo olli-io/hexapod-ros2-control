@@ -2,8 +2,41 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- viewport-fit=cover pairs with the env(safe-area-inset-*) padding in
+       styles.css: added to the home screen the page owns the whole display,
+       including the notch and the home indicator, and without both halves the
+       tab bar sits under one of them. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Hexapod Control</title>
+
+  <!-- Installability. Everything referenced here is a flat name at the site
+       root, which is the only shape the server will serve: captive_portal
+       .static_filename refuses any path with a separator in it and _handle_get
+       answers a refusal with a 302 to "/", so a nested icon would hand the
+       browser this page instead of a PNG — silently. Files come from web/public/,
+       which Vite copies to dist/ verbatim; they cannot be dropped into dist/ by
+       hand because the build empties it.
+
+       There is no service worker, and adding one would not work: they register
+       only in a secure context and the robot is reached over plain HTTP. See
+       the README's Frontend section for the whole argument, including why
+       Let's Encrypt does not solve it. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <!-- Also stops the automatic /favicon.ico request, which currently costs a
+       302 on every fresh load. -->
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <!-- The pair below is what actually delivers a chrome-less launch from the
+       home screen; iOS reads the first, Chrome the second. The manifest's
+       display field alone does not do it on iOS. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Hexapod">
+  <!-- black-translucent, so the status bar sits over the page's own dark
+       ground rather than cutting a bar out of it. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1d2021">
 </head>
 <body>
   <div id="app"></div>

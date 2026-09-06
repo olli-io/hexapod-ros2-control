@@ -126,6 +126,7 @@ class ButtonNode(Node):
             battery_empty_v=self.declare_parameter("battery_empty_v", 6.6).value,
             battery_full_v=self.declare_parameter("battery_full_v", 8.4).value,
             control_port=self.declare_parameter("control_port", 8080).value,
+            mdns_name=self.declare_parameter("mdns_name", "").value,
             arrow=self.declare_parameter("label_arrow", "->").value,
         )
         self._interfaces = self.declare_parameter(

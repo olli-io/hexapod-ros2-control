@@ -176,6 +176,61 @@ def test_the_name_is_only_used_on_the_hotspot():
     )
 
 
+def test_the_mdns_name_goes_first_on_a_station_network_with_the_address_under_it():
+    """avahi answers <hostname>.local over multicast on whatever network the
+    robot joins, so unlike control.hexa this name needs no DNS the robot
+    controls. It leads because it survives a phone locking and nobody has to
+    read four numbers off a 64-pixel panel.
+
+    The address stays, on a line of its own: ".local" is not answered on every
+    network or by every phone, and a name that silently does not resolve with no
+    address beside it is worse than the address alone. Station mode uses two of
+    the panel's four lines, so the third is free.
+    """
+    config = dataclasses.replace(InfoConfig(), mdns_name="hexa.local")
+    assert battery_screen(7.5, "192.168.1.42", config, STATION) == (
+        "Battery -> 50 %  ( 7.5 V )\n"
+        "Control -> hexa.local:8080\n"
+        "   or  -> 192.168.1.42:8080"
+    )
+    assert network_screen(STATION, "192.168.1.42", config, 3.0) == (
+        "Hotspot off\n"
+        "Control -> hexa.local:8080\n"
+        "   or  -> 192.168.1.42:8080"
+    )
+
+
+def test_no_mdns_name_leaves_the_station_screens_exactly_as_they_were():
+    """The default is empty, and it has to stay inert: only the host knows
+    whether `hexa robot install-mdns` was ever run."""
+    assert InfoConfig().mdns_name == ""
+    assert battery_screen(7.5, "10.0.0.5", InfoConfig(), STATION) == (
+        "Battery -> 50 %  ( 7.5 V )\nControl -> 10.0.0.5:8080"
+    )
+
+
+def test_the_mdns_name_is_ignored_on_the_hotspot():
+    """The AP answers control.hexa from its own DNS and serves port 80, so the
+    portal name still wins and no fallback line is spent — the credentials need
+    that room, and every name resolves there anyway."""
+    config = dataclasses.replace(InfoConfig(), mdns_name="hexa.local")
+    assert battery_screen(7.5, "192.168.4.1", config, NAMED_HOTSPOT) == (
+        "Battery -> 50 %  ( 7.5 V )\n"
+        "Control -> control.hexa\n"
+        "WiFi -> hexapod / hexahexa"
+    )
+
+
+def test_the_mdns_lines_fit_the_panel():
+    """Two lines where there was one, on a screen that wraps rather than
+    truncates — and a wrap can push the last line off a four-line panel."""
+    config = dataclasses.replace(InfoConfig(), mdns_name="hexa.local")
+    lines = battery_screen(7.5, "192.168.100.200", config, STATION).split("\n")
+    assert len(lines) == 3
+    for line in lines:
+        assert len(line) <= LINE_BUDGET, line
+
+
 def test_the_station_result_screen_says_the_hotspot_is_off():
     assert network_screen(STATION, "10.0.0.5", InfoConfig(), 3.0) == (
         "Hotspot off\nControl -> 10.0.0.5:8080"

@@ -81,6 +81,22 @@ NETWORK_ENABLE_UNITS=(
     hexa-network-report.service
 )
 
+# mDNS. A third separate opt-in, and the most invasive of the three in one
+# narrow way: it renames the Pi. That is the entire mechanism — avahi publishes
+# <hostname>.local against whatever addresses the host has, on every interface,
+# and re-announces by itself when they change. So a hostname is all it takes to
+# be reachable by name in both network modes, and nothing here has to track an
+# IP or hook NetworkManager. The cost is that `pi@raspberrypi` becomes
+# `pi@hexa` in every ssh prompt and known_hosts, which is why nobody gets it by
+# deploying.
+MDNS_TEMPLATE="systemd/hexa-control.avahi-service"
+MDNS_SERVICE_PATH="/etc/avahi/services/hexa-control.service"
+# Beside network-mode.sh's previous-profile, and for the same reason: the thing
+# this replaced has to be recoverable by uninstall.
+MDNS_STATE_DIR="/var/lib/hexa-network"
+MDNS_PREV_HOSTNAME="${MDNS_STATE_DIR}/previous-hostname"
+MDNS_NAME="${HEXA_MDNS_NAME:-hexa}"
+
 # Name of the <ros2_control> block in the URDF. Must match the constant in
 # hexa_bringup/launch/robot.launch.py.
 HARDWARE_COMPONENT_NAME="HexaSystem"
@@ -125,6 +141,15 @@ Commands:
                               opt-in because it can take the Pi off the network
                               you are ssh'd in over.
   uninstall-network           Disable + remove the network-mode units.
+  install-mdns                Install + enable mDNS (needs sudo), so the robot
+                              answers to '${MDNS_NAME}.local' on any network it is on
+                              and shows up in network browsers. Works in both
+                              modes; needs no internet. A separate opt-in
+                              because it RENAMES the Pi — avahi publishes
+                              <hostname>.local, so the hostname is the
+                              mechanism. Set HEXA_MDNS_NAME to pick another.
+  uninstall-mdns              Remove the mDNS service and restore the previous
+                              hostname.
   network-mode [mode]         Switch now, no button needed
                               (toggle | hotspot | station | status;
                               default status). Switching to the hotspot drops
@@ -467,6 +492,105 @@ cmd_uninstall_network() {
     echo ">> Removed. The info button's hold no longer switches network mode."
 }
 
+# The port the service record advertises. webteleop.yaml is the source of truth,
+# but `hexa deploy push` ships no src/ tree, so on the Pi that file is not there
+# to read — hence a default, and an env override for anyone who has moved the
+# port. Read where it exists (a full checkout), defaulted where it does not.
+mdns_port() {
+    local cfg="src/hexa_webteleop/config/webteleop.yaml"
+    if [[ -n "${HEXA_MDNS_PORT:-}" ]]; then
+        echo "${HEXA_MDNS_PORT}"
+    elif [[ -f "${cfg}" ]] && grep -qE '^\s*port:' "${cfg}"; then
+        sed -nE 's/^[[:space:]]*port:[[:space:]]*([0-9]+).*/\1/p' "${cfg}" | head -1
+    else
+        echo 8080
+    fi
+}
+
+# mDNS, so a home network needs no address read off a 256x64 panel. The hotspot
+# already solves this with a DHCP-advertised portal URL and unanswered probes
+# (systemd/network-mode.sh); on somebody else's network there is no such hook,
+# and this is the one mechanism that works without being the DHCP server.
+cmd_install_mdns() {
+    [[ $# -eq 0 ]] || die "install-mdns: unexpected argument '$1'"
+    [[ -f "${MDNS_TEMPLATE}" ]] || die "missing ${MDNS_TEMPLATE} — re-run 'hexa deploy push' to ship it"
+    command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this host does not run systemd"
+    # Checked here rather than discovered later on a phone that cannot resolve
+    # the name. Pi OS ships it; a minimal image may not.
+    command -v avahi-daemon >/dev/null 2>&1 || die \
+        "avahi-daemon not found — install it first (apt install avahi-daemon)"
+    command -v hostnamectl >/dev/null 2>&1 || die "hostnamectl not found"
+
+    local port previous
+    port="$(mdns_port)"
+    previous="$(hostname)"
+
+    if [[ "${previous}" != "${MDNS_NAME}" ]]; then
+        echo ">> Renaming ${previous} -> ${MDNS_NAME} (sudo)"
+        sudo install -d -m 755 "${MDNS_STATE_DIR}"
+        # Only on the first rename: running install twice must not record
+        # "hexa" as the name to go back to.
+        [[ -f "${MDNS_PREV_HOSTNAME}" ]] || \
+            echo "${previous}" | sudo tee "${MDNS_PREV_HOSTNAME}" >/dev/null
+        sudo hostnamectl set-hostname "${MDNS_NAME}"
+        # Without the matching /etc/hosts line every later sudo prints "unable
+        # to resolve host" — cosmetic, but it lands on somebody mid-task.
+        sudo sed -i -E "s/^(127\.0\.1\.1[[:space:]]+).*/\1${MDNS_NAME}/" /etc/hosts
+        grep -qE "^127\.0\.1\.1[[:space:]]" /etc/hosts || \
+            echo "127.0.1.1	${MDNS_NAME}" | sudo tee -a /etc/hosts >/dev/null
+    fi
+
+    local rendered
+    rendered="$(mktemp)"
+    # shellcheck disable=SC2064  # expand ${rendered} now, at trap-set time
+    trap "rm -f '${rendered}'" EXIT
+    sed -e "s|@PORT@|${port}|g" "${MDNS_TEMPLATE}" > "${rendered}"
+    echo ">> Installing ${MDNS_SERVICE_PATH} (sudo)"
+    sudo install -d -m 755 "$(dirname "${MDNS_SERVICE_PATH}")"
+    sudo install -m 644 "${rendered}" "${MDNS_SERVICE_PATH}" || die "install failed"
+
+    sudo systemctl enable --now avahi-daemon
+    sudo systemctl reload-or-restart avahi-daemon
+
+    echo ">> Enabled. The robot answers to ${MDNS_NAME}.local on any network it joins."
+    echo "   Web teleop:    http://${MDNS_NAME}.local:${port}"
+    echo "   Check it:      avahi-browse -rt _http._tcp   (from another machine)"
+    echo
+    echo "   To put the name on the panel instead of the address, set"
+    echo "     mdns_name: \"${MDNS_NAME}.local\""
+    echo "   in src/hexa_buttons/config/buttons.yaml. Left manual on purpose: the"
+    echo "   container cannot tell whether this host actually runs avahi, and a"
+    echo "   name on the panel that does not resolve strands whoever reads it."
+    if [[ "${previous}" != "${MDNS_NAME}" ]]; then
+        echo
+        echo "   NOTE: the hostname changed. An open ssh session is fine, but the"
+        echo "   next one is ${MDNS_NAME} — and the host key is now filed under a"
+        echo "   new name, so expect a known_hosts prompt."
+    fi
+}
+
+cmd_uninstall_mdns() {
+    [[ $# -eq 0 ]] || die "uninstall-mdns: unexpected argument '$1'"
+    command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this host does not run systemd"
+
+    echo ">> Removing ${MDNS_SERVICE_PATH} (sudo)"
+    sudo rm -f "${MDNS_SERVICE_PATH}"
+
+    if [[ -f "${MDNS_PREV_HOSTNAME}" ]]; then
+        local previous
+        previous="$(cat "${MDNS_PREV_HOSTNAME}")"
+        echo ">> Restoring hostname ${previous}"
+        sudo hostnamectl set-hostname "${previous}"
+        sudo sed -i -E "s/^(127\.0\.1\.1[[:space:]]+).*/\1${previous}/" /etc/hosts
+        sudo rm -f "${MDNS_PREV_HOSTNAME}"
+    fi
+
+    # Left running: avahi is a system service that predates us and may well be
+    # what something else on this Pi is using. Only our record is ours to drop.
+    sudo systemctl reload-or-restart avahi-daemon || true
+    echo ">> Removed. The robot no longer advertises itself over mDNS."
+}
+
 # Switch by hand — network bring-up without a button fitted, and the only way to
 # test the nmcli sequence before wiring it to the panel.
 cmd_network_mode() {
@@ -582,6 +706,8 @@ case "${sub}" in
     play-tune)          cmd_play_tune "$@" ;;
     install-network)    cmd_install_network "$@" ;;
     uninstall-network)  cmd_uninstall_network "$@" ;;
+    install-mdns)       cmd_install_mdns "$@" ;;
+    uninstall-mdns)     cmd_uninstall_mdns "$@" ;;
     network-mode)       cmd_network_mode "$@" ;;
     status)     cmd_status "$@" ;;
     logs)       cmd_logs "$@" ;;

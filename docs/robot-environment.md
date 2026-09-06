@@ -412,7 +412,38 @@ ssh -t <host> 'cd ~/hexa-robot && ./hexa robot install-network'
   stay.
 - **`control.hexa` only exists on the hotspot.** It is the AP's own DNS
   answering, so on any other network the robot is its address as usual — which
-  is what the info screen shows there.
+  is what the info screen shows there, unless mDNS is installed (below).
+
+### mDNS: a name on somebody else's network
+
+On the hotspot the robot is its own DHCP and DNS server, which is what makes
+`control.hexa` and the captive-portal popup possible. As a guest on a home
+network it is neither, and the only thing on the panel is an address to read off
+a 256x64 screen and type. mDNS closes that gap without needing to be anyone's
+DNS server: avahi answers for `<hostname>.local` over multicast, on whatever
+network it finds itself on, and re-announces by itself when the address changes.
+
+```
+ssh -t <host> 'cd ~/hexa-robot && ./hexa robot install-mdns'
+```
+
+Then `http://hexa.local:8080` reaches the controller, and the robot shows up in
+network browsers as "Hexapod Control". `uninstall-mdns` reverses it.
+
+- **It renames the Pi**, because the hostname *is* the mechanism — avahi
+  publishes `<hostname>.local`. The previous name is saved and restored on
+  uninstall. Expect a `known_hosts` prompt on the next ssh. `HEXA_MDNS_NAME`
+  picks a different one.
+- **It works in both modes** and needs no internet, mDNS being link-local
+  multicast. It does not conflict with the hotspot's wildcard DNS, which would
+  answer the same name with the same address.
+- **`.local` is not universal.** Some Android builds and most managed networks
+  do not answer it, which is why the panel keeps showing the address on the line
+  under the name rather than replacing it.
+- **The panel line is opt-in separately.** Set `mdns_name: "hexa.local"` in
+  `src/hexa_buttons/config/buttons.yaml`; it is empty by default because nothing
+  in the container can tell whether this host actually runs avahi, and a name on
+  the panel that does not resolve strands whoever reads it.
 
 The webapp coexists with the gamepad: the gamepad owns `/cmd_vel` by default,
 and the webapp prompts to claim control when it connects. See

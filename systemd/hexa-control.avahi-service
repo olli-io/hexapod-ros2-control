@@ -1,0 +1,26 @@
+<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Advertises the web teleop over mDNS, so the robot shows up by name in a
+     network browser instead of by an address somebody read off a 256x64 panel.
+
+     Not a systemd unit despite living here: systemd/ is this repo's host
+     payload directory (network-mode.sh is a shell script), and this is the
+     same deal as everything else in it — shipped by `hexa deploy push`, never
+     installed, until the operator opts in with `hexa robot install-mdns`.
+
+     The name a browser resolves is not this file's doing: avahi publishes
+     <hostname>.local against whatever addresses the host currently has, on
+     every interface, and re-announces on its own when they change. That is why
+     install-mdns sets the hostname and why nothing here has to know an IP, in
+     either network mode. This file adds only the service record, which is what
+     makes the robot discoverable rather than merely resolvable.
+
+     @PORT@ is rendered at install time from webteleop.yaml, which is the single
+     source of truth for the port, exactly as buttons.yaml gets it. -->
+<service-group>
+  <name replace-wildcards="yes">Hexapod Control on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>@PORT@</port>
+  </service>
+</service-group>

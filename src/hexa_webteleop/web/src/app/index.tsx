@@ -6,6 +6,7 @@ import StatusBar from "../components/StatusBar";
 import ModeStack, { MODES, modeLocked } from "../components/ModeStack";
 import HoldButton from "../components/HoldButton";
 import ControlPrompt from "../components/ControlPrompt";
+import { useKeepAwake } from "../hooks/useKeepAwake";
 import {
   animationAvailable,
   controllerActive,
@@ -70,6 +71,12 @@ export const Route = createFileRoute("/")({ component: ControlRoute });
 
 function ControlRoute() {
   const { state, send } = useTeleop();
+
+  // Held for as long as this route is mounted, for the same reason the
+  // keepalive and the held functions are: driving is minutes of stick with no
+  // taps in between, which every phone reads as an idle screen. Leaving for the
+  // Log view releases it — nothing is being driven from there.
+  useKeepAwake();
   const [pressed, setPressed] = useState<ReadonlySet<ActionName>>(new Set());
 
   const animationAllowed = animationAvailable(state);

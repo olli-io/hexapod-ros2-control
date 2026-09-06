@@ -469,12 +469,76 @@ correctness — it is a compile step, not a design.
   nothing anyway: every response carries `Cache-Control: no-store`. Fixed names
   have a second payoff — colcon's `--symlink-install` links stay valid, so a
   rebuild refreshes a running sim with no colcon run.
+- `web/public/` — the four files that are *not* inlined, because they cannot be:
+  `manifest.webmanifest` and the three icons. Vite copies this directory into
+  `dist/` verbatim, outside the HTML graph `vite-plugin-singlefile` inlines,
+  which is the only way to add a file to the bundle — `emptyOutDir` wipes
+  anything placed in `dist/` by hand. They land flat at the root, so the
+  single-file rule above still holds for everything the *page* is made of.
+  `web/icon.svg` is the artwork they are rendered from and does not ship;
+  `tools/render-icons.sh` regenerates them.
+
+## The app shell
+
+The webapp installs to a phone's home screen. Not for offline use — it controls
+a robot, so it is useless without one — but for the screen: a joystick UI loses
+a URL bar and a toolbar to the browser, a stray swipe can pull-to-refresh
+mid-walk, and nothing about an ordinary page stops the phone dimming while the
+robot is being driven.
+
+- **The manifest and the Apple meta tags**, in `index.html`. iOS reads
+  `apple-mobile-web-app-capable` and gives a genuinely chrome-less launch;
+  Chrome reads the manifest. `start_url` and `scope` are both `/` because that
+  is the only document the server serves — the router runs on a hash history
+  precisely so no route is ever a path the server must know, and a scope below
+  the root would name a path that 302s.
+- **`viewport-fit=cover` plus `env(safe-area-inset-*)`** in `styles.css`. Once
+  installed the page owns the whole display, notch and home indicator included,
+  and the tab bar sits under one of them without both halves. The insets are
+  `0px` in an ordinary tab, so nothing moves there.
+- **`hooks/useKeepAwake.ts`**, called by the Control route and released with it.
+  Prefers `navigator.wakeLock`; falls back to a muted looping video, inlined as
+  a data URI so `dist/` stays flat. Best-effort by nature — every failure path
+  is a silent no-op, because a phone that dims is a nuisance and an exception
+  thrown out of the driving view is not.
+- **A Fullscreen button on the Network view**, never automatic: the only other
+  gesture this app has is a joystick drag, and going fullscreen under a thumb
+  that is steering is exactly the surprise a teleop UI must not spring. Absent
+  on iPhone Safari, which has no Fullscreen API and needs none once installed.
+
+**There is no service worker, and one would not work.** Service workers register
+only in a *secure context*, and every address the robot answers on is plain
+HTTP: `http://control.hexa/` on its own hotspot, `http://<ip>:8080` as a guest
+on somebody else's network. Let's Encrypt does not rescue this — `.hexa` is not
+a delegated TLD and never will be issued for, DNS-01 against a real domain wants
+internet the hotspot does not have and a 90-day renewal the robot cannot
+perform there, and the Pi has no RTC, so a stale clock fails validation with no
+way for the operator to click past it. An expired certificate means a UI that
+will not load at all, which is worse than the gap being closed.
+
+Two existing decisions point the same way. Every static response carries
+`Cache-Control: no-store` so a phone can never run last week's UI against
+today's socket protocol, and a caching worker is the exact opposite of that.
+Unknown paths 302 to `/` rather than 404 so the OS connectivity probes go
+unanswered and the joining phone opens the controller by itself, and a worker
+with a navigation fallback would start answering them.
+
+The consequence is asymmetric and worth knowing: **iOS gets the whole thing**
+(Add to Home Screen needs no worker and no HTTPS), **Android gets fullscreen
+and no-sleep but a shortcut rather than an installed app**, since Chrome's
+install criteria require HTTPS plus a worker. A trusted local CA and an HTTPS
+listener beside the plain port 80 would close that half later; nothing here
+blocks it. One wart to accept meanwhile: launching the installed iOS app while
+the robot is unreachable shows Safari's error page inside the standalone shell,
+with no address bar to retry from — close it and reopen.
 
 ```
 cd src/hexa_webteleop/web
 npm ci          # first time, or after a dependency change
 npm run build   # type-checks, then writes web/dist — commit the result
 npm run dev     # host dev server on :5173, /ws and /logs proxied to :8080
+
+./tools/render-icons.sh   # only after editing icon.svg; then build and commit
 ```
 
 `npm run dev` wants a robot to talk to: bring one up with `./hexa sim up` first.

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source artwork for the webapp's icons. Not under public/: only the
+     rasterized PNGs ship, and an SVG in the bundle would be a fourth flat file
+     no browser here asks for.
+
+     The motif is the face's NEUTRAL expression: two rings, which is literally
+     what EyeRaster::drawEye emits for it (core/EyeRaster.cpp draws
+     ring(cx, 32, 18, 18)). Re-proportioned rather than copied, since the panel
+     is 256x64 and an icon is square, so keeping the 4:1 layout would draw a
+     thin band across an empty box. The ring pair reads as the same face either
+     way.
+
+     Everything sits inside the centred circle of 80% diameter that a maskable
+     icon may be cropped to (r = 204.8 here; the furthest ink is at r = 182), so
+     one drawing serves purpose "any maskable" and no separate maskable file is
+     needed.
+
+     Colours are the styles.css palette: bg_dim ground, fg ink. Re-render with
+     tools/render-icons.sh. Note for editors: XML forbids a double hyphen
+     inside a comment, so CSS variable names cannot be written here verbatim. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#1d2021"/>
+  <g fill="none" stroke="#d4be98" stroke-width="20">
+    <circle cx="160" cy="256" r="76"/>
+    <circle cx="352" cy="256" r="76"/>
+  </g>
+</svg>

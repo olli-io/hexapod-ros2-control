@@ -5,6 +5,7 @@ phone joining the robot's hotspot end up holding the controller without anyone
 telling it an address: every path that is not a webapp file is somebody who
 wants the app, so it goes to the app rather than to a 404.
 """
+import json
 import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -123,15 +124,91 @@ def test_every_shipped_asset_is_reachable():
 
 def test_the_index_references_only_flat_assets():
     """Same rule, from the other end: whatever the built index.html points at has
-    to be a name the server will serve.
+    to be a name the server will serve, and has to be there.
+
+    Existence is half the test because of how a miss fails. A manifest or an
+    icon the build never emitted is still a flat, acceptable *name*, so the
+    server takes the request, finds no file, and 302s it to "/" — handing the
+    browser this very page in place of the PNG it asked for. Nothing errors and
+    nothing logs; the icon is just silently wrong. Asserting the file exists is
+    what turns that into a red test.
     """
-    html = (_DIST / "index.html").read_text()
-    for ref in re.findall(r'(?:src|href)="([^"]+)"', html):
+    # Only the markup, which here means everything before the inlined bundle:
+    # the whole app is a <script> in this same file, and minified JS is full of
+    # fragments like href="'+St(e)+'" that are not references to anything. The
+    # page's own references — the manifest, the icons — are all head tags, and
+    # the head ends before the first script.
+    markup = (_DIST / "index.html").read_text().split("<script", 1)[0]
+    for ref in re.findall(r'(?:src|href)="([^"]+)"', markup):
         # The page is served from "/", so that is what a relative href resolves
         # against. An off-site URL is somebody else's problem.
         if urlparse(ref).scheme or ref.startswith("//"):
             continue
-        assert static_filename(request_path(urljoin("/", ref))) is not None, ref
+        name = static_filename(request_path(urljoin("/", ref)))
+        assert name is not None, ref
+        assert (_DIST / name).is_file(), f"{ref} is referenced but not shipped"
+
+
+# --- the installable app shell --------------------------------------------
+
+
+def _manifest() -> dict:
+    return json.loads((_DIST / "manifest.webmanifest").read_text())
+
+
+def test_the_manifest_ships_and_parses():
+    """Without it the page is a page; with it the same page is something iOS
+    will put on a home screen and launch without browser chrome. It comes from
+    web/public/, which Vite copies into dist/ verbatim — it cannot be dropped
+    into dist/ by hand, because the build empties that directory first.
+    """
+    assert (_DIST / "manifest.webmanifest").is_file()
+    assert _manifest()["name"]
+
+
+def test_the_manifest_is_scoped_to_the_root():
+    """The server serves exactly one document, at "/", and 302s every other path
+    to it — which is what makes a joining phone declare a captive portal. A
+    start_url or scope below the root would name a path that redirects, so the
+    installed app would launch on a redirect back to where it started, and any
+    browser checking scope would put its own chrome back on. The router runs on
+    a hash history for the same reason; there is no second document to point at.
+    """
+    manifest = _manifest()
+    assert manifest["start_url"] == "/"
+    assert manifest["scope"] == "/"
+    assert manifest["display"] == "standalone"
+
+
+def test_every_manifest_icon_is_flat_and_shipped():
+    """Same silent-302 hazard as the index references above, one indirection
+    further out: nothing in the HTML mentions these, so only reading the
+    manifest catches an icon that is nested or missing.
+    """
+    icons = _manifest()["icons"]
+    assert icons, "a manifest with no icons is not installable"
+    for icon in icons:
+        name = static_filename(request_path(icon["src"]))
+        assert name is not None, icon["src"]
+        assert (_DIST / name).is_file(), f"{icon['src']} is in the manifest but not shipped"
+
+
+def test_the_bundle_ships_no_service_worker():
+    """There is deliberately no service worker, and this is where that decision
+    is written down rather than only argued for in the README.
+
+    It could not work: service workers register only in a secure context, and
+    every address the robot answers on is plain HTTP. It should not work
+    either — the server sets `Cache-Control: no-store` on everything so a phone
+    can never run last week's UI against today's socket protocol, and a
+    fetch-handling worker would both undo that and start answering the
+    connectivity probes whose going unanswered is what opens the captive portal.
+    """
+    for entry in _DIST.iterdir():
+        assert "serviceworker" not in entry.name.lower().replace("-", "").replace(
+            "_", ""
+        ), entry.name
+        assert entry.name not in ("sw.js", "service-worker.js"), entry.name
 
 
 @pytest.mark.parametrize(

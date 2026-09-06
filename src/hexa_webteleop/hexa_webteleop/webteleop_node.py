@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import threading
 import time
 from pathlib import Path
@@ -87,6 +88,13 @@ from .web_mapping import (
     preset_payload,
     preset_pending_expired,
 )
+
+# ``FileResponse`` types a file from the stdlib table, which does not carry
+# ``.webmanifest`` on every Python and every base image — and a manifest served
+# as octet-stream is one a browser may decline. Registered here rather than
+# passed at the call site so the one static handler stays type-agnostic.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+
 
 # The webapp sends one stick message per ``touchmove``, which browsers
 # coalesce to the display refresh rate.
