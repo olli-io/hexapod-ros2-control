@@ -15,6 +15,7 @@ from hexa_teleop import (
     apply_deadband,
     fit_drive_to_envelope,
     map_joy,
+    resolve_functions,
 )
 
 
@@ -246,6 +247,43 @@ def _buttons(
     out[6] = int(record)
     out[7] = int(init)
     return tuple(out)
+
+
+# ─── The index layer ────────────────────────────────────────────────
+#
+# The only place a Joy index is read. Everything below this section goes
+# through ``map_joy``, which is ``map_functions`` over this.
+
+def test_resolve_functions_names_what_is_held():
+    cfg = _cfg()
+    # "start" is bound to init in the base section, "select" to record.
+    got = resolve_functions(_axes(), _buttons(init=True), cfg, GAIT)
+    assert "init" in got.pressed
+    assert "record" not in got.pressed
+
+
+def test_resolve_functions_reads_a_section_not_a_mode():
+    """Same snapshot, two sections, two answers.
+
+    ``l1`` is ``yaw_left`` in the posture section and unbound in the gait
+    one, so what a snapshot *means* is a property of the section it is read
+    against — which is why the state machine asks per section rather than
+    resolving once per tick.
+    """
+    cfg = _cfg()
+    held = _buttons(yaw_left=True)  # l1
+    assert "yaw_left" in resolve_functions(_axes(), held, cfg, POSTURE).pressed
+    assert "yaw_left" not in resolve_functions(_axes(), held, cfg, GAIT).pressed
+
+
+def test_resolve_functions_reports_axes_sign_normalised_but_not_deadbanded():
+    # Deadband is the state machine's to apply, so every input device gets
+    # the same rule from one place — this value is well under the fixture's
+    # 0.1 and survives here.
+    cfg = _cfg()
+    got = resolve_functions(_axes(right_y=0.02), _buttons(), cfg, GAIT)
+    assert math.isclose(got.axes["drive_x"], 0.02)
+    assert got.axes["drive_y"] == 0.0
 
 
 def test_deadband_zeros_small_inputs():

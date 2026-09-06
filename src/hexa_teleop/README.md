@@ -12,7 +12,12 @@ replace it transparently.
 - **`teleop_joy.py`** — `/joy` → command topics. Mode-switched stick
   semantics; mapping fully configurable via YAML.
 - **`joy_mapping.py`** — pure mapping library (`Joy` → commands), no
-  `rclpy`, unit-testable.
+  `rclpy`, unit-testable. Two halves: `resolve_functions` reads a `Joy`
+  snapshot as the *functions* a section's bindings say are held, and
+  `map_functions` is the state machine over those. `map_joy` is the pair
+  composed, and is what a device reporting indices calls. A device whose
+  operator names the function outright — the webapp — builds the seam's
+  `FunctionInput` itself and skips the index half entirely.
 
 Use any X-input controller (fe. 8BitDo etc. in X-input mode). The
 `/dev/input` bind mount propagates hot-plugged devices into the running

@@ -13,9 +13,9 @@ webapp file is sent to the root of the same host.
 The redirect is doing two jobs. It answers the probe with something other than
 the "there is internet here" the OS hoped for, which is what makes the phone
 declare a captive portal and open its sign-in browser on the controller by
-itself; and it puts the browser at ``/``, where the webapp's relative
-``main.js`` and ``styles.css`` resolve. Serving the page inline under some other
-path would load neither.
+itself; and it puts the browser at ``/``, the one path the webapp is served
+from. Its own views are routes behind a ``#`` there precisely so that nothing
+the operator taps ever comes back through here asking for a path.
 """
 from __future__ import annotations
 

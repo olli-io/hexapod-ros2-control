@@ -3,6 +3,10 @@ build/
 install/
 log/
 
+# Frontend deps. Copied into the builder by `COPY src/` otherwise, which on a
+# `hexa deploy build` means dragging them through qemu.
+**/node_modules
+
 # Python
 __pycache__/
 *.pyc

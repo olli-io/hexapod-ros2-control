@@ -1,24 +1,20 @@
 """Pure mapping from webapp input to high-level commands.
 
-Translates the webapp's two-joystick + nine-button input model into
-the ``(axes, buttons)`` sequences that ``hexa_teleop.joy_mapping.map_joy``
-consumes, then delegates to ``map_joy`` for the full state machine
-(mode switching, init two-press, record, yaw easing, height
-integration, gait/animation cycling).
+The webapp has no buttons and no axes — it has a grid whose slots the
+operator taps, and each slot knows which *function* it is. So the client
+sends the function name (``init``, ``quadruped_mode``, ``gait_next`` …) and
+this module hands it straight to ``hexa_teleop.joy_mapping.map_functions``,
+which runs the full state machine (mode switching, init two-press, record,
+yaw easing, height integration, gait/animation cycling) — the same one the
+gamepad runs. Nothing here builds a ``sensor_msgs/Joy`` index: that layer
+belongs to a device that actually reports indices, and this one does not.
 
-The webapp config (``webteleop.yaml``) produces a ``JoyConfig`` with
-webapp-specific virtual key names (``btn_0`` … ``btn_8``,
-``left_stick_x/y``, ``right_stick_x/y``) but the same function
-namespace and the same ``JoyState`` / ``JoyOutput`` dataclasses as the
-gamepad teleop. This lets the non-trivial state machine live in one
-place (``map_joy``) rather than being duplicated per input device.
-
-The one validation difference from the gamepad config loader: the
-webapp allows ``init`` / ``record`` (BASE_FUNCTIONS) in per-mode
-bindings (validated with ``ALL_FUNCTIONS``) so the bottom 6 buttons can
-vary per mode including those two functions. The gamepad loader
-restricts mode bindings to ``BUTTON_CLASS_FUNCTIONS | AXIS_CLASS_FUNCTIONS``
-and keeps ``init`` / ``record`` in ``base.bindings`` only.
+The two on-screen sticks are the exception: they are continuous, and which
+function each drives depends on the mode, which the *node* is authoritative
+for. Resolving them here rather than in the client is what stops a stick
+held across a mode switch from leaking drive into pose for the tick before
+the client hears about the change. Their per-mode table is
+``webteleop.yaml``'s ``sticks:`` blocks, loaded into a ``StickMap``.
 
 Pure-python; rclpy-free so the mapping + config loading are
 unit-testable standalone.
@@ -29,6 +25,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 
@@ -50,23 +47,89 @@ from hexa_teleop.presets import (
 from hexa_teleop.presets import resync_gait as _resync_gait
 
 from hexa_teleop.joy_mapping import (
-    ALL_FUNCTIONS,
     ANIMATION,
+    AXIS_CLASS_FUNCTIONS,
     BASE_FUNCTIONS,
+    BUTTON_CLASS_FUNCTIONS,
     GAIT,
     POSTURE,
     BaseConfig,
+    FunctionInput,
     JoyConfig,
     JoyOutput,
     JoyState,
     ModeConfig,
     PostureConfig,
-    cross_section_function_check,
-    map_joy,
-    validate_bindings,
+    map_functions,
 )
 
-NUM_BUTTONS = 9
+# What the client is allowed to name on the wire: every function the state
+# machine reads as a press, and nothing else. The axis-class functions are
+# the sticks', and the client does not name those.
+ACTIONS: frozenset[str] = BASE_FUNCTIONS | BUTTON_CLASS_FUNCTIONS
+
+# The webapp's two sticks, by the names the ``sticks:`` blocks use.
+STICKS: tuple[str, ...] = (
+    "left_stick_x",
+    "left_stick_y",
+    "right_stick_x",
+    "right_stick_y",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class StickMap:
+    """Which axis-class function each stick drives, per mode.
+
+    One dict per config section — ``webteleop.yaml``'s ``sticks:`` blocks
+    verbatim, stick name -> function name. Kept out of ``JoyConfig`` because
+    it is the webapp's own layout, not something the shared state machine
+    reads: ``map_web`` resolves it and hands over functions.
+    """
+
+    gait: Mapping[str, str]
+    posture: Mapping[str, str]
+    animation: Mapping[str, str]
+
+    def for_section(self, section: str) -> Mapping[str, str]:
+        if section == POSTURE:
+            return self.posture
+        if section == ANIMATION:
+            return self.animation
+        return self.gait
+
+
+def parse_sticks(section: str, raw_sticks: object) -> dict[str, str]:
+    """Validate one ``sticks:`` block: stick name -> axis-class function.
+
+    The webapp's answer to ``validate_bindings``, and much smaller because
+    there is nothing here but four sticks and the functions they drive — no
+    keys, no indices, no button class.
+    """
+    if not isinstance(raw_sticks, dict):
+        raise ValueError(f"{section}.sticks must be a mapping")
+    table: dict[str, str] = {}
+    seen: dict[str, str] = {}
+    for key, fn in raw_sticks.items():
+        stick, function = str(key), str(fn)
+        if stick not in STICKS:
+            raise ValueError(
+                f"{section}.sticks: unknown stick {stick!r} "
+                f"(expected one of {', '.join(STICKS)})"
+            )
+        if function not in AXIS_CLASS_FUNCTIONS:
+            raise ValueError(
+                f"{section}.sticks: {stick!r} is bound to {function!r}, "
+                f"which is not an axis-class function"
+            )
+        if function in seen:
+            raise ValueError(
+                f"{section}.sticks: {function!r} is bound to both "
+                f"{seen[function]!r} and {stick!r}"
+            )
+        seen[function] = stick
+        table[stick] = function
+    return table
 
 
 def load_web_config(
@@ -74,11 +137,12 @@ def load_web_config(
     gait_yaml: str | Path,
     posture_yaml: str | Path,
     geometry_yaml: str | Path,
-) -> tuple[JoyConfig, str, str, VelocityCaps, PresetRegistry]:
+) -> tuple[JoyConfig, StickMap, str, str, VelocityCaps, PresetRegistry]:
     """Load ``webteleop.yaml`` + gait/posture/geometry configs into a ``JoyConfig``.
 
-    Returns ``(cfg, initial_mode, default_gait, caps, presets)`` — same shape as
-    ``teleop_joy._load_config`` so the node can consume both identically.
+    Returns ``(cfg, sticks, initial_mode, default_gait, caps, presets)`` —
+    ``teleop_joy._load_config``'s tuple plus the ``StickMap``, which is the one
+    thing the webapp has that a gamepad does not: a layout with no keys in it.
     ``geometry_yaml`` supplies the leg mounts the angular cap is derived from.
     """
     path = Path(path)
@@ -107,52 +171,23 @@ def load_web_config(
     default_quadruped_gait = registry.entry_gait(quadruped_preset.id)
 
     base_raw = raw["base"]
-    button_index = {str(k): int(v) for k, v in base_raw["buttons"].items()}
-    axis_index = {str(k): int(v) for k, v in base_raw["axes"].items()}
-    axis_sign = {
-        str(k): float(v) for k, v in base_raw.get("axis_signs", {}).items()
-    }
-    base_bindings = {str(k): str(v) for k, v in base_raw["bindings"].items()}
-    validate_bindings(
-        "base",
-        base_bindings,
-        base_buttons=set(button_index),
-        base_axes=set(axis_index),
-        allowed_functions=BASE_FUNCTIONS,
-    )
+    # No key layout: the webapp names its functions, so ``BaseConfig``'s
+    # index and binding tables stay at their empty defaults and only the
+    # deadband is the webapp's to set.
     base = BaseConfig(
         deadband=float(base_raw["deadband"]),
         trigger_threshold=float(base_raw.get("trigger_threshold", 0.5)),
-        button_index=button_index,
-        axis_index=axis_index,
-        axis_sign=axis_sign,
-        bindings=base_bindings,
     )
 
-    def _parse_mode(section: str, raw_section: dict) -> dict[str, str]:
-        bindings = {str(k): str(v) for k, v in raw_section["bindings"].items()}
-        validate_bindings(
-            section,
-            bindings,
-            base_buttons=set(base.button_index),
-            base_axes=set(base.axis_index),
-            allowed_functions=ALL_FUNCTIONS,
-        )
-        return bindings
-
-    gait_bindings = _parse_mode("gait", raw["gait"])
     posture_raw = raw["posture"]
-    posture_bindings = _parse_mode("posture", posture_raw)
-    animation_bindings = _parse_mode("animation", raw["animation"])
-    cross_section_function_check({
-        "gait": gait_bindings,
-        "posture": posture_bindings,
-        "animation": animation_bindings,
-    })
+    sticks = StickMap(
+        gait=parse_sticks("gait", raw["gait"]["sticks"]),
+        posture=parse_sticks("posture", posture_raw["sticks"]),
+        animation=parse_sticks("animation", raw["animation"]["sticks"]),
+    )
 
     height = posture_raw["height"]
     posture_cfg = PostureConfig(
-        bindings=posture_bindings,
         # PostureScalarLimits carries PostureConfig's own field names.
         **dataclasses.asdict(posture_limits),
         height_max=height_max,
@@ -162,9 +197,9 @@ def load_web_config(
 
     cfg = JoyConfig(
         base=base,
-        gait=ModeConfig(bindings=gait_bindings),
+        gait=ModeConfig(),
         posture=posture_cfg,
-        animation=ModeConfig(bindings=animation_bindings),
+        animation=ModeConfig(),
         gait_cycle=gait_cycle,
         quadruped_gait_cycle=quadruped_gait_cycle,
         default_quadruped_gait=default_quadruped_gait,
@@ -180,28 +215,48 @@ def load_web_config(
             f"initial_mode must be one of "
             f"{POSTURE!r}, {GAIT!r}, {ANIMATION!r}; got {initial_mode!r}"
         )
-    return cfg, initial_mode, default_gait, caps, registry
+    return cfg, sticks, initial_mode, default_gait, caps, registry
 
 
 def map_web(
     left_stick: tuple[float, float],
     right_stick: tuple[float, float],
-    buttons: tuple[int, ...],
+    actions: frozenset[str],
+    sticks: StickMap,
     cfg: JoyConfig,
     state: JoyState,
     dt: float,
 ) -> JoyOutput:
-    """Map webapp input to ``JoyOutput`` via the shared ``map_joy``.
+    """Map webapp input to ``JoyOutput`` via the shared ``map_functions``.
 
     ``left_stick`` / ``right_stick`` are ``(x, y)`` pairs in ``[-1, 1]``,
-    REP-103 normalised (x: left = +, y: forward = +). ``buttons`` is a
-    ``NUM_BUTTONS``-element tuple of 0/1. The function packs them into
-    the ``axes`` / ``buttons`` sequences that ``map_joy`` expects and
-    delegates — the full state machine (mode switching, init, record,
-    yaw, height, gait/animation cycling) runs inside ``map_joy``.
+    REP-103 normalised (x: left = +, y: forward = +). ``actions`` is the set
+    of functions the operator is holding, named outright.
+
+    The state machine asks per section; the held set is the same answer
+    whichever it asks for, because a slot that means ``quadruped_mode`` in
+    gait mode sends that word and nothing else — the aliasing a key layout
+    forces (one key, ``record`` here and ``quadruped_mode`` there) does not
+    exist on this device. The sticks do vary, so they are resolved against
+    the section asked for.
     """
-    axes = (left_stick[0], left_stick[1], right_stick[0], right_stick[1])
-    return map_joy(axes, buttons, cfg, state, dt)
+    values = {
+        "left_stick_x": left_stick[0],
+        "left_stick_y": left_stick[1],
+        "right_stick_x": right_stick[0],
+        "right_stick_y": right_stick[1],
+    }
+
+    def source(section: str) -> FunctionInput:
+        return FunctionInput(
+            pressed=actions,
+            axes={
+                function: values[stick]
+                for stick, function in sticks.for_section(section).items()
+            },
+        )
+
+    return map_functions(source, cfg, state, dt)
 
 
 def input_is_stale(
@@ -246,9 +301,11 @@ def battery_payload(
     }
 
 
-def neutral_inputs() -> tuple[tuple[float, float], tuple[float, float], tuple[int, ...]]:
-    """Neutral webapp input: centred sticks, all buttons released."""
-    return (0.0, 0.0), (0.0, 0.0), (0,) * NUM_BUTTONS
+def neutral_inputs() -> tuple[
+    tuple[float, float], tuple[float, float], frozenset[str]
+]:
+    """Neutral webapp input: centred sticks, nothing held."""
+    return (0.0, 0.0), (0.0, 0.0), frozenset()
 
 
 def resync_gait(
@@ -320,26 +377,3 @@ def preset_pending_expired(
     deadline is what the webapp reads as "it did not happen".
     """
     return deadline_monotonic is not None and now_monotonic > deadline_monotonic
-
-
-def button_labels_for_mode(cfg: JoyConfig, mode: str) -> tuple[str, ...]:
-    """Return ``NUM_BUTTONS`` button labels (function names) for ``mode``.
-
-    Indices 0-2: fixed mode-select buttons from ``base.bindings``
-    (``btn_0``, ``btn_1``, ``btn_2``). Indices 3-8: per-mode bindings
-    (``btn_3`` … ``btn_8``). Unbound buttons return ``""``.
-    """
-    if mode == GAIT:
-        mode_cfg = cfg.gait
-    elif mode == POSTURE:
-        mode_cfg = cfg.posture
-    else:
-        mode_cfg = cfg.animation
-    labels: list[str] = []
-    for i in range(NUM_BUTTONS):
-        key = f"btn_{i}"
-        if i < 3:
-            labels.append(cfg.base.bindings.get(key, ""))
-        else:
-            labels.append(mode_cfg.bindings.get(key, ""))
-    return tuple(labels)

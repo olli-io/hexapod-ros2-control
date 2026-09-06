@@ -1,0 +1,27 @@
+{
+  "name": "hexa-webteleop",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.32",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tanstack/router-plugin": "^1.168.35",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "terser": "^5.51.2",
+    "typescript": "^7.0.2",
+    "vite": "^7.1.0",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}

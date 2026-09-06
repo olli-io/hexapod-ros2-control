@@ -5,7 +5,9 @@ phone joining the robot's hotspot end up holding the controller without anyone
 telling it an address: every path that is not a webapp file is somebody who
 wants the app, so it goes to the app rather than to a 404.
 """
+import re
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import pytest
 
@@ -33,6 +35,10 @@ def test_the_root_survives_normalisation():
 
 
 def test_a_flat_asset_name_is_served_from_the_web_directory():
+    """The rule, not the manifest: the single-file build ships only index.html,
+    but the server still has to accept a flat name for anything too large for
+    the bundler to inline.
+    """
     assert static_filename("/main.js") == "main.js"
     assert static_filename("/styles.css") == "styles.css"
 
@@ -70,6 +76,12 @@ _PROBE_NAMES = (
 )
 
 
+# What setup.py installs into share/hexa_webteleop/web, and therefore the only
+# directory the static server can serve out of. The bundle is committed and is a
+# single inlined index.html; a build is `npm run build` in web/.
+_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
+
+
 @pytest.mark.parametrize("name", _PROBE_NAMES)
 def test_the_webapp_ships_no_file_an_os_probes_for(name):
     """A phone opens its sign-in browser on the controller *because* its probe
@@ -77,7 +89,49 @@ def test_the_webapp_ships_no_file_an_os_probes_for(name):
     the phone would call the hotspot an ordinary network, and the popup that
     saves anyone having to be told an address would quietly stop happening.
     """
-    assert not (Path(__file__).resolve().parents[1] / "web" / name).exists()
+    assert not (_DIST / name).exists()
+
+
+def test_the_committed_bundle_is_a_built_one():
+    """The bundle is a build artefact that lives in git, because the ARM64 robot
+    image builds from a bare checkout with no node in it. A rebuild that was
+    never committed ships a robot with no UI, so the suite is where that is
+    caught.
+
+    The build is a single file — `vite-plugin-singlefile` inlines the script and
+    the stylesheet — so a built page carries the whole app. The unbuilt source
+    `web/index.html`, which is a stub pointing at `/src/main.tsx`, is what the
+    two assertions tell apart.
+    """
+    index = _DIST / "index.html"
+    assert index.is_file()
+    html = index.read_text()
+    assert "/src/main.tsx" not in html, "web/index.html was copied in unbuilt"
+    assert len(html) > 50_000, "the app is inlined; a small page is not a build"
+
+
+def test_every_shipped_asset_is_reachable():
+    """The bundle must stay flat. ``static_filename`` refuses any nested path and
+    ``_handle_get`` answers that with a 302 to "/" rather than a 404, so a file
+    under an assets/ subdirectory would fail *silently* — the browser would be
+    handed the HTML page in place of the script it asked for.
+    """
+    for entry in _DIST.iterdir():
+        assert entry.is_file(), f"{entry.name} is a directory; the bundle must be flat"
+        assert static_filename(request_path("/" + entry.name)) == entry.name
+
+
+def test_the_index_references_only_flat_assets():
+    """Same rule, from the other end: whatever the built index.html points at has
+    to be a name the server will serve.
+    """
+    html = (_DIST / "index.html").read_text()
+    for ref in re.findall(r'(?:src|href)="([^"]+)"', html):
+        # The page is served from "/", so that is what a relative href resolves
+        # against. An off-site URL is somebody else's problem.
+        if urlparse(ref).scheme or ref.startswith("//"):
+            continue
+        assert static_filename(request_path(urljoin("/", ref))) is not None, ref
 
 
 @pytest.mark.parametrize(

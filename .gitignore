@@ -10,6 +10,10 @@ log/
 .env
 .env.robot
 
+# Web teleop frontend deps. web/dist is the built bundle and IS committed:
+# the ARM64 robot image builds from a bare checkout with no node in it.
+src/hexa_webteleop/web/node_modules/
+
 # Python
 __pycache__/
 *.pyc

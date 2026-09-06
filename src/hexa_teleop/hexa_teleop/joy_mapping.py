@@ -9,8 +9,8 @@ package README.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Collection, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Callable, Collection, Mapping, Sequence
 
 POSTURE = "posture"
 GAIT = "gait"
@@ -75,23 +75,30 @@ class BaseConfig:
     deadband: float
     trigger_threshold: float
     # Controller hardware layout: physical key name -> Joy.{buttons,axes}
-    # index. Edit these blocks to support a different controller.
-    button_index: Mapping[str, int]
-    axis_index: Mapping[str, int]
+    # index. Edit these blocks to support a different controller. All four
+    # default to empty because they describe a *physical* device: an input
+    # source that names its functions outright (the webapp) has no layout to
+    # declare and leaves them alone.
+    button_index: Mapping[str, int] = field(default_factory=dict)
+    axis_index: Mapping[str, int] = field(default_factory=dict)
     # Per-axis sign so a driver that reports the opposite direction can
     # be normalised to "+x forward, +y left, dpad-up = +1". Missing
     # entries default to +1.0.
-    axis_sign: Mapping[str, float]
+    axis_sign: Mapping[str, float] = field(default_factory=dict)
     # Mode-agnostic key bindings (mode-select buttons, init, record).
     # key name -> function name (or "" for unbound).
-    bindings: Mapping[str, str]
+    bindings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ModeConfig:
-    """Per-mode bindings: physical key name -> function name."""
+    """Per-mode bindings: physical key name -> function name.
 
-    bindings: Mapping[str, str]
+    Empty for an input source that names its functions outright, which has
+    no keys to bind — see ``BaseConfig``.
+    """
+
+    bindings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -106,7 +113,6 @@ class PostureConfig:
     never be honoured.
     """
 
-    bindings: Mapping[str, str]
     x_max: float
     y_max: float
     roll_max: float
@@ -118,6 +124,9 @@ class PostureConfig:
     height_max: float
     height_min: float
     height_rate: float
+    # Last so it can default to empty, as on ``ModeConfig``. Every caller
+    # passes the scalars by keyword, so the order is nobody's business.
+    bindings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -235,6 +244,35 @@ class JoyOutput:
     # fact for a caller that wants to log or gate on it without matching
     # gait names.
     init_quadruped: bool = False
+
+
+@dataclass(frozen=True)
+class FunctionInput:
+    """What the operator is asking for, named by function rather than key.
+
+    The seam between an input device and the state machine. ``pressed`` holds
+    the button-class and base functions held this tick; ``axes`` maps each
+    axis-class function to its sign-normalised value in [-1, 1], deadband not
+    yet applied (``map_functions`` owns that, so every device gets one rule).
+    A function absent from ``axes`` reads as 0.0.
+    """
+
+    pressed: frozenset[str]
+    axes: Mapping[str, float]
+
+
+# Resolves the operator's input against one config section (GAIT / POSTURE /
+# ANIMATION). A section rather than a bare snapshot because the same key means
+# different functions per mode, and the state machine deliberately reads three
+# things against a fixed section — see ``map_functions``.
+FunctionSource = Callable[[str], FunctionInput]
+
+
+EMPTY_INPUT = FunctionInput(pressed=frozenset(), axes={})
+
+
+def _axis(inp: FunctionInput, function: str, deadband: float) -> float:
+    return apply_deadband(inp.axes.get(function, 0.0), deadband)
 
 
 def apply_deadband(value: float, deadband: float) -> float:
@@ -377,7 +415,7 @@ def _dpad_pressed(
     return value < -0.5
 
 
-def button_pressed_for(
+def _button_pressed(
     function: str,
     base: BaseConfig,
     mode_cfg: ModeConfig | PostureConfig,
@@ -414,16 +452,18 @@ def button_pressed_for(
     return False
 
 
-def axis_value_for(
+def _axis_signed(
     function: str,
     base: BaseConfig,
     mode_cfg: ModeConfig | PostureConfig,
     axes: Sequence[float],
 ) -> float:
-    """Sign-normalised, deadband-applied value of the axis bound to ``function``.
+    """Sign-normalised value of the axis bound to ``function``.
 
-    Returns 0.0 if unbound, bound to a non-axis key, or the index is
-    out of range.
+    Deadband is NOT applied here: it is the same rule for every input
+    device, so ``map_functions`` applies it to whatever a ``FunctionSource``
+    hands over. Returns 0.0 if unbound, bound to a non-axis key, or the
+    index is out of range.
     """
     key = _resolve_function_key(function, base, mode_cfg)
     if key is None or key not in base.axis_index:
@@ -431,7 +471,34 @@ def axis_value_for(
     idx = base.axis_index[key]
     raw = _read_axis_idx(axes, idx)
     sign = base.axis_sign.get(key, 1.0)
-    return apply_deadband(sign * raw, base.deadband)
+    return sign * raw
+
+
+def resolve_functions(
+    axes: Sequence[float],
+    buttons: Sequence[int],
+    cfg: JoyConfig,
+    section: str,
+) -> FunctionInput:
+    """Read a ``sensor_msgs/Joy`` snapshot as functions, per ``section``.
+
+    The only place a Joy index is read. A device that reports indices — the
+    gamepad — comes through here; one whose operator names the function
+    outright builds a ``FunctionInput`` without it.
+    """
+    base = cfg.base
+    mode_cfg = _mode_cfg(cfg, section)
+    return FunctionInput(
+        pressed=frozenset(
+            fn
+            for fn in BASE_FUNCTIONS | BUTTON_CLASS_FUNCTIONS
+            if _button_pressed(fn, base, mode_cfg, buttons, axes)
+        ),
+        axes={
+            fn: _axis_signed(fn, base, mode_cfg, axes)
+            for fn in AXIS_CLASS_FUNCTIONS
+        },
+    )
 
 
 def _clip(v: float, lo: float, hi: float) -> float:
@@ -570,15 +637,27 @@ def resolve_gait_cycle(
     return filtered
 
 
-def map_joy(
-    axes: Sequence[float],
-    buttons: Sequence[int],
+def map_functions(
+    source: FunctionSource,
     cfg: JoyConfig,
     state: JoyState,
     dt: float,
 ) -> JoyOutput:
-    base = cfg.base
-    mode_cfg = _mode_cfg(cfg, state.mode)
+    """The whole teleop state machine, over functions rather than keys.
+
+    ``source(section)`` answers "which functions are held, and what do the
+    axis-class ones read, resolved against ``section``'s bindings". A device
+    with a physical layout builds one with ``resolve_functions``; a device
+    whose operator presses the function itself — the webapp — builds one
+    directly and never owns an index.
+
+    Most reads go through ``active``, the input resolved against the mode in
+    force. Three do not, and say so where they happen: ``quadruped_mode``
+    against GAIT, the posture sticks against POSTURE, the animation cycler
+    against ANIMATION.
+    """
+    deadband = cfg.base.deadband
+    active = source(state.mode)
 
     # Mode buttons: rising edge on the key bound to gait_mode selects
     # GAIT; rising edge on posture_mode selects POSTURE; rising edge
@@ -586,13 +665,9 @@ def map_joy(
     # for the already-active mode is a no-op. Held buttons don't
     # repeat. If multiple edges land on the same tick, posture wins
     # (safer fallback).
-    gait_pressed = button_pressed_for("gait_mode", base, mode_cfg, buttons, axes)
-    posture_pressed = button_pressed_for(
-        "posture_mode", base, mode_cfg, buttons, axes
-    )
-    animation_pressed = button_pressed_for(
-        "animation_mode", base, mode_cfg, buttons, axes
-    )
+    gait_pressed = "gait_mode" in active.pressed
+    posture_pressed = "posture_mode" in active.pressed
+    animation_pressed = "animation_mode" in active.pressed
     gait_edge = gait_pressed and not state.prev_gait_mode
     posture_edge = posture_pressed and not state.prev_posture_mode
     animation_edge = animation_pressed and not state.prev_animation_mode
@@ -617,10 +692,10 @@ def map_joy(
         state.mode = GAIT if state.mode == ANIMATION else ANIMATION
         mode_changed = True
 
-    # If the mode changed, refresh the mode-cfg view so this tick's
-    # remaining reads use the new mode's bindings.
+    # If the mode changed, re-resolve so this tick's remaining reads see
+    # the new mode's functions.
     if mode_changed:
-        mode_cfg = _mode_cfg(cfg, state.mode)
+        active = source(state.mode)
 
     # Side effects of leaving / entering ANIMATION mode.
     animation_name_out: str | None = None
@@ -646,7 +721,7 @@ def map_joy(
     # six-leg stand, select for the four-corner one; off the belly
     # either is a fold, which the ROS layer resolves because the
     # mapping cannot see the engine.
-    init_pressed = button_pressed_for("init", base, mode_cfg, buttons, axes)
+    init_pressed = "init" in active.pressed
     init_edge = init_pressed and not state.prev_init
     state.prev_init = init_pressed
     # Resolved against the GAIT section in EVERY mode, not the active
@@ -654,9 +729,7 @@ def map_joy(
     # table would leave ``prev_quad_init`` False while the button was
     # held in posture mode and fire a spurious edge the instant gait
     # mode was entered.
-    quad_pressed = button_pressed_for(
-        "quadruped_mode", base, cfg.gait, buttons, axes
-    )
+    quad_pressed = "quadruped_mode" in source(GAIT).pressed
     # Confined to GAIT mode, which is where the key is bound:
     # everywhere else ``select`` keeps its base binding (``record``),
     # and firing both off one press would record a posture on the way to
@@ -738,19 +811,20 @@ def map_joy(
 
     # Record button: rising-edge press. Applied after live posture is
     # computed (see below) so the snapshot includes this tick's input.
-    record_pressed = button_pressed_for("record", base, mode_cfg, buttons, axes)
+    record_pressed = "record" in active.pressed
     record_edge = record_pressed and not state.prev_record
     state.prev_record = record_pressed
 
-    # Posture-mode stick reads. ``axis_value_for`` applies the bound
-    # axis's sign and deadband, so by the time these locals are
-    # populated, "stick forward / left → positive" is already in
-    # effect (assuming the YAML's ``axis_signs`` match the controller).
+    # Posture-mode stick reads, always against the POSTURE section. The
+    # source has already applied the sign, ``_axis`` the deadband, so by
+    # the time these locals are populated "stick forward / left → positive"
+    # is in effect.
     posture_cfg = cfg.posture
-    lx = axis_value_for("tilt_roll", base, posture_cfg, axes)
-    ly = axis_value_for("tilt_pitch", base, posture_cfg, axes)
-    rx = axis_value_for("pose_y", base, posture_cfg, axes)
-    ry = axis_value_for("pose_x", base, posture_cfg, axes)
+    sticks = source(POSTURE)
+    lx = _axis(sticks, "tilt_roll", deadband)
+    ly = _axis(sticks, "tilt_pitch", deadband)
+    rx = _axis(sticks, "pose_y", deadband)
+    ry = _axis(sticks, "pose_x", deadband)
 
     # Body height: ``height_up`` / ``height_down`` are button-class.
     # Integrate (up - down) * rate * dt in any mode. Held both ⇒ no net
@@ -759,12 +833,8 @@ def map_joy(
     # there. The scalar limits / rate are always the canonical
     # ``posture`` values. Works equally well bound to D-pad up/down or
     # to face buttons or to L1/R1.
-    height_up = button_pressed_for(
-        "height_up", base, mode_cfg, buttons, axes
-    )
-    height_down = button_pressed_for(
-        "height_down", base, mode_cfg, buttons, axes
-    )
+    height_up = "height_up" in active.pressed
+    height_down = "height_down" in active.pressed
     net = (1.0 if height_up else 0.0) - (1.0 if height_down else 0.0)
     state.height_current += net * posture_cfg.height_rate * dt
     if state.height_current > posture_cfg.height_max:
@@ -777,13 +847,9 @@ def map_joy(
     # ANIMATION mode; prev-state is still refreshed in other modes so
     # a button still held when ANIMATION is entered doesn't spuriously
     # rising-edge on the entry tick.
-    animation_cfg = cfg.animation
-    anim_prev_pressed = button_pressed_for(
-        "animation_prev", base, animation_cfg, buttons, axes
-    )
-    anim_next_pressed = button_pressed_for(
-        "animation_next", base, animation_cfg, buttons, axes
-    )
+    anim = source(ANIMATION)
+    anim_prev_pressed = "animation_prev" in anim.pressed
+    anim_next_pressed = "animation_next" in anim.pressed
     if state.mode == ANIMATION and cfg.animation_list:
         delta = 0
         if anim_next_pressed and not state.prev_animation_next:
@@ -808,8 +874,8 @@ def map_joy(
     # so the cycler can never ask for a gait the engine would refuse.
     gait_select: str | None = forced_gait
     cycle = cfg.quadruped_gait_cycle if state.quadruped else cfg.gait_cycle
-    prev_pressed = button_pressed_for("gait_prev", base, mode_cfg, buttons, axes)
-    next_pressed = button_pressed_for("gait_next", base, mode_cfg, buttons, axes)
+    prev_pressed = "gait_prev" in active.pressed
+    next_pressed = "gait_next" in active.pressed
     if cycle and state.mode != ANIMATION:
         delta = 0
         if next_pressed and not state.prev_gait_next:
@@ -832,16 +898,10 @@ def map_joy(
 
     # Yaw + wiggle: same shared yaw target so L1 + L2 doesn't double
     # the yaw — L2 only adds the wiggle translation on top.
-    yaw_btn_left = button_pressed_for("yaw_left", base, mode_cfg, buttons, axes)
-    yaw_btn_right = button_pressed_for(
-        "yaw_right", base, mode_cfg, buttons, axes
-    )
-    wiggle_left = button_pressed_for(
-        "wiggle_left", base, mode_cfg, buttons, axes
-    )
-    wiggle_right = button_pressed_for(
-        "wiggle_right", base, mode_cfg, buttons, axes
-    )
+    yaw_btn_left = "yaw_left" in active.pressed
+    yaw_btn_right = "yaw_right" in active.pressed
+    wiggle_left = "wiggle_left" in active.pressed
+    wiggle_right = "wiggle_right" in active.pressed
     push_left = yaw_btn_left or wiggle_left
     push_right = yaw_btn_right or wiggle_right
     if state.mode == POSTURE and push_left != push_right:
@@ -965,15 +1025,13 @@ def map_joy(
     # joy_publisher scales raw int16 without clamping, so a fully-pressed axis
     # reads a hair past -1.
     drive_x = _clip(
-        axis_value_for("drive_x", base, mode_cfg, axes)
-        + axis_value_for("drive_x_aux", base, mode_cfg, axes),
+        _axis(active, "drive_x", deadband)
+        + _axis(active, "drive_x_aux", deadband),
         -1.0,
         1.0,
     )
-    drive_y = _clip(axis_value_for("drive_y", base, mode_cfg, axes), -1.0, 1.0)
-    drive_yaw = _clip(
-        axis_value_for("drive_yaw", base, mode_cfg, axes), -1.0, 1.0
-    )
+    drive_y = _clip(_axis(active, "drive_y", deadband), -1.0, 1.0)
+    drive_yaw = _clip(_axis(active, "drive_yaw", deadband), -1.0, 1.0)
     drive_x, drive_y, drive_yaw = fit_drive_to_envelope(
         drive_x, drive_y, drive_yaw, cfg.stance_unit
     )
@@ -997,3 +1055,28 @@ def map_joy(
         animation_name=animation_name_out,
         init_quadruped=init_quadruped,
     )
+
+
+def map_joy(
+    axes: Sequence[float],
+    buttons: Sequence[int],
+    cfg: JoyConfig,
+    state: JoyState,
+    dt: float,
+) -> JoyOutput:
+    """``map_functions`` for a device that reports Joy indices.
+
+    The snapshot is fixed for the tick, so each section is resolved at most
+    once however many times the state machine asks for it.
+    """
+    resolved: dict[str, FunctionInput] = {}
+
+    def source(section: str) -> FunctionInput:
+        got = resolved.get(section)
+        if got is None:
+            got = resolved[section] = resolve_functions(
+                axes, buttons, cfg, section
+            )
+        return got
+
+    return map_functions(source, cfg, state, dt)

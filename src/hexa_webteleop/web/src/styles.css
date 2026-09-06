@@ -101,6 +101,8 @@ html, body {
   padding: 0.5rem;
   border-radius: var(--radius);
   cursor: pointer;
+  /* The tab items are router links; the rest are buttons. Both are icons. */
+  text-decoration: none;
 }
 
 .nav-icon svg {
@@ -109,7 +111,7 @@ html, body {
   display: block;
 }
 
-button.nav-icon:active {
+.nav-icon:active {
   color: var(--accent);
   background: var(--surface);
 }
@@ -137,7 +139,7 @@ button.nav-icon:active {
   height: auto;
 }
 
-#navbar button.nav-icon:active {
+#navbar .nav-icon:active {
   background: var(--surface-2);
   border-color: var(--accent);
   color: var(--accent);
@@ -173,9 +175,10 @@ button.nav-icon:active {
 
 /* ── Views (one at a time, above the tab bar) ───────────────────── */
 
-/* Every view takes the same place in the #app flexbox, so they inherit one box
-   in both orientations and the tab bar stays put. The control area brings its
-   own layout rules below; these are for the stacked list views. */
+/* One route is mounted at a time and its view takes the same place in the #app
+   flexbox, so they inherit one box in both orientations and the tab bar stays
+   put. The control area brings its own layout rules below; these are for the
+   stacked list views. */
 #preset-view,
 #network-view,
 #log-view {
@@ -189,21 +192,6 @@ button.nav-icon:active {
   overflow-y: auto;
   touch-action: pan-y;
 }
-
-/* No titles: the tab bar names the view and never leaves the screen. The only
-   header left carries the log's refresh, aligned to the list column below it. */
-.view-header {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  width: 100%;
-  max-width: 420px;
-  margin: 0 auto;
-}
-
-.view-header .nav-icon { padding: 0.25rem; }
-.view-header .nav-icon svg { width: 24px; height: 24px; }
 
 #preset-list {
   display: flex;
@@ -457,20 +445,31 @@ button.nav-icon:active {
 
 /* ── Button grid (3x3, square cells) ────────────────────────────── */
 
+/* A real <table>: the rows and cells in ButtonGrid.tsx place the buttons, so
+   nothing here decides which slot a button lands in. table-layout: fixed is
+   what keeps the three columns even, and border-spacing replaces the old grid
+   gap (it also insets the outer edge by the same 0.5rem, which the grid gap
+   did not). */
 #button-grid {
   flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
-  gap: 0.5rem;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0.5rem;
   aspect-ratio: 1;
+}
+
+#button-grid td {
+  width: 33.333%;
+  height: 33.333%;
+  padding: 0;
 }
 
 #button-grid button {
   display: flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 1;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   padding: 0.25rem;
   background: var(--surface);
@@ -600,6 +599,12 @@ button.nav-icon:active {
 
 /* ── Log view ───────────────────────────────────────────────────── */
 
+/* The refresh floats over the log, so the view is its positioning context.
+   #logs-view is what scrolls, not this box, so the button stays put. */
+#log-view {
+  position: relative;
+}
+
 #logs-view {
   flex: 1;
   min-height: 0;
@@ -619,4 +624,21 @@ button.nav-icon:active {
   touch-action: pan-y;
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* Floating over the log's top right corner: opaque, so the entries scrolling
+   underneath stay legible behind it. Inset past the view's own padding and
+   clear of the scrollbar. */
+#log-refresh {
+  position: absolute;
+  top: 1.2rem;
+  right: 1.3rem;
+  padding: 0.35rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+#log-refresh svg {
+  width: 22px;
+  height: 22px;
 }

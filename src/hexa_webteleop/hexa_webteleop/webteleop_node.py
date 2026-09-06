@@ -22,7 +22,7 @@ and republished at 60 Hz.
 - WebSocket heartbeat: ``aiohttp`` pings each client and force-closes a
   socket that misses its pong, which triggers the disconnect cleanup.
 - Input watchdog: the 60 Hz timer feeds ``neutral_inputs`` to
-  ``map_web`` whenever no stick/button message has arrived within
+  ``map_web`` whenever no stick/action message has arrived within
   ``safety.input_timeout_s``, so ``/cmd_vel`` falls to zero rather than
   latching. The disconnect path also zeroes the shared input state.
 
@@ -30,7 +30,7 @@ Architecture:
 - Main thread: ``rclpy.spin`` with a 60 Hz timer that calls
   ``map_web`` and publishes (when web owns).
 - Server thread: ``asyncio`` event loop running the ``aiohttp`` app.
-- Shared state: ``threading.Lock``-protected stick/button values +
+- Shared state: ``threading.Lock``-protected stick/action values +
   last-input timestamp + client count + ownership flag. The WS handler
   writes; the timer reads. rclpy publishers are thread-safe, so
   ``/teleop/owner`` is published from the WS handler directly. The pack
@@ -75,9 +75,8 @@ from hexa_teleop.presets import (
 
 from . import captive_portal
 from .web_mapping import (
-    NUM_BUTTONS,
+    ACTIONS,
     battery_payload,
-    button_labels_for_mode,
     input_is_stale,
     load_web_config,
     map_web,
@@ -129,6 +128,7 @@ class WebTeleopNode(Node):
 
         (
             self._cfg,
+            self._sticks,
             initial_mode,
             default_gait,
             self._caps,
@@ -200,8 +200,9 @@ class WebTeleopNode(Node):
         self._lock = threading.Lock()
         self._left_stick: tuple[float, float] = (0.0, 0.0)
         self._right_stick: tuple[float, float] = (0.0, 0.0)
-        self._buttons: tuple[int, ...] = (0,) * NUM_BUTTONS
-        # Safety watchdog: monotonic time of the last stick/button message.
+        # The functions the operator is holding, named — never an index.
+        self._actions: frozenset[str] = frozenset()
+        # Safety watchdog: monotonic time of the last stick/action message.
         # Seeded to 0.0 so input reads stale until the first message lands.
         self._last_input_monotonic = 0.0
         self._input_stale = True
@@ -389,7 +390,7 @@ class WebTeleopNode(Node):
             f"{result.cfg.gait_angular_z_max:.3f} rad/s"
         )
         if result.left_animation_mode:
-            # Animations are six-leg only, and map_joy only blocks *entering*
+            # Animations are six-leg only, and the mapping only blocks *entering*
             # the mode — arriving on four legs has to leave it, and tell the
             # pipeline, which is still holding the last selected animation.
             self.get_logger().info("animation mode left (quadruped leg set)")
@@ -397,9 +398,6 @@ class WebTeleopNode(Node):
             self._broadcast_to_clients({
                 "type": "mode",
                 "mode": self._state.mode,
-                "button_labels": list(
-                    button_labels_for_mode(self._cfg, self._state.mode)
-                ),
             })
         self._broadcast_preset()
 
@@ -428,15 +426,15 @@ class WebTeleopNode(Node):
         with self._lock:
             left = self._left_stick
             right = self._right_stick
-            buttons = self._buttons
+            actions = self._actions
             web_owns = self._web_owns
             last_input = self._last_input_monotonic
 
         # Safety watchdog: if no input has arrived within the timeout (the
         # WebSocket dropped uncleanly, the phone slept, etc.) feed neutral
         # inputs so /cmd_vel falls to zero instead of latching the last
-        # commanded velocity. map_web still runs so map_joy sees the button
-        # releases and edge state stays consistent.
+        # commanded velocity. map_web still runs so the state machine sees
+        # the releases and edge state stays consistent.
         stale = input_is_stale(last_input, time.monotonic(), self._input_timeout_s)
         publishing = web_owns or not self._arbitration_enabled
         if stale and not self._input_stale and publishing:
@@ -445,9 +443,11 @@ class WebTeleopNode(Node):
             )
         self._input_stale = stale
         if stale:
-            left, right, buttons = neutral_inputs()
+            left, right, actions = neutral_inputs()
 
-        out = map_web(left, right, buttons, self._cfg, self._state, TICK_DT_S)
+        out = map_web(
+            left, right, actions, self._sticks, self._cfg, self._state, TICK_DT_S
+        )
 
         # Ahead of the ownership gate: a preset switch is published regardless
         # of who owns /cmd_vel, so its deadline has to be watched the same way.
@@ -458,7 +458,6 @@ class WebTeleopNode(Node):
             self._broadcast_to_clients({
                 "type": "mode",
                 "mode": self._state.mode,
-                "button_labels": list(button_labels_for_mode(self._cfg, self._state.mode)),
             })
 
         # Ahead of the ownership gate, and exempt from it for the reason a
@@ -686,7 +685,6 @@ class WebTeleopNode(Node):
             "gaits": list(self._cfg.gait_cycle),
             "animations": list(self._cfg.animation_list),
             "mode": self._state.mode,
-            "button_labels": list(button_labels_for_mode(self._cfg, self._state.mode)),
             "owner": self._arbitration.owner if self._arbitration_enabled else GAMEPAD,
             "arbitration_enabled": self._arbitration_enabled,
             "gait_state": self._latest_gait_state,
@@ -731,7 +729,7 @@ class WebTeleopNode(Node):
                 # stale immediately.
                 self._left_stick = (0.0, 0.0)
                 self._right_stick = (0.0, 0.0)
-                self._buttons = (0,) * NUM_BUTTONS
+                self._actions = frozenset()
                 self._last_input_monotonic = 0.0
             if last_client:
                 self._release_control()
@@ -756,15 +754,22 @@ class WebTeleopNode(Node):
                 elif stick == "right":
                     self._right_stick = (x, y)
                 self._last_input_monotonic = time.monotonic()
-        elif msg_type == "button":
-            idx = int(data.get("index", -1))
+        elif msg_type == "action":
+            # The client names the function it wants; anything outside the
+            # shared namespace is a client the node does not know, and is
+            # dropped rather than guessed at.
+            action = str(data.get("action", ""))
             pressed = bool(data.get("pressed", False))
-            if 0 <= idx < NUM_BUTTONS:
-                with self._lock:
-                    btns = list(self._buttons)
-                    btns[idx] = 1 if pressed else 0
-                    self._buttons = tuple(btns)
-                    self._last_input_monotonic = time.monotonic()
+            if action not in ACTIONS:
+                self.get_logger().warning(f"unknown action {action!r} ignored")
+                return
+            with self._lock:
+                self._actions = (
+                    self._actions | {action}
+                    if pressed
+                    else self._actions - {action}
+                )
+                self._last_input_monotonic = time.monotonic()
         elif msg_type == "battery":
             # Polled rather than pushed: the pack is sampled at 10 Hz on the
             # robot and the strip reads it once a second or so, so a reply per

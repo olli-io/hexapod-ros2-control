@@ -14,21 +14,25 @@ four presets stand on six legs, so the leg set cannot tell them apart.
 `/cmd_gait` does double duty: it drives the UI's status strip *and* resyncs the
 node's stick velocity caps and gait cycler when the gamepad switches gaits
 (`web_mapping.resync_gait`), so the two teleops agree on more than the display. `/animation/mode` is display-only —
-syncing the animation cycler would be dead code, since the shared
-`map_joy` resets it to 0 on every ANIMATION-mode entry.
+syncing the animation cycler would be dead code, since the shared state
+machine resets it to 0 on every ANIMATION-mode entry.
 
 ## Architecture
 
 - **`web_mapping.py`** — pure Python (no rclpy). Loads webapp config and
-  delegates to `hexa_teleop.joy_mapping.map_joy` for the full state
-  machine (modes, init two-press, record, yaw easing, height, cycling).
-  Unit-testable.
+  delegates to `hexa_teleop.joy_mapping.map_functions` for the full state
+  machine (modes, init two-press, record, yaw easing, height, cycling) —
+  the same machine the gamepad runs, entered by function name rather than
+  through a key layout the webapp does not have. Unit-testable.
 - **`webteleop_node.py`** — ROS glue. `aiohttp` server in a daemon thread
   + 60 Hz rclpy timer that maps input and publishes; shared state behind a
   `threading.Lock`. Single-connection policy: a second device gets `busy`
   and is closed, retrying until the slot frees.
-- **`web/`** — static webapp (`index.html` + `main.js` + `styles.css`), one
-  page holding all four views. No TypeScript, no build step, no npm.
+- **`web/`** — the webapp: React 19 + TypeScript sources in `web/src/`, its four
+  views file-based routes under `web/src/app/`, built by Vite into a single
+  inlined `web/dist/index.html`. `web/dist/` is **committed** and is what
+  `setup.py` installs and the node serves; see [Frontend](#frontend) for why, and
+  for the rules the bundle has to obey.
 
 ## Webapp UI
 
@@ -44,10 +48,11 @@ syncing the animation cycler would be dead code, since the shared
   wrong, and each view says the rest in words. The bar never leaves the screen,
   so no view carries a back arrow and Control is the way back from all of them.
 - **Control area** — two touch joysticks flanking a 3×3 button grid; top 3
-  buttons select mode (Gait / Posture / Anim), bottom 6 are
-  mode-dependent (node pushes labels on mode change). While a controller
-  owns control the grid becomes an inline "Take control" prompt and the
-  sticks are disabled.
+  buttons select mode (Gait / Posture / Anim), bottom 6 are mode-dependent.
+  Each slot names the **function** it asks for and carries its own caption
+  (`web/src/utils/actions.ts`), so there is no binding elsewhere for the text
+  to drift from. While a controller owns control the grid becomes an inline
+  "Take control" prompt and the sticks are disabled.
 - **Status strip** — a compact readout above the button grid showing the
   current **preset**, gait, animation mode (em dash until an animation is first
   latched) and pack voltage/current. The preset is here because the Mode tab icon
@@ -71,8 +76,8 @@ prev/next (animation) — and height up/down. The quadruped init is the
 four-legged half of the init button: from the belly it stands the robot up
 with the middle pair left folded, and off the belly it folds like init does.
 It takes gait mode's second slot because `record` only does anything in
-posture mode, and it is bound in the gait section alone, which is what
-confines it to gait mode. It asks for the four-corner **leg set**, which the
+posture mode; gait mode is the only layout that offers it, and the state
+machine acts on it there alone. It asks for the four-corner **leg set**, which the
 engine resolves to the QUAD preset — so prev/next can never ask a standing robot
 for a leg set it is not on. Once on four legs, prev/next walks the QUAD rotation
 instead; the six-leg selection keeps its own
@@ -93,14 +98,15 @@ middle pair's own move on either side of it where the two presets differ in leg
 set. See `hexa_teleop`'s README for what a preset is and `docs/leg-phases.md`
 for what the robot actually does.
 
-A view that **replaces the control area** in `index.html` — not an overlay over
-it, and not a page of its own. Full-screen because the list is the whole task
-while it is open and a preset row is a thing you tap on a phone, in this page
-because pending and refused are live states and only the WebSocket carries them;
-navigating away would drop the socket, and the server hands its one client slot
-to whoever reconnects. The tab bar stays put, so the Mode tab opens the view and
-the Control tab leaves it, and both sticks are re-centred on the way in — they
-leave the screen, and a knob held at that moment never sees its own touchend.
+A **route** that replaces the control area — not an overlay over it, and not a
+page of its own. Full-screen because the list is the whole task while it is open
+and a preset row is a thing you tap on a phone; a client-side route because
+pending and refused are live states and only the WebSocket carries them, and a
+navigation that fetched a document would drop the socket — the server hands its
+one client slot to whoever reconnects. The tab bar stays put, so the Mode tab
+opens the view and the Control tab leaves it, and both sticks are re-centred on
+the way in: the Control route unmounts, and a knob held at that moment never sees
+its own touchend, so each canvas commands zero as it goes.
 
 - **The active row comes from `/gait/preset` and nothing else** — never the tap,
   never the latched `/cmd_preset`. That command topic keeps a refused id forever,
@@ -116,9 +122,9 @@ leave the screen, and a knob held at that moment never sees its own touchend.
   stand itself — every init edge asks for a leg set, and the engine resolves that
   to a preset — so a four-corner mode tapped here would be overwritten the moment
   the robot got up.
-  The button presses the grid's own `init` slot (found by label, not by a
-  hardcoded index) rather than reaching for `/gait/initialize` directly, so
-  standing up stays one path through `map_joy`, two-press revert and all. It is
+  The button asks for the same `init` function the grid's stand slot does,
+  rather than reaching for `/gait/initialize` directly, so standing up stays one
+  path through the shared state machine, two-press revert and all. It is
   exempt from arbitration exactly as a mode switch is (below), which also makes
   it the only stand a webapp can reach while a controller drives — the grid it
   presses is a take-control prompt in that state.
@@ -149,11 +155,13 @@ handover is a state worth reading rather than a menu item to confirm.
 
 ## Log view
 
-Recent output from `GET /logs`, fetched when the tab opens and on its refresh
-button. A view rather than the standalone page it used to be: leaving `index.html`
-dropped the WebSocket, and the server hands its one client slot to whoever
-reconnects, so reading the log cost the reader control of the robot. Not polled —
-it is a thing you go and read, and the socket beside it is carrying control input.
+Recent output from `GET /logs`, fetched when the route mounts — i.e. each time
+the tab opens — and on its refresh button. A route rather than the standalone
+page it used to be: leaving `index.html` dropped the WebSocket, and the server
+hands its one client slot to whoever reconnects, so reading the log cost the
+reader control of the robot. Not polled — it is a thing you go and read, and the
+socket beside it is carrying control input. Reachable with the link down, which
+is why it takes no session state at all.
 
 ## Pack telemetry
 
@@ -242,8 +250,12 @@ port 80 — arrive at all. Best-effort: a privileged port needs a root container
 
 The **operator** half of each preset (the Mode view's list, each one's label and
 gait rotation), server port/heartbeat, safety watchdog timeout, pack-telemetry
-topic and poll period, stick deadband, and per-mode button→function bindings live
-in [`config/webteleop.yaml`](config/webteleop.yaml) (documented inline). The
+topic and poll period, stick deadband, and the per-mode **stick** tables live
+in [`config/webteleop.yaml`](config/webteleop.yaml) (documented inline). There
+are no button bindings there: the webapp has no keys, so the grid sends the
+function name and its slot layout lives with its captions in
+`web/src/utils/actions.ts`. The sticks stay here because which function each
+drives depends on the mode, and the node is what knows the mode. The
 **physical** half — the leg set, the standing pose and the stride/swing bundle —
 is `hexa_description/config/tuning.yaml`'s `gait_node.presets` list under the
 same ids, and is never restated here; adding a preset is an edit to those two
@@ -254,9 +266,88 @@ posture-mode scalar limits come from that same `tuning.yaml` (SSoT — `gait_nod
 being shared is what makes the webapp pose the body over the same range a
 gamepad does.
 
+## Frontend
+
+The webapp is React 19 + TypeScript on TanStack Router, bundled by Vite. Unlike
+the rest of the repo it builds on the **host**, not in a container — no image
+carries node, and none needs to.
+
+The build runs the **React Compiler** (`babel-plugin-react-compiler`, targeting
+19) and minifies with **terser** (`drop_console`, two passes — ~2.5 kB gzipped
+better than the esbuild default, on a page a phone pulls over the robot's own
+hotspot). The compiler is conservative by design and skips what it cannot prove
+safe: `Joystick`, `GridButton`, the Control route and `useTeleopSocket` all write
+a ref during render so hand-attached listeners can read live values, and all four
+come out exactly as written. Nothing here depends on that memoization for
+correctness — it is a compile step, not a design.
+
+- `web/src/app/` — the **routes**, one file per view: `index.tsx` (Control, the
+  home route), `preset.tsx`, `network.tsx`, `log.tsx`, and `__root.tsx`, the
+  shell that holds the tab bar and the busy overlay around an `<Outlet/>`. File
+  names *are* the paths — `@tanstack/router-plugin` generates
+  `src/routeTree.gen.ts` from this directory, which is **committed** because
+  `npm run build` type-checks before Vite runs and a fresh checkout has to
+  type-check.
+- `web/src/` — everything the routes are made of, sorted by what a file *is*:
+  `hooks/useTeleopSocket.ts` holds every piece of server state in one reducer
+  (one case per `/ws` message type); `types/protocol.ts` types the wire contract
+  both ways; `utils/views.ts` is the tab order and each tab's path, so the bar
+  and the routes agree by construction, and `utils/labels.ts` is the display
+  strings. `session.tsx` — that socket held **above the router**, since the
+  server has a single client slot and a link owned by a route would drop the
+  robot every time somebody looked at the log — stays at the top beside
+  `main.tsx`, with the routes it wraps. `components/Joystick.tsx` is
+  deliberately imperative — canvas drawing and hand-attached listeners, no React state — because a
+  touchmove fires per frame and its handlers need `preventDefault`, which
+  React's passive synthetic events cannot do.
+- **The router runs on a hash history.** The server serves one page and answers
+  every other path with a 302 to `/` — deliberately, since that redirect is what
+  makes a joining phone declare a captive portal — so a reload on `/network`
+  would come back as the Control view. Behind a `#` a route is never a path the
+  server has to know about, and the two rules stop having an opinion about each
+  other.
+- **One route is mounted at a time**, which is what a router buys over the four
+  hidden `<div>`s this replaced: each view's state is created and disposed with
+  it. The Log fetches on mount instead of on a nonce the shell bumps; the Control
+  route owns the keepalive, the set of held functions and the joystick handles,
+  and releases every one on the way out — a button under a thumb when the grid
+  leaves the screen never sees its own touchend, and each canvas commands zero in
+  its own cleanup. A mode change is the same hazard in miniature: six of the nine
+  slots are replaced, so anything held that the new mode does not offer is
+  released for the same reason.
+- `web/dist/` — the built bundle, **committed to git**. It has to be: the ARM64
+  robot image builds `robot.Dockerfile` from a bare checkout (`hexa deploy
+  build`, and the release workflow), and its builder stage has no node. A
+  rebuild that is never committed ships a robot with no UI, which is why the
+  pytest suite asserts the bundle is a built one.
+- **The bundle is a single file.** `captive_portal.static_filename` refuses any
+  path with a `/` in it, and `_handle_get` answers a refusal with a 302 to `/`
+  rather than a 404 — so a file under an `assets/` subdirectory fails
+  *silently*, handing the browser the HTML page in place of the script it asked
+  for. `vite-plugin-singlefile` inlines the script and the stylesheet into
+  `index.html`, so there is nothing beside the page to get wrong; code splitting
+  is off (`autoCodeSplitting: false`, `inlineDynamicImports`) for the same
+  reason — a split route would be a second file to fetch. `vite.config.ts` still
+  pins flat, unhashed names for anything too large to inline. Hashing would buy
+  nothing anyway: every response carries `Cache-Control: no-store`. Fixed names
+  have a second payoff — colcon's `--symlink-install` links stay valid, so a
+  rebuild refreshes a running sim with no colcon run.
+
+```
+cd src/hexa_webteleop/web
+npm ci          # first time, or after a dependency change
+npm run build   # type-checks, then writes web/dist — commit the result
+npm run dev     # host dev server on :5173, /ws and /logs proxied to :8080
+```
+
+`npm run dev` wants a robot to talk to: bring one up with `./hexa sim up` first.
+Node 20.19+ or 22.12+ (see `.nvmrc`).
+
 ## Running
 
 `./hexa sim up` brings up sim + webteleop + teleop; open
 `http://<container-ip>:8080`. In production `bringup.launch.py` includes
 webteleop alongside the gamepad teleop. Tests:
-`./hexa sim python3 -m pytest src/hexa_webteleop/test -q`.
+`./hexa sim python3 -m pytest src/hexa_webteleop/test -q`. The webapp itself is
+not covered by that suite beyond the bundle checks — verify UI changes against
+the sim.

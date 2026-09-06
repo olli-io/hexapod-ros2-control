@@ -1,11 +1,13 @@
 from .web_mapping import (
-    NUM_BUTTONS,
+    ACTIONS,
+    STICKS,
+    StickMap,
     battery_payload,
-    button_labels_for_mode,
     input_is_stale,
     load_web_config,
     map_web,
     neutral_inputs,
+    parse_sticks,
     preset_descriptors,
     preset_payload,
     preset_pending_expired,
@@ -13,13 +15,15 @@ from .web_mapping import (
 )
 
 __all__ = [
-    "NUM_BUTTONS",
+    "ACTIONS",
+    "STICKS",
+    "StickMap",
     "battery_payload",
-    "button_labels_for_mode",
     "input_is_stale",
     "load_web_config",
     "map_web",
     "neutral_inputs",
+    "parse_sticks",
     "preset_descriptors",
     "preset_payload",
     "preset_pending_expired",

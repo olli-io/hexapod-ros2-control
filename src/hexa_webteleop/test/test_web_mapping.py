@@ -5,15 +5,16 @@ import pytest
 import yaml
 
 from hexa_webteleop import (
-    NUM_BUTTONS,
+    ACTIONS,
+    StickMap,
     battery_payload,
-    button_labels_for_mode,
     input_is_stale,
     load_web_config,
     map_web,
     neutral_inputs,
     preset_descriptors,
     preset_payload,
+    parse_sticks,
     preset_pending_expired,
     resync_gait,
 )
@@ -57,48 +58,16 @@ server:
 base:
   deadband: 0.05
   trigger_threshold: 0.5
-  buttons:
-    btn_0: 0
-    btn_1: 1
-    btn_2: 2
-    btn_3: 3
-    btn_4: 4
-    btn_5: 5
-    btn_6: 6
-    btn_7: 7
-    btn_8: 8
-  axes:
-    left_stick_x: 0
-    left_stick_y: 1
-    right_stick_x: 2
-    right_stick_y: 3
-  axis_signs: {}
-  bindings:
-    btn_0: gait_mode
-    btn_1: posture_mode
-    btn_2: animation_mode
 
 gait:
-  bindings:
-    btn_3: init
-    btn_4: quadruped_mode
-    btn_5: gait_prev
-    btn_6: gait_next
-    btn_7: height_up
-    btn_8: height_down
+  sticks:
     left_stick_y: drive_x
     left_stick_x: drive_y
     right_stick_x: drive_yaw
     right_stick_y: drive_x_aux
 
 posture:
-  bindings:
-    btn_3: init
-    btn_4: record
-    btn_5: yaw_left
-    btn_6: yaw_right
-    btn_7: height_up
-    btn_8: height_down
+  sticks:
     left_stick_y: pose_x
     left_stick_x: pose_y
     right_stick_x: tilt_roll
@@ -107,13 +76,7 @@ posture:
     rate_m_per_s: 0.05
 
 animation:
-  bindings:
-    btn_3: init
-    btn_4: record
-    btn_5: animation_prev
-    btn_6: animation_next
-    btn_7: height_up
-    btn_8: height_down
+  sticks:
     left_stick_y: drive_x
     left_stick_x: drive_y
     right_stick_x: drive_yaw
@@ -207,6 +170,14 @@ teleop_node:
 """
 
 
+_RAW = yaml.safe_load(_WEBTELEOP_YAML)
+STICKS = StickMap(
+    gait=parse_sticks("gait", _RAW["gait"]["sticks"]),
+    posture=parse_sticks("posture", _RAW["posture"]["sticks"]),
+    animation=parse_sticks("animation", _RAW["animation"]["sticks"]),
+)
+
+
 def _load(tmp_path):
     web_path = tmp_path / "webteleop.yaml"
     gait_path = tmp_path / "gait.yaml"
@@ -221,7 +192,9 @@ def _load(tmp_path):
 
 @pytest.fixture
 def cfg(tmp_path):
-    loaded_cfg, initial_mode, default_gait, _, _ = _load(tmp_path)
+    loaded_cfg, _sticks_unused, initial_mode, default_gait, _, _ = _load(
+        tmp_path
+    )
     return loaded_cfg, initial_mode, default_gait
 
 
@@ -230,11 +203,10 @@ def cfg_and_caps(tmp_path):
     return _load(tmp_path)
 
 
-def _buttons(*pressed_indices) -> tuple[int, ...]:
-    out = [0] * NUM_BUTTONS
-    for idx in pressed_indices:
-        out[idx] = 1
-    return tuple(out)
+def _held(*actions: str) -> frozenset[str]:
+    """The functions the operator is holding, as the client names them."""
+    assert set(actions) <= ACTIONS, "test asked for a function the node refuses"
+    return frozenset(actions)
 
 
 def _sticks(
@@ -283,9 +255,18 @@ def test_load_config_scalar_limits_come_from_tuning_not_webteleop(cfg):
     assert math.isclose(loaded_cfg.posture.wiggle_pivot_forward_m, 0.06)
 
 
-def test_load_config_button_count(cfg):
+def test_load_config_declares_no_key_layout(cfg):
+    """The webapp has no keys, so it brings no index tables.
+
+    They are ``BaseConfig``'s only because a gamepad needs them; a config
+    that filled them in here would be describing a device that does not
+    exist.
+    """
     loaded_cfg, _, _ = cfg
-    assert len(loaded_cfg.base.button_index) == NUM_BUTTONS
+    assert loaded_cfg.base.button_index == {}
+    assert loaded_cfg.base.axis_index == {}
+    assert loaded_cfg.base.bindings == {}
+    assert loaded_cfg.gait.bindings == {}
 
 
 def test_load_config_gait_cycle_filtered(cfg):
@@ -316,36 +297,42 @@ def test_load_config_animation_list(cfg):
     )
 
 
-# ─── Button labels ──────────────────────────────────────────────────
+# ─── Stick tables ───────────────────────────────────────────────────
 
-def test_button_labels_gait_mode(cfg):
-    loaded_cfg, _, _ = cfg
-    labels = button_labels_for_mode(loaded_cfg, GAIT)
-    assert labels == (
-        "gait_mode", "posture_mode", "animation_mode",
-        "init", "quadruped_mode", "gait_prev", "gait_next",
-        "height_up", "height_down",
-    )
+def test_loaded_stick_map_matches_the_config(cfg_and_caps):
+    _, sticks, _, _, _, _ = cfg_and_caps
+    assert sticks == STICKS
+    assert sticks.for_section(GAIT)["left_stick_y"] == "drive_x"
+    assert sticks.for_section(POSTURE)["left_stick_y"] == "pose_x"
+    assert sticks.for_section(ANIMATION)["right_stick_x"] == "drive_yaw"
 
 
-def test_button_labels_posture_mode(cfg):
-    loaded_cfg, _, _ = cfg
-    labels = button_labels_for_mode(loaded_cfg, POSTURE)
-    assert labels == (
-        "gait_mode", "posture_mode", "animation_mode",
-        "init", "record", "yaw_left", "yaw_right",
-        "height_up", "height_down",
-    )
+def test_parse_sticks_rejects_an_unknown_stick():
+    with pytest.raises(ValueError, match="unknown stick"):
+        parse_sticks("gait", {"middle_stick_x": "drive_x"})
 
 
-def test_button_labels_animation_mode(cfg):
-    loaded_cfg, _, _ = cfg
-    labels = button_labels_for_mode(loaded_cfg, ANIMATION)
-    assert labels == (
-        "gait_mode", "posture_mode", "animation_mode",
-        "init", "record", "animation_prev", "animation_next",
-        "height_up", "height_down",
-    )
+def test_parse_sticks_rejects_a_button_class_function():
+    # A stick drives a quantity; it cannot be bound to a press.
+    with pytest.raises(ValueError, match="not an axis-class function"):
+        parse_sticks("gait", {"left_stick_x": "gait_next"})
+
+
+def test_parse_sticks_rejects_one_function_on_two_sticks():
+    with pytest.raises(ValueError, match="bound to both"):
+        parse_sticks(
+            "gait", {"left_stick_x": "drive_x", "right_stick_x": "drive_x"}
+        )
+
+
+# ─── The wire's function namespace ──────────────────────────────────
+
+def test_actions_are_the_pressable_functions_only(cfg):
+    # What the node accepts on the wire. The sticks' functions are not in it:
+    # they arrive as deflection, not as a press.
+    assert {"init", "record", "quadruped_mode", "gait_next"} <= ACTIONS
+    assert "drive_x" not in ACTIONS
+    assert "pose_x" not in ACTIONS
 
 
 # ─── map_web: gait mode stick mapping ───────────────────────────────
@@ -355,7 +342,7 @@ def test_gait_left_stick_y_maps_to_drive_x(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     left, right = _sticks(ly=0.5)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     assert math.isclose(out.linear_x, _stick(0.5, loaded_cfg) * loaded_cfg.gait_linear_max, rel_tol=1e-6)
     assert out.linear_y == 0.0
 
@@ -365,7 +352,7 @@ def test_gait_left_stick_x_maps_to_drive_y(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     left, right = _sticks(lx=0.5)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     assert math.isclose(out.linear_y, _stick(0.5, loaded_cfg) * loaded_cfg.gait_linear_max, rel_tol=1e-6)
     assert out.linear_x == 0.0
 
@@ -375,7 +362,7 @@ def test_gait_right_stick_x_maps_to_drive_yaw(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     left, right = _sticks(rx=0.5)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     assert math.isclose(out.angular_z, _stick(0.5, loaded_cfg) * loaded_cfg.gait_angular_z_max, rel_tol=1e-6)
 
 
@@ -386,7 +373,7 @@ def test_gait_right_stick_y_also_drives_forward(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     left, right = _sticks(ry=0.5)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     assert math.isclose(
         out.linear_x, _stick(0.5, loaded_cfg) * loaded_cfg.gait_linear_max,
         rel_tol=1e-6,
@@ -400,7 +387,7 @@ def test_gait_both_pads_sum_into_forward(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     left, right = _sticks(ly=1.0, ry=1.0)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     # Clipped at the cap rather than doubling it.
     assert math.isclose(out.linear_x, loaded_cfg.gait_linear_max, rel_tol=1e-6)
 
@@ -410,7 +397,7 @@ def test_gait_deadband_zeros_small_inputs(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     left, right = _sticks(ly=0.03)  # below deadband 0.05
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     assert out.linear_x == 0.0
 
 
@@ -421,7 +408,7 @@ def test_posture_left_stick_maps_to_pose_xy(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=POSTURE)
     left, right = _sticks(lx=0.5, ly=0.5)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     # left_stick_y → pose_x, left_stick_x → pose_y
     assert math.isclose(out.pose_x, _stick(0.5, loaded_cfg) * loaded_cfg.posture.x_max, rel_tol=1e-6)
     assert math.isclose(out.pose_y, _stick(0.5, loaded_cfg) * loaded_cfg.posture.y_max, rel_tol=1e-6)
@@ -436,7 +423,7 @@ def test_posture_right_stick_maps_to_tilt(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=POSTURE)
     left, right = _sticks(rx=0.5, ry=0.5)
-    out = map_web(left, right, _buttons(), loaded_cfg, state, DT)
+    out = map_web(left, right, _held(), STICKS, loaded_cfg, state, DT)
     # right_stick_x → tilt_roll, right_stick_y → tilt_pitch
     assert out.pose_roll != 0.0
     assert out.pose_pitch != 0.0
@@ -448,8 +435,8 @@ def test_mode_switch_gait_to_posture(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
-    # btn_1 = posture_mode, rising edge
-    out = map_web((0, 0), (0, 0), _buttons(1), loaded_cfg, state, DT)
+    # posture_mode, rising edge
+    out = map_web((0, 0), (0, 0), _held("posture_mode"), STICKS, loaded_cfg, state, DT)
     assert out.mode_changed is True
     assert state.mode == POSTURE
 
@@ -458,8 +445,8 @@ def test_mode_switch_gait_to_animation(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
-    # btn_2 = animation_mode, rising edge (toggles gait ↔ animation)
-    out = map_web((0, 0), (0, 0), _buttons(2), loaded_cfg, state, DT)
+    # animation_mode, rising edge (toggles gait ↔ animation)
+    out = map_web((0, 0), (0, 0), _held("animation_mode"), STICKS, loaded_cfg, state, DT)
     assert out.mode_changed is True
     assert state.mode == ANIMATION
 
@@ -469,9 +456,9 @@ def test_mode_switch_no_retrigger_on_held_button(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     # First tick: rising edge
-    map_web((0, 0), (0, 0), _buttons(1), loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held("posture_mode"), STICKS, loaded_cfg, state, DT)
     # Second tick: still held, no new edge
-    out = map_web((0, 0), (0, 0), _buttons(1), loaded_cfg, state, DT)
+    out = map_web((0, 0), (0, 0), _held("posture_mode"), STICKS, loaded_cfg, state, DT)
     assert out.mode_changed is False
 
 
@@ -481,8 +468,8 @@ def test_gait_next_cycles_forward(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
-    # btn_6 = gait_next, rising edge
-    out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)
+    # gait_next, rising edge
+    out = map_web((0, 0), (0, 0), _held("gait_next"), STICKS, loaded_cfg, state, DT)
     assert out.gait_select is not None
     # gait_cycle filtered: [tripod, tetrapod, ripple] (surf, crawl removed)
     assert out.gait_select == "tetrapod"
@@ -492,20 +479,20 @@ def test_gait_prev_cycles_backward(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
-    # btn_5 = gait_prev, rising edge
-    out = map_web((0, 0), (0, 0), _buttons(5), loaded_cfg, state, DT)
+    # gait_prev, rising edge
+    out = map_web((0, 0), (0, 0), _held("gait_prev"), STICKS, loaded_cfg, state, DT)
     assert out.gait_select is not None
     # wraps to last
     assert out.gait_select == "ripple"
 
 
-# ─── map_web: quadruped init (btn_4 in gait mode) ───────────────────
+# ─── map_web: quadruped init (gait mode only) ──────────────────────
 
 def test_quadruped_init_asks_for_the_quadruped_gait(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=1)
-    out = map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    out = map_web((0, 0), (0, 0), _held("quadruped_mode"), STICKS, loaded_cfg, state, DT)
     # The leg set rides the gait, and the init that goes with it is what
     # stands the robot up on that set.
     assert out.gait_select == "quad_canter"
@@ -518,12 +505,12 @@ def test_quadruped_mode_cycles_its_own_rotation(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=1)
-    map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
-    map_web((0, 0), (0, 0), _buttons(), loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held("quadruped_mode"), STICKS, loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
     assert state.quadruped is True
 
-    # btn_6 = gait_next, rising edge — inside the four-leg rotation.
-    out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)
+    # gait_next, rising edge — inside the four-leg rotation.
+    out = map_web((0, 0), (0, 0), _held("gait_next"), STICKS, loaded_cfg, state, DT)
     assert out.gait_select == "quad_walk"
     assert state.current_gait_idx == 1, "the six-leg slot must not drift"
 
@@ -533,29 +520,27 @@ def test_hexapod_init_asks_for_the_cycler_gait(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=1)
     six_leg = loaded_cfg.gait_cycle[1]
-    map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
-    map_web((0, 0), (0, 0), _buttons(), loaded_cfg, state, DT)
-    # btn_3 = init, the six-leg half of the same button.
-    out = map_web((0, 0), (0, 0), _buttons(3), loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held("quadruped_mode"), STICKS, loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
+    # init, the six-leg half of the same grid slot.
+    out = map_web((0, 0), (0, 0), _held("init"), STICKS, loaded_cfg, state, DT)
     assert state.quadruped is False
     assert out.init_quadruped is False
     assert out.gait_select == six_leg
 
 
-def test_quadruped_button_is_record_in_posture_mode(cfg):
-    """btn_4 is `quadruped_mode` only in the gait section.
-
-    The shared mapping resolves that function against the gait bindings in
-    every mode to keep its edge tracker honest, but only acts on it in gait
-    mode — so a posture-mode press of the same button must record the pose
-    and leave the leg set alone.
+def test_the_posture_slot_records_and_leaves_the_leg_set_alone(cfg):
+    """The grid slot that stands the robot on four legs in gait mode is
+    ``record`` in posture mode — and on this wire that is a different word,
+    not the same key read against another table. So the posture press
+    records the pose and cannot reach the leg set even by accident.
     """
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=POSTURE)
     # Hold a pose offset on the left stick, then record it.
-    map_web((0.0, 0.5), (0, 0), _buttons(), loaded_cfg, state, DT)
-    out = map_web((0.0, 0.5), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    map_web((0.0, 0.5), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
+    out = map_web((0.0, 0.5), (0, 0), _held("record"), STICKS, loaded_cfg, state, DT)
     assert out.gait_select is None
     assert out.init_request is False
     assert out.init_quadruped is False
@@ -563,20 +548,26 @@ def test_quadruped_button_is_record_in_posture_mode(cfg):
     assert state.recorded_x != 0.0
 
 
-def test_quadruped_button_held_across_a_mode_switch_does_not_fire(cfg):
-    """No spurious init when the button enters gait mode already held.
+def test_quadruped_mode_held_into_gait_mode_does_not_fire(cfg):
+    """No spurious stand when the function arrives already held.
 
-    The press starts in posture mode (where it means `record`); the edge
-    tracker sees it there, so arriving in gait mode is not a rising edge.
+    ``quadruped_mode`` is acted on in gait mode only, but its edge tracker
+    advances in every mode — so a client still sending it from before it
+    heard the mode change (its keepalive resends what it holds) lands in
+    gait mode with the tracker already set, and no rising edge fires.
     """
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=POSTURE)
-    map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
-    # btn_0 = gait_mode, with btn_4 still held.
-    map_web((0, 0), (0, 0), _buttons(0, 4), loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held("quadruped_mode"), STICKS, loaded_cfg, state, DT)
+    map_web(
+        (0, 0), (0, 0), _held("gait_mode", "quadruped_mode"), STICKS,
+        loaded_cfg, state, DT,
+    )
     assert state.mode == GAIT
-    out = map_web((0, 0), (0, 0), _buttons(4), loaded_cfg, state, DT)
+    out = map_web(
+        (0, 0), (0, 0), _held("quadruped_mode"), STICKS, loaded_cfg, state, DT
+    )
     assert out.init_quadruped is False
     assert state.quadruped is False
 
@@ -584,7 +575,7 @@ def test_quadruped_button_held_across_a_mode_switch_does_not_fire(cfg):
 # ─── resync_gait: external /cmd_gait switches ───────────────────────
 
 def test_resync_gait_updates_caps_and_cycler(cfg_and_caps):
-    loaded_cfg, _, _, caps, registry = cfg_and_caps
+    loaded_cfg, _, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
     new_cfg = resync_gait("ripple", loaded_cfg, state, registry)
@@ -596,7 +587,7 @@ def test_resync_gait_updates_caps_and_cycler(cfg_and_caps):
 
 def test_resync_gait_unknown_name_returns_none(cfg_and_caps):
     # A foreign string on /cmd_gait: no cfg, cycler untouched.
-    loaded_cfg, _, _, caps, registry = cfg_and_caps
+    loaded_cfg, _, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=1)
     assert resync_gait("moonwalk", loaded_cfg, state, registry) is None
@@ -607,7 +598,7 @@ def test_resync_gait_outside_cycle_updates_caps_only(cfg_and_caps):
     # crawl is in the catalog but filtered from this config's gait_cycle
     # (unstable) — the gamepad may still command it. Caps follow; the
     # cycler keeps its old position.
-    loaded_cfg, _, _, caps, registry = cfg_and_caps
+    loaded_cfg, _, _, _, caps, registry = cfg_and_caps
     assert "crawl" not in loaded_cfg.gait_cycle
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=2)
@@ -621,10 +612,10 @@ def test_resync_gait_own_loopback_is_idempotent(cfg_and_caps):
     # The node hears its own accepted publish back via loopback; map_joy
     # already advanced the cycler on the press, so the resync must land
     # on the same slot.
-    loaded_cfg, _, _, caps, registry = cfg_and_caps
+    loaded_cfg, _, _, _, caps, registry = cfg_and_caps
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT, current_gait_idx=0)
-    out = map_web((0, 0), (0, 0), _buttons(6), loaded_cfg, state, DT)  # gait_next
+    out = map_web((0, 0), (0, 0), _held("gait_next"), STICKS, loaded_cfg, state, DT)  # gait_next
     assert out.gait_select is not None
     idx_after_press = state.current_gait_idx
     new_cfg = resync_gait(out.gait_select, loaded_cfg, state, registry)
@@ -638,8 +629,8 @@ def test_init_request_fires_when_posture_default(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
-    # btn_3 = init, rising edge
-    out = map_web((0, 0), (0, 0), _buttons(3), loaded_cfg, state, DT)
+    # init, rising edge
+    out = map_web((0, 0), (0, 0), _held("init"), STICKS, loaded_cfg, state, DT)
     assert out.init_request is True
 
 
@@ -649,7 +640,7 @@ def test_zero_input_produces_zero_output(cfg):
     loaded_cfg, _, _ = cfg
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
-    out = map_web((0, 0), (0, 0), _buttons(), loaded_cfg, state, DT)
+    out = map_web((0, 0), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
     assert out.linear_x == 0.0
     assert out.linear_y == 0.0
     assert out.angular_z == 0.0
@@ -704,10 +695,10 @@ def test_battery_payload_drops_non_finite_fields():
 
 
 def test_neutral_inputs_are_centred_and_released():
-    left, right, buttons = neutral_inputs()
+    left, right, actions = neutral_inputs()
     assert left == (0.0, 0.0)
     assert right == (0.0, 0.0)
-    assert buttons == (0,) * NUM_BUTTONS
+    assert actions == frozenset()
 
 
 def test_neutral_inputs_map_to_zero_velocity(cfg):
@@ -715,9 +706,9 @@ def test_neutral_inputs_map_to_zero_velocity(cfg):
     from hexa_teleop.joy_mapping import JoyState
     state = JoyState(mode=GAIT)
     # Drive forward, then apply the watchdog's neutral inputs: cmd_vel zeroes.
-    map_web((0.0, 0.8), (0.0, 0.0), _buttons(), loaded_cfg, state, DT)
-    left, right, buttons = neutral_inputs()
-    out = map_web(left, right, buttons, loaded_cfg, state, DT)
+    map_web((0.0, 0.8), (0.0, 0.0), _held(), STICKS, loaded_cfg, state, DT)
+    left, right, actions = neutral_inputs()
+    out = map_web(left, right, actions, STICKS, loaded_cfg, state, DT)
     assert out.linear_x == 0.0
     assert out.linear_y == 0.0
     assert out.angular_z == 0.0
@@ -729,7 +720,7 @@ def test_preset_payload_reads_the_applied_preset(cfg_and_caps):
     # The active row comes off /gait/preset and nothing else. It cannot come off
     # /gait/leg_set: normal and fast both stand on six legs, so the leg set
     # cannot tell them apart — it rides along only for the navbar icon.
-    _, _, _, _, registry = cfg_and_caps
+    _, _, _, _, _, registry = cfg_and_caps
     registry.note_preset("quad")
     payload = preset_payload(registry, "quadruped", None, None)
     assert payload["active"] == "quad"
@@ -746,14 +737,14 @@ def test_preset_payload_reads_the_applied_preset(cfg_and_caps):
 def test_preset_payload_is_blank_before_the_first_report(cfg_and_caps):
     # /gait/preset is latched, but nothing has published it yet in sim before
     # the locomotion node starts. Showing no row beats guessing at one.
-    _, _, _, _, registry = cfg_and_caps
+    _, _, _, _, _, registry = cfg_and_caps
     payload = preset_payload(registry, "", None, None)
     assert payload["active"] is None
     assert payload["leg_set"] is None
 
 
 def test_preset_payload_carries_pending_and_refused(cfg_and_caps):
-    _, _, _, _, registry = cfg_and_caps
+    _, _, _, _, _, registry = cfg_and_caps
     registry.note_preset("normal")
     payload = preset_payload(registry, "hexapod", "quad", None)
     assert payload["active"] == "normal"
@@ -766,7 +757,7 @@ def test_preset_payload_carries_pending_and_refused(cfg_and_caps):
 
 
 def test_preset_descriptors_list_every_preset(cfg_and_caps):
-    _, _, _, _, registry = cfg_and_caps
+    _, _, _, _, _, registry = cfg_and_caps
     rows = preset_descriptors(registry)
     assert [r["id"] for r in rows] == ["normal", "fast", "quad"]
     assert rows[0]["label"] == "NORMAL"

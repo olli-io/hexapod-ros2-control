@@ -14,9 +14,14 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
-        (os.path.join("share", package_name, "web"), glob("web/*.html")),
-        (os.path.join("share", package_name, "web"), glob("web/*.css")),
-        (os.path.join("share", package_name, "web"), glob("web/*.js")),
+        # The built webapp bundle, committed under web/dist (see the README):
+        # one index.html with the script and the stylesheet inlined. Flat on
+        # purpose — captive_portal.static_filename refuses any nested path — so
+        # one non-recursive glob installs all of it.
+        (
+            os.path.join("share", package_name, "web"),
+            [p for p in glob("web/dist/*") if os.path.isfile(p)],
+        ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
