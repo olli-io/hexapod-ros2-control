@@ -73,10 +73,10 @@ gait_node:
           rear:
             tip_reach: 0.138
             coxa_deg: 10
-        stride_length: 0.125
+        stride_length: 0.11
         stride_length_radial: 0.100
-        min_swing_time: 0.45
-        max_swing_time: 0.60
+        min_swing_time: 0.4
+        max_swing_time: 0.5
         step_height: 0.015
 
       # Tall and deliberate: belly clearance for what the robot is walking
