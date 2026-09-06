@@ -73,6 +73,7 @@ function ControlRoute() {
   const [pressed, setPressed] = useState<ReadonlySet<ActionName>>(new Set());
 
   const animationAllowed = animationAvailable(state);
+  const controlled = controllerActive(state);
 
   const leftJoyRef = useRef<JoystickHandle | null>(null);
   const rightJoyRef = useRef<JoystickHandle | null>(null);
@@ -121,21 +122,26 @@ function ControlRoute() {
     };
   }, [send]);
 
-  // ... and on a mode change, which swaps the corners the modes do not share —
+  // ... and on a mode change, or a controller taking /cmd_vel. A mode change
+  // swaps the corners the modes do not share —
   // animation mode keeps stand and takes the height pair off for its own. A
   // button the new mode does not offer is gone from the screen, so its release
   // event never arrives, and the keepalive would hold that function down for
   // good. The mode buttons are offered in every mode, so a mode change can
   // never leave one of them stale — but a preset the animations are not written
   // for disables the animation one, and a disabled button fires no events
-  // either, so that is watched here alongside the mode.
+  // either, so that is watched here alongside the mode. A controller taking
+  // /cmd_vel is the extreme of the same case: the whole view is replaced by the
+  // prompt, so nothing at all is offered and everything held is released.
   useEffect(() => {
-    const offered = new Set<ActionName>([
-      ...MODES.filter((m) => !modeLocked(m.mode, animationAllowed)).map(
-        (m) => m.action,
-      ),
-      ...CORNERS[state.mode],
-    ]);
+    const offered = controlled
+      ? new Set<ActionName>()
+      : new Set<ActionName>([
+          ...MODES.filter((m) => !modeLocked(m.mode, animationAllowed)).map(
+            (m) => m.action,
+          ),
+          ...CORNERS[state.mode],
+        ]);
     const stale = [...pressedRef.current].filter((a) => !offered.has(a));
     if (stale.length === 0) return;
     setPressed((prev) => {
@@ -144,7 +150,7 @@ function ControlRoute() {
       return next;
     });
     for (const action of stale) send({ type: "action", action, pressed: false });
-  }, [state.mode, animationAllowed, send]);
+  }, [state.mode, animationAllowed, controlled, send]);
 
   // Safety stop: if the page is hidden, reset joys to zero
   useEffect(() => {
@@ -158,8 +164,22 @@ function ControlRoute() {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
+  // A controller owning /cmd_vel owns every input on this view: the sticks, the
+  // corners hanging off them and the mode column all feed a /cmd_vel this page
+  // is not the source of, and the status strip reports a robot somebody else is
+  // driving. So the view is the prompt while it lasts, rather than a prompt in
+  // the middle of a screenful of dead controls. The joysticks unmount with it,
+  // and their cleanup commands zero on the way out; the effect above releases
+  // whatever the corners were holding.
+  if (controlled) {
+    return (
+      <div id="control-area">
+        <ControlPrompt onTakeControl={() => send({ type: "request_control" })} />
+      </div>
+    );
+  }
+
   const folded = state.gaitState === "folded";
-  const controlled = controllerActive(state);
   const presetLabel =
     state.presets.find((p) => p.id === state.activePreset)?.label ??
     state.activePreset ??
@@ -191,18 +211,13 @@ function ControlRoute() {
   // stand — so it needs no leg-set qualifier, and the four-legged stand is the
   // Mode view's QUAD preset rather than a second button here. The Mode view's
   // own button is the same press under the same two words.
-  //
-  // A controller owning /cmd_vel takes every corner along with the sticks and
-  // the grid, which is the one condition the table above does not carry.
-  const offers = (action: ActionName) =>
-    !controlled && CORNERS[state.mode].includes(action);
+  const offers = (action: ActionName) => CORNERS[state.mode].includes(action);
 
   return (
     <div id="control-area">
       <Joystick
         side="left"
         label="Left"
-        disabled={controlled}
         send={send}
         handleRef={leftJoyRef}
       >
@@ -235,25 +250,18 @@ function ControlRoute() {
           voltage={state.packVoltage}
           current={state.packCurrent}
         />
-        {controlled ? (
-          <ControlPrompt
-            onTakeControl={() => send({ type: "request_control" })}
-          />
-        ) : (
-          <ModeStack
-            mode={state.mode}
-            animationAllowed={animationAllowed}
-            pressed={pressed}
-            onPress={pressAction}
-            onRelease={releaseAction}
-          />
-        )}
+        <ModeStack
+          mode={state.mode}
+          animationAllowed={animationAllowed}
+          pressed={pressed}
+          onPress={pressAction}
+          onRelease={releaseAction}
+        />
       </div>
 
       <Joystick
         side="right"
         label="Right"
-        disabled={controlled}
         send={send}
         handleRef={rightJoyRef}
       >

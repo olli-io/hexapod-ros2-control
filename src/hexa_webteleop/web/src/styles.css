@@ -717,19 +717,16 @@ html, body {
   min-height: 0;
 }
 
-/* The square the mode column and the prompt both fill in landscape, sized per
-   orientation above. The column keeps the square rather than shrinking to three
-   buttons' worth of height, so the joysticks either side sit where they sit
-   whichever of the two is on screen. */
-#mode-stack,
-#control-prompt {
+/* The square the mode column fills in landscape, sized per orientation above.
+   It keeps the square rather than shrinking to three buttons' worth of height,
+   so the joysticks either side sit at the size the panel leaves them. */
+#mode-stack {
   width: var(--panel-size);
   height: var(--panel-size);
 }
 
 /* Current preset, gait, animation mode and pack telemetry. Compact so it
-   doesn't steal height from the joysticks; visible in both mode-column and
-   prompt states. Wraps rather than widening: the same --panel-size holds it to
+   doesn't steal height from the joysticks. Wraps rather than widening: the same --panel-size holds it to
    the column's width, so a fourth item — or a narrow phone — costs a second line
    instead of squeezing the joysticks the panel sits between. Each item is an
    icon and a value, so what fits on one line is the values themselves. */
@@ -826,17 +823,21 @@ html, body {
   pointer-events: none;
 }
 
-/* ── Inline control prompt (replaces the mode selector) ─────────── */
-/* Shown in place of the mode column while a controller owns /cmd_vel. */
+/* ── Control prompt (stands in for the whole control view) ──────── */
+/* A controller owning /cmd_vel owns every input this view has, so the view is
+   the prompt while it does — not a prompt boxed into the middle of a screen of
+   dead sticks. It hugs its own content and is centred by #control-area, capped
+   so the sentence does not run the width of a landscape screen. */
 
 #control-prompt {
   flex: 0 0 auto;
+  max-width: min(92vw, 520px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.9rem;
-  padding: 1rem;
+  padding: 1.5rem;
   text-align: center;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -849,6 +850,9 @@ html, body {
 }
 
 #take-control-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   padding: 0.7rem 1.4rem;
   background: var(--surface-2);
   border: 1px solid var(--accent);
@@ -860,52 +864,32 @@ html, body {
   cursor: pointer;
 }
 
+#take-control-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
 #take-control-btn:active {
   background: var(--accent);
   color: var(--bg-dim);
 }
 
 /* Portrait lays the three modes out in a row instead, in a short wide bar — the
-   rule sits below both blocks it overrides, which is what an ID rule of equal
+   rule sits below the block it overrides, which is what an ID rule of equal
    specificity needs to win. The joysticks are stacked above and below the panel
    in portrait, not either side of it, so a square in the middle spends height
    the two circles want; a bar gives it back and still leaves each button a
-   third of the screen's width to hit. The prompt that stands in for the bar
-   takes the same box, and turns its own text and button side by side to fit it,
-   so the circles still sit where they sit whichever of the two is on screen. */
+   third of the screen's width to hit. */
 @media (orientation: portrait) {
-  #mode-stack,
-  #control-prompt {
-    width: min(92vw, 520px);
-  }
-
   /* One landscape row, plus the padding above and below it: a mode button is
      the same height in both orientations, and the height a portrait bar does
      not spend is height the two circles get. The 2rem is what the landscape
      square spends on its own padding and its two gaps. */
   #mode-stack {
+    width: min(92vw, 520px);
     flex-direction: row;
     height: calc((var(--panel-size) - 2rem) / 3 + 1rem);
   }
-
-  /* The prompt takes the bar's box as a floor rather than a fixed height: its
-     sentence wraps to whatever a narrow screen makes of it, and the circles —
-     sized from the height their own rows are left with — give back the little
-     it needs beyond the bar. */
-  #control-prompt {
-    flex-direction: row;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    height: auto;
-    min-height: calc((var(--panel-size) - 2rem) / 3 + 1rem);
-  }
-}
-
-/* ── Disabled joysticks ─────────────────────────────────────────── */
-
-.joystick-pad.disabled canvas {
-  opacity: 0.4;
-  pointer-events: none;
 }
 
 /* ── Modals ─────────────────────────────────────────────────────── */

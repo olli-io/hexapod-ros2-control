@@ -15,7 +15,6 @@ export interface JoystickHandle {
 interface Props {
   side: StickSide;
   label: string;
-  disabled: boolean;
   send: SendFn;
   handleRef: RefObject<JoystickHandle | null>;
   // Corner buttons, placed by the caller against the circle's bounding square.
@@ -29,7 +28,6 @@ interface Props {
 export default function Joystick({
   side,
   label,
-  disabled,
   send,
   handleRef,
   children,
@@ -222,10 +220,8 @@ export default function Joystick({
   return (
     <div className="joystick">
       {/* The square the circle is inscribed in, and the box the corner buttons
-          are positioned against. `disabled` is on the canvas alone: a
-          controller owning /cmd_vel takes the sticks, and the caller decides
-          for itself what to hang in the corners. */}
-      <div className={`joystick-pad${disabled ? " disabled" : ""}`}>
+          are positioned against. */}
+      <div className="joystick-pad">
         <canvas ref={canvasRef} />
         {children}
       </div>
