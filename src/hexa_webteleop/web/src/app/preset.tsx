@@ -2,9 +2,10 @@ import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { MODES, modeLocked } from "../components/ModeStack";
 import Spinner from "../components/Spinner";
+import StatusBar from "../components/StatusBar";
 import { useModal } from "../providers/ModalProvider";
 import { animationAvailable, useTeleop } from "../providers/TeleopProvider";
-import { animationLabel, buzz, gaitLabel } from "../utils/labels";
+import { animationLabel, buzz, gaitLabel, presetLabel } from "../utils/labels";
 import type { ActionName } from "../types/protocol";
 
 // How long a tap here holds the function down before letting go. This view has
@@ -37,11 +38,8 @@ function PresetRoute() {
   // for a while or is refused outright.
   const standing = state.gaitState === "stand";
   const pending = state.pendingPreset;
-  // The label of the preset in flight, for the modal below. Falls back to the
-  // id, which is what a preset the descriptor list does not carry would be
-  // called anywhere else on this view.
-  const pendingLabel =
-    state.presets.find((p) => p.id === pending)?.label ?? pending;
+  // The label of the preset in flight, for the modal below.
+  const pendingLabel = presetLabel(state.presets, pending);
   // Non-null only while the robot is between the belly and a stand.
   const transition = TRANSITION_LABELS[state.gaitState] ?? null;
   const animationAllowed = animationAvailable(state);
@@ -84,6 +82,24 @@ function PresetRoute() {
 
   return (
     <div id="preset-view">
+      {/* What the robot is on right now, in a box of its own above the ones
+          that change it: this is the view where preset, gait and animation are
+          picked, so the reading of which is in force belongs next to the press.
+          Read off the engine's report topics, the same source the tiles light
+          themselves from, so the box and the tiles cannot disagree. */}
+      <section className="preset-section" data-section="stats">
+        <h2 className="preset-section-title">STATS</h2>
+        <StatusBar
+          presetLabel={presetLabel(state.presets, state.activePreset)}
+          // No gait is running on the belly, so the strategy the next stand
+          // will use is not a status — the same rule the Control strip follows.
+          gait={folded ? "" : state.gait}
+          animation={state.animation}
+          voltage={state.packVoltage}
+          current={state.packCurrent}
+        />
+      </section>
+
       {/* Two stacks, each a column of boxes: what the robot stands as (MODE
           over PRESET) and what it walks (GAIT over ANIM). One under the other
           in portrait, side by side in landscape — where the screen is short and
@@ -119,7 +135,7 @@ function PresetRoute() {
                     tap(slot.action);
                   }}
                 >
-                  {slot.label}
+                  <span className="preset-label">{slot.label}</span>
                 </button>
               ))}
 
@@ -223,7 +239,7 @@ function PresetRoute() {
                       send({ type: "select_gait", gait });
                     }}
                   >
-                    {gaitLabel(gait)}
+                    <span className="preset-label">{gaitLabel(gait)}</span>
                   </button>
                 ))}
               </div>
@@ -262,7 +278,9 @@ function PresetRoute() {
                       send({ type: "select_animation", animation });
                     }}
                   >
-                    {animationLabel(animation)}
+                    <span className="preset-label">
+                      {animationLabel(animation)}
+                    </span>
                   </button>
                 ))}
               </div>

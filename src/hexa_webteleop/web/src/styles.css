@@ -210,8 +210,20 @@ html, body {
 #log-view {
   /* One spacing for the view, the way a box has one for its tiles: the padding
      off the screen edge is the same as the gap between two of the view's own
-     children, so nothing sits closer to its neighbour than to the edge. */
-  --view-gap: 0.6rem;
+     children, so nothing sits closer to its neighbour than to the edge.
+     Scaled with the screen like everything else in here, so a short one spends
+     its height on the tiles rather than on the air between the boxes.
+
+     `svh`, not `vh`: on a phone browser `vh` is the LARGE viewport — the height
+     the page would have with the browser's own bar hidden — so a `vh`-scaled
+     box on a landscape phone with that bar still up is sized to 60-odd px that
+     are not there, and the view overflows the screen it was meant to fit. `svh`
+     is the small viewport, the one `height: 100%` actually resolves to while the
+     bar is up, and it does not move when the bar hides. The `vh` line above it
+     is the fallback for a browser without `svh`, which is what a browser that
+     drops the second declaration is left with. */
+  --view-gap: clamp(0.35rem, 1.4vh, 0.6rem);
+  --view-gap: clamp(0.35rem, 1.4svh, 0.6rem);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -233,23 +245,53 @@ html, body {
   /* One spacing for the box: the gap between two tiles and the padding from a
      tile to the box's edge are the same number in both orientations, so a tile
      against the wall sits as far off it as it does off its neighbour. The grids
-     below read it too, which is what keeps the two from drifting apart. */
-  --tile-gap: 0.5rem;
+     below read it too, which is what keeps the two from drifting apart.
+     Screen-scaled for the same reason --view-gap is, in the same units. */
+  --tile-gap: clamp(0.3rem, 1.2vh, 0.5rem);
+  --tile-gap: clamp(0.3rem, 1.2svh, 0.5rem);
   display: flex;
   flex-direction: column;
   gap: var(--tile-gap);
   width: 100%;
   max-width: 420px;
   margin: 0 auto;
-  /* Shrinks with the view but never grows into it: the view's own centring is
-     what places the boxes. */
+  /* Never grows, and shrinks only into its own grid: the box is its heading,
+     its grid and the padding around them, and the view's centring is what
+     places it. What a squeeze takes comes out of the grid's rows — the box's
+     padding and the gap to the next box are not the view's to spend. */
   flex: 0 1 auto;
+  min-height: 0;
   min-height: 0;
   overflow: hidden;
   padding: var(--tile-gap);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
+}
+
+/* The Mode view's copy of the strip, in the STATS box at the top: the section
+   already draws the surface, border and padding the strip draws for itself over
+   the mode column, so here it is only the row of readings. Spread across the
+   box like the tile grids under the other headings, rather than centred in it.
+   */
+#preset-view #status-bar {
+  width: 100%;
+  max-width: none;
+  /* The one row the box holds, and it does not give any of it back: squeezed,
+     the strip loses its own bottom padding first, which reads as readings
+     sitting on the box's bottom edge. What gives on this view is --tile-h, and
+     this row is a line of 0.7rem text with nothing worth taking. */
+  flex: 0 0 auto;
+  align-items: center;
+  /* Not none: the readings get a little room above and below, and since one
+     row of them is all the box holds under its heading, that room is the box's
+     height — 0.35rem each side is what makes STATS a fifth taller than the
+     heading + one line it would otherwise be. Vertical only; the ends are the
+     section's own --tile-gap, like every tile grid in here. */
+  padding: 0.35rem 0;
+  background: none;
+  border: none;
+  justify-content: space-evenly;
 }
 
 /* The one word naming the choice the box makes, set like the network panels'
@@ -260,6 +302,7 @@ html, body {
   align-items: baseline;
   gap: 0.6rem;
   font-size: clamp(0.6rem, 1.4vh, 0.72rem);
+  font-size: clamp(0.6rem, 1.4svh, 0.72rem);
   font-weight: 700;
   letter-spacing: 0.14em;
   color: var(--muted);
@@ -282,6 +325,26 @@ html, body {
   color: var(--red);
 }
 
+/* What one tile is, in height: the size it takes wherever the view has the room
+   for it, and the most it may be stretched to where a grid hands it more. Two
+   numbers rather than a padding, so the four grids below cannot drift apart and
+   a short screen shrinks every tile by the same amount. The landscape block near
+   the end of this section restates both — that screen is short and wide, so its
+   two stacks are half as deep and every tile in them is taller. */
+#preset-view {
+  /* The height left over, split eight ways: a portrait screen carries all four
+     boxes in one column — two mode rows, two preset rows, three gait rows, one
+     animation row — and the 24.5rem is what the tab bar, the STATS box, the four
+     headings, the gaps and the padding cost around them. An estimate, and it
+     does not have to be exact: it is what a tile ASKS for, and the grids give
+     back whatever the screen turns out not to have — a notch's safe-area inset,
+     say, which no number here can know. Too generous and the tiles come out a
+     little smaller than asked; too mean and the field sits centred with room to
+     spare. Neither costs a box its padding. */
+  --tile-h: clamp(1.7rem, calc((100vh - 24.5rem) / 8), 3rem);
+  --tile-h: clamp(1.7rem, calc((100svh - 24.5rem) / 8), 3rem);
+}
+
 /* The presets as tiles, not rows, on a 2x2: a phone is narrow, and four abreast
    would leave four slivers too thin for a label. The box around them is what
    caps and centres the grid. */
@@ -289,22 +352,46 @@ html, body {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--tile-gap);
+  /* The rows are what gives when the view runs out of height, and the only
+     thing that does: `minmax(0, --tile-h)` asks for a tile's height and settles
+     for less, so a screen an inch shorter than the sizing below expects — a
+     notch's safe-area inset, a rounding, a browser bar nobody predicted — comes
+     off the tiles evenly instead of out of one box's bottom padding or off the
+     bottom of the view. Every grid on the view is sized this way, so they all
+     give the same amount. */
+  grid-auto-rows: minmax(0, var(--tile-h));
+  flex: 0 1 auto;
   min-height: 0;
 }
 
-.preset-item {
+/* One tile, four kinds of them: a preset, a gait, an animation, a mode. The box
+   rules are shared because the tiles are deliberately identical — what tells
+   one group from the next is the box it sits in, not how its tiles are drawn.
+   #preset-stand carries its own fill and border below; everything about its
+   shape is this rule's. */
+.preset-item,
+.gait-item,
+.anim-item,
+.preset-mode,
+#preset-stand {
+  /* Centred both ways, always: a label is placed by the tile's own middle
+     rather than by the top padding it sits under, so a tile squeezed shorter
+     than its label keeps that label in the middle instead of pushing it out of
+     the bottom edge. */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.15rem;
-  /* vh-scaled padding and type: a short screen takes the tile down to a compact
-     chip instead of pushing the gaits — or the note below them — off the
-     bottom. */
+  /* The tile's height is its grid row's, not a sum of its padding: the row asks
+     for --tile-h and the tile fills it. Padding that grows a tile cannot shrink
+     one — on a screen too short to give every tile its height the padding stays
+     and the label goes — where a row hands back what it cannot have and the
+     label stays in the middle of whatever is left. */
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding: clamp(0.4rem, 1.8vh, 1rem) 0.6rem;
+  padding: 0.2rem 0.5rem;
   border: 1px solid var(--muted);
   border-radius: 8px;
   background: var(--surface-2);
@@ -315,8 +402,25 @@ html, body {
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
-.preset-label { font-size: clamp(0.8rem, 2vh, 1rem); font-weight: 700; }
-.preset-sub { font-size: clamp(0.65rem, 1.5vh, 0.78rem); color: var(--muted); }
+/* Every tile's label, whichever grid it is in: one line, ellipsised rather than
+   wrapped or spilt, since a tile is a third of a column wide and a name that
+   does not fit is still worth reading the front of. */
+.preset-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(0.72rem, 1.9vh, 1rem);
+  font-size: clamp(0.72rem, 1.9svh, 1rem);
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.preset-sub {
+  font-size: clamp(0.65rem, 1.5vh, 0.78rem);
+  font-size: clamp(0.65rem, 1.5svh, 0.78rem);
+  color: var(--muted);
+}
 
 /* Active is the mode the robot is actually standing in — from /gait/leg_set,
    never from the tap. Same solid fill the active teleop mode button uses. */
@@ -349,6 +453,8 @@ html, body {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--tile-gap);
+  grid-auto-rows: minmax(0, var(--tile-h));
+  flex: 0 1 auto;
   min-height: 0;
 }
 
@@ -359,6 +465,8 @@ html, body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--tile-gap);
+  grid-auto-rows: minmax(0, var(--tile-h));
+  flex: 0 1 auto;
   min-height: 0;
 }
 
@@ -372,25 +480,6 @@ html, body {
   grid-template-columns: repeat(3, 1fr);
 }
 
-
-.gait-item,
-.anim-item,
-.preset-mode {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  padding: clamp(0.4rem, 1.8vh, 1rem) 0.6rem;
-  border: 1px solid var(--muted);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--fg);
-  font: inherit;
-  font-size: clamp(0.8rem, 2vh, 1rem);
-  font-weight: 700;
-  text-align: center;
-  cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
-}
 
 /* The gait latched on /cmd_gait, the animation latched on /animation/mode, the
    mode the node's state machine is in. Same solid accent an active preset takes,
@@ -427,21 +516,8 @@ html, body {
    on the view does anything until it is pressed. */
 #preset-stand {
   grid-column: 1 / -1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.15rem;
-  min-height: 0;
-  overflow: hidden;
-  padding: clamp(0.4rem, 1.4vh, 0.75rem) 1rem;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--fg);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
+  border-color: var(--border);
 }
 
 #preset-stand.folded {
@@ -459,7 +535,13 @@ html, body {
 
 #preset-stand:disabled { opacity: 0.5; pointer-events: none; }
 
-/* Empty until the node refuses something, so it reserves no space. */
+/* Empty until the node refuses something, so it reserves no space — including
+   the gap a flex item is given even at zero height, which is why the empty one
+   is taken out of the flow rather than left in it at 0px. Left in, it lands one
+   --view-gap below the last box and the view's centring has that much less room
+   under the field than over it, which reads as a field sitting high. */
+#preset-note:empty { display: none; }
+
 #preset-note {
   flex: 0 0 auto;
   width: 100%;
@@ -484,11 +566,22 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: var(--view-gap);
+  /* Never grows, and passes a squeeze down to the boxes rather than absorbing
+     it: a stack whose own box ends above its last box lets that box hang out of
+     it and eat the gap to whatever comes next — in portrait that is the one gap
+     between the two stacks, PRESET to GAIT, which then reads narrower than the
+     three around it. */
+  flex: 0 1 auto;
   min-height: 0;
   min-width: 0;
 }
 
 @media (orientation: landscape) {
+  /* The width the field of boxes is held to. On #preset-view because the STATS
+     box above the stacks is capped by it too, and the two must agree — a strip
+     wider than the stacks under it would hang off both ends of the field. */
+  #preset-view { --stacks-max: 1000px; }
+
   #preset-stacks {
     flex-direction: row;
     align-items: stretch;
@@ -496,10 +589,15 @@ html, body {
        space as between two boxes in one, so the four read as one field of boxes
        rather than as two columns set apart. */
     width: 100%;
-    max-width: 1000px;
+    max-width: var(--stacks-max);
     margin: 0 auto;
-    /* Takes the view's height so each stack can centre its own boxes in it. */
-    flex: 1 1 auto;
+    /* Sized by the taller of the two stacks, not by the view: the view's own
+       centring is what places the field, and a row stretched to the full height
+       centres its columns inside itself a second time — which splits the slack
+       between the two centrings and leaves the field looking hung from the
+       STATS box. `align-items: stretch` above still hands the shorter column the
+       taller one's height, which is all the rule below needs. */
+    flex: 0 1 auto;
   }
 
   /* Equal halves, each with its boxes centred in the height rather than hung
@@ -515,16 +613,25 @@ html, body {
      column they sit in is the cap. */
   .preset-section { max-width: none; }
 
+  /* Except the STATS box, which has no column: it spans the field of boxes. */
+  #preset-view > .preset-section { max-width: var(--stacks-max); }
+
   /* The height a stack does not spend on boxes goes into the tiles instead: a
      landscape screen is short, so the vh the portrait tiles scale by leaves
-     them squat here, and the room is there. */
-  .preset-item,
-  .gait-item,
-  .anim-item,
-  .preset-mode,
-  #preset-stand {
-    padding-top: clamp(0.5rem, 3.4vh, 1.2rem);
-    padding-bottom: clamp(0.5rem, 3.4vh, 1.2rem);
+     them squat here, and the room is there — two boxes deep instead of four.
+     The floor is lower than the portrait one for the same reason the ceiling is
+     higher: this is the orientation where the browser's own bar takes a fifth
+     of the height, and a tile that cannot shrink is a view that clips. */
+  #preset-view {
+    /* The height left over, split four ways: a landscape stack is four tile
+       rows deep at its deepest (three gaits over one animation), and the 9.5rem
+       is what the STATS box, the four headings, the gaps and the padding cost
+       around them. Sized from the leftover rather than from a flat fraction of
+       the screen because the leftover is what the tiles actually get — a flat
+       fraction has to be pitched low enough for the shortest screen and then
+       leaves a fullscreen one with room nothing spends. */
+    --tile-h: clamp(1.5rem, calc((100vh - 9.5rem) / 4), 3.4rem);
+    --tile-h: clamp(1.5rem, calc((100svh - 9.5rem) / 4), 3.4rem);
   }
 }
 
@@ -652,7 +759,11 @@ html, body {
    equal so a clamp on either axis keeps the pad square rather than oval. */
 @media (orientation: portrait) {
   #control-area { flex-direction: column; }
-  #center-panel { --panel-size: min(52vw, 30vh, 500px); }
+  #center-panel {
+    --panel-size: min(52vw, 30vh, 500px);
+    /* What the mode bar and the status strip are both laid out from. */
+    --panel-width: min(92vw, 520px);
+  }
   /* Half a corner button top and bottom, plus the label's height on top only:
      the label hangs under the pad either way, so a row padded evenly centres
      pad + label and leaves the circle half a label high. With the extra reserve
@@ -768,9 +879,17 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.4rem;
   min-width: 0;
   min-height: 0;
+  /* The mode stack's inner rhythm: the gap between two buttons, and the inset
+     of the buttons from the stack's own edge — one value, because it is also
+     what separates the status bar from the first button. */
+  --stack-gap: 0.5rem;
+  /* Zero, and not the stack's gap: the stack's top padding is ALREADY one
+     --stack-gap of clear space under the bar, so anything here would be added
+     on top of it and the bar would stand further off the buttons than the
+     buttons do off each other. */
+  gap: 0;
 }
 
 /* The square the mode column fills in landscape, sized per orientation above.
@@ -785,13 +904,23 @@ html, body {
    doesn't steal height from the joysticks. Wraps rather than widening: the same --panel-size holds it to
    the column's width, so a fourth item — or a narrow phone — costs a second line
    instead of squeezing the joysticks the panel sits between. Each item is an
-   icon and a value, so what fits on one line is the values themselves. */
+   icon and a value, so what fits on one line is the values themselves. It sits
+   in its own rounded surface box, so the readings read as one panel over the
+   mode column rather than loose text floating above it. */
 #status-bar {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.15rem 0.8rem;
   max-width: var(--panel-size);
+  /* Even padding: 0.3rem was as tight as a box can be drawn round one line of
+     text, and the readings sit better with the same room above and below them
+     as they have at the ends. It is the only thing setting the bar's height —
+     one line of 0.7rem text plus this — so it is what "taller" is spent on. */
+  padding: 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 2);
   font-size: 0.7rem;
   letter-spacing: 0.05em;
   white-space: nowrap;
@@ -827,8 +956,8 @@ html, body {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.5rem;
+  gap: var(--stack-gap);
+  padding: var(--stack-gap);
 }
 
 #mode-stack button {
@@ -841,7 +970,7 @@ html, body {
   padding: 0.25rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) * 2);
   color: var(--fg);
   font-family: inherit;
   font-size: clamp(0.6rem, 2.4vmin, 0.95rem);
@@ -942,9 +1071,22 @@ html, body {
      not spend is height the two circles get. The 2rem is what the landscape
      square spends on its own padding and its two gaps. */
   #mode-stack {
-    width: min(92vw, 520px);
+    width: var(--panel-width);
     flex-direction: row;
     height: calc((var(--panel-size) - 2rem) / 3 + 1rem);
+  }
+
+  /* The strip runs the width of the row of buttons under it — the stack's width
+     less the padding the buttons sit inside — so the two boxes share an edge
+     instead of a narrow strip floating over a wide bar. `--panel-size` is the
+     landscape column's cap and has nothing to say here, so the wrap cap goes.
+     Spread rather than centred: with the whole bar's width to sit on, the
+     readings should read as separate values, not one run of text in the
+     middle. */
+  #center-panel #status-bar {
+    width: calc(var(--panel-width) - var(--stack-gap) * 2);
+    max-width: none;
+    justify-content: space-evenly;
   }
 }
 

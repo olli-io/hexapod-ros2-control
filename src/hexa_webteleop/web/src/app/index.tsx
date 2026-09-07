@@ -12,6 +12,7 @@ import {
   controllerActive,
   useTeleop,
 } from "../providers/TeleopProvider";
+import { presetLabel } from "../utils/labels";
 import type { ActionName, Mode } from "../types/protocol";
 
 // Re-send held input this often (ms) so the server's input watchdog
@@ -180,17 +181,15 @@ function ControlRoute() {
   // whatever the corners were holding.
   if (controlled) {
     return (
-      <div id="control-area">
+      // `prompt-only` is for the fullscreen-landscape rules in styles.css: with
+      // the sticks and the strip gone there is nothing for that layout to place.
+      <div id="control-area" className="prompt-only">
         <ControlPrompt onTakeControl={() => send({ type: "request_control" })} />
       </div>
     );
   }
 
   const folded = state.gaitState === "folded";
-  const presetLabel =
-    state.presets.find((p) => p.id === state.activePreset)?.label ??
-    state.activePreset ??
-    "";
 
   // The functions a thumb needs without letting go of its stick sit at the
   // corners of the circles the thumbs are already on: reaching the middle of
@@ -249,7 +248,7 @@ function ControlRoute() {
       {/* Center column: status strip over the mode selector. */}
       <div id="center-panel">
         <StatusBar
-          presetLabel={presetLabel}
+          presetLabel={presetLabel(state.presets, state.activePreset)}
           // No gait is running on the belly, so the strategy the next stand will
           // use is not a status.
           gait={folded ? "" : state.gait}

@@ -1,3 +1,5 @@
+import type { PresetDescriptor } from "../types/protocol";
+
 // Tile names for the gaits. The four-corner two lose their `quad_` prefix
 // rather than carry it as a suffix: what the operator picks is a canter or a
 // walk, no six-leg gait shares either name, and which legs they walk is the
@@ -24,6 +26,19 @@ const ANIM_LABELS: Record<string, string> = {
 
 export function animationLabel(name: string): string {
   return ANIM_LABELS[name] ?? name;
+}
+
+// The operator-facing name of a preset id, as `presets.list` declares it.
+// Falls back to the id — the label is config, and a preset the descriptor list
+// does not carry has to be called something. Here rather than at each call site
+// because the Control strip, the Mode view's own strip and the switching modal
+// all name the same preset and must agree on what it is called.
+export function presetLabel(
+  presets: PresetDescriptor[],
+  id: string | null,
+): string {
+  if (id === null) return "";
+  return presets.find((preset) => preset.id === id)?.label ?? id;
 }
 
 // Short haptic tick on button press (no-op where unsupported, e.g. iOS).

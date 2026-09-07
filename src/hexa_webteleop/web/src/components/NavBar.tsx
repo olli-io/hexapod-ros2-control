@@ -1,6 +1,15 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Joystick, ScrollText, SlidersHorizontal, Wifi, WifiOff } from "lucide-react";
+import {
+  Joystick,
+  Maximize,
+  Minimize,
+  ScrollText,
+  SlidersHorizontal,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
+import { CAN_FULLSCREEN, useFullscreen } from "../hooks/useFullscreen";
 import { VIEW_PATHS, viewOfPath } from "../utils/views";
 import type { ViewName } from "../utils/views";
 
@@ -15,10 +24,11 @@ interface Props {
 
 // Tab bar: symbols only, evenly spaced. Horizontal across the bottom in
 // portrait, vertical down the right edge in landscape (CSS-driven). Every item
-// is a route link: it swaps the view above the bar and the bar itself never leaves,
-// which is why no view carries a back arrow. Which tab is lit comes from the
-// router rather than from a prop, so the bar cannot disagree with what is on
-// screen.
+// but the last is a route link: it swaps the view above the bar and the bar
+// itself never leaves, which is why no view carries a back arrow. Which tab is
+// lit comes from the router rather than from a prop, so the bar cannot disagree
+// with what is on screen. The last item is the fullscreen toggle — not a view,
+// so it lights from the document instead.
 export default function NavBar({
   usableOnly,
   connected,
@@ -27,6 +37,7 @@ export default function NavBar({
 }: Props) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const current = viewOfPath(pathname);
+  const { fullscreen, toggle: toggleFullscreen } = useFullscreen();
 
   const cls = (view: ViewName, ...extra: (string | false)[]) => {
     const usable = view === "network" || view === "log";
@@ -89,6 +100,26 @@ export default function NavBar({
 
       {/* Log */}
       {tab("log", "Log", cls("log"), <ScrollText aria-hidden />)}
+
+      {/* Fullscreen: the browser chrome on or off. A button rather than a link,
+          and the one item `usableOnly` does not hide — it is a property of this
+          device's screen, so it keeps working with the socket down. Lit while
+          fullscreen, by the same class the tabs use: it is the one item whose
+          "active" is a state of the document rather than a route. */}
+      {CAN_FULLSCREEN && (
+        <button
+          id="tab-fullscreen"
+          type="button"
+          className={["nav-icon", fullscreen && "tab-active"]
+            .filter(Boolean)
+            .join(" ")}
+          onClick={toggleFullscreen}
+          aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"}
+          aria-pressed={fullscreen}
+        >
+          {fullscreen ? <Minimize aria-hidden /> : <Maximize aria-hidden />}
+        </button>
+      )}
     </nav>
   );
 }
