@@ -1,25 +1,6 @@
-// Consolidated single-node locomotion controller (the ROS seam around the shared
-// control brain, shared/motion_core).
-//
-// Mirrors the Pi Pico firmware's single 200 Hz loop, but with ROS seams instead
-// of the gamepad / servo hardware:
-//   - Input  seam: build a hexa::pipeline::CommandIntent from /cmd_vel (velocity)
-//     plus the discrete command topics (/cmd_gait, /cmd_preset,
-//     /gait/initialize, /body/pose, /animation/mode), and call the pipeline's
-//     CORE tick directly — bypassing
-//     map_joy, so the node is /cmd_vel-native (Nav2 / twist_mux / teleop_twist).
-//   - Output seam: publish the pipeline's 18 joint angles (radians) as
-//     std_msgs/Float64MultiArray on /joint_group_position_controller/commands,
-//     folding the old ik_node + joint_command_bridge. The firmware joint order
-//     already equals the controller's joints: list, so no remap.
-//   - Clock seam: a ROS timer + get_clock() (sim time under use_sim_time), so the
-//     tick stays in lockstep with controller_manager / Gazebo.
-//   - Diagnostics: re-publish /gait/state (the one locomotion-chain topic the
-//     hexa_display face sink consumes). /cmd_vel, /body/pose, /animation/mode
-//     reach the face straight from teleop, unchanged.
-//
-// Replaces the control_node -> gait_node -> posture_node -> ik_node ->
-// joint_command_bridge process chain with one process, one clock, one dt.
+// ROS seam around the shared control brain (shared/motion_core): one 200 Hz
+// tick from /cmd_vel + the discrete command topics to joint commands. Calls the
+// core tick directly, bypassing map_joy. See README.md.
 
 #include <array>
 #include <chrono>
@@ -41,10 +22,10 @@
 #include <std_msgs/msg/u_int8.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
-#include "gait/engine.hpp"   // hexa::gait::state_value
-#include "pipeline.hpp"      // the shared control brain + CommandIntent
+#include "gait/engine.hpp"
+#include "pipeline.hpp"
 #include "pipeline_config_loader.hpp"
-#include "servo_out.hpp"     // servo_out::kNumJoints
+#include "servo_out.hpp"
 
 namespace {
 
@@ -71,40 +52,17 @@ class LocomotionNode : public rclcpp::Node {
     boot_ = get_clock()->now();
 
     pub_cmd_ = create_publisher<Float64MultiArray>(command_topic_, 10);
-    // /gait/state is the only locomotion-chain topic the face sink consumes; the
-    // rest of its inputs (/cmd_vel, /body/pose, /animation/mode) come from teleop.
-    // Latched: it publishes on change only, and the boot "folded" goes out on the
-    // first tick — a face sink that subscribes later must still receive it.
-    pub_state_ = create_publisher<StringMsg>("/gait/state",
-                                             rclcpp::QoS(1).transient_local());
-    // The leg set the engine has APPLIED — "hexapod" or "quadruped". Report
-    // only; the leg set is still commanded by naming a gait on /cmd_gait, and
-    // nothing here reads this back. It exists because /cmd_gait is latched and
-    // a refused request stays on it forever, so a UI reading the command topic
-    // would show a leg set the robot never took. Latched for the same reason
-    // /gait/state is: it publishes on change, and the boot value has to reach a
-    // subscriber that joins later.
-    pub_leg_set_ = create_publisher<StringMsg>(
-        "/gait/leg_set", rclcpp::QoS(1).transient_local());
-    // The preset the engine has APPLIED. Report only, and the finer-grained
-    // half of the pair above: two presets can stand on the same leg set and
-    // differ in stance, stride and swing time, so /gait/leg_set alone cannot
-    // say which one is in force. Latched for the same reason.
-    pub_preset_ = create_publisher<StringMsg>(
-        "/gait/preset", rclcpp::QoS(1).transient_local());
-    // Relay-arm intent for hexa_hardware: the supervisor's per-tick decision
-    // (energize only once stood, drop on fold / fault / critical battery). The
-    // hardware node drives SET RELAY off this, honouring the board's staged-pose
-    // rule (a pose is staged by write() before the enable lands). Latched so a
-    // late-joining hardware node catches the current intent.
-    pub_relay_ = create_publisher<BoolMsg>(
-        "/hardware/relay_cmd", rclcpp::QoS(1).transient_local());
-    // Undervoltage rung (UndervoltStage as uint8: 0 none, 1 warn, 2 fold,
-    // 3 cutoff). hexa_hardware turns rung 1 into a buzzer request and latches
-    // its own rail off at rung 3, so the cutoff holds even if this node dies.
-    // Latched; escalate-only, so the topic never counts down.
-    pub_undervolt_ = create_publisher<UInt8Msg>(
-        "/hardware/undervoltage", rclcpp::QoS(1).transient_local());
+    // Report topics publish on change only, so they are latched for a subscriber
+    // that joins after the boot value went out.
+    const auto latched = rclcpp::QoS(1).transient_local();
+    pub_state_ = create_publisher<StringMsg>("/gait/state", latched);
+    // The leg set / preset the engine has APPLIED, not the one requested:
+    // /cmd_gait and /cmd_preset are latched, so a refused request stays on them.
+    pub_leg_set_ = create_publisher<StringMsg>("/gait/leg_set", latched);
+    pub_preset_ = create_publisher<StringMsg>("/gait/preset", latched);
+    pub_relay_ = create_publisher<BoolMsg>("/hardware/relay_cmd", latched);
+    // UndervoltStage as uint8; escalate-only, never counts down.
+    pub_undervolt_ = create_publisher<UInt8Msg>("/hardware/undervoltage", latched);
 
     sub_vel_ = create_subscription<Twist>(
         "/cmd_vel", 10, [this](Twist::SharedPtr m) { on_cmd_vel(*m); });
@@ -113,15 +71,10 @@ class LocomotionNode : public rclcpp::Node {
     sub_init_ = create_subscription<Empty>(
         "/gait/initialize", 10,
         [this](Empty::SharedPtr) { init_pending_ = true; });
-    // Hardware over-current fault (published by hexa_hardware off the board's
-    // STATUS register). Level, not edge: it holds true while the board is tripped
-    // and clears once STATUS reads clean, so recovery (Start) is only honoured
-    // once the fault has lifted. The engine itself latches FAULT.
+    // Level, not edge: stays true while the board is tripped. The engine latches.
     sub_fault_ = create_subscription<BoolMsg>(
-        "/hardware/fault", rclcpp::QoS(1).transient_local(),
+        "/hardware/fault", latched,
         [this](BoolMsg::SharedPtr m) { fault_level_ = m->data; });
-    // Pack telemetry from hexa_hardware's aux node (~10 Hz). Drives the
-    // supervisor's undervoltage ladder; with no publisher (sim) it stays kNone.
     battery_topic_ = declare_parameter<std::string>(
         "battery_topic", "/hexa_hardware_aux/battery_state");
     sub_battery_ = create_subscription<BatteryState>(
@@ -130,18 +83,13 @@ class LocomotionNode : public rclcpp::Node {
           battery_v_ = m->voltage;
           battery_unconsumed_ = true;
         });
-    // /cmd_gait and /animation/mode are latched by teleop (transient_local,
-    // depth 1) so a late-joining node catches the last selection.
-    const auto latched = rclcpp::QoS(1).transient_local();
     sub_gait_ = create_subscription<StringMsg>(
         "/cmd_gait", latched, [this](StringMsg::SharedPtr m) {
           gait_name_ = m->data;
           gait_pending_ = true;
         });
-    // The operator preset. Latched like /cmd_gait, and read every tick rather
-    // than on the edge alone: request_preset is idempotent while the named
-    // preset is already in force, and re-asserting it is what makes a node that
-    // restarts mid-session come back on the preset the operator left it on.
+    // Re-asserted every tick, not on the edge: request_preset is idempotent, and
+    // this is what brings a restarted node back on the operator's preset.
     sub_preset_ = create_subscription<StringMsg>(
         "/cmd_preset", latched, [this](StringMsg::SharedPtr m) {
           preset_name_ = m->data;
@@ -153,11 +101,7 @@ class LocomotionNode : public rclcpp::Node {
           anim_pending_ = true;
         });
 
-    // Hot config reload: re-read geometry.yaml + tuning.yaml and swap in a fresh
-    // pipeline WITHOUT restarting the process (Gazebo/controllers/teleop stay up).
-    // The rebuilt pipeline cold-starts at FOLDED, so a reload re-folds the robot —
-    // send /gait/initialize again to stand. Runs on the same single-threaded
-    // executor as on_tick(), so the swap never races a tick (no lock needed).
+    // Same single-threaded executor as on_tick(), so the swap needs no lock.
     srv_reload_ = create_service<Trigger>(
         "~/reload_config",
         [this](const std::shared_ptr<Trigger::Request> req,
@@ -177,8 +121,6 @@ class LocomotionNode : public rclcpp::Node {
   }
 
  private:
-  // Monotonic microseconds since construction (sim time under use_sim_time), so
-  // the pipeline advances in lockstep with the controller / Gazebo.
   std::uint64_t now_us() const {
     const std::int64_t ns = (get_clock()->now() - boot_).nanoseconds();
     return ns > 0 ? static_cast<std::uint64_t>(ns / 1000) : 0;
@@ -193,9 +135,6 @@ class LocomotionNode : public rclcpp::Node {
   void on_tick() {
     const std::uint64_t t = now_us();
 
-    // Build the command intent from the latest topic state. Velocity is in m/s
-    // already (Twist is physical units) — no stick scaling. The discrete
-    // commands fire for a single tick on the edge their topic arrived.
     hexa::pipeline::CommandIntent cmd;
     cmd.linear_x = static_cast<float>(last_twist_.linear.x);
     cmd.linear_y = static_cast<float>(last_twist_.linear.y);
@@ -210,17 +149,15 @@ class LocomotionNode : public rclcpp::Node {
       cmd.init_request = true;
       init_pending_ = false;
     }
-    // Before the gait, deliberately: the preset owns the leg set, and a
-    // /cmd_gait naming a gait of the other one is refused. When the operator
-    // picks a preset both topics land in the same tick, and the gait that walks
-    // the new preset is only legal once the preset request is in.
+    // Preset before gait: a gait of the other leg set is refused, and both
+    // topics land in the same tick when the operator picks a preset.
     if (have_preset_) {
       cmd.has_preset_select = true;
-      cmd.preset_select = preset_name_;  // view into preset_name_ (outlives tick)
+      cmd.preset_select = preset_name_;
     }
     if (gait_pending_) {
       cmd.has_gait_select = true;
-      cmd.gait_select = gait_name_;  // string_view into gait_name_ (outlives tick)
+      cmd.gait_select = gait_name_;
       gait_pending_ = false;
     }
     if (anim_pending_) {
@@ -229,22 +166,19 @@ class LocomotionNode : public rclcpp::Node {
       anim_pending_ = false;
     }
 
-    // /cmd_vel-staleness watchdog: a dead velocity publisher settles the gait
-    // (force_zero), mirroring the firmware supervisor's input timeout. An
-    // already-zero command is unaffected, so an idle robot is fine.
+    // A stale /cmd_vel publisher settles the gait via the supervisor's input timeout.
     const std::uint64_t timeout_us =
         static_cast<std::uint64_t>(hexa::config::kInputTimeoutS * 1e6f);
     const bool fresh = have_cmd_vel_ && (t - last_cmd_vel_us_) < timeout_us;
 
     hexa::pipeline::TickInput in;
     in.now_us = t;
-    in.axes = nullptr;  // core tick ignores axes/buttons (no map_joy on this path)
+    in.axes = nullptr;
     in.buttons = 0;
     in.bt_connected = fresh;
     in.last_input_us = have_cmd_vel_ ? last_cmd_vel_us_ : 0;
-    // Consume-once: feed a sample only on ticks one arrived. The board polls at
-    // ~10 Hz against this 200 Hz tick, so re-presenting the same reading would
-    // run the debounce hold against stale data — and keep counting after the
+    // Consume-once: re-presenting a ~10 Hz sample at 200 Hz would run the
+    // undervoltage debounce against stale data, and keep counting after the
     // publisher died.
     in.battery_valid = battery_unconsumed_;
     in.battery_v = battery_unconsumed_ ? battery_v_ : 0.0f;
@@ -255,7 +189,7 @@ class LocomotionNode : public rclcpp::Node {
     const hexa::pipeline::TickResult res = pipeline_->tick(cmd, in);
     log_events(res);
 
-    // Firmware joint order == controller joints: order, so publish directly.
+    // Firmware joint order equals the controller's joints: list, so no remap.
     Float64MultiArray out;
     out.data.resize(servo_out::kNumJoints);
     for (int i = 0; i < servo_out::kNumJoints; ++i) {
@@ -263,7 +197,6 @@ class LocomotionNode : public rclcpp::Node {
     }
     pub_cmd_->publish(out);
 
-    // Re-publish /gait/state on change for the face sink.
     const std::string state = hexa::gait::state_value(res.engine_state);
     if (state != last_state_) {
       StringMsg sm;
@@ -293,7 +226,6 @@ class LocomotionNode : public rclcpp::Node {
       last_leg_set_ = leg_set;
     }
 
-    // Publish the relay-arm intent on change so hexa_hardware drives SET RELAY.
     if (!have_relay_ || res.relay_energized != last_relay_) {
       BoolMsg rm;
       rm.data = res.relay_energized;
@@ -305,14 +237,8 @@ class LocomotionNode : public rclcpp::Node {
     publish_undervolt_stage(res);
   }
 
-  // Announce a rung change on /hardware/undervoltage. The first tick publishes
-  // the baseline (kNone) for a late-joining hexa_hardware; after that only
-  // escalations go out, at most three more per power cycle.
-  //
-  // Floored at whatever we last sent, independently of the supervisor's latch:
-  // `~/reload_config` swaps in a fresh pipeline that restarts at kNone, and this
-  // node outlives the swap, so without the floor a reload would broadcast a
-  // de-escalation. (The reload is refused from kFold up; the floor covers kWarn.)
+  // Floored at the last stage sent, independently of the supervisor's latch: a
+  // reload swaps in a pipeline that restarts at kNone, and this node outlives it.
   void publish_undervolt_stage(const hexa::pipeline::TickResult& res) {
     using Stage = hexa::supervisor::UndervoltStage;
     const Stage stage = res.decision.undervolt_stage;
@@ -352,8 +278,6 @@ class LocomotionNode : public rclcpp::Node {
     }
   }
 
-  // Narrate the teleop / safety edges the pipeline resolved (the ROS analogue of
-  // the firmware's [teleop]/[safety] logs). Rate-limited edges only.
   void log_events(const hexa::pipeline::TickResult& res) {
     if (res.init_request) {
       using IA = hexa::pipeline::InitAction;
@@ -378,8 +302,6 @@ class LocomotionNode : public rclcpp::Node {
       }
     }
     if (res.gait_blocked_by_posture) {
-      // The other refusal. Worth its own line: "dropped (state=stand)" would be
-      // baffling, since a stand is exactly where a leg-set change is legal.
       RCLCPP_WARN(get_logger(),
                   "leg-set change dropped — the body pose never returned to "
                   "neutral. Centre the posture sticks and ask again.");
@@ -395,14 +317,11 @@ class LocomotionNode : public rclcpp::Node {
     }
   }
 
-  // Re-read geometry.yaml + tuning.yaml and hot-swap the pipeline. On a YAML
-  // parse/key error the current pipeline is kept untouched and the failure is
-  // reported (unlike startup's load_pipeline_config, which falls back to baked —
-  // we don't want a bad edit to silently swap in the baked config mid-session).
+  // Unlike startup, a bad YAML keeps the current pipeline rather than falling
+  // back to baked: a mid-session swap to stale config must never be silent.
   void on_reload_config(const Trigger::Request&, Trigger::Response& res) {
-    // A fresh pipeline's supervisor starts at kNone, which would clear a latched
-    // undervoltage cutoff and re-arm the rail on a condemned pack. The latch must
-    // survive until the robot is power-cycled, so refuse the hot-swap.
+    // A fresh supervisor starts at kNone and would re-arm the rail on a
+    // condemned pack; the cutoff latch must survive until a power cycle.
     if (last_undervolt_ >= hexa::supervisor::UndervoltStage::kFold) {
       res.success = false;
       res.message =
@@ -420,8 +339,6 @@ class LocomotionNode : public rclcpp::Node {
       auto cfg = hexa::locomotion::load_pipeline_config_from_yaml(geometry_path,
                                                                   tuning_path);
       pipeline_ = std::make_unique<hexa::pipeline::Pipeline>(cfg);
-      // Force the next tick to re-announce state to the face sink + hardware
-      // (the fresh pipeline is FOLDED / de-energized).
       last_state_.clear();
       last_leg_set_.clear();
       last_preset_.clear();
@@ -442,7 +359,6 @@ class LocomotionNode : public rclcpp::Node {
   std::string command_topic_;
   bool publish_diagnostics_ = false;
 
-  // Latest topic state.
   Twist last_twist_;
   BodyPoseMsg last_pose_;
   bool have_cmd_vel_ = false;
@@ -462,7 +378,7 @@ class LocomotionNode : public rclcpp::Node {
   bool have_relay_ = false;
   std::string battery_topic_;
   float battery_v_ = 0.0f;
-  bool battery_unconsumed_ = false;  // a sample arrived since the last tick
+  bool battery_unconsumed_ = false;
   hexa::supervisor::UndervoltStage last_undervolt_ =
       hexa::supervisor::UndervoltStage::kNone;
   bool have_undervolt_ = false;

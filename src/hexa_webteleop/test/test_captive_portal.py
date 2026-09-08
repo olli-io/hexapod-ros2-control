@@ -79,7 +79,7 @@ _PROBE_NAMES = (
 
 # What setup.py installs into share/hexa_webteleop/web, and therefore the only
 # directory the static server can serve out of. The bundle is committed and is a
-# single inlined index.html; a build is `npm run build` in web/.
+# single inlined index.html; a build is `pnpm build` in web/.
 _DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
 
 

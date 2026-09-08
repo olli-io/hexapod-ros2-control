@@ -1,14 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(hexa_locomotion CXX)
 
-# ── Consolidated single-node locomotion controller ─────────────────────────
-#
-# Links the target-agnostic control-brain sources (shared/motion_core) DIRECTLY
-# — the same float source the Pico firmware and hexa_pico_bridge compile — and
-# wraps them in one 200 Hz ROS node with /cmd_vel-native seams. The only thing
-# that differs vs the Pico build is the seam: input is /cmd_vel + the discrete
-# command topics (not a gamepad), config is loaded from geometry.yaml /
-# tuning.yaml at startup (PipelineConfig), and output is the sim/robot controller.
+# Compiles shared/motion_core directly (link-time seam swap, same source as the
+# Pico firmware and hexa_pico_bridge). See README.md.
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 20)
@@ -25,12 +19,11 @@ find_package(std_srvs REQUIRED)
 find_package(hexa_interfaces REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
-# ── Shared control-brain source tree ────────────────────────────────────────
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(FW_SRC ${REPO_ROOT}/shared/motion_core)
 set(GEN_CONFIG ${FW_SRC}/config_generated.hpp)
 
-# ── Build-time config codegen (baked defaults for PipelineConfig::baked()) ───
+# Baked defaults for PipelineConfig::baked(); the fallback when the YAML load fails.
 find_program(PYTHON3 python3 REQUIRED)
 set(CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_description/config/geometry.yaml
@@ -49,7 +42,7 @@ add_custom_command(
   VERBATIM)
 add_custom_target(hexa_locomotion_gen_config DEPENDS ${GEN_CONFIG})
 
-# ── Firmware pipeline sources (minus the Pico-only seam impls) ───────────────
+# motion_core minus the Pico-only seam impls.
 set(FW_PIPELINE_SOURCES
   ${FW_SRC}/pipeline.cpp
   ${FW_SRC}/pipeline_config.cpp
@@ -78,8 +71,7 @@ add_executable(locomotion_node
   ${FW_PIPELINE_SOURCES})
 add_dependencies(locomotion_node hexa_locomotion_gen_config)
 target_include_directories(locomotion_node PRIVATE ${FW_SRC} src)
-# The firmware libs throw (IK UnreachableTarget, reseat invalid_argument); build
-# with exceptions exactly as the Pico + host + bridge builds do.
+# motion_core throws (IK UnreachableTarget, reseat invalid_argument).
 target_compile_options(locomotion_node PRIVATE -Wall -Wextra -fexceptions)
 ament_target_dependencies(locomotion_node
   rclcpp ament_index_cpp geometry_msgs std_msgs sensor_msgs std_srvs hexa_interfaces)
@@ -91,10 +83,7 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
   OPTIONAL)
 
-# ── Parity test: runtime loader == baked() ──────────────────────────────────
-# Proves the self-sufficient yaml-cpp loader reproduces the build-time baked
-# PipelineConfig (config_generated.hpp) field-by-field, so a geometry.yaml /
-# tuning.yaml edit cannot silently drift the runtime config from the codegen.
+# Parity test: runtime loader == baked().
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_config_loader
@@ -105,8 +94,7 @@ if(BUILD_TESTING)
     add_dependencies(test_config_loader hexa_locomotion_gen_config)
     target_include_directories(test_config_loader PRIVATE ${FW_SRC} src)
     target_compile_options(test_config_loader PRIVATE -Wall -Wextra -fexceptions)
-    # Point the test at the exact source YAMLs gen_config.py bakes from, so the
-    # runtime-loader-vs-baked() diff is over identical inputs.
+    # The exact YAMLs gen_config.py bakes from, so the diff is over identical inputs.
     target_compile_definitions(test_config_loader PRIVATE
       GEOMETRY_YAML="${REPO_ROOT}/src/hexa_description/config/geometry.yaml"
       TUNING_YAML="${REPO_ROOT}/src/hexa_description/config/tuning.yaml")

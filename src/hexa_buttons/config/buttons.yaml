@@ -1,103 +1,57 @@
 button_node:
   ros__parameters:
-    # Read by robot.launch.py: false brings the stack up without the buttons.
+    # Read by robot.launch.py: false skips the node.
     enabled: true
 
     # --- Wiring ---
-    #
-    # Two momentary switches, each between its BCM line and ground, held high by
-    # the SoC's internal pull-up. No external resistor needed.
-    #
-    # GPIO5/6 are clear of everything else on the header: SPI0 on 8-11 (face),
-    # UART on 14/15 (Servo2040), PWM0 on 18 (buzzer), 24/25 (panel DC/RST), and
-    # i2c1 on 2/3 which is left free for a future peripheral.
-    #
-    # CONTAINER-side path (docker-compose.robot.yaml maps ${GPIO_CHIP} onto it);
-    # the trailing number is what gpiozero's lgpio factory is pinned to.
+    # Switch between BCM line and ground, SoC pull-up. Container-side chip path.
     gpio_chip: "/dev/gpiochip0"
-    info_line: 5 # battery percentage + web teleop address; hold to switch network mode
-    bluetooth_line: 6 # controller status; hold to pair
-    #
-    # These collapse onto gpiozero's mutually constrained pull_up/active_state
-    # (see pull_kwargs in screen_logic.py):
-    #   true  + true   -> pull_up: True    switch to ground, SoC pull-up
-    #   false + false  -> pull_up: False   switch to 3V3, SoC pull-down
-    #   true  + false  -> external pull-up, no SoC bias
-    #   false + true   -> rejected at startup: would read as always pressed.
+    info_line: 5 # battery + address; hold: network mode
+    bluetooth_line: 6 # controller status; hold: pair
+    # Collapse onto gpiozero pull_up/active_state (pull_kwargs in screen_logic.py).
+    # active_low: false + bias_pull_up: true is rejected at startup.
     active_low: true
     bias_pull_up: true
 
     # --- Timing ---
-    #
-    # Nothing is polled; gpiozero delivers edges. This is the housekeeping tick
-    # (screen timeout, scan timeout, ~1 Hz battery/address re-render) and it
-    # drains the GPIO threads' event queue, so it also bounds press latency.
+    # Housekeeping tick; also bounds press latency. Edges are not polled.
     tick_rate_hz: 20.0
-    # gpiozero Button(bounce_time=...), applied below userspace.
     debounce_s: 0.03
-    # Button(hold_time=...) for BOTH buttons. The screens advertise this same
-    # number, so the panel cannot promise a hold the buttons do not honour.
+    # Hold time for both buttons; the screens advertise this number.
     hold_s: 3.0
-    # An info screen hands the panel back to the face this long after it went
-    # up. Same button dismisses early; the other swaps screens.
     screen_timeout_s: 6.0
-    # Backstop for a scan that finds nothing. A non-empty /bluetooth/status ends
-    # one earlier; either button cancels.
+    # Backstop; a non-empty /bluetooth/status or either button ends a scan earlier.
     scan_timeout_s: 30.0
 
     # --- Battery screen ---
     battery_topic: /hexa_hardware_aux/battery_state
-    # Linear voltage -> percentage map, 2S LiPo. SCREEN NUMBER ONLY — the safety
-    # ladder is `battery:` in hexa_description/config/hardware.yaml, the face
-    # expressions are battery_warning_v / battery_critical_v in display.yaml.
-    # The pack reading comes through the Servo2040's uncalibrated divider.
+    # 2S LiPo voltage -> percentage, screen number only. Safety ladder is
+    # `battery:` in hexa_description/config/hardware.yaml.
     battery_empty_v: 6.6
     battery_full_v: 8.4
 
-    # robot.launch.py overrides this with `server.port` from webteleop.yaml,
-    # which is the source of truth; this is the hand-launch fallback.
+    # Overridden at launch from webteleop.yaml server.port.
     control_port: 8080
-    # mDNS name the panel points a browser at on a station network, e.g.
-    # "hexa.local". Empty means show the IP address instead, which is the
-    # behaviour without this set.
-    #
-    # Set it only after `./hexa robot install-mdns` has actually been run on the
-    # host: nothing in the container can tell whether avahi is publishing, and a
-    # name that does not resolve is worse on a 256x64 panel than the four
-    # numbers it replaced. The address stays on the line below either way, since
-    # ".local" is not answered on every network or by every phone. Ignored on
-    # the hotspot, which has control.hexa from its own DNS.
+    # Station-mode name, e.g. "hexa.local". Empty shows the IP. Set only after
+    # `./hexa robot install-mdns`. Ignored on the hotspot.
     mdns_name: ""
-    # Preferred in order; anything unlisted is used only if none of these has an
-    # IPv4 address.
+    # Preference order; unlisted interfaces used only as a fallback.
     ip_interfaces: ["wlan0", "eth0"]
 
     # --- Network mode switch (info button, hold) ---
-    #
-    # The container cannot run nmcli (unprivileged, no D-Bus, no NET_ADMIN), so
-    # a request goes into the bind-mounted log volume and a host systemd .path
-    # unit relays it to systemd/network-mode.sh.
-    #
-    # INERT until `./hexa robot install-network` has been run on the Pi.
+    # Request file -> host systemd .path unit -> systemd/network-mode.sh.
+    # Inert until `./hexa robot install-network`.
     network_toggle_enabled: true
-    # Container-side paths (host: ~/hexa-robot/log/...). The first is written
-    # here and read there, the second the other way round — never both on one
-    # file, or the host's own .path watcher would retrigger forever.
+    # Container-side paths. Spool is written here, state file by the host.
     network_spool: /workspace/log/network
     network_state_file: /workspace/log/network.state
-    # network-mode.sh writes `result=switching` before touching the radio, so
-    # silence past this means the units were never installed.
+    # No `result=switching` within this: units not installed.
     network_ack_timeout_s: 5.0
-    # Backstop for a switch the host took but never reported the end of. Ends on
-    # the result screen, not the face. Generous: AP up + station DHCP is slow.
+    # Host acked but never finished.
     network_timeout_s: 60.0
-    # Longer than an ordinary screen — it carries a password to type in.
+    # Result screen carries a password, so it stays longer.
     network_info_timeout_s: 20.0
-    #
-    # SSID and password are deliberately not here: network-mode.sh owns them
-    # (HEXA_AP_SSID / HEXA_AP_PSK) and reports them back in the state file.
+    # SSID and password live in network-mode.sh and come back in the state file.
 
-    # ASCII on purpose: the bundled Pixel Operator font covers ASCII + Latin-1
-    # only, so U+2192 renders blank (add it to codepoints() in
-    # shared/display_core/tools/gen_font.py to use one).
+    # ASCII only: the panel font has no U+2192.
     label_arrow: "->"

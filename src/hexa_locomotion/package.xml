@@ -4,14 +4,9 @@
   <name>hexa_locomotion</name>
   <version>0.1.0</version>
   <description>
-    Consolidated single-node locomotion controller. Compiles the target-agnostic
-    control brain (shared/motion_core) directly and runs the whole
-    velocity-shaping -> gait -> posture -> compose/IK pipeline in one 200 Hz tick,
-    mirroring the Pi Pico firmware's single loop but with ROS seams: /cmd_vel +
-    the discrete command topics in, joint commands out. Replaces the
-    control_node -> gait_node -> posture_node -> ik_node -> joint_command_bridge
-    process chain; the geometry+tuning config is loaded from geometry.yaml /
-    tuning.yaml at startup (PipelineConfig), so runtime tuning is preserved.
+    Single-node locomotion controller: compiles shared/motion_core directly and
+    runs the velocity -> gait -> posture -> IK pipeline in one 200 Hz tick.
+    /cmd_vel and the discrete command topics in, joint commands out.
   </description>
   <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
   <license>MIT</license>
@@ -26,13 +21,9 @@
   <depend>std_srvs</depend>
   <depend>hexa_interfaces</depend>
 
-  <!-- Runtime PipelineConfig loader reads geometry.yaml + tuning.yaml directly
-       with yaml-cpp (six-leg symmetry, deg->IK-radian poses, per-gait velocity
-       caps), reusing the linked firmware gait registry for duty factors. -->
   <depend>yaml-cpp</depend>
 
-  <!-- Build-time config codegen reads these packages' YAMLs (baked defaults for
-       PipelineConfig::baked(); the single source of truth stays here). -->
+  <!-- gen_config.py bakes its YAMLs at build time; the loader reads them at runtime. -->
   <build_depend>hexa_description</build_depend>
   <exec_depend>hexa_description</exec_depend>
 

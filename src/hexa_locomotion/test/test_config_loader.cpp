@@ -1,12 +1,6 @@
-// Parity test: the runtime yaml-cpp loader reproduces the baked config.
-//
-// hexa_locomotion loads its PipelineConfig from geometry.yaml / tuning.yaml at
-// startup (load_pipeline_config_from_yaml). PipelineConfig::baked() reconstructs
-// the same config from config_generated.hpp, which tools/gen_config.py bakes from
-// those same YAMLs at build time. This test drives the runtime loader over the
-// exact source YAMLs the codegen used (GEOMETRY_YAML / TUNING_YAML, injected by
-// CMake) and asserts every field matches baked() within a float tolerance —
-// proving the hand-ported symmetry/pose/caps math never drifts from the codegen.
+// Parity test: the runtime yaml-cpp loader reproduces PipelineConfig::baked()
+// field by field over the same source YAMLs gen_config.py bakes from
+// (GEOMETRY_YAML / TUNING_YAML, injected by CMake).
 #include <cmath>
 #include <string>
 
@@ -17,9 +11,7 @@
 
 namespace {
 
-// Direct-copy scalars round the same double to the same float, so they match
-// exactly; derived caps (float vs double arithmetic in the codegen) can differ
-// by a couple of ULPs. One modest absolute tolerance covers both.
+// Derived caps differ from the codegen by a few ULPs (float vs double arithmetic).
 constexpr float kTol = 1e-5f;
 
 using hexa::locomotion::load_pipeline_config_from_yaml;
@@ -37,7 +29,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   const PipelineConfig loaded =
       load_pipeline_config_from_yaml(GEOMETRY_YAML, TUNING_YAML);
 
-  // ── geometry: leg specs, coxa_to_bottom, poses ──
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
     const std::string leg = "leg[" + std::to_string(i) + "]";
     expect_vec3_near(loaded.leg_specs[i].mount_xyz, baked.leg_specs[i].mount_xyz,
@@ -60,10 +51,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   }
   EXPECT_NEAR(loaded.coxa_to_bottom, baked.coxa_to_bottom, kTol);
   EXPECT_NEAR(loaded.foot_radius, baked.foot_radius, kTol);
-  // ── the preset table, position by position ──
-  // Order is load-bearing: the baked table is indexed and the YAML list is
-  // read in declaration order, so a reordered `presets:` block has to show up
-  // here rather than silently renumbering what the firmware boots on.
+  // Position by position: the baked table is indexed, so a reordered `presets:`
+  // block must fail here rather than renumber what the firmware boots on.
   ASSERT_EQ(loaded.presets.size(), baked.presets.size());
   EXPECT_EQ(loaded.default_preset, baked.default_preset);
   for (std::size_t pi = 0; pi < baked.presets.size(); ++pi) {
@@ -77,9 +66,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     EXPECT_NEAR(lp.max_swing_time, bp.max_swing_time, kTol) << lp.id;
     EXPECT_NEAR(lp.step_height, bp.step_height, kTol) << lp.id;
     EXPECT_NEAR(lp.standing.body_height, bp.standing.body_height, kTol) << lp.id;
-    // All three groups, including the placeholder a parked-pair preset carries:
-    // the loader fills it from the front group and gen_config.py does the same,
-    // so a drift in that rule is a drift here.
+    // Includes the placeholder row a parked-pair preset carries.
     for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
       const auto group = hexa::LEG_GROUP_NAMES[gi];
       EXPECT_NEAR(lp.standing.groups[gi].tip_reach,
@@ -91,7 +78,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     }
   }
 
-  // ── gait engine ──
   const auto& le = loaded.engine;
   const auto& be = baked.engine;
   EXPECT_NEAR(le.stride_length, be.stride_length, kTol);
@@ -126,12 +112,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.pair_fold_dwell_time, be.pair_fold_dwell_time, kTol);
   EXPECT_NEAR(le.support_shift_lead, be.support_shift_lead, kTol);
 
-  // ── velocity caps (per-gait, keyed by the registry names) ──
-  // angular_max is derived, not read from YAML: the loader solves the standing
-  // stance from geometry.yaml + tuning.yaml and divides each gait's linear cap
-  // by the outermost foot's radius, so this leg of the parity check is what
-  // catches a drift in that derivation.
-  // One table per preset: three of the four inputs to a cap ride the preset.
+  // angular_max is derived from the solved stance, not read from YAML; this is
+  // the check that catches a drift in that derivation.
   ASSERT_EQ(loaded.caps_by_preset.size(), baked.caps_by_preset.size());
   for (const auto& [preset, bcaps] : baked.caps_by_preset) {
     ASSERT_TRUE(loaded.caps_by_preset.count(preset)) << preset;
@@ -152,7 +134,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   }
   EXPECT_EQ(loaded.default_gait, baked.default_gait);
 
-  // ── control velocity shaping ──
   EXPECT_NEAR(loaded.control.vmax_ramp_time_linear,
               baked.control.vmax_ramp_time_linear, kTol);
   EXPECT_NEAR(loaded.control.vmax_ramp_time_angular,
@@ -162,7 +143,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(loaded.control.snap_tol_angular, baked.control.snap_tol_angular,
               kTol);
 
-  // ── posture animation stack ──
   const auto& lp = loaded.posture;
   const auto& bp = baked.posture;
   EXPECT_NEAR(lp.gait_sway_gain, bp.gait_sway_gain, kTol);
@@ -213,9 +193,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.pose_limit_yaw, bp.pose_limit_yaw, kTol);
   EXPECT_NEAR(lp.body_height_max, bp.body_height_max, kTol);
   EXPECT_NEAR(lp.body_height_min, bp.body_height_min, kTol);
-  // The loader carries the DEFAULT preset's standing height it already read
-  // rather than re-sourcing it; codegen reads the same key. Both must equal
-  // that preset's stance.
   EXPECT_NEAR(lp.nominal_body_height, bp.nominal_body_height, kTol);
   EXPECT_NEAR(lp.nominal_body_height,
               loaded.presets[loaded.default_preset].standing.body_height, kTol);

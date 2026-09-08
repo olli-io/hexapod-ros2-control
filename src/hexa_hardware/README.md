@@ -1,286 +1,119 @@
- hexa_hardware
+# hexa_hardware
 
-`ros2_control` SystemInterface plugin for the real hexapod: bridges the
-controller manager's joint command/state interfaces and a UART-attached
-open servo controller (Pimoroni Servo 2040 or any board speaking the
-same protocol).
+`ros2_control` SystemInterface plugin for the real hexapod. It bridges the
+controller manager's joint interfaces and a UART-attached servo board
+(Pimoroni Servo 2040, "Modified Chica" protocol). C++ / `ament_cmake`
+because pluginlib loads the plugin by class name.
 
-C++ / `ament_cmake` because pluginlib loads `hardware_interface`
-plugins by class name from a shared library.
+Sim runs through `gz_ros2_control` in `hexa_simulation`. This package owns the
+real-robot path only.
 
-Sim runs through `gz_ros2_control` and lives in `hexa_simulation`; this
-package only owns the real-robot path.
+## Plugin
 
-## Plugin name
+The URDF declares `hexa_hardware/HexaHardware`
+(`hexa_description/urdf/hexapod.urdf.xacro`, `<xacro:unless use_sim>`).
+Config is read from `hexa_description`'s share directory: `hardware.yaml`
+(wiring) and `servo_calibration.yaml` (per-servo endpoint pulses). Override
+with `<param name="config_path">` / `<param name="calibration_path">`.
 
-The URDF declares `hexa_hardware/HexaHardware` (see
-`hexa_description/urdf/hexapod.urdf.xacro`, the `<xacro:unless
-use_sim>` branch under `<ros2_control>`). The plugin resolves its
-config from `hexa_description`'s share directory by default (co-located
-with `geometry.yaml` / `tuning.yaml`): `hardware.yaml` for wiring and
-`servo_calibration.yaml` for the per-servo endpoint pulse widths. Pass
-`<param name="config_path">/abs/path/to/hardware.yaml</param>` and/or
-`<param name="calibration_path">/abs/path/to/servo_calibration.yaml</param>`
-under `<hardware>` to override either (e.g. for a test rig with
-different calibration).
+## Seams
 
-## Pluggable transport + protocol
+Two YAML-selected seams, built by `hardware_factory.hpp` from
+`hardware.yaml`'s `connection:` and `parser:` blocks:
 
-Two seams under one plugin class, both selected from YAML:
+- **Transport** (`include/hexa_hardware/transport.hpp`) — byte pipe. Concrete:
+  `UartTransport`. Placeholders: `I2cTransport`, `UsbTransport` (throw on
+  `open()`).
+- **BoardProtocol** (`include/hexa_hardware/board_protocol.hpp`) — drive
+  servo pins, set servo power (relay), read battery in real units. Concrete:
+  `Servo2040Protocol`. Relay index and telemetry units are protocol constants,
+  not host config.
 
-- **Transport** (`include/hexa_hardware/transport.hpp`) — byte pipe.
-  Open / close / write / read-with-timeout, nothing more. Concrete:
-  `UartTransport` (POSIX serial — the Pi header UART by default, and it
-  equally covers a Servo 2040 wired over USB-CDC).
-  Placeholders: `I2cTransport`, `UsbTransport` (raw HID/bulk) — both
-  declared and wired through the factory, both throw on `open()` until
-  someone fills in the body.
-- **BoardProtocol** (`include/hexa_hardware/board_protocol.hpp`) —
-  semantic operations the hardware interface needs: drive consecutive
-  servo pins, set servo power (relay), read the battery in engineering
-  units. Owns a `Transport&` and the wire framing. Concrete:
-  `Servo2040Protocol` (Chica framing, see below). The relay pin and the
-  battery telemetry units are board-owned protocol constants, not host
-  config — the interface exposes intent (`set_servo_power`) and real units
-  (`read_battery` → volts/amps), never raw pins or scale factors.
+New board: one `BoardProtocol` subclass + a branch in `make_board_protocol`.
+New physical layer: one `Transport` subclass + a branch in `make_transport`.
 
-The factory (`hardware_factory.hpp`) picks both from
-`hexa_description/config/hardware.yaml`:
+## Wire protocol
 
-    connection:
-      type: uart           # uart | i2c | usb
-      device: /dev/ttyAMA0
-      baud: 115200
-    parser:
-      type: servo2040
-      aux_period_ms: 100
+Half-duplex UART. Command bytes have MSB set, data bytes MSB clear (7 bits;
+14-bit values as two bytes little-endian). Frames:
 
-Adding a new board is one new `BoardProtocol` subclass plus a branch
-in `make_board_protocol`. Adding a new physical layer is one new
-`Transport` subclass plus a branch in `make_transport`.
+- **SET** — `[S|0x80][start_pin][count][lo,hi] × count`.
+- **GET** — request `[G|0x80][start_pin][count]`; reply shaped like SET.
+- **SETALL** — `[0xD5][29 bytes]`, all 18 servos from pin 0, 11 bits each
+  packed 7 bits per byte. Value = `pulse_us - 500`.
 
-## Wire protocol ("Modified Chica")
+Resync: discard bytes until one with MSB set. Index map and units: the
+servo2040 driver's `protocol.md`.
 
-Half-duplex over a single UART. Byte 0x80 mask discriminates command
-bytes from data bytes:
+## Write path
 
-- Command byte — MSB set. `S | 0x80` for SET, `G | 0x80` for GET.
-- Data byte — MSB clear, so 7 bits per byte; a 14-bit value packs into
-  two data bytes little-endian: `lo = v & 0x7F`, `hi = (v >> 7) & 0x7F`.
+Frame plans are precomputed in `on_init` (`leg_order.hpp`). Steady state sends
+one 30-byte SETALL, which fits the board's 32-byte RX FIFO. SETALL requires a
+flat pin map 0…17 and every `pulse_us` clamp inside `[500, 2500]`; otherwise
+`write()` sends one SET per consecutive pin run. During the energize sweep it
+always sends one SET per live leg.
 
-Frames:
+## Servo rail
 
-- SET — `[S | 0x80][start_pin][count][val_lo, val_hi] × count`. Writes
-  `count` consecutive pins starting at `start_pin`. A pin assigned as a
-  digital output (e.g. the relay) interprets values 0 / 1 as low / high.
-- GET request — `[G | 0x80][start_pin][count]`.
-- GET reply — same shape as SET: `[G | 0x80][start_pin][count][val × count]`.
-- SETALL — `[0xD5][29 payload bytes]`, a fixed 30 bytes with no start/count
-  header. Drives **all 18 servos** from board index 0. The payload is the 18
-  values MSB-first, 11 bits each, concatenated into one bitstream and emitted 7
-  bits at a time into the low 7 bits of each byte (so payload bytes stay
-  MSB-clear and resync still works); the tail byte's low 5 bits are zero padding.
-  Value encoding is `pulse_us - 500`, range `0…2000` → `500…2500 µs`, clamped
-  board-side. Servo-only: the relay and all telemetry keep using SET/GET.
-
-The battery current/voltage indices reply in fixed-point centi-units
-(count × 0.01 = A / V); `read_battery` applies that one fixed factor and
-returns real units. The relay lives at a fixed board-owned index. See the
-servo2040 driver's `protocol.md` for the unit definition and index map.
-
-Recovery from a partial frame on the wire is trivial: discard bytes
-until one with MSB set arrives.
-
-## Joint → frame batching
-
-`write()` sorts joints by board index once, in `on_init`, and precomputes the
-frame plans — the wiring fixes them, so nothing is rebuilt per tick.
-
-**Steady state** (energize sweep complete) sends the whole pose as **one 30-byte
-SETALL frame**. That number is the point: the equivalent SET is
-`[S][0][18]` + 36 data bytes = **39 bytes**, which exceeds the board's **32-byte
-UART RX FIFO**. If the firmware's main loop stalls while such a frame streams in,
-the FIFO overruns and the frame's **tail** is lost — i.e. the servo on the
-highest pin, silently and intermittently. 30 bytes fits the FIFO whole, so the
-loop can be busy for an entire frame and lose nothing.
-
-SETALL applies only when both hold (checked once in `on_init`, logged either
-way); otherwise `write()` falls back to the consecutive-run SET frames:
-
-- The harness is the flat board map 0…17 — every servo present, no gaps, no
-  offset (`is_flat_pin_map`, `leg_order.hpp`). SETALL carries no start/count
-  header, so it can express nothing else.
-- Every servo's `pulse_us` clamp is inside `[500, 2500]` µs. SETALL clamps a
-  sub-500 pulse *up* to 500 and drives it, where a SET below 500 means "hold
-  last position" in firmware — a tighter override would change meaning, so it
-  disables the fast path instead.
-
-**During the sweep ramp**, `write()` keeps emitting one SET frame per live leg
-(9 bytes each, comfortably inside the FIFO). SETALL cannot be used there: the
-board stages every channel in the frame, so a single SETALL energizes all 18
-servos at once and defeats the stagger, whose whole point is that un-commanded
-channels stay limp until their turn. Only the whole-table frame was ever at risk
-of losing its tail.
-
-A harness whose joints are **not** on consecutive pins still works — the run
-splitter emits one SET per maximal consecutive run — it just pays more frames.
-
-## Servo rail: relay, then a per-leg energize sweep
-
-The board never drives a servo the host has not commanded. `SET RELAY 1` closes
-the relay with **every servo limp**, and a servo SET sent while the rail is open
-is discarded (there is no pre-relay staging), so the host owns both the pose and
-the order the servos come up in.
-
-`apply_relay()` (called from `read()`, on the controller-manager thread) drives
-the relay toward `/hardware/relay_cmd` — the locomotion supervisor's arm intent,
-true on a live link in any non-`fault` engine state — and forces it off while a
-board over-current trip is latched. On the OFF→ON edge it arms
+`apply_relay()` (from `read()`) drives the relay toward `/hardware/relay_cmd`
+and forces it off while an over-current trip is latched. The OFF→ON edge arms
 `hexa::EnergizeSweep` (`shared/motion_core/energize_sweep.hpp`, shared with the
-Pico firmware), and `write()` then drives only the legs the sweep has brought
-live so far:
+Pico firmware): legs come up in pin order, `init.sweep_leg_interval_ms` apart.
 
-- Legs come up in **pin order**, `init.sweep_leg_interval_ms` apart. With the
-  shipped wiring that is `l_rear, r_rear, l_middle, r_middle, l_front, r_front`
-  — rear → front, alternating sides.
-- The stagger keeps the inrush as six small steps instead of one spike big
-  enough to trip the board's over-current tiers. `0` disables it.
-- Once the sweep completes, `write()` emits exactly what it did before it
-  existed. `build_leg_order` (`leg_order.hpp`) derives the leg grouping from the
-  joint names + pin table, so a rewired harness re-orders the sweep with it.
-- The same edge serves cold start and over-current recovery.
+## Buzzer
 
-## Buzzer requests
-
-Three moments are worth hearing rather than reading out of a log. Each publishes
-a tune name on `/buzzer/play` (`std_msgs/String`, transient_local):
-
-- **`up`** — from `on_activate`, once everything else there has succeeded. The
-  servo link is open and the stack is live.
-- **`fault`** — from the trip edge in `read()`, once per trip; the latch keeps
-  the branch from re-firing until `STATUS` reads clean again.
-- **`undervolt`** — on the rung-1 edge of the undervoltage ladder. Pack low,
-  robot still drivable.
-
-The publish is a *request*, not a beep: the buzzer hangs off the Pi's hardware
-PWM and `hexa_buzzer` is the node that owns it. Best-effort by construction —
-no buzzer node running, none fitted, or no PWM mounted all mean silence and
-nothing else, and none of them is visible from here. The buzzer is optional
-hardware and must never be able to fail a control-path call.
-
-The topic is latched because `up` goes out from `on_activate()`, which can beat
-the buzzer node's subscription matching; a volatile reader would drop the one
-tune that says the robot is ready. See `src/hexa_buzzer/README.md` and
-`docs/robot-environment.md` §15.
+Publishes tune names on `/buzzer/play` (`std_msgs/String`, transient_local):
+`up` from `on_activate`, `fault` on a trip edge, `undervolt` on undervoltage
+rung 1. Best-effort; `hexa_buzzer` owns the hardware.
 
 ## State feedback
 
-`read()` echoes the last commanded position into the position state
-interface (hobby servos don't report shaft angle) and computes velocity
-as the numerical derivative. Joint state is **not** polled from the
-board.
+`read()` echoes the last command as position and differentiates it for
+velocity. The battery is polled by GET every `parser.aux_period_ms` on the aux
+thread and published on `~/battery_state` (`sensor_msgs/BatteryState`).
 
-The battery bus **is** polled via a single GET, every `parser.aux_period_ms` on
-the aux thread (see "Threading" below), and republished in engineering units on
-`~/battery_state` (`sensor_msgs/BatteryState`) from an internal node. It needs no
-host config beyond that period: the units are protocol-defined and the sensors
-are always present on the board.
-
-That reading is telemetry only — this node sets no thresholds against it. The
-undervoltage **policy** lives in the locomotion supervisor
-(`shared/motion_core/supervisor.hpp`), which consumes `~/battery_state`, runs the
-debounced three-rung ladder from `hardware.yaml`'s `battery:` block, and
-publishes the rung on `/hardware/undervoltage` (`std_msgs/UInt8`; 0 none, 1 warn,
-2 fold, 3 cutoff; latched, escalate-only). This node subscribes and owns the two
-rungs that need it specifically:
-
-- **rung 1** — requests the `undervolt` buzzer tune (this process owns the tune
-  spool), once on the rung's rising edge.
-- **rung 3** — sets a sticky local latch forcing `apply_relay()` to hold the rail
-  open regardless of `/hardware/relay_cmd`, so "refuse to turn it on again"
-  survives a locomotion restart republishing a stale `true`. In memory only;
-  restarting this process (a power cycle, in practice) is the sole reset.
+Undervoltage policy lives in the locomotion supervisor
+(`shared/motion_core/supervisor.hpp`), published on `/hardware/undervoltage`
+(`std_msgs/UInt8`, 0–3). This node acts on rung 1 (buzzer) and rung 3 (sticky
+relay-off latch, reset only by restarting the process).
 
 ## Threading
 
-Two threads touch the board, split by one rule: **the control cycle never waits
-on the board.**
+The control cycle never waits on the board.
 
-- **controller-manager thread** — `read()` and `write()`, called at the
-  `update_rate` in `hexa_bringup/config/ros2_controllers.yaml` (200 Hz, a 5 ms
-  budget for the entire control cycle). It only ever *writes*: the servo
-  SET/SETALL frame in `write()`, and the occasional relay SET from
-  `apply_relay()`. A write returns as soon as the kernel accepts the bytes.
-- **aux thread** — the internal `hexa_hardware_aux` node's executor, plus
-  `poll_aux()` every `parser.aux_period_ms`. It owns every GET, and GETs are
-  blocking request/response round trips whose cost is set by the Servo2040's own
-  loop turnaround, not by the wire.
+- **controller-manager thread** — `read()` / `write()` at 200 Hz. Writes only.
+- **aux thread** — `hexa_hardware_aux` node executor + `poll_aux()`. Owns
+  every blocking GET.
 
-The GETs used to run inline in `read()`, decimated by a `parser.get_period_ticks`
-tick count. That put a board round trip inside the 5 ms control budget: a healthy
-poll flirted with `controller_manager: Overrun detected!`, and a board that went
-quiet cost the full 50 ms reply timeout *per GET* — two of them back to back,
-twenty missed cycles. Off that thread, a slow or silent board costs stale
-telemetry and nothing else. The Pico firmware still paces the same poll in ticks
-(`parser.get_period_ticks`, read only by `gen_config.py`) because it deliberately
-keeps the round trip inside its own tick budget.
-
-What crosses between the threads is only ever a plain value:
-
-- `Transport::write()` is internally serialized so a SET and a GET request can
-  never interleave their bytes. Reads take no lock — sharing one with `write()`
-  would reintroduce exactly the stall this split removes, and serial is full
-  duplex, so a concurrent write cannot corrupt an in-flight read.
-- `Servo2040Protocol` gives the send path and the GET path separate scratch
-  buffers, so the two threads share no mutable state.
-- `poll_aux()` never drives the relay. A trip sets two atomics — the fault latch
-  and a latch-clear request — and `apply_relay()` emits the actual `SET RELAY 0`
-  on the next control tick, ≤5 ms later. That keeps every relay frame on one
-  thread while preserving the rule that a trip is answered unconditionally: that
-  frame is what clears the board's sticky latch, without which `STATUS` never
-  reads clean and the robot can never be re-armed.
+`Transport::write()` is serialized; reads take no lock. The two paths use
+separate scratch buffers. `poll_aux()` never drives the relay: a trip sets
+atomics and `apply_relay()` emits `SET RELAY 0` on the next control tick.
 
 ## Lifecycle
 
-- `on_init` — load config, build Transport + BoardProtocol via factory.
+- `on_init` — load config, build Transport + BoardProtocol.
 - `on_configure` — open the Transport.
-- `on_activate` — `set_servo_power(false)` (known-off baseline, which also
-  clears any latch), reset commands to the current echoed state so the first
-  cycle doesn't snap, request the `up` buzzer tune. Activating never powers the
-  rail; `apply_relay()` closes it once the supervisor asks.
-- `on_deactivate` — `set_servo_power(false)`.
-- `on_cleanup` — close serial, stop the aux publisher thread.
+- `on_activate` — servo power off, sync commands to echoed state, request `up`.
+- `on_deactivate` — servo power off.
+- `on_cleanup` — close serial, stop the aux thread.
 
 ## Config
 
-Config lives in `hexa_description/config/`, split in two:
+In `hexa_description/config/`:
 
-- `hardware.yaml` — wiring: `connection`, `parser` (`aux_period_ms`; the
-  sibling `get_period_ticks` paces the same poll on the Pico and is ignored
-  here), `init`
-  (`sweep_leg_interval_ms`), `buzzer` (`spool`), `battery` (the undervoltage
-  ladder's thresholds — read by the supervisor and baked into the firmware by
-  `gen_config.py`, not by this node), `deg_at_center`, a shared
-  `servo_defaults.pulse_us` clamp, and a `servos` map of per-servo
-  `{pin, reversed?, pulse_us?}` (keyed by URDF joint name; `reversed`/`pulse_us`
-  default when omitted). No relay/aux pins: the relay and battery sensors are
-  board-owned protocol constants.
-- `servo_calibration.yaml` — a pin-ordered `calibration_values` list of
-  `{pin, us_at_plus_45, us_at_minus_45}`; a servo with `pin: N` reads entry
-  `N-1`. Split out so a calibration routine can rewrite it without touching
-  the commented wiring.
+- `hardware.yaml` — `connection`, `parser`, `init`, `buzzer`, `battery`
+  (read by the supervisor and `gen_config.py`, not here), `deg_at_center`,
+  `servo_defaults.pulse_us`, and a `servos` map of `{pin, reversed?, pulse_us?}`
+  keyed by joint name.
+- `servo_calibration.yaml` — pin-ordered `calibration_values` list of
+  `{pin, us_at_plus_45, us_at_minus_45}`.
 
-Both files document their own field semantics (calibration math, `reversed`,
-the `deg_at_center` → URDF-radian conversion).
+Both files document their own field semantics.
 
-## Bench testing without hardware
+## Bench test
 
-There is no mock plugin in this package — sim already covers
-zero-hardware testing. For a wire-level smoke test against the
-servo2040 backend, pair a PTY with `socat`:
+No mock plugin; sim covers zero-hardware testing. For a wire-level smoke test:
 
     socat -d -d pty,raw,echo=0 pty,raw,echo=0
 
-then point `connection.device` at one end and listen on the other. The
-`connection.baud` must match the firmware's UART setting; it is only
-ignored if the board is reached over USB-CDC instead.
+Point `connection.device` at one end and listen on the other.

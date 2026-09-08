@@ -1,16 +1,41 @@
 # hexa_description
 
-Robot description package: URDF (via xacro), meshes, joint limits, and the
-`robot_state_publisher` configuration.
+Robot description package and the single source of truth for the robot's
+geometry, joint limits, tuning and servo wiring. Nothing else duplicates these
+values. Every consumer loads them at runtime, or generates code from them.
 
-This package is the single source of truth for the robot's kinematic structure.
-Both the kinematics library and the simulation consume the URDF produced here.
+## Contents
 
-Contents (to be added):
-- `urdf/hexapod.urdf.xacro` — parameterised description (leg length, coxa/femur/tibia, body geometry).
-- `urdf/hexapod.gazebo.xacro` — Gazebo plugin tags (ros2_control, IMU, etc.).
-- `meshes/` — visual + collision meshes per leg segment.
-- `config/geometry.yaml` — also carries a `joints:` block with the absolute travel window (`lower_limit_deg` / `upper_limit_deg`) plus sim-only `effort` / `velocity`, expressed in intuitive per-joint degrees (coxa sweep, femur above horizontal, tibia interior). The URDF and `shared/motion_core/tools/gen_config.py` convert these to IK-convention radians at load time (sign-aware: femur and tibia conversions are monotonically decreasing, so intuitive `upper` maps to URDF `lower` and vice versa). `mounts.*.yaw_deg` is also in degrees; the only radian values live inside generated URDF text.
-- The block is target-agnostic — limits apply equally to sim and the real robot. The joint angle at **servo center** is a property of the physical build and lives only in `config/hardware.yaml`'s `deg_at_center`; `gen_config.py` cross-checks it against the window above.
-- The default at-rest stance is not a file here either — it lives in `config/tuning.yaml`'s `gait_node` `default_standing_pose` ros params, described by where the feet sit rather than by joint angles: one belly clearance for the body, plus a `tip_reach` (coxa axis to foot tip, in the ground plane) and a `coxa_deg` splay for each of the front, middle and rear pairs. Left and right mirror. Decoupled from the servo center so an asymmetric build can set them independently.
-- `launch/description.launch.py` — publishes the URDF on `/robot_description`.
+- `urdf/hexapod.urdf.xacro` — the robot model. Reads all dimensions and joint
+  limits from `config/geometry.yaml` via `xacro.load_yaml`. No mesh files; links
+  are primitives.
+- `urdf/hexapod.gazebo.xacro` — Gazebo overlay (materials, foot friction).
+  Included only with `use_sim:=true`, so it never reaches the real robot.
+- `launch/description.launch.py` — runs `robot_state_publisher` and publishes
+  the URDF on `/robot_description`. Arguments: `use_sim`, `use_sim_time`.
+- `config/geometry.yaml` — body, leg and mount dimensions, plus the `joints:`
+  travel window. Angles are in intuitive per-joint degrees. Conversion to
+  IK-convention radians happens at load time.
+- `config/tuning.yaml` — gait, control, posture and teleop tuning, including
+  the `presets` list and `default_standing_pose`. Shared by sim, web teleop and
+  the Pico firmware.
+- `config/hardware.yaml` — Servo2040 connection, servo pin wiring, direction,
+  `deg_at_center`, and the undervoltage ladder.
+- `config/servo_calibration.yaml` — per-servo endpoint pulse widths, one
+  entry per Servo2040 pin. Kept separate so a tool can rewrite it.
+
+## Consumers
+
+- `hexa_locomotion` — loads `geometry.yaml` + `tuning.yaml` into a
+  `PipelineConfig` at startup.
+- `shared/motion_core/tools/gen_config.py` — bakes all four files into the
+  Pico firmware's constexpr config. A parity test keeps the two paths equal.
+- `hexa_hardware` — reads `hardware.yaml` and `servo_calibration.yaml`.
+- `hexa_teleop`, `hexa_webteleop`, `hexa_common` — read preset ids and limits
+  from `tuning.yaml` and `geometry.yaml`.
+- `hexa_simulation`, `hexa_bringup` — include the launch file.
+
+## Editing
+
+Bad values can damage the robot. Nothing validates them. After an edit: sim
+`hexa sim restart`; robot `hexa deploy` then `hexa robot restart`; Pico reflash.

@@ -1,14 +1,12 @@
 display_node:
   ros__parameters:
-    # Read by the bringup launch files: false skips the face node entirely.
+    # false skips the face node in the bringup launch files.
     enabled: true
 
-    # Policy tick rate. The renderer eases gaze / blinks autonomously on top.
     update_rate_hz: 10.0
 
-    # One dotted param per canonical gait state (rclpy has no string-map type).
-    # Valid values: neutral, happy, sleepy, dead, greedy, woozy, angry, love,
-    # scanning.
+    # One param per gait state. Valid values: neutral, happy, sleepy, dead,
+    # greedy, woozy, angry, love, scanning.
     expression_map.folded: sleepy
     expression_map.initialize: neutral
     expression_map.stand: neutral
@@ -16,22 +14,14 @@ display_node:
     expression_map.gait: neutral
     expression_map.settling: neutral
     expression_map.reseating: neutral
-    # The middle pair on its way to or from the folded pose — a leg-set change.
-    # The robot is standing and working, so it wears the same face a reseat
-    # does; it is not going to sleep.
     expression_map.folding_pair: neutral
     expression_map.unfolding_pair: neutral
     expression_map.folding: sleepy
 
     animation_expression: woozy
 
-    # Pose mode: the face answers the posture sticks rather than the gait state,
-    # which sits at `stand` throughout. Left stick tilts (roll/pitch), right
-    # stick shifts (x/y); yaw and height are not stick-bound and count as
-    # neither. A stick reads as held at the threshold and stays held until it
-    # drops under threshold * posture_exit_ratio. Thresholds are in /body/pose
-    # units, against hexa_teleop's roll/pitch_max_deg and x/y_max full scale.
-    # 0.0 disables that stick.
+    # Pose mode: left stick tilts, right stick shifts. A stick holds until it
+    # drops under threshold * posture_exit_ratio. 0.0 disables that stick.
     posture_tilt_expression: happy
     posture_shift_expression: love
     posture_both_expression: angry
@@ -39,71 +29,56 @@ display_node:
     posture_shift_threshold_m: 0.005
     posture_exit_ratio: 0.6
 
-    # /bluetooth/scanning. The only animated expression, and it outranks every
-    # other rule in the policy including a flat pack.
     scanning_expression: scanning
 
-    # Battery overrides: warning shows only when idle, critical always.
+    # Warning shows only when idle, critical always. 0.0 disables a threshold.
+    # Face only — the safety ladder is `battery:` in hardware.yaml.
     battery_topic: /hexa_hardware_aux/battery_state
     battery_warning_expression: sleepy
     battery_critical_expression: dead
-    # 0.0 disables a threshold. Shipped disabled: the hardware.yaml
-    # voltage-divider scale is uncalibrated. FACE ONLY — the safety ladder that
-    # beeps, folds and cuts the rail is `battery:` in hardware.yaml.
     battery_warning_v: 0.0
     battery_critical_v: 0.0
     battery_hysteresis_v: 0.3
     battery_hold_s: 3.0
 
-    # Horizontal gaze from cmd_vel (gait-active). Axes are normalized by the
-    # *_max caps, then sign-quantized with enter/exit hysteresis. Vertical gaze
-    # always follows body pitch, never cmd_vel.
+    # Horizontal gaze from cmd_vel: normalized by the *_max caps, then
+    # sign-quantized with enter/exit hysteresis.
     gaze_deadband: 0.15
     gaze_exit_ratio: 0.6
     gaze_wz_weight: 1.0
     gaze_vy_max: 0.1
     gaze_wz_max: 0.5
 
-    # Gaze from body tilt (pitch in both modes, yaw/roll in pose mode).
+    # Gaze from body tilt.
     pose_pitch_threshold_rad: 0.08
     pose_tilt_threshold_rad: 0.08
 
-    # Text mode has no knobs here: publish a non-empty String on /display/text
-    # (transient_local) to replace the eyes. Layout lives in
-    # shared/display_core/text_screen.hpp.
-
-    # breathing runs until the first /gait/state; idling starts after the robot
-    # has stood idle and level for this long. Battery warning/critical suppress
-    # both.
+    # Idling look-around starts after this long idle and level.
     idling_start_delay_s: 4.0
 
-    # --- Renderer half: SH1122 OLED panel ---
+    # --- SH1122 panel ---
 
     spi_device: "/dev/spidev0.0"
     spi_speed_hz: 8000000
 
-    # Control pins by chip + line offset (BCM numbering). cs_line: -1 leaves CS
-    # to the SPI controller, which is what the Pi 5 needs — its spi0 node claims
-    # GPIO8, and the RP1 controller has no SPI_NO_CS.
+    # BCM line offsets. cs_line: -1 leaves CS to the SPI controller (Pi 5).
     gpio_chip: "/dev/gpiochip0"
     dc_line: 24
     rst_line: 25
     cs_line: -1
 
-    # Render loop rate (Hz), decoupled from update_rate_hz. Frames only go over
-    # SPI when they change.
     render_hz: 60
 
-    # Run the full pipeline without touching SPI/GPIO (dev box / CI).
+    # Full pipeline without SPI/GPIO (sim / CI).
     headless: false
 
-# Consumed ONLY by the firmware config codegen used for raspberry pi pico
+# Consumed only by the Pi Pico firmware config codegen.
 pico_panel:
-  enabled: true # false skips the face render on core1 (robot is faceless)
-  spi_index: 0 # 0 = spi0, 1 = spi1
+  enabled: true
+  spi_index: 0
   sck: 18
   mosi: 19
-  cs: 17 # manual chip select
+  cs: 17
   dc: 20
   rst: 21
   spi_hz: 25000000

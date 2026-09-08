@@ -3,7 +3,7 @@
 #
 # A script rather than a README line because the sizes are load-bearing: 192 and
 # 512 are what a manifest needs, and 180 is what iOS reads for the home-screen
-# icon. Run it after editing icon.svg, then `npm run build` and commit both
+# icon. Run it after editing icon.svg, then `pnpm build` and commit both
 # public/ and the rebuilt dist/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
