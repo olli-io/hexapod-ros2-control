@@ -1030,7 +1030,16 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   const float stance_band = 0.5f * stride_length;
   const float stance_ceiling = stance_band * (1.0f + kStanceExcursionGrace);
 
-  clock_->advance(dt, cycle_time);
+  // Through the crossing the feet are carried, not walked: the clock waits on
+  // six planted feet until the shaped command is back at the knee the other way,
+  // so the tripod the mirror launched lifts toward a full, static AEP instead of
+  // one sweeping the stride under it. Read off the previous tick's stance flags,
+  // which the fire tick already required, and shape_reversal runs before this,
+  // so the hold is in effect on the fire tick itself.
+  const bool crossing = !settling && reversal_.crossing() && all_planted();
+  if (!crossing) {
+    clock_->advance(dt, cycle_time);
+  }
   const auto phases = clock_->phases();
 
   std::map<std::string, LegOutput> out;

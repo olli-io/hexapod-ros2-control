@@ -133,10 +133,17 @@ for a middle leg walking sideways.
 
 So the ladder does not stop the walk before mirroring. It **holds** it at the
 knee, waits for the gait's next all-down window, reflects there, and releases.
-What is left afterwards is the stopping distance from the knee against the
-stance band's grace: the robot is still travelling the old way as the reflection
-lands, and no reflection can give back ground the robot has yet to stop
-covering.
+
+The release is a **crossing**: the shaper slews the command from the knee one
+way, through zero, to the knee the other way, half a second in which the body
+nets no travel. The gait clock waits it out. Every foot is planted when the
+reflection fires, so through the crossing the feet are carried, not walked, and
+the set the reflection maps to lift-off leaves the ground only once the body is
+moving the new way, toward a full and static AEP. Left running, the clock would
+have launched that set into the crossing, toward an AEP sweeping the width of
+the stride under it, and on a short swing the touchdown target cannot follow:
+the foot lands short and pins. What is left is the grace-zone excursion of the
+planted set as the body decelerates through zero and comes back to where it was.
 
 A reversal that is already below the knee is not held — its feet are canonical
 for its own shorter stride, but the walk being asked for is a longer one, so the

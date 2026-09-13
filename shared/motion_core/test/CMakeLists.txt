@@ -252,3 +252,10 @@ hexa_host_test(test_pipeline test_pipeline.cpp
   ${FW_POSTURE_SOURCES}
   ${FW_GAIT_SOURCES})
 target_compile_options(test_pipeline PRIVATE -fexceptions)
+
+# Reversal-ladder probe (not a test): what the planted feet do after the mirror
+# fires. Engine only, like probe_lateral without posture.
+add_executable(probe_reversal probe_reversal.cpp ${FW_GAIT_SOURCES})
+add_dependencies(probe_reversal gen_config)
+target_include_directories(probe_reversal PRIVATE ${FW_SRC})
+target_compile_options(probe_reversal PRIVATE -Wall -Wextra -fexceptions)

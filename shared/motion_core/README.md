@@ -61,7 +61,8 @@ overload runs `map_joy` first, then the same core.
 6. **Supervisor step** — watchdog + battery → `Decision`. `force_zero` zeros
    the command; the fold rung queues one `request_fold()`.
 7. **Reversal shaping** — `Engine::shape_reversal` holds a reversing command
-   until all six feet are planted and on schedule, then mirrors the clock.
+   until all six feet are planted and on schedule, then mirrors the clock and
+   holds the gait clock while the shaped command crosses zero.
 8. **Velocity shaping** — `Control::shape` on the applied leg set.
 9. **Gait engine** — `Engine::update(dt, v, wz)` → per-leg `LegOutput`
    (foot target, stance flag, phase, parked).

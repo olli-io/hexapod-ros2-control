@@ -67,6 +67,8 @@ Use exactly these names in identifiers, logs and docstrings. Definitions are in
 - **support shift** — not *CoM shift*, *weight transfer*.
 - **reversal ladder**, **mirror**, **knee** — not *flip*, *turnaround*,
   *phase flip*, *saturation point*.
+- **crossing** — the shaped command's pass through zero after the mirror.
+  Not *zero crossing*, *slew-through*.
 
 ## Documentation and comments
 

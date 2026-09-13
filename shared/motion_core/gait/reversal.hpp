@@ -26,6 +26,17 @@
 // gait clock this reflects. So the hold carries across the handoff and reflects
 // on the other side.
 //
+// The mirror is exact at fire time; the release is not. The gate hands the raw
+// request back and the limiter slews it through zero — the crossing, half a
+// second in which the body nets no travel while the clock, left running, walks
+// on. The tripod the mirror maps to lift-off would swing across all of it toward
+// an AEP that sweeps the width of the stride inside one swing, and on a short
+// swing the touchdown target cannot follow: it lands short and pins. So the
+// crossing is reported (crossing()) and the engine holds the gait clock through
+// it. Nothing is airborne at fire time, so every foot is carried, not walked,
+// and the launched tripod lifts only once the shaped command is back at the knee
+// the other way, toward a full, static AEP.
+//
 // Not at the first all-down window there, though. The engagement's body-velocity
 // envelope outlasts the first touchdowns on every gait but tripod, and a foot that
 // landed under a half-open envelope has covered less ground than its phase has
@@ -111,11 +122,16 @@ class ReversalGate {
   // sweeping through zero from arming a settle: the reversal is what the operator
   // asked for, and the crossing is only the shaper on its way there.
   bool reversing() const { return armed_ || handled_; }
-  // Both flags: handled_ is the in-flight latch the engine reads, and a ladder
+  // The shaped command is crossing zero after the mirror: the engine's reason to
+  // hold the gait clock. Ends when the command has come back through to the
+  // knee the other way (or converged on a slower request), or on the timeout.
+  bool crossing() const { return crossing_; }
+  // Every flag: handled_ is the in-flight latch the engine reads, and a ladder
   // torn down with the walk is not holding a reversal for it.
   void reset() {
     armed_ = false;
     handled_ = false;
+    crossing_ = false;
   }
 
  private:
@@ -127,6 +143,9 @@ class ReversalGate {
   // reflection did not. Clears when the command stops opposing the travel the
   // ladder began from.
   bool handled_ = false;
+  // Set on the fire tick, cleared once the applied command opposes the hold and
+  // carries the knee (or the request) again. Reuses held_for_ as its backstop.
+  bool crossing_ = false;
   // The travel this reversal turns away from, latched whether or not it is held,
   // and the scale that walks it at the knee. Later tests read this, not the live
   // command, which the hold itself moves.

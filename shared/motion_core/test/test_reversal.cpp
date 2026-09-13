@@ -90,6 +90,15 @@ struct SkidStats {
   // holds this under the stance ceiling; the engagement has no such bound, so this
   // is what says whether a turn it absorbs stays inside the leg's envelope.
   float worst_excursion = 0.0f;
+  // The crossing after the mirror. The clock must wait it out: worst |master
+  // step| on a GAIT tick after the mirror while the shaped command is still
+  // clearly inside the knee. Then the launched tripod must land on a full AEP:
+  // worst `band - excursion along the new travel` at a touchdown after the
+  // mirror, positive meaning it landed short. And the clock must come back: ticks
+  // from the mirror to the first tick the master advanced again, -1 if never.
+  float post_mirror_master_step = 0.0f;
+  float post_mirror_landing_short = -std::numeric_limits<float>::max();
+  int ticks_to_clock_release = -1;
 };
 
 // Where in the robot's start-up the turn lands.
@@ -103,6 +112,7 @@ enum class Turn {
   kHold,     // the steady-walk residual everything else is judged against
   kReverse,  // straight to the opposite sign
   kStop,     // to zero — the same AEP slide, half as far
+  kCreep,    // to half the knee the other way: a reversal into a crawl
 };
 
 // Walk along `axis` (0 = fore/aft, 1 = lateral) at the saturating command until
@@ -112,10 +122,25 @@ enum class Turn {
 // very slip being measured.
 SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
                      int axis, bool instant = false, bool ladder = false,
-                     From from = From::kSteadyGait) {
-  const auto cfg = g::engine_config_from_config();
-  const auto nominal = g::nominal_stance_from_config();
+                     From from = From::kSteadyGait,
+                     const std::string& preset = "normal") {
+  // The baked config is the boot preset; another preset overlays the fields
+  // apply_preset changes and stands on its own solved stance, so every bound
+  // below is read off the walk the engine is actually running.
+  auto cfg = g::engine_config_from_config();
+  std::map<std::string, hexa::Vec3> nominal;
+  for (const auto& setup : g::preset_setups_from_config()) {
+    if (setup.id != preset) continue;
+    cfg.stride_length = setup.stride_length;
+    cfg.stride_length_radial = setup.stride_length_radial;
+    cfg.min_swing_time = setup.min_swing_time;
+    cfg.max_swing_time = setup.max_swing_time;
+    cfg.step_height = setup.step_height;
+    nominal = setup.nominal_stance;
+  }
+  EXPECT_FALSE(nominal.empty()) << "unknown preset " << preset;
   auto e = g::make_default_engine(gait);
+  EXPECT_TRUE(e->request_preset(preset));
   const float duty = g::strategies().at(gait)()->duty_factor();
   const float swing_end = g::swing_end_phase(duty, cfg.swing_phase_margin);
   // The stride this axis can actually lay down, and the command derated to
@@ -204,9 +229,12 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
   float prev_master = e->master_phase();
   g::EngineState prev_state = e->state();
 
-  const float turned = turn == Turn::kReverse  ? -speed
-                       : turn == Turn::kStop ? 0.0f
-                                             : speed;
+  const float turned = turn == Turn::kReverse ? -speed
+                       : turn == Turn::kStop  ? 0.0f
+                       : turn == Turn::kCreep ? -0.5f * knee
+                                              : speed;
+  const float band = 0.5f * stride;
+  int mirror_tick = -1;
   SkidStats s;
   s.turned_while_engaging = e->state() == g::EngineState::ENGAGING;
   // Long enough for the whole ladder out of an engagement: the rest of the
@@ -256,7 +284,19 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
       }
     }
 
-    if (walked && step > 0.1f && step < 0.9f) {
+    const bool mirror = walked && step > 0.1f && step < 0.9f;
+    if (mirror_tick >= 0 && !mirror && walked) {
+      // Clearly inside the knee: the gate calls the crossing over a hair short
+      // of it, and the clock is free to run from there.
+      if (std::fabs(v) < 0.9f * knee) {
+        s.post_mirror_master_step = std::max(s.post_mirror_master_step, step);
+      }
+      if (step > 0.0f && s.ticks_to_clock_release < 0) {
+        s.ticks_to_clock_release = i - mirror_tick;
+      }
+    }
+    if (mirror) {
+      if (mirror_tick < 0) mirror_tick = i;
       ++s.mirrors;
       // What the reflection just promised each leg, against what the ground
       // under its foot can actually give: remaining stance, in strides, versus
@@ -302,6 +342,15 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
       }
       if (!swing && t.swing) {  // touchdown edge: bank the swing just finished
         ++s.landings;
+        if (mirror_tick >= 0) {
+          // Excursion along the travel being turned to, which is where the
+          // AEP sits: a full landing is at +band (plus the ride's headroom).
+          const hexa::Vec3 e_foot = leg.foot_target - nominal.at(name);
+          const float along = (axis == 0 ? e_foot.x : e_foot.y) *
+                              (turned < 0.0f ? -1.0f : 1.0f);
+          s.post_mirror_landing_short =
+              std::max(s.post_mirror_landing_short, band - along);
+        }
         if (t.landing_slip > s.peak_landing_slip) {
           s.peak_landing_slip = t.landing_slip;
           s.worst_leg = name;
@@ -438,15 +487,15 @@ TEST(Reversal, TheLaddersHoldIsNotReadAsAReleasedStick) {
 
 // What the reflection buys: the legs that landed most recently get their runway
 // back instead of pinning against the ceiling. Worst stance drag over 12 turn
-// offsets on both axes, on the baked config:
+// offsets on both axes, on the baked config, with the clock waiting out the
+// crossing:
 //
-//   tripod    48.1 mm -> 31.9 mm
-//   tetrapod  64.5 mm -> 33.0 mm
-//   ripple    75.0 mm -> 36.7 mm
+//   tripod    80.1 mm -> 0.3 mm
+//   tetrapod  79.2 mm -> 0.0 mm
+//   ripple    82.0 mm -> 0.0 mm
 //
-// What is left is the stopping distance from the knee (~22 mm here) against the
-// stance band's 12.5 mm of grace: no reflection can give back ground the robot
-// has yet to stop covering.
+// Nothing is left to speak of: the planted set is carried back to where it
+// stood, and the launched set lands on a full AEP.
 TEST(Reversal, LadderHandsTheStanceLegsTheirRunwayBack) {
   for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
     const SkidStats bare = sweep(gait, /*ladder=*/false);
@@ -457,6 +506,63 @@ TEST(Reversal, LadderHandsTheStanceLegsTheirRunwayBack) {
         << gait << ": " << led.worst_stance_leg << " still dragged "
         << led.peak_stance_drag * 1000.0f << " mm, against "
         << bare.peak_stance_drag * 1000.0f << " mm without the ladder";
+  }
+}
+
+// The mirror is exact at fire time; the release is not. The gate hands the raw
+// request back and the limiter slews it through zero, and left running the
+// clock walks 0.42 of a cycle across that crossing while the body nets no
+// travel. On the fast preset the tripod the mirror launched swung across the
+// whole of it toward an AEP sweeping the width of the stride, landed 40 mm
+// short and pinned for ~28 mm of drag on three legs. So the clock waits the
+// crossing out on six planted feet: no master step while the shaped command is
+// inside the knee, every touchdown after the mirror on a full AEP, and what
+// drag is left is the planted set's grace-zone excursion (~2 mm here).
+TEST(Reversal, TheClockWaitsOutTheCrossing) {
+  const auto& p = hexa::config::kPresets[hexa::config::preset_index("fast")];
+  const auto cfg = g::engine_config_from_config();
+  const float cycle =
+      p.max_swing_time / g::swing_end_phase(0.5f, cfg.swing_phase_margin);
+  for (int axis = 0; axis < 2; ++axis) {
+    for (int i = 0; i < 12; ++i) {
+      const SkidStats s = drive_skid(
+          "tripod", cycle * static_cast<float>(i) / 12.0f, Turn::kReverse, axis,
+          /*instant=*/false, /*ladder=*/true, From::kSteadyGait, "fast");
+      const std::string where =
+          "fast axis " + std::to_string(axis) + " offset " + std::to_string(i);
+      ASSERT_EQ(s.mirrors, 1) << where;
+      EXPECT_LT(s.post_mirror_master_step, 1.0e-6f)
+          << where << " ran the clock through the crossing";
+      EXPECT_LT(s.post_mirror_landing_short, 0.005f)
+          << where << " landed " << s.post_mirror_landing_short * 1000.0f
+          << " mm short of its AEP after the mirror";
+      // Inside the grace zone (10.6 mm lateral, 13.4 mm fore/aft): 1-2 mm on
+      // most offsets, a few at 5-9 mm, against 28 mm before the clock waited.
+      EXPECT_LT(s.peak_stance_drag, 0.010f)
+          << where << ": " << s.worst_stance_leg << " dragged "
+          << s.peak_stance_drag * 1000.0f << " mm";
+      EXPECT_GE(s.ticks_to_clock_release, 0) << where << " never released";
+    }
+  }
+}
+
+// A reversal into a creep never carries the knee the other way, so the crossing
+// cannot end on it. It ends on the request instead: once the shaper has
+// converged on the slower command the clock runs again, and the engine has been
+// walking the whole time.
+TEST(Reversal, ACrossingIntoACreepReleasesTheClock) {
+  for (int axis = 0; axis < 2; ++axis) {
+    const SkidStats s =
+        drive_skid("tripod", 0.0f, Turn::kCreep, axis, /*instant=*/false,
+                   /*ladder=*/true, From::kSteadyGait, "fast");
+    const std::string where = "fast axis " + std::to_string(axis);
+    ASSERT_EQ(s.mirrors, 1) << where;
+    EXPECT_GE(s.ticks_to_clock_release, 0) << where << " never released";
+    EXPECT_LT(s.ticks_to_clock_release, static_cast<int>(2.0f / kDt))
+        << where << " held the clock for " << s.ticks_to_clock_release * kDt
+        << " s";
+    EXPECT_FALSE(s.reseated) << where;
+    EXPECT_FALSE(s.stood) << where;
   }
 }
 

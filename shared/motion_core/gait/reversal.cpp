@@ -17,6 +17,11 @@ constexpr float kReversalCos = -0.5f;
 // across the band above the knee, so arriving a little fast costs nothing.
 constexpr float kHoldTolerance = 1.05f;
 
+// Share of the knee (or of a slower request) the shaped command must carry the
+// other way before the crossing is over. The limiter lands asymptotically only
+// on the request, never on the knee, so a hair short is arrival.
+constexpr float kCrossingArrival = 0.95f;
+
 float dot(std::pair<float, float> a, std::pair<float, float> b) {
   return a.first * b.first + a.second * b.second;
 }
@@ -93,6 +98,22 @@ ReversalGate::Output ReversalGate::step(
     handled_ = in.walking &&
                travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
                                hold_omega_, in.zero_tol);
+    if (crossing_) {
+      // Over once the shaped command opposes the hold and carries the knee
+      // again. Capped at the request, so a reversal into a creep slower than
+      // the knee ends the crossing when the shaper has converged, not never.
+      const float carrying =
+          max_leg_speed(legs, in.applied_xy, in.applied_omega);
+      const bool crossed =
+          dot(in.applied_xy, hold_xy_) + in.applied_omega * hold_omega_ <= 0.0f;
+      const float target =
+          kCrossingArrival *
+          std::min(in.knee_speed,
+                   max_leg_speed(legs, in.request_xy, in.request_omega));
+      held_for_ += in.dt;
+      crossing_ = handled_ && !(crossed && carrying >= target) &&
+                  held_for_ < in.timeout;
+    }
     return pass;
   } else {
     if (!in.walking ||
@@ -130,6 +151,8 @@ ReversalGate::Output ReversalGate::step(
       carrying <= in.knee_speed * kHoldTolerance) {
     armed_ = false;
     handled_ = true;
+    crossing_ = true;
+    held_for_ = 0.0f;
     return {in.request_xy, in.request_omega, true};
   }
 
