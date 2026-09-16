@@ -464,3 +464,57 @@ TEST(Presets, CapsFollowTheBundle) {
   }
 }
 
+
+// Gesture tables: each gesture's ranges lie inside the flat tables, the leg
+// tracks tile the keyframe table in order, times increase down every track,
+// and the ids are unique. The values themselves are the designer's.
+TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
+  std::vector<std::string_view> ids;
+  std::size_t next_track = 0;
+  std::size_t next_body = 0;
+  for (const auto& g : cfg::kGestures) {
+    EXPECT_TRUE(std::find(ids.begin(), ids.end(), g.id) == ids.end())
+        << "duplicate gesture id " << g.id;
+    ids.push_back(g.id);
+    EXPECT_GT(g.return_time, 0.0f) << g.id;
+    EXPECT_EQ(g.first_leg_track, next_track) << g.id;
+    EXPECT_EQ(g.first_body_key, next_body) << g.id;
+    ASSERT_LE(g.first_leg_track + g.leg_track_count, cfg::kGestureLegTracks.size())
+        << g.id;
+    ASSERT_LE(g.first_body_key + g.body_key_count, cfg::kGestureBodyKeyframes.size())
+        << g.id;
+    EXPECT_TRUE(g.leg_track_count > 0 || g.body_key_count > 0)
+        << g.id << " has no keyframes";
+    for (std::size_t k = 1; k < g.body_key_count; ++k) {
+      const auto& a = cfg::kGestureBodyKeyframes[g.first_body_key + k - 1];
+      const auto& b = cfg::kGestureBodyKeyframes[g.first_body_key + k];
+      EXPECT_LT(a.t, b.t) << g.id << " body";
+    }
+    if (g.body_key_count > 0) {
+      EXPECT_GT(cfg::kGestureBodyKeyframes[g.first_body_key].t, 0.0f) << g.id;
+    }
+    next_track += g.leg_track_count;
+    next_body += g.body_key_count;
+  }
+  EXPECT_EQ(next_track, cfg::kGestureLegTracks.size());
+  EXPECT_EQ(next_body, cfg::kGestureBodyKeyframes.size());
+
+  std::size_t next_key = 0;
+  for (const auto& t : cfg::kGestureLegTracks) {
+    EXPECT_EQ(t.first, next_key);
+    EXPECT_GT(t.count, 0u);
+    ASSERT_LE(t.first + t.count, cfg::kGestureLegKeyframes.size());
+    EXPECT_LT(static_cast<int>(t.leg), hexa::kNumLegs);
+    EXPECT_GT(cfg::kGestureLegKeyframes[t.first].t, 0.0f);
+    for (std::size_t k = 0; k < t.count; ++k) {
+      const auto& key = cfg::kGestureLegKeyframes[t.first + k];
+      EXPECT_GE(key.height, 0.0f);
+      if (!key.preserve) EXPECT_GT(key.reach, 0.0f);
+      if (k > 0) {
+        EXPECT_LT(cfg::kGestureLegKeyframes[t.first + k - 1].t, key.t);
+      }
+    }
+    next_key += t.count;
+  }
+  EXPECT_EQ(next_key, cfg::kGestureLegKeyframes.size());
+}

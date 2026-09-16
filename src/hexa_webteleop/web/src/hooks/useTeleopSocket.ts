@@ -39,6 +39,12 @@ export interface TeleopState {
   activePreset: string | null;
   activeLegSet: LegSet | null;
   pendingPreset: string | null;
+  // The Gesture view: `gestures` is fixed at connect; `gesture` is the engine's
+  // report of the one playing, "" between gestures; `gesturePreset` is the one
+  // preset they run on, null where the node names none.
+  gestures: string[];
+  gesture: string;
+  gesturePreset: string | null;
   // The nonce re-arms the four-second clear when the node refuses the same thing
   // twice — the text alone would not change, so the effect would not re-run.
   refusal: { text: string; nonce: number } | null;
@@ -65,6 +71,9 @@ const INITIAL: TeleopState = {
   activePreset: null,
   activeLegSet: null,
   pendingPreset: null,
+  gestures: [],
+  gesture: "",
+  gesturePreset: null,
   refusal: null,
   packVoltage: null,
   packCurrent: null,
@@ -109,6 +118,9 @@ function reduce(state: TeleopState, action: Action): TeleopState {
         activePreset: msg.preset_active ?? null,
         activeLegSet: msg.preset_leg_set ?? null,
         pendingPreset: msg.preset_pending ?? null,
+        gestures: msg.gestures ?? [],
+        gesture: msg.gesture ?? "",
+        gesturePreset: msg.preset_gesture ?? null,
         batteryPollS: msg.battery_poll_s ?? 1,
       };
     case "busy":
@@ -135,6 +147,8 @@ function reduce(state: TeleopState, action: Action): TeleopState {
           ? { text: msg.refused, nonce: (state.refusal?.nonce ?? 0) + 1 }
           : null,
       };
+    case "gesture":
+      return { ...state, gesture: msg.gesture };
     case "battery":
       return {
         ...state,

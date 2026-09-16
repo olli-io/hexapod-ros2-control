@@ -170,11 +170,33 @@ html, body {
   color: var(--accent);
 }
 
-/* Connection: wifi on/off. The glyph itself swaps to the struck-through one
-   when disconnected; only the tint is CSS's. */
-#tab-network.connected { color: var(--green); }
+/* Connection: the cog stays grey and full size; the wifi glyph carries the
+   colour — green with the link up, red with it down — and keeps it whichever
+   tint the tab itself takes. Pinned to the tab's own top-right corner, inside
+   the border, rather than offset from the cog: the landscape strip's items are
+   short, and a glyph placed off the cog's shoulder left the button there. Out
+   of the flow, so the cog keeps its track. */
+#tab-network {
+  position: relative;
+  overflow: hidden;
+}
 
-#tab-network.disconnected { color: var(--red); }
+.nav-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: block;
+  line-height: 0;
+}
+
+#navbar .nav-badge svg {
+  width: 20px;
+  height: 20px;
+}
+
+#tab-network.connected .nav-badge { color: var(--green); }
+
+#tab-network.disconnected .nav-badge { color: var(--red); }
 
 /* Control tab: green while a controller owns /cmd_vel — the tab whose contents
    change, since its mode column becomes the take-control prompt. */
@@ -182,6 +204,9 @@ html, body {
 
 /* Mode icon: accent while a preset switch is in flight. */
 #tab-preset.pending { color: var(--accent); }
+
+/* Gesture icon: accent while one plays. */
+#tab-gesture.playing { color: var(--accent); }
 
 /* The tab now showing. Last, and carrying two classes to every status rule's
    one, so it outranks the green/red/accent tints above: which view you are
@@ -206,6 +231,7 @@ html, body {
    <pre> is the one exception: the log is unbounded, so it scrolls inside the
    view rather than moving it. */
 #preset-view,
+#gesture-view,
 #network-view,
 #log-view {
   /* One spacing for the view, the way a box has one for its tiles: the padding
@@ -345,6 +371,14 @@ html, body {
   --tile-h: clamp(1.7rem, calc((100svh - 24.5rem) / 8), 3rem);
 }
 
+/* The Gesture view holds one box, so its tiles have the room the Mode view's
+   do not: a flat share of the screen, with the same floor and a higher
+   ceiling. */
+#gesture-view {
+  --tile-h: clamp(1.7rem, 9vh, 3.6rem);
+  --tile-h: clamp(1.7rem, 9svh, 3.6rem);
+}
+
 /* The presets as tiles, not rows, on a 2x2: a phone is narrow, and four abreast
    would leave four slivers too thin for a label. The box around them is what
    caps and centres the grid. */
@@ -372,6 +406,7 @@ html, body {
 .preset-item,
 .gait-item,
 .anim-item,
+.gesture-item,
 .preset-mode,
 #preset-stand {
   /* Centred both ways, always: a label is placed by the tile's own middle
@@ -449,7 +484,8 @@ html, body {
    alternative is a column count that changes with the preset, which would move
    every tile on a preset switch. */
 #gait-row,
-#anim-row {
+#anim-row,
+#gesture-list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--tile-gap);
@@ -476,7 +512,8 @@ html, body {
    are four rows deep. The animations take the same three so the two rows under
    the presets keep one column grid between them. */
 #gait-row,
-#anim-row {
+#anim-row,
+#gesture-list {
   grid-template-columns: repeat(3, 1fr);
 }
 
@@ -486,6 +523,7 @@ html, body {
    so "what the robot is on" reads the same everywhere it appears in the view. */
 .gait-item.active,
 .anim-item.active,
+.gesture-item.active,
 .preset-mode.active {
   background: var(--accent);
   border-color: var(--accent);
@@ -496,12 +534,14 @@ html, body {
    mode row plus everything else goes inert while a preset change is in flight. */
 .gait-item:disabled,
 .anim-item:disabled,
+.gesture-item:disabled,
 .preset-mode:disabled { opacity: 0.4; pointer-events: none; }
 
 /* Inert is not the same as off: an animation that is actually running keeps its
    fill while the row around it is dimmed — the row goes inert for the duration
    of a preset change, and the body is still being animated through it. */
 .anim-item.active:disabled,
+.gesture-item.active:disabled,
 .gait-item.active:disabled { opacity: 1; }
 
 /* The one word each of these rows carries is a name, so it is set the way the
@@ -698,12 +738,33 @@ html, body {
   color: var(--bg-dim);
 }
 
-/* Landscape stands the view's two panels side by side. Both are one screenful's
-   worth of the same question, and landscape is exactly where the view is short
-   and wide: two stacked panels, each ending in a button, spend height there is
-   none of, across width there is plenty of. Each still hugs its own content and
-   the pair is centred — stretching them to the view's height would leave two
-   tall boxes with their text along the top. */
+/* A dialog's buttons, abreast: the fix and the way out are one choice, so they
+   share a row rather than stack. */
+.dialog-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
+.dialog-actions .panel-btn { margin-top: 0.4rem; }
+
+/* The way out, drawn quieter than the fix beside it. */
+.panel-btn.secondary {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.panel-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Landscape stands the view's three panels side by side. Each is one
+   screenful's worth of the same question, and landscape is exactly where the
+   view is short and wide: stacked panels, each ending in a button, spend height
+   there is none of, across width there is plenty of. Each still hugs its own
+   content and the row is centred — stretching them to the view's height would
+   leave tall boxes with their text along the top. */
 @media (orientation: landscape) {
   #network-view { flex-direction: row; align-items: center; }
   #network-view .panel { flex: 1 1 0; margin: 0; }
@@ -1151,13 +1212,37 @@ html, body {
 
 /* ── Log view ───────────────────────────────────────────────────── */
 
-/* The refresh floats over the log, so the view is its positioning context.
-   #logs-view is what scrolls — the log is unbounded and no screen holds it —
-   and this box, like every view, does not, so the button stays put. */
-#log-view {
-  position: relative;
+/* One row over the log: the level chips, and the refresh at the row's end.
+   Left-set, since the chips read as a filter on the text under them. */
+#log-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  width: 100%;
 }
 
+/* A chip hides its level when off: dimmed border-only, filled when on, in the
+   tint the level carries in the log itself so the chip names it twice. */
+.log-level {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.log-level.active { color: var(--fg); border-color: var(--fg); }
+.log-level.active[data-level="WARN"] { color: var(--tab-active); border-color: var(--tab-active); }
+.log-level.active[data-level="ERROR"] { color: var(--red); border-color: var(--red); }
+
+/* #logs-view is what scrolls — the log is unbounded and no screen holds it —
+   and the view, like every view, does not. */
 #logs-view {
   flex: 1;
   min-height: 0;
@@ -1179,13 +1264,9 @@ html, body {
   user-select: text;
 }
 
-/* Floating over the log's top right corner: opaque, so the entries scrolling
-   underneath stay legible behind it. Inset past the view's own padding and
-   clear of the scrollbar. */
+/* The refresh, at the far end of the filter row. */
 #log-refresh {
-  position: absolute;
-  top: 1.2rem;
-  right: 1.3rem;
+  margin-left: auto;
   padding: 0.35rem;
   background: var(--surface-2);
   border: 1px solid var(--border);

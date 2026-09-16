@@ -53,6 +53,9 @@ Use exactly these names in identifiers, logs and docstrings. Definitions are in
   **duty factor**, **cycle time**, **phase offset**.
 - **posture** — body pose and its subsystem. Not *body trim*, *body control*.
 - **animation** — a posture-stack layer only, never gait or kinematic motion.
+- **gesture** — a keyframed leg + body motion played from a stand on
+  `/cmd_gesture`; its leg track is neither gait nor animation, its body track
+  is a posture term, not an animation layer.
 - **pose mode** — `/cmd_vel` zero, body moves on planted feet.
   **gait-active** — `/cmd_vel` non-zero.
 - **settle** — the stop. Not *pause*, *stop sequence*, *re-plant*.

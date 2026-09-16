@@ -426,3 +426,53 @@ def preset_pending_expired(
     deadline is what the webapp reads as "it did not happen".
     """
     return deadline_monotonic is not None and now_monotonic > deadline_monotonic
+
+
+def load_gesture_ids(gestures_yaml: str | Path) -> tuple[str, ...]:
+    """The gesture ids ``gestures.yaml`` declares, in declaration order.
+
+    The Gesture view is one tile per id; the node checks a request against the
+    same tuple. Ids only — the keyframes are the engine's business, and it
+    validates them itself when it loads the file.
+    """
+    with Path(gestures_yaml).open() as f:
+        raw = yaml.safe_load(f) or {}
+    entries = raw.get("gestures")
+    if not isinstance(entries, list):
+        raise ValueError("gestures.yaml: `gestures` must be a list")
+    ids = tuple(str(entry["id"]) for entry in entries)
+    if len(set(ids)) != len(ids):
+        raise ValueError("gestures.yaml: duplicate gesture id")
+    return ids
+
+
+def gesture_refusal(
+    gesture: str,
+    gestures: tuple[str, ...],
+    gait_state: str,
+    current_preset: str | None,
+    gesture_preset: str,
+    gesture_preset_label: str,
+    pending_preset: str | None,
+) -> str | None:
+    """Why a gesture request is not sent, or ``None`` when it is.
+
+    The engine takes a gesture only from a stand on the default preset, and
+    ``/cmd_gesture`` is volatile — a refused id is consumed and gone, so unlike
+    a preset this could be left to the engine. It is pre-gated anyway for the
+    reason the note exists: the engine's refusal is a log line the operator
+    cannot see, and this is a sentence on the view.
+    """
+    if gesture not in gestures:
+        return "no such gesture"
+    if pending_preset is not None:
+        return "switching mode — wait"
+    if gait_state == "gesture":
+        return "a gesture is playing"
+    if gait_state == "gait":
+        return "not while walking — stop first"
+    if gait_state != "stand":
+        return "stand first"
+    if current_preset != gesture_preset:
+        return f"gestures need the {gesture_preset_label} preset"
+    return None

@@ -70,7 +70,8 @@ set(HEXA_CONFIG_YAMLS
     ${HEXA_REPO_ROOT}/src/hexa_description/config/hardware.yaml
     ${HEXA_REPO_ROOT}/src/hexa_description/config/servo_calibration.yaml
     ${HEXA_REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml
-    ${HEXA_REPO_ROOT}/src/hexa_display/config/display.yaml)
+    ${HEXA_REPO_ROOT}/src/hexa_display/config/display.yaml
+    ${HEXA_REPO_ROOT}/src/hexa_description/config/gestures.yaml)
 add_custom_command(
     OUTPUT ${HEXA_GEN_CONFIG}
     COMMAND ${PYTHON3} ${HEXA_SHARED}/tools/gen_config.py
@@ -104,6 +105,9 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/gait/limits.cpp
     ${HEXA_SHARED}/gait/engine.cpp
     ${HEXA_SHARED}/gait/reversal.cpp
+    ${HEXA_SHARED}/gesture/keyframe.cpp   # keyframed gestures from a stand
+    ${HEXA_SHARED}/gesture/player.cpp
+    ${HEXA_SHARED}/gesture/validate.cpp
     ${HEXA_SHARED}/posture/pose.cpp        # body-pose algebra, float fork (part 08)
     ${HEXA_SHARED}/posture/animations.cpp  # animation stack (part 08)
     ${HEXA_SHARED}/posture/posture.cpp     # posture controller / signal derivation (part 08)

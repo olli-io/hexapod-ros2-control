@@ -1125,3 +1125,171 @@ TEST(LegSetChange, ABodyPosePushedMidChangeDoesNotReachTheMiddles) {
     }
   }
 }
+
+// ── Gestures ──
+//
+// A gesture rides /cmd_gesture, so these drive the core seam like the quadruped
+// suite above. Every configured gesture is played, since the YAML is the thing
+// under test as much as the player.
+
+namespace {
+
+pl::CommandIntent gesture_select(std::string_view id) {
+  pl::CommandIntent cmd;
+  cmd.has_gesture_select = true;
+  cmd.gesture_select = id;
+  return cmd;
+}
+
+std::array<hexa::Vec3, hexa::kNumLegs> nominal_feet() {
+  std::array<hexa::Vec3, hexa::kNumLegs> out{};
+  const auto nominal = hexa::gait::nominal_stance_from_config();
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    out[i] = nominal.at(hexa::gait::LEG_NAMES[i]);
+  }
+  return out;
+}
+
+// Stand on the core seam with the posture settled, ready for a gesture.
+void stand_settled(pl::Pipeline& p, std::uint64_t& now_us) {
+  stand_up(p, now_us);
+  for (int i = 0; i < 400; ++i) {
+    tick_cmd(p, pl::CommandIntent{}, now_us);
+  }
+  ASSERT_EQ(p.engine().state(), EngineState::STAND);
+}
+
+// Request `id` and run at zero command until the engine stands again. Every
+// tick's result is returned, the request tick first.
+std::vector<pl::TickResult> run_gesture(pl::Pipeline& p, std::uint64_t& now_us,
+                                        std::string_view id) {
+  std::vector<pl::TickResult> steps;
+  steps.push_back(tick_cmd(p, gesture_select(id), now_us));
+  for (int i = 0; i < 2000; ++i) {
+    steps.push_back(tick_cmd(p, pl::CommandIntent{}, now_us));
+    if (steps.back().engine_state == EngineState::STAND) break;
+  }
+  return steps;
+}
+
+}  // namespace
+
+TEST(Gesture, RunsFromAStandAndBringsTheFeetHome) {
+  const auto home = nominal_feet();
+  for (const auto& g : hexa::config::kGestures) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
+
+    const auto steps = run_gesture(p, now_us, g.id);
+    ASSERT_TRUE(steps.front().gesture_accepted) << g.id;
+    ASSERT_EQ(steps.back().engine_state, EngineState::STAND) << g.id;
+    bool ran = false;
+    for (std::size_t i = 0; i < steps.size(); ++i) {
+      const auto& r = steps[i];
+      EXPECT_EQ(r.unreachable, 0) << g.id << " tick " << i;
+      if (r.engine_state == EngineState::GESTURE) {
+        ran = true;
+        EXPECT_EQ(r.gesture, std::string(g.id)) << g.id << " tick " << i;
+        EXPECT_FALSE(r.walking);
+      }
+    }
+    EXPECT_TRUE(ran) << g.id << " never entered GESTURE";
+    EXPECT_TRUE(steps.back().gesture.empty()) << g.id;
+
+    // Settle the posture smoother, then the feet are home.
+    pl::TickResult r;
+    for (int i = 0; i < 200; ++i) r = tick_cmd(p, pl::CommandIntent{}, now_us);
+    const auto feet = feet_from_theta(r);
+    for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+      EXPECT_LT((feet[i] - home[i]).norm(), 1e-3f)
+          << g.id << " " << hexa::gait::LEG_NAMES[i];
+    }
+  }
+}
+
+TEST(Gesture, RefusedWhileWalking) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
+  for (int i = 0; i < 200; ++i) tick_cmd(p, drive(0.05f, 0.0f, 0.0f), now_us);
+  ASSERT_NE(p.engine().state(), EngineState::STAND);
+  auto cmd = gesture_select("wave");
+  cmd.linear_x = 0.05f;
+  const pl::TickResult r = tick_cmd(p, cmd, now_us);
+  EXPECT_TRUE(r.has_gesture_select);
+  EXPECT_EQ(r.gesture_select, "wave");
+  EXPECT_FALSE(r.gesture_accepted);
+  EXPECT_TRUE(r.gesture.empty());
+}
+
+TEST(Gesture, RefusedWhileAPresetChangeWaitsForThePose) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
+  // A held pose keeps the preset change waiting inside the pipeline; the engine
+  // itself has not been asked yet, so only the pipeline can refuse here.
+  pl::CommandIntent select;
+  select.has_preset_select = true;
+  select.preset_select = "fast";
+  select.pose_x = 0.02f;
+  for (int i = 0; i < 20; ++i) tick_cmd(p, select, now_us);
+  ASSERT_EQ(p.engine().state(), EngineState::STAND);
+  auto cmd = gesture_select("wave");
+  cmd.pose_x = 0.02f;
+  const pl::TickResult r = tick_cmd(p, cmd, now_us);
+  EXPECT_FALSE(r.gesture_accepted);
+  for (int i = 0; i < 20; ++i) {
+    EXPECT_NE(tick_cmd(p, cmd, now_us).engine_state, EngineState::GESTURE);
+  }
+}
+
+TEST(Gesture, NoJointCommandOutrunsItsServo) {
+  for (const auto& g : hexa::config::kGestures) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
+    const auto steps = run_gesture(p, now_us, g.id);
+    ASSERT_GT(steps.size(), 2u) << g.id;
+    for (std::size_t i = 1; i < steps.size(); ++i) {
+      for (std::size_t j = 0; j < servo_out::kNumJoints; ++j) {
+        const float step = std::fabs(steps[i].theta[j] - steps[i - 1].theta[j]);
+        const float budget =
+            hexa::config::kJointLimits[j % 3].velocity * pl::kDt;
+        ASSERT_LT(step, budget)
+            << g.id << ": joint " << j << " was commanded " << step / pl::kDt
+            << " rad/s on tick " << i << ", past its rated "
+            << hexa::config::kJointLimits[j % 3].velocity;
+      }
+    }
+  }
+}
+
+TEST(Gesture, BodyTrackMovesTheBodyUnderThePoseClamp) {
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
+  const auto home = nominal_feet();
+  // bow has no leg track: every foot stays planted and only the body moves, so
+  // the feet as the servos see them (posed frame) leave nominal together.
+  const auto steps = run_gesture(p, now_us, "bow");
+  ASSERT_TRUE(steps.front().gesture_accepted);
+  float worst = 0.0f;
+  float pitch_span = 0.0f;
+  for (const auto& r : steps) {
+    if (r.engine_state != EngineState::GESTURE) continue;
+    EXPECT_EQ(r.unreachable, 0);
+    const auto feet = feet_from_theta(r);
+    for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+      worst = std::max(worst, (feet[i] - home[i]).norm());
+    }
+    // A pitch is left-right symmetric and tilts front against rear; a lifted
+    // leg would break the symmetry.
+    EXPECT_NEAR(feet[0].z, feet[3].z, 1e-4f) << "front pair";
+    EXPECT_NEAR(feet[1].z, feet[4].z, 1e-4f) << "middle pair";
+    EXPECT_NEAR(feet[2].z, feet[5].z, 1e-4f) << "rear pair";
+    pitch_span = std::max(pitch_span, std::fabs(feet[0].z - feet[2].z));
+  }
+  EXPECT_GT(worst, 0.01f) << "the body track never moved the body";
+  EXPECT_GT(pitch_span, 0.02f) << "the bow never pitched the body";
+}

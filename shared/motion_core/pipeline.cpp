@@ -8,6 +8,7 @@
 
 #include "config_generated.hpp"
 #include "gait/gaits/registry.hpp"
+#include "gesture/validate.hpp"
 #include "kinematics/leg_ik.hpp"
 #include "leg_index.hpp"
 
@@ -87,7 +88,8 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
       engine_(hexa::gait::make_default_engine(
           cfg.default_gait, cfg.leg_specs, cfg.engine, standing_pose_,
           cfg.folded_pose, cfg.initialized_pose, cfg.coxa_to_bottom,
-          cfg.foot_radius, preset_setups_, cfg.default_preset)),
+          cfg.foot_radius, preset_setups_, cfg.default_preset,
+          cfg.gestures)),
       caps_by_preset_(cfg.caps_by_preset),
       caps_(cfg.caps_by_preset.at(cfg.presets.at(cfg.default_preset).id)),
       control_(cfg.control, caps_, nominal_stance_,
@@ -108,6 +110,13 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
           kTickMarginUs,
       }),
       leg_specs_(cfg.leg_specs) {
+  // Every gesture runs on the default preset at a zero height offset, which is
+  // exactly nominal_stance_, so a table checked here never surprises the tick.
+  // Throws std::invalid_argument, like a bad standing pose.
+  hexa::gesture::validate_gestures(
+      cfg.gestures, hexa::gait::leg_specs_from(cfg.leg_specs), nominal_stance_,
+      hexa::posture::pose_limits_from(cfg.posture));
+
   // The JoyConfig's stick scaling tracks the active gait's caps; map_joy owns the
   // mode FSM / posture baseline in JoyState. Both are unused on the ROS path.
   applied_preset_ = engine_->preset_id();
@@ -282,6 +291,16 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
     }
   }
 
+  if (jo.has_gesture_select) {
+    r.has_gesture_select = true;
+    r.gesture_select = std::string(jo.gesture_select);
+    // The pipeline's own pose-neutral preset wait drops itself the moment the
+    // engine leaves STAND, so a gesture must not be allowed to take the stand
+    // out from under it. The engine's guards cover everything else.
+    r.gesture_accepted = !pending_preset_.has_value() &&
+                         engine_->request_gesture(r.gesture_select);
+  }
+
   // The engine commits a preset at the end of whatever path it took — a belly
   // apply, the end of a change ladder, or a fault revert. Following its report
   // rather than the request is what makes every one of those paths land here.
@@ -327,6 +346,10 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   }
 
   const hexa::gait::EngineState st = engine_->state();
+  // Read with `st`, before update(), so the report and the state agree on the
+  // tick a gesture starts or ends. The body term below is read after.
+  const std::optional<hexa::gesture::GestureProgress> gesture_reported =
+      engine_->gesture();
 
   // Failsafe / telemetry / status-LED policy, fed the raw teleop intent (walking
   // off the unshaped command), the engine posture and any fresh battery sample.
@@ -386,10 +409,17 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
                                                    jo.pose_z, jo.pose_roll,
                                                    jo.pose_pitch, jo.pose_yaw};
   posture_.set_user_pose(user_pose);
-  const bool walking = cmd_is_walking(cmd_x, cmd_y, cmd_z);
+  // A stick pushed mid-gesture is ignored by the engine, and must not fade the
+  // gait animations in under a gesture either.
+  const bool walking = cmd_is_walking(cmd_x, cmd_y, cmd_z) &&
+                       st != hexa::gait::EngineState::GESTURE;
+  const std::optional<hexa::gesture::GestureProgress> gesture =
+      engine_->gesture();
   const hexa::posture::BodyPose body_pose = posture_.update(
       out, engine_->master_phase(), walking, st, engine_->strategy_name(),
-      engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f);
+      engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f,
+      gesture.has_value() ? std::optional<hexa::posture::BodyPose>(gesture->body)
+                          : std::nullopt);
 
   r.unreachable = compose_gait(out, body_pose);
   // What compose_gait actually applied, for next tick's neutral-pose check.
@@ -401,6 +431,9 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   // that completed on this tick reports the set it landed on.
   r.leg_set = engine_->leg_set();
   r.preset = engine_->preset_id();
+  if (gesture_reported.has_value()) {
+    r.gesture = gesture_reported->id;
+  }
   r.master_phase = engine_->master_phase();
   r.walking = walking;
 

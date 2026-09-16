@@ -42,7 +42,8 @@ set(CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_description/config/hardware.yaml
   ${REPO_ROOT}/src/hexa_description/config/servo_calibration.yaml
   ${REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml
-  ${REPO_ROOT}/src/hexa_display/config/display.yaml)
+  ${REPO_ROOT}/src/hexa_display/config/display.yaml
+  ${REPO_ROOT}/src/hexa_description/config/gestures.yaml)
 add_custom_command(
   OUTPUT ${GEN_CONFIG}
   COMMAND ${PYTHON3} ${FW_SRC}/tools/gen_config.py
@@ -75,6 +76,9 @@ set(FW_PIPELINE_SOURCES
   ${FW_SRC}/gait/limits.cpp
   ${FW_SRC}/gait/engine.cpp
   ${FW_SRC}/gait/reversal.cpp
+  ${FW_SRC}/gesture/keyframe.cpp
+  ${FW_SRC}/gesture/player.cpp
+  ${FW_SRC}/gesture/validate.cpp
   ${FW_SRC}/posture/pose.cpp
   ${FW_SRC}/posture/animations.cpp
   ${FW_SRC}/posture/posture.cpp)

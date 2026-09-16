@@ -105,6 +105,11 @@ struct TickResult {
   std::string preset_select;             // requested preset (accepted or not)
   bool preset_accepted = false;          // switch allowed in the current state
 
+  bool has_gesture_select = false;
+  std::string gesture_select;            // requested gesture (accepted or not)
+  bool gesture_accepted = false;         // standing on the default preset
+  std::string gesture;                   // the running gesture's id, else ""
+
   // The leg set and the PRESET the engine has actually applied — what the
   // operator is standing on, as opposed to what the last /cmd_preset asked for.
   // A refused request leaves the command topic latched at a name the engine

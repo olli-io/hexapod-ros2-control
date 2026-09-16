@@ -60,6 +60,8 @@ class LocomotionNode : public rclcpp::Node {
     // /cmd_gait and /cmd_preset are latched, so a refused request stays on them.
     pub_leg_set_ = create_publisher<StringMsg>("/gait/leg_set", latched);
     pub_preset_ = create_publisher<StringMsg>("/gait/preset", latched);
+    // The running gesture's id, "" between gestures. A report, never a command.
+    pub_gesture_ = create_publisher<StringMsg>("/gait/gesture", latched);
     pub_relay_ = create_publisher<BoolMsg>("/hardware/relay_cmd", latched);
     // UndervoltStage as uint8; escalate-only, never counts down.
     pub_undervolt_ = create_publisher<UInt8Msg>("/hardware/undervoltage", latched);
@@ -99,6 +101,13 @@ class LocomotionNode : public rclcpp::Node {
         "/animation/mode", latched, [this](StringMsg::SharedPtr m) {
           anim_name_ = m->data;
           anim_pending_ = true;
+        });
+    // Consumed once, like /cmd_gait, and volatile: a gesture is an event, and
+    // a restarted node must never replay one.
+    sub_gesture_ = create_subscription<StringMsg>(
+        "/cmd_gesture", 10, [this](StringMsg::SharedPtr m) {
+          gesture_name_ = m->data;
+          gesture_pending_ = true;
         });
 
     // Same single-threaded executor as on_tick(), so the swap needs no lock.
@@ -165,6 +174,11 @@ class LocomotionNode : public rclcpp::Node {
       cmd.animation_name = anim_name_;
       anim_pending_ = false;
     }
+    if (gesture_pending_) {
+      cmd.has_gesture_select = true;
+      cmd.gesture_select = gesture_name_;
+      gesture_pending_ = false;
+    }
 
     // A stale /cmd_vel publisher settles the gait via the supervisor's input timeout.
     const std::uint64_t timeout_us =
@@ -216,6 +230,14 @@ class LocomotionNode : public rclcpp::Node {
       pub_preset_->publish(pm);
       RCLCPP_INFO(get_logger(), "preset -> %s", res.preset.c_str());
       last_preset_ = res.preset;
+    }
+    // The boot value is the empty string, so the first publish needs a flag.
+    if (!have_gesture_ || res.gesture != last_gesture_) {
+      StringMsg gm;
+      gm.data = res.gesture;
+      pub_gesture_->publish(gm);
+      last_gesture_ = res.gesture;
+      have_gesture_ = true;
     }
     const std::string leg_set = hexa::gait::leg_set_value(res.leg_set);
     if (leg_set != last_leg_set_) {
@@ -301,6 +323,16 @@ class LocomotionNode : public rclcpp::Node {
                     hexa::gait::state_value(res.engine_state).c_str());
       }
     }
+    if (res.has_gesture_select) {
+      if (res.gesture_accepted) {
+        RCLCPP_INFO(get_logger(), "gesture -> %s", res.gesture_select.c_str());
+      } else {
+        RCLCPP_INFO(get_logger(), "gesture -> %s dropped (state=%s, preset=%s)",
+                    res.gesture_select.c_str(),
+                    hexa::gait::state_value(res.engine_state).c_str(),
+                    res.preset.c_str());
+      }
+    }
     if (res.gait_blocked_by_posture) {
       RCLCPP_WARN(get_logger(),
                   "leg-set change dropped — the body pose never returned to "
@@ -335,14 +367,16 @@ class LocomotionNode : public rclcpp::Node {
         ament_index_cpp::get_package_share_directory("hexa_description");
     const std::string geometry_path = share + "/config/geometry.yaml";
     const std::string tuning_path = share + "/config/tuning.yaml";
+    const std::string gestures_path = share + "/config/gestures.yaml";
     try {
-      auto cfg = hexa::locomotion::load_pipeline_config_from_yaml(geometry_path,
-                                                                  tuning_path);
+      auto cfg = hexa::locomotion::load_pipeline_config_from_yaml(
+          geometry_path, tuning_path, gestures_path);
       pipeline_ = std::make_unique<hexa::pipeline::Pipeline>(cfg);
       last_state_.clear();
       last_leg_set_.clear();
       last_preset_.clear();
       have_relay_ = false;
+      have_gesture_ = false;
       res.success = true;
       res.message = "reloaded config (gait=" + cfg.default_gait +
                     "); pipeline reset to FOLDED — send /gait/initialize to stand";
@@ -370,6 +404,10 @@ class LocomotionNode : public rclcpp::Node {
   std::string preset_name_;
   bool anim_pending_ = false;
   std::string anim_name_;
+  bool gesture_pending_ = false;
+  std::string gesture_name_;
+  std::string last_gesture_;
+  bool have_gesture_ = false;
   std::string last_state_;
   std::string last_leg_set_;
   std::string last_preset_;
@@ -392,10 +430,12 @@ class LocomotionNode : public rclcpp::Node {
   rclcpp::Subscription<StringMsg>::SharedPtr sub_gait_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_preset_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_anim_;
+  rclcpp::Subscription<StringMsg>::SharedPtr sub_gesture_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_cmd_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_state_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_leg_set_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_preset_;
+  rclcpp::Publisher<StringMsg>::SharedPtr pub_gesture_;
   rclcpp::Publisher<BoolMsg>::SharedPtr pub_relay_;
   rclcpp::Publisher<UInt8Msg>::SharedPtr pub_undervolt_;
   rclcpp::Service<Trigger>::SharedPtr srv_reload_;

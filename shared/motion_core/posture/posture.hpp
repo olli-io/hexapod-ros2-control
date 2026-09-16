@@ -82,6 +82,10 @@ std::optional<std::pair<float, float>> lpf_step_polar_xy(
 // footprint. Elsewhere the controller emits IDENTITY.
 bool posture_active(gait::EngineState state);
 
+// The clamp envelope from the tuning block: the absolute belly-clearance bounds
+// become offsets from the nominal stance here, and nowhere else.
+PoseLimits pose_limits_from(const ::hexa::config::PostureConfig& posture);
+
 // Move current toward target by at most rate_per_s * dt, no overshoot. Drives
 // the gait-animation activation crossfade.
 float slew_toward(float current, float target, float rate_per_s, float dt);
@@ -113,10 +117,17 @@ class PostureController {
   // sum with the user pose under the pose-limit clamp. IDENTITY where
   // posture_active(state) is false. master_phase is wrapped to [0, 1)
   // defensively; phase-locked animations gate on gait_name.
+  //
+  // `gesture_pose` is a running gesture's body track. Added after the smoother
+  // so its keyframe timing is exact, and under the same clamp as everything
+  // else. Not an animation: it is not routed through the stack.
   BodyPose update(const std::map<std::string, gait::LegOutput>& legs,
                   float master_phase, bool walking, gait::EngineState state,
                   std::string_view gait_name, gait::LegSet leg_set, float dt,
-                  float t);
+                  float t,
+                  std::optional<BodyPose> gesture_pose = std::nullopt);
+
+  const PoseLimits& limits() const { return limits_; }
 
  private:
   Stack default_stack_;

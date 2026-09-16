@@ -22,14 +22,14 @@ function RootLayout() {
   const router = useRouter();
 
   // With the socket down the control area commands nothing and the preset rows
-  // report a stale robot, so the bar keeps only the two tabs that still work:
-  // Network, to get the link back, and Log, which is fetched over plain HTTP and
-  // is where the reason for the drop shows up. The route follows unless it is
-  // already Log, so nobody is left on a dead screen with no way back. Keyed on
-  // `linkDown` rather than `!connected`, which is also true while the first
-  // socket is still opening — every load would begin on the Network view. The
-  // path is read inside the effect rather than depended on, so this fires on the
-  // drop and not on every navigation after it.
+  // report a stale robot, so the bar keeps only the one tab that still works:
+  // Network, to get the link back, which also opens the log — fetched over
+  // plain HTTP, and where the reason for the drop shows up. The route follows
+  // unless it is already the log, so nobody is left on a dead screen with no
+  // way back. Keyed on `linkDown` rather than `!connected`, which is also true
+  // while the first socket is still opening — every load would begin on the
+  // Network view. The path is read inside the effect rather than depended on,
+  // so this fires on the drop and not on every navigation after it.
   useEffect(() => {
     if (!linkDown) return;
     if (router.state.location.pathname === VIEW_PATHS.log) return;
@@ -45,6 +45,7 @@ function RootLayout() {
         connected={connected}
         controllerActive={controllerActive(state)}
         presetPending={state.pendingPreset !== null}
+        gesturePlaying={state.gesture !== ""}
       />
 
       {/* Every view takes the same place in the #app flexbox, so they inherit

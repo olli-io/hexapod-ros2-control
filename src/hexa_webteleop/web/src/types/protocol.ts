@@ -57,6 +57,11 @@ export interface InitMessage {
   preset_active?: string | null;
   preset_leg_set?: LegSet | null;
   preset_pending?: string | null;
+  // The Gesture view: gestures.yaml's ids, the one the engine is playing ("" for
+  // none), and the one preset gestures run on — the view offers a switch to it.
+  gestures?: string[];
+  gesture?: string;
+  preset_gesture?: string | null;
   battery_poll_s?: number;
 }
 
@@ -98,6 +103,12 @@ export interface PresetMessage {
   refused?: string | null;
 }
 
+// The engine's report of the gesture it is playing; "" when none is.
+export interface GestureMessage {
+  type: "gesture";
+  gesture: string;
+}
+
 // Either field is null when the node has no fresh reading to give.
 export interface BatteryMessage {
   type: "battery";
@@ -114,6 +125,7 @@ export type ServerMessage =
   | AnimationMessage
   | GaitStateMessage
   | PresetMessage
+  | GestureMessage
   | BatteryMessage;
 
 export type StickSide = "left" | "right";
@@ -129,6 +141,9 @@ export type ClientMessage =
   // Likewise an animation by name rather than a step through the rotation. The
   // node still checks the mode before it reaches /animation/mode.
   | { type: "select_animation"; animation: string }
+  // A gesture by id. One event on /cmd_gesture, which the node pre-gates on a
+  // stand on the gesture preset; the refusal comes back on the preset message.
+  | { type: "select_gesture"; gesture: string }
   | { type: "request_control" }
   | { type: "release_control" };
 

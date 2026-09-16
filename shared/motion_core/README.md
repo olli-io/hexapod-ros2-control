@@ -34,6 +34,13 @@ hardware. The seams each caller supplies — input, config source, clock, output
 - **`posture/`** — `PostureController`: user body pose + animation stack →
   `BodyPose` offset. Animations are pure `AnimationContext → BodyPose`
   (`breathing`, `gait_sway`, `support_shift`, `gait_bounce`, body rolls).
+- **`gesture/`** — keyframed leg + body motions played from a stand
+  (`gestures.yaml`). `keyframe` samples one track (`ease` smoothstep or a
+  `continuous` Hermite run); `GesturePlayer` completes a gesture's per-leg and
+  body tables with the implicit start and return knots and plays them off one
+  clock; `validate_gestures` solves every gesture through IK at construction.
+  Its leg track is neither gait nor animation; its body track is a posture
+  term, not an animation layer.
 - **`kinematics/`** — `apply_body_pose`, `body_to_leg`, `inverse_kinematics`
   (knee-up branch, throws `UnreachableTarget`).
 - **`energize_sweep.hpp`, `servo_out.hpp`** — hardware-side helpers the Pico
@@ -46,11 +53,13 @@ hardware. The seams each caller supplies — input, config source, clock, output
 overload runs `map_joy` first, then the same core.
 
 1. **Record tick edge** — supervisor jitter accounting.
-2. **Leg set / preset / gait requests** — an init edge on the belly resolves a
-   leg set (start = six, select = four) to a preset. A preset select from a
-   stand is held until the body pose is neutral (3 s timeout, then dropped
-   and reported as `gait_blocked_by_posture`), then committed together with
-   the gait that walks it. A gait select naming the other leg set is refused.
+2. **Leg set / preset / gait / gesture requests** — an init edge on the belly
+   resolves a leg set (start = six, select = four) to a preset. A preset
+   select from a stand is held until the body pose is neutral (3 s timeout,
+   then dropped and reported as `gait_blocked_by_posture`), then committed
+   together with the gait that walks it. A gait select naming the other leg
+   set is refused. A gesture select is accepted only from a stand on the
+   default preset with nothing armed; the engine starts it on its next tick.
 3. **Follow the applied preset** — when the engine reports a new preset, copy
    its velocity caps, nominal stance and stride into `Control` and the joy
    scaling. The engine's report, not the request, drives this.
@@ -65,10 +74,11 @@ overload runs `map_joy` first, then the same core.
    holds the gait clock while the shaped command crosses zero.
 8. **Velocity shaping** — `Control::shape` on the applied leg set.
 9. **Gait engine** — `Engine::update(dt, v, wz)` → per-leg `LegOutput`
-   (foot target, stance flag, phase, parked).
+   (foot target, stance flag, phase, parked). In `GESTURE` the player's feet
+   come out here and the command is ignored.
 10. **Posture** — user pose (pinned to identity while the middle pair is in
-    flight) + animation stack, gated on `walking` and engine state →
-    `BodyPose`.
+    flight) + animation stack, gated on `walking` and engine state, plus a
+    running gesture's body term, all under one clamp → `BodyPose`.
 11. **Compose / IK** — per leg: `apply_body_pose` → `body_to_leg` →
     `inverse_kinematics`. An unreachable target holds that leg's last-good
     angles. A parked leg writes the folded pose directly.
@@ -80,7 +90,8 @@ overload runs `map_joy` first, then the same core.
 `FOLDED → INITIALIZE → STAND ⇄ ENGAGING → GAIT → SETTLING → STAND`,
 `STAND → FOLDING → FOLDED`, `STAND → RESEATING` (height change, preset change,
 settle hand-off, abandoned engagement), `STAND ⇄ FOLDING_PAIR / UNFOLDING_PAIR`
-(leg-set change), `FAULT` from anywhere. Walking drops any armed change; a
+(leg-set change), `STAND → GESTURE → STAND` (default preset only), `FAULT`
+from anywhere. Walking drops any armed change; a
 stop is always a **settle** (gait runs on at zero stride) unless the gait is too
 slow, then a **reseat**.
 

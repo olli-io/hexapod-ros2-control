@@ -1,6 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { Gamepad, Gamepad2, Plug, Unplug } from "lucide-react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Gamepad, Gamepad2, Plug, ScrollText, Unplug } from "lucide-react";
 import { useTeleop } from "../providers/TeleopProvider";
+import { VIEW_PATHS } from "../utils/views";
 
 // Link state and the controller handover, in one view because they are one
 // question: which input the robot is listening to, and whether this device can
@@ -12,6 +13,7 @@ export const Route = createFileRoute("/network")({ component: NetworkRoute });
 
 function NetworkRoute() {
   const { state, connected, send, connect, disconnect } = useTeleop();
+  const navigate = useNavigate();
   const webOwns = state.owner === "web";
 
   return (
@@ -59,6 +61,22 @@ function NetworkRoute() {
             {webOwns ? "Hand over control" : "Control here"}
           </button>
         )}
+      </div>
+
+      {/* The log, one tap away rather than a tab of its own: it is read when
+          the link or the robot misbehaves, which is what this view is for, and
+          the bar has no room for a fifth symbol on a phone. */}
+      <div className="panel">
+        <div className="panel-title">Logs</div>
+        <p>Recent node output, filtered by level.</p>
+        <button
+          id="logs-open"
+          className="panel-btn"
+          onClick={() => void navigate({ to: VIEW_PATHS.log })}
+        >
+          <ScrollText aria-hidden />
+          Open logs
+        </button>
       </div>
     </div>
   );

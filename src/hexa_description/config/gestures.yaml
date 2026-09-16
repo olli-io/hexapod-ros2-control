@@ -1,0 +1,58 @@
+# Gestures: keyframed leg + body motions played from a stand on /cmd_gesture.
+# Units: m, s, rad — except keys ending in `_deg`.
+#
+# angle_deg  — coxa swivel in the leg's own mount frame; 0 = straight out
+#              along the mount yaw, positive counter-clockwise (REP-103). Not
+#              mirrored per side: a right leg swinging forward is negative.
+# reach      — planar distance coxa axis -> foot tip.
+# height     — foot lift above the standing ground plane; 0 = planted.
+# transition — how the track ARRIVES at this keyframe: `ease` (smoothstep,
+#              stops there) or `continuous` (a smooth curve through it).
+#
+# A leg keyframe positions any number of legs at one time t; a leg not named
+# in it keeps interpolating toward its next keyframe. `preserve` holds a track
+# at its previous value: per leg (`l_front: preserve`), for a whole leg
+# keyframe (`preserve: true`, every leg the gesture moves), or for the body
+# (`preserve: true`). Every track starts at the current stance / identity body
+# at t = 0 and returns there over return_time after its last keyframe. Body
+# keyframes are offsets from the standing pose and must sit inside the
+# posture_node pose limits; a live /body/pose adds on top of them.
+#
+# Gestures run only on the default preset (tuning.yaml default_preset); reach
+# and angle are written for that stance. Which legs may be in the air together
+# is the designer's responsibility.
+gestures:
+  - id: wave
+    return_time: 0.6
+    legs:
+      - t: 0.5
+        transition: ease
+        l_front: { angle_deg: 45, reach: 0.11, height: 0.08 }
+      - t: 0.9
+        transition: continuous
+        l_front: { angle_deg: 65, reach: 0.12, height: 0.10 }
+      - t: 1.3
+        transition: continuous
+        l_front: { angle_deg: 25, reach: 0.12, height: 0.10 }
+      - t: 1.7
+        transition: continuous
+        l_front: { angle_deg: 65, reach: 0.12, height: 0.10 }
+    body:
+      - { t: 0.5, y: -0.015, roll_deg: -3, transition: ease }
+      - { t: 1.7, preserve: true, transition: ease }
+  - id: stretch
+    return_time: 0.8
+    legs:
+      - t: 0.8
+        transition: ease
+        l_front: { angle_deg: 60, reach: 0.16, height: 0.05 }
+        r_front: { angle_deg: -60, reach: 0.16, height: 0.05 }
+      - { t: 1.6, preserve: true, transition: ease }
+    body:
+      - { t: 0.8, x: -0.02, pitch_deg: 8, transition: ease }
+      - { t: 2.2, preserve: true, transition: ease }
+  - id: bow
+    return_time: 0.6
+    body:
+      - { t: 0.8, x: 0.02, z: -0.01, pitch_deg: -10, transition: ease }
+      - { t: 1.6, preserve: true, transition: ease }

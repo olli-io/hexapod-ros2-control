@@ -58,6 +58,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Empty, String
 
+from hexa_common import default_preset_id, gait_params
 from hexa_teleop.joy_mapping import ANIMATION, GAIT, JoyState
 from hexa_teleop.teleop_arbitration import (
     GAMEPAD,
@@ -79,8 +80,10 @@ from .web_mapping import (
     ACTIONS,
     battery_payload,
     gait_selectable,
+    gesture_refusal,
     input_is_stale,
     load_animation_preset,
+    load_gesture_ids,
     load_web_config,
     map_web,
     neutral_inputs,
@@ -131,6 +134,7 @@ class WebTeleopNode(Node):
         # The angular cap is the linear one over the outermost foot's standing
         # radius, so the caps need the leg mounts as well.
         geometry_yaml_path = description_config / "geometry.yaml"
+        gestures_yaml_path = description_config / "gestures.yaml"
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
@@ -166,6 +170,13 @@ class WebTeleopNode(Node):
         # Empty until something is latched on /animation/mode — the
         # pipeline is on its startup default; the UI shows a placeholder.
         self._latest_animation_mode: str = ""
+        # The Gesture view's tiles, and the one preset the engine plays them
+        # on: gestures.yaml is written for the default preset's stance, so the
+        # gate here is that preset and the view offers a switch to it.
+        self._gestures = load_gesture_ids(gestures_yaml_path)
+        self._gesture_preset = default_preset_id(gait_params(tuning_yaml_path))
+        # The running gesture's id from /gait/gesture, "" between gestures.
+        self._latest_gesture: str = ""
 
         # Server config
         with cfg_path.open() as f:
@@ -212,6 +223,10 @@ class WebTeleopNode(Node):
         self.get_logger().info(
             f"animation list: {list(self._cfg.animation_list)}"
         )
+        self.get_logger().info(
+            f"gestures: {list(self._gestures)} on preset "
+            f"{self._gesture_preset!r}"
+        )
         if self._animation_preset is not None:
             self.get_logger().info(
                 f"animation mode is available on preset "
@@ -256,6 +271,9 @@ class WebTeleopNode(Node):
         self._pub_animation_mode = self.create_publisher(
             String, "/animation/mode", latched_qos
         )
+        # Volatile like /gait/initialize: a gesture is an event, and a late
+        # subscriber replaying one would move the legs.
+        self._pub_cmd_gesture = self.create_publisher(String, "/cmd_gesture", 10)
         self._pub_owner = self.create_publisher(String, "/teleop/owner", latched_qos)
         # TRANSIENT_LOCAL to match hexa_locomotion's latched publisher:
         # /gait/state publishes on change only, so a late-joining node
@@ -289,6 +307,11 @@ class WebTeleopNode(Node):
         )
         self._sub_animation_mode = self.create_subscription(
             String, "/animation/mode", self._on_animation_mode, latched_qos
+        )
+        # The engine's report of the gesture it is playing — the Gesture view's
+        # lit tile, and the only thing that says a request was taken.
+        self._sub_gait_gesture = self.create_subscription(
+            String, "/gait/gesture", self._on_gait_gesture, latched_qos
         )
         # Pack telemetry for the status strip. Sensor QoS (best-effort) to
         # match hexa_hardware's publisher — a reliable reader would never
@@ -486,6 +509,12 @@ class WebTeleopNode(Node):
             "type": "animation",
             "animation": msg.data,
         })
+
+    def _on_gait_gesture(self, msg: String) -> None:
+        if msg.data == self._latest_gesture:
+            return
+        self._latest_gesture = msg.data
+        self._broadcast_to_clients({"type": "gesture", "gesture": msg.data})
 
     def _on_battery(self, msg: BatteryState) -> None:
         self._battery = (msg.voltage, msg.current, time.monotonic())
@@ -771,6 +800,11 @@ class WebTeleopNode(Node):
             "presets": preset_descriptors(self._presets),
             # Which preset the Mode view leaves selectable in animation mode.
             "preset_animation": self._animation_preset,
+            # The Gesture view: its tiles, the one playing, and the preset it
+            # asks the operator to switch to first.
+            "gestures": list(self._gestures),
+            "gesture": self._latest_gesture,
+            "preset_gesture": self._gesture_preset,
             **{
                 f"preset_{k}": v
                 for k, v in preset_payload(
@@ -889,6 +923,8 @@ class WebTeleopNode(Node):
             self._select_gait(str(data.get("gait", "")))
         elif msg_type == "select_animation":
             self._select_animation(str(data.get("animation", "")))
+        elif msg_type == "select_gesture":
+            self._select_gesture(str(data.get("gesture", "")))
         elif msg_type == "request_control":
             self._claim_control()
         elif msg_type == "release_control":
@@ -952,6 +988,32 @@ class WebTeleopNode(Node):
             return
         self.get_logger().info(f"publishing /animation/mode={animation!r}")
         self._pub_animation_mode.publish(String(data=animation))
+
+    def _select_gesture(self, gesture: str) -> None:
+        """Play a gesture by id, from the Gesture view.
+
+        Exempt from ownership for the reason an init press is: one Empty-like
+        event on a volatile topic that touches neither /cmd_vel nor /body/pose,
+        and the engine holds the sticks off for the duration itself. Pre-gated
+        so the refusal is a sentence on the view rather than a line in the
+        engine's log; the engine still has the last word.
+        """
+        wanted = self._presets.get(self._gesture_preset)
+        reason = gesture_refusal(
+            gesture,
+            self._gestures,
+            self._latest_gait_state,
+            self._presets.current_id(),
+            self._gesture_preset,
+            wanted.label if wanted is not None else self._gesture_preset,
+            self._pending_preset,
+        )
+        if reason is not None:
+            self.get_logger().info(f"gesture {gesture!r} refused — {reason}")
+            self._broadcast_preset(refused=reason)
+            return
+        self.get_logger().info(f"publishing /cmd_gesture={gesture!r}")
+        self._pub_cmd_gesture.publish(String(data=gesture))
 
     def _select_preset(self, preset_id: str) -> None:
         """Ask the engine for a preset. Deliberately NOT gated on ownership.

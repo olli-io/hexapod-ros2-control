@@ -16,6 +16,7 @@
 #include "config_generated.hpp"
 #include "gait/engine.hpp"
 #include "gait/limits.hpp"
+#include "gesture/player.hpp"
 #include "leg_index.hpp"
 #include "vec3.hpp"
 
@@ -51,6 +52,11 @@ struct PipelineConfig {
   std::string default_gait;
   hexa::config::ControlConfig control{};  // vmax_ramp_time_* + snap_tol_*
   hexa::config::PostureConfig posture{};  // animation amplitudes, taus, limits, slew
+
+  // gestures.yaml, flattened to per-leg tracks. In declaration order; may be
+  // empty. Validated against the default preset's stance when the Pipeline is
+  // built.
+  std::vector<hexa::gesture::GestureSpec> gestures;
 
   // The Pico's config, and the parity anchor for the ROS loader.
   static PipelineConfig baked();

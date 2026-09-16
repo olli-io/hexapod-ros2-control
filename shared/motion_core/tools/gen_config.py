@@ -334,6 +334,148 @@ def presets(gait: dict, geometry: dict):
     return out, ids.index(default_id)
 
 
+# ── gestures ────────────────────────────────────────────────────────────────
+
+GESTURE_TRANSITIONS = ("ease", "continuous")
+LEG_KEYFRAME_KEYS = {"t", "transition", "preserve"} | set(LEG_NAMES)
+LEG_ENTRY_KEYS = {"angle_deg", "reach", "height"}
+BODY_AXES = ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg")
+BODY_KEYFRAME_KEYS = {"t", "transition", "preserve"} | set(BODY_AXES)
+
+
+def keyframe_common(entry, where: str, prev_t):
+    """t (strictly increasing, > 0) and transition; shared by both tracks."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"{where}: a keyframe must be a mapping")
+    if "t" not in entry:
+        raise ValueError(f"{where}: missing t")
+    t = float(entry["t"])
+    if not t > 0.0:
+        raise ValueError(f"{where}: t must be > 0 (the start is implicit)")
+    if prev_t is not None and not t > prev_t:
+        raise ValueError(f"{where}: t must increase down the list")
+    transition = str(entry.get("transition", ""))
+    if transition not in GESTURE_TRANSITIONS:
+        raise ValueError(
+            f"{where}: transition must be one of {GESTURE_TRANSITIONS}")
+    return t, transition
+
+
+def gestures(doc):
+    """Flatten gestures.yaml into per-leg keyframe tables.
+
+    The authoring format is multi-leg (one keyframe positions several legs at
+    one t); the baked tables, the runtime GestureSpec and the player are per
+    leg, so the flattening happens here. A keyframe-level `preserve` expands to
+    one preserve knot per leg the gesture moves anywhere. Mirrored by
+    pipeline_config_loader.cpp, which the parity test holds to this output.
+    """
+    entries = (doc or {}).get("gestures") or []
+    out = []
+    seen = set()
+    for entry in entries:
+        gid = str(entry["id"])
+        if gid in seen:
+            raise ValueError(f"gestures.yaml: duplicate id {gid!r}")
+        seen.add(gid)
+        unknown = set(entry) - {"id", "return_time", "legs", "body"}
+        if unknown:
+            raise ValueError(f"gestures.yaml {gid}: unknown keys {sorted(unknown)}")
+        return_time = float(entry.get("return_time", 0.0))
+        if not return_time > 0.0:
+            raise ValueError(f"gestures.yaml {gid}: return_time must be > 0")
+
+        keyframes = entry.get("legs") or []
+        # Pass 1: validate, and find every leg the gesture moves.
+        moved = []
+        prev_t = None
+        for i, kf in enumerate(keyframes):
+            where = f"gestures.yaml {gid}.legs[{i}]"
+            prev_t = keyframe_common(kf, where, prev_t)[0]
+            unknown = set(kf) - LEG_KEYFRAME_KEYS
+            if unknown:
+                raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
+            legs_here = [n for n in LEG_NAMES if n in kf]
+            if kf.get("preserve", False):
+                if legs_here:
+                    raise ValueError(
+                        f"{where}: preserve: true takes no leg entries")
+                continue
+            if not legs_here:
+                raise ValueError(
+                    f"{where}: names no leg (use preserve: true to hold all)")
+            for leg in legs_here:
+                v = kf[leg]
+                if v == "preserve":
+                    pass
+                elif isinstance(v, dict):
+                    if set(v) != LEG_ENTRY_KEYS:
+                        raise ValueError(
+                            f"{where}.{leg}: needs exactly "
+                            f"{sorted(LEG_ENTRY_KEYS)}")
+                    if not float(v["reach"]) > 0.0:
+                        raise ValueError(f"{where}.{leg}: reach must be > 0")
+                    if float(v["height"]) < 0.0:
+                        raise ValueError(f"{where}.{leg}: height must be >= 0")
+                else:
+                    raise ValueError(
+                        f"{where}.{leg}: a mapping or the word preserve")
+                if leg not in moved:
+                    moved.append(leg)
+        # Pass 2: per-leg tables, legs in Leg order.
+        tracks = []
+        for leg in LEG_NAMES:
+            if leg not in moved:
+                continue
+            rows = []
+            for kf in keyframes:
+                if kf.get("preserve", False):
+                    v = "preserve"
+                elif leg in kf:
+                    v = kf[leg]
+                else:
+                    continue
+                row = dict(t=float(kf["t"]), angle=0.0, reach=0.0, height=0.0,
+                           transition=str(kf["transition"]),
+                           preserve=(v == "preserve"))
+                if v != "preserve":
+                    row["angle"] = math.radians(float(v["angle_deg"]))
+                    row["reach"] = float(v["reach"])
+                    row["height"] = float(v["height"])
+                rows.append(row)
+            tracks.append((leg, rows))
+
+        body_rows = []
+        prev_t = None
+        for i, kf in enumerate(entry.get("body") or []):
+            where = f"gestures.yaml {gid}.body[{i}]"
+            t, transition = keyframe_common(kf, where, prev_t)
+            prev_t = t
+            unknown = set(kf) - BODY_KEYFRAME_KEYS
+            if unknown:
+                raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
+            preserve = bool(kf.get("preserve", False))
+            axes = [a for a in BODY_AXES if a in kf]
+            if preserve and axes:
+                raise ValueError(f"{where}: preserve: true takes no axis values")
+            row = dict(t=t, x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0,
+                       transition=transition, preserve=preserve)
+            if not preserve:
+                row["x"] = float(kf.get("x", 0.0))
+                row["y"] = float(kf.get("y", 0.0))
+                row["z"] = float(kf.get("z", 0.0))
+                row["roll"] = math.radians(float(kf.get("roll_deg", 0.0)))
+                row["pitch"] = math.radians(float(kf.get("pitch_deg", 0.0)))
+                row["yaw"] = math.radians(float(kf.get("yaw_deg", 0.0)))
+            body_rows.append(row)
+
+        if not tracks and not body_rows:
+            raise ValueError(f"gestures.yaml {gid}: has no keyframes")
+        out.append(dict(id=gid, return_time=return_time, legs=tracks,
+                        body=body_rows))
+    return out
+
+
 def rest_pose(geometry: dict, key: str):
     """Per-leg (coxa, femur, tibia) angles for one of the two belly-rest poses.
 
@@ -524,8 +666,9 @@ def hardware_joints(hw: dict, calibration: dict, limits: dict):
 # ── header emission ─────────────────────────────────────────────────────────
 
 def emit(geometry, gait, teleop, posture, control, hardware, calibration,
-         webteleop, display, sources) -> str:
+         webteleop, display, gestures_doc, sources) -> str:
     specs = leg_specs(geometry)
+    gesture_rows_src = gestures(gestures_doc)
     limits = joint_limits(geometry)
     preset_rows, default_preset_idx = presets(gait, geometry)
     default_entry = gait["presets"][default_preset_idx]
@@ -783,6 +926,83 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("// The default preset's row, which is the one the firmware runs on.")
     w("inline constexpr std::array<GaitSpec, "
       f"{len(caps)}> kGaits = kGaitsByPreset[kDefaultPreset];")
+    w("")
+
+    # ── gestures ──
+    w("// ── Gestures (hexa_description/config/gestures.yaml) ──")
+    w("// Keyframed leg + body motions played from a stand. Flat tables plus")
+    w("// index ranges; the per-leg form is the flattening of the YAML's")
+    w("// multi-leg keyframes. A `preserve` knot repeats the value of the knot")
+    w("// before it; its value fields are zero here, the player resolves them.")
+    w("enum class GestureTransition : std::uint8_t { EASE, CONTINUOUS };")
+    w("struct LegKeyframe {")
+    w("  float t;       // s from gesture start")
+    w("  float angle;   // rad, coxa swivel in the mount frame")
+    w("  float reach;   // m, planar coxa axis -> tip")
+    w("  float height;  // m above the standing ground plane")
+    w("  GestureTransition transition;  // how the track arrives here")
+    w("  bool preserve;")
+    w("};")
+    w("struct BodyKeyframe {")
+    w("  float t;")
+    w("  float x, y, z;           // m, offsets from the standing pose")
+    w("  float roll, pitch, yaw;  // rad")
+    w("  GestureTransition transition;")
+    w("  bool preserve;")
+    w("};")
+    w("struct GestureLegTrack {  // one leg's keyframes, into kGestureLegKeyframes")
+    w("  hexa::Leg leg;")
+    w("  std::size_t first;")
+    w("  std::size_t count;")
+    w("};")
+    w("struct GestureConfig {")
+    w("  std::string_view id;")
+    w("  float return_time;  // s, a track's last keyframe -> nominal")
+    w("  std::size_t first_leg_track;  // into kGestureLegTracks")
+    w("  std::size_t leg_track_count;")
+    w("  std::size_t first_body_key;   // into kGestureBodyKeyframes")
+    w("  std::size_t body_key_count;")
+    w("};")
+    w("")
+    leg_keys, body_keys, leg_tracks, gesture_rows = [], [], [], []
+    for gst in gesture_rows_src:
+        first_track = len(leg_tracks)
+        for leg, rows in gst["legs"]:
+            leg_tracks.append((gst["id"], leg, len(leg_keys), len(rows)))
+            leg_keys.extend((gst["id"], leg, r) for r in rows)
+        first_body = len(body_keys)
+        body_keys.extend((gst["id"], r) for r in gst["body"])
+        gesture_rows.append((gst, first_track, len(gst["legs"]), first_body,
+                             len(gst["body"])))
+
+    def trans(name: str) -> str:
+        return "GestureTransition::" + name.upper()
+
+    w(f"inline constexpr std::array<LegKeyframe, {len(leg_keys)}> "
+      "kGestureLegKeyframes = {{")
+    for gid, leg, r in leg_keys:
+        w(f"    {{{fl(r['t'])}, {fl(r['angle'])}, {fl(r['reach'])}, "
+          f"{fl(r['height'])}, {trans(r['transition'])}, {bo(r['preserve'])}}},"
+          f"  // {gid} {leg}")
+    w("}};")
+    w(f"inline constexpr std::array<BodyKeyframe, {len(body_keys)}> "
+      "kGestureBodyKeyframes = {{")
+    for gid, r in body_keys:
+        w(f"    {{{fl(r['t'])}, {fl(r['x'])}, {fl(r['y'])}, {fl(r['z'])}, "
+          f"{fl(r['roll'])}, {fl(r['pitch'])}, {fl(r['yaw'])}, "
+          f"{trans(r['transition'])}, {bo(r['preserve'])}}},  // {gid}")
+    w("}};")
+    w(f"inline constexpr std::array<GestureLegTrack, {len(leg_tracks)}> "
+      "kGestureLegTracks = {{")
+    for gid, leg, first, count in leg_tracks:
+        w(f"    {{hexa::Leg::{leg.upper()}, {first}, {count}}},  // {gid}")
+    w("}};")
+    w(f"inline constexpr std::array<GestureConfig, {len(gesture_rows)}> "
+      "kGestures = {{")
+    for gst, ft, tc, fb, bc in gesture_rows:
+        w(f"    {{{cstr(gst['id'])}, {fl(gst['return_time'])}, {ft}, {tc}, "
+          f"{fb}, {bc}}},")
+    w("}};")
     w("")
 
     w("// Standing feet over the outermost foot's radius — the unitless lever")
@@ -1351,6 +1571,7 @@ def main() -> int:
         "calibration": f"{cfg_dir}/hexa_description/config/servo_calibration.yaml",
         "webteleop": f"{cfg_dir}/hexa_webteleop/config/webteleop.yaml",
         "display": f"{cfg_dir}/hexa_display/config/display.yaml",
+        "gestures": f"{cfg_dir}/hexa_description/config/gestures.yaml",
     }
     missing = [p for p in paths.values() if not os.path.isfile(p)]
     if missing:
@@ -1372,7 +1593,8 @@ def main() -> int:
     header = emit(loaded["geometry"], loaded["gait"],
                   loaded["teleop"], loaded["posture"], loaded["control"],
                   loaded["hardware"], loaded["calibration"],
-                  loaded["webteleop"], loaded["display"], sources)
+                  loaded["webteleop"], loaded["display"], loaded["gestures"],
+                  sources)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     # Only rewrite when content changes so CMake dependency timestamps stay clean.

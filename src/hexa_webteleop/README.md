@@ -5,11 +5,12 @@ same ROS topics as the gamepad teleop (`hexa_teleop`), so the two are
 interchangeable and only one drives at a time.
 
 - **Publishes** — `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/cmd_preset`,
-  `/animation/mode`, `/gait/initialize`, `/teleop/owner`.
-- **Subscribes** — `/gait/state` (switch gating), `/gait/preset` and
-  `/gait/leg_set` (the engine's reports), the latched `/cmd_gait`,
-  `/cmd_preset` and `/animation/mode` (the current *selection*, heard from both
-  teleops and from its own publishes), and `sensor_msgs/BatteryState`.
+  `/cmd_gesture`, `/animation/mode`, `/gait/initialize`, `/teleop/owner`.
+- **Subscribes** — `/gait/state` (switch gating), `/gait/preset`,
+  `/gait/leg_set` and `/gait/gesture` (the engine's reports), the latched
+  `/cmd_gait`, `/cmd_preset` and `/animation/mode` (the current *selection*,
+  heard from both teleops and from its own publishes), and
+  `sensor_msgs/BatteryState`.
 
 `/cmd_gait` does double duty: it drives the status strip *and* resyncs the
 node's velocity caps and gait cycler when the gamepad switches gaits
@@ -27,10 +28,11 @@ node's velocity caps and gait cycler when the gamepad switches gaits
 - **`web/`** — React 19 + TypeScript, built by Vite into a single inlined
   `web/dist/index.html`, which is committed. See [Frontend](#frontend).
 
-## The four views
+## The views
 
 A tab bar (symbols only; bottom in portrait, left strip in landscape) swaps the
-view above it. The current tab is drawn in `#FABD2F`, which outranks any status
+view above it. Network is a grey cog with a wifi glyph beside it, green with the link up and
+red with it down. The current tab is drawn in `#FABD2F`, which outranks any status
 tint. The bar never leaves the screen, so no view carries a back arrow.
 
 ### Control
@@ -110,10 +112,39 @@ drop the socket. Both sticks re-centre on the way in.
 
 Every button here is a tap, not a hold, and there is no keepalive.
 
+### Gesture
+
+One tile per gesture in `hexa_description/config/gestures.yaml`, whose ids the
+node ships in the `init` message. A tap sends `select_gesture`; the node
+publishes the id once on `/cmd_gesture` (volatile — a gesture is an event). The
+lit tile is the engine's report on `/gait/gesture`, never the tap, and the tab
+icon takes the accent while one plays.
+
+The engine plays a gesture only from a stand on the default preset
+(`tuning.yaml`'s `gait_node.default_preset`, shipped as `preset_gesture`), so
+the view is gated the same way, off the engine's reports:
+
+- Off that preset a **modal replaces the view** with the fix: a *Switch to
+  NORMAL* button, which is the Mode view's own `select_preset` request and
+  lands under the same rules — live from a stand only, pending until
+  `/gait/preset` reports it, spinner meanwhile. On the belly or mid-walk the
+  button is dimmed and the second button leads to the Mode view, where STAND is.
+- On the preset but not standing, the tiles are dimmed with *Stand to activate*
+  on the heading. While a gesture plays every tile is inert and the running one
+  keeps its fill.
+- The node pre-gates the request (`gesture_refusal`, pure and unit-tested) so a
+  refusal is a sentence under the tiles rather than a line in the engine's log;
+  the engine still has the last word.
+
+Like a preset or gait switch, a gesture is exempt from `/cmd_vel` ownership: one
+event that touches neither drive stream, and the engine holds the sticks off
+for the duration itself.
+
 ### Network
 
 Link state and the controller handover, because they are one question: which
-input the robot listens to, and whether this device can reach it.
+input the robot listens to, and whether this device can reach it. Plus the way
+to the log.
 
 - **Link** — connected/disconnected, the host, and a disconnect/reconnect
   toggle. A manual disconnect stays down; every other close retries.
@@ -121,12 +152,21 @@ input the robot listens to, and whether this device can reach it.
   arbitration disabled, and the view says so.
 - A **Fullscreen** button, never automatic — the app's only other gesture is a
   joystick drag. Absent on iPhone Safari, which needs none once installed.
-- The two panels stack in portrait and stand side by side in landscape.
+- **Logs** — an *Open logs* button to the Log view below. A panel rather than a
+  fifth tab: the log is read when the link or the robot misbehaves, which is
+  what this view is for, and a phone's bar has no room for another symbol.
+- The three panels stack in portrait and stand side by side in landscape.
 
 ### Log
 
 Recent output from `GET /logs`, fetched on mount and on the refresh button. Not
-polled. Takes no session state, so it works with the link down.
+polled. Takes no session state, so it works with the link down. Opened from the
+Network view; the Network tab stays lit while it is up, and is the way back.
+
+A row of level chips (`DEBUG`, `INFO`, `WARN`, `ERROR`, with `FATAL` folded into
+`ERROR`) hides the levels turned off. A line with no level tag — a traceback, a
+wrapped line — follows the tagged line above it. The rule is pure
+(`web/src/utils/logs.ts`) and resets on every visit.
 
 ## Pack telemetry
 
@@ -166,9 +206,9 @@ writes it. **Take control** → `request_control` → owner `web`, and the gamep
 goes dormant; releasing (toggle, disconnect, or `POST /control/release`) resumes
 it. The logic is `hexa_teleop.teleop_arbitration` — pure, shared, unit-tested.
 
-Preset switches, gait switches and inits are **exempt**: they touch neither
-`/cmd_vel` nor `/body/pose`, and are idempotent writes to latched topics both
-teleops already read. So the Mode view works while a controller drives, which is
+Preset switches, gait switches, gestures and inits are **exempt**: they touch
+neither `/cmd_vel` nor `/body/pose`, and are one-shot or idempotent writes to
+selection topics both teleops already read. So the Mode view works while a controller drives, which is
 the point of it — and its `STAND` is the only stand a webapp can reach then.
 
 ## HTTP endpoints
@@ -223,15 +263,16 @@ pnpm dev         # dev server on :5173, /ws and /logs proxied to :8080
 ### Source layout
 
 - `web/src/app/` — the routes, one file per view: `index.tsx` (Control, home),
-  `preset.tsx`, `network.tsx`, `log.tsx`, and `__root.tsx`, the shell holding the
-  tab bar around an `<Outlet/>`. File names *are* the paths;
+  `preset.tsx`, `gesture.tsx`, `network.tsx`, `log.tsx`, and `__root.tsx`, the
+  shell holding the tab bar around an `<Outlet/>`. File names *are* the paths;
   `src/routeTree.gen.ts` is generated from this directory and **committed**,
   because `pnpm build` type-checks first and a fresh checkout has to type-check.
 - `web/src/hooks/useTeleopSocket.ts` — every piece of server state in one
   reducer, one case per `/ws` message type.
 - `web/src/types/protocol.ts` — the wire contract, both ways.
-- `web/src/utils/` — `views.ts` is the tab order and each tab's path, so the bar
-  and the routes agree by construction; `labels.ts` is the display strings.
+- `web/src/utils/` — `views.ts` is the tab order and each route's path, so the
+  bar and the routes agree by construction; `labels.ts` is the display strings;
+  `logs.ts` is the log level filter.
 - `web/src/providers/` — the two contexts `main.tsx` wraps the router in.
   `TeleopProvider` holds the socket **above the router**, since the server has
   one client slot and a link owned by a route would drop the robot whenever

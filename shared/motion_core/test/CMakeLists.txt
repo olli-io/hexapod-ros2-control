@@ -34,7 +34,8 @@ file(GLOB_RECURSE CONFIG_YAMLS
   ${REPO_ROOT}/src/hexa_description/config/hardware.yaml
   ${REPO_ROOT}/src/hexa_description/config/servo_calibration.yaml
   ${REPO_ROOT}/src/hexa_webteleop/config/webteleop.yaml
-  ${REPO_ROOT}/src/hexa_display/config/display.yaml)
+  ${REPO_ROOT}/src/hexa_display/config/display.yaml
+  ${REPO_ROOT}/src/hexa_description/config/gestures.yaml)
 add_custom_command(
   OUTPUT ${GEN_CONFIG}
   COMMAND ${PYTHON3} ${FW_SRC}/tools/gen_config.py
@@ -114,6 +115,9 @@ set(FW_GAIT_SOURCES
   ${GAIT_SRC}/limits.cpp
   ${GAIT_SRC}/engine.cpp
   ${GAIT_SRC}/reversal.cpp
+  ${FW_SRC}/gesture/keyframe.cpp
+  ${FW_SRC}/gesture/player.cpp
+  ${FW_SRC}/gesture/validate.cpp
   ${KIN_SRC}/leg_ik.cpp
   ${KIN_SRC}/body_transform.cpp)
 
@@ -152,6 +156,11 @@ target_compile_options(test_stand_transition PRIVATE -fexceptions)
 # on.
 hexa_host_test(test_reversal test_reversal.cpp ${FW_GAIT_SOURCES})
 target_compile_options(test_reversal PRIVATE -fexceptions)
+
+# Gestures: keyframe sampling, the player's implicit start / return knots and
+# preserve resolution, and the engine's GESTURE state and its guards.
+hexa_host_test(test_gesture test_gesture.cpp ${FW_GAIT_SOURCES})
+target_compile_options(test_gesture PRIVATE -fexceptions)
 
 # ── Control velocity shaping (part 07) ──
 # BodyVelocityLimiter slew + Control scale-to-envelope / reset wiring. Float

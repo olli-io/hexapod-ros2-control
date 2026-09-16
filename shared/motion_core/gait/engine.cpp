@@ -186,7 +186,8 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
                std::map<std::string, LegContext> leg_contexts,
                std::optional<std::map<std::string, kin::LegSpec>> leg_specs,
                std::optional<ReseatGeometryByLeg> reseat_geometry,
-               std::vector<PresetSetup> presets, std::size_t default_preset)
+               std::vector<PresetSetup> presets, std::size_t default_preset,
+               std::vector<gesture::GestureSpec> gestures)
     : config_(config),
       strategy_(std::move(strategy)),
       strategy_name_(std::move(strategy_name)),
@@ -195,7 +196,8 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
       legs_(std::move(leg_contexts)),
       leg_specs_(std::move(leg_specs)),
       reseat_geometry_(std::move(reseat_geometry)),
-      presets_(std::move(presets)) {
+      presets_(std::move(presets)),
+      gestures_(std::move(gestures)) {
   require_all_legs(nominal_stance, "nominal_stance");
   require_all_legs(folded_stance, "folded_stance");
   require_all_legs(initialized_stance, "initialized_stance");
@@ -258,6 +260,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
   }
   preset_ = default_preset;
   fallback_preset_ = default_preset;
+  default_preset_ = default_preset;
   leg_set_ = presets_[preset_].leg_set;
   apply_preset_knobs();
   fallback_strategy_name_ = strategy_name_;
@@ -588,6 +591,8 @@ void Engine::enter_fault() {
   cmd_gain_ = 1.0f;
   reversal_.reset();
   pending_fold_ = false;
+  gesture_.reset();
+  pending_gesture_.reset();
   pending_strategy_name_.reset();
   // Recovery is the cold start, on six legs; an armed change means nothing here.
   pending_preset_.reset();
@@ -619,6 +624,40 @@ bool Engine::request_fold() {
   }
   pending_fold_ = true;
   return true;
+}
+
+bool Engine::request_gesture(const std::string& id) {
+  std::optional<std::size_t> want;
+  for (std::size_t i = 0; i < gestures_.size(); ++i) {
+    if (gestures_[i].id == id) {
+      want = i;
+      break;
+    }
+  }
+  if (!want.has_value()) {
+    return false;
+  }
+  // From a stand only, and only on the default preset: the keyframes are
+  // written for that stance and validated against nothing else. An armed
+  // change or fold has the stand spoken for.
+  if (state_ != EngineState::STAND || preset_ != default_preset_ ||
+      pending_preset_.has_value() || pending_fold_ ||
+      !leg_specs_.has_value()) {
+    return false;
+  }
+  pending_gesture_ = *want;
+  return true;
+}
+
+std::optional<gesture::GestureProgress> Engine::gesture() const {
+  if (!gesture_) {
+    return std::nullopt;
+  }
+  gesture::GestureProgress out;
+  out.id = gesture_->id();
+  out.t = gesture_->t();
+  out.body = gesture_->body();
+  return out;
 }
 
 void Engine::set_target_height(float target_height) {
@@ -833,6 +872,7 @@ std::map<std::string, LegOutput> Engine::update(
       // into "deferred until you stop".
       pending_preset_.reset();
       pending_strategy_name_.reset();
+      pending_gesture_.reset();
       engagement_->begin(*strategy_, active_legs_);
       state_ = EngineState::ENGAGING;
       return tick_engagement(dt, v_body_xy, omega_z);
@@ -874,6 +914,17 @@ std::map<std::string, LegOutput> Engine::update(
       state_ = EngineState::UNFOLDING_PAIR;
       return tick_pair_fold(dt);
     }
+    // Ahead of the height reseat: request_gesture already required the
+    // default preset, and the pipeline never moves the height, so the stance
+    // the gesture starts from is the one it was validated on.
+    if (pending_gesture_.has_value()) {
+      const std::size_t idx = *pending_gesture_;
+      pending_gesture_.reset();
+      gesture_ = std::make_unique<gesture::GesturePlayer>(
+          gestures_[idx], last_targets_, nominal_, *leg_specs_);
+      state_ = EngineState::GESTURE;
+      return tick_gesture(dt);
+    }
     if (reseat_geometry_.has_value() && leg_specs_.has_value() &&
         std::fabs(target_height_ - applied_height_) >
             config_.reseat_height_change_threshold &&
@@ -902,6 +953,9 @@ std::map<std::string, LegOutput> Engine::update(
   if (state_ == EngineState::FOLDING_PAIR ||
       state_ == EngineState::UNFOLDING_PAIR) {
     return tick_pair_fold(dt);
+  }
+  if (state_ == EngineState::GESTURE) {
+    return tick_gesture(dt);
   }
 
   if (state_ == EngineState::ENGAGING) {
@@ -1345,6 +1399,23 @@ std::map<std::string, LegOutput> Engine::tick_fold(float dt) {
   return out;
 }
 
+std::map<std::string, LegOutput> Engine::tick_gesture(float dt) {
+  auto out = gesture_->update(dt);
+  // Structural only: a gesture never runs on the quadruped set.
+  overlay_parked(out);
+  capture_state(out);
+  if (!gesture_->done()) {
+    return out;
+  }
+  gesture_.reset();
+  state_ = EngineState::STAND;
+  // The return knot lands on nominal exactly; stated so STAND holds no stale
+  // target.
+  last_targets_ = nominal_;
+  for (const auto& n : LEG_NAMES) last_stance_[n] = true;
+  return out;
+}
+
 std::map<std::string, LegOutput> Engine::tick_engagement(
     float dt, std::pair<float, float> v_body_xy, float omega_z) {
   auto out = engagement_->update(dt, v_body_xy, omega_z);
@@ -1714,7 +1785,8 @@ std::unique_ptr<Engine> make_default_engine(
     const std::array<JointAngles, kNumLegs>& folded_pose,
     const std::array<JointAngles, kNumLegs>& initialized_pose,
     float coxa_to_bottom, float foot_radius,
-    std::vector<PresetSetup> presets, std::size_t default_preset) {
+    std::vector<PresetSetup> presets, std::size_t default_preset,
+    std::vector<gesture::GestureSpec> gestures) {
   auto factory = strategies().find(strategy_name);
   if (factory == strategies().end()) {
     throw std::invalid_argument("unknown strategy: " + strategy_name);
@@ -1726,7 +1798,7 @@ std::unique_ptr<Engine> make_default_engine(
       rest_stance_from(specs, initialized_pose), coxa_to_bottom, foot_radius,
       build_leg_contexts_from(specs, standing_pose), leg_specs_from(specs),
       reseat_geometry_from(specs, standing_pose), std::move(presets),
-      default_preset);
+      default_preset, std::move(gestures));
 }
 
 std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
@@ -1735,7 +1807,7 @@ std::unique_ptr<Engine> make_default_engine(const std::string& strategy_name) {
       standing_pose_from_config(), ::hexa::config::kFoldedPose,
       ::hexa::config::kInitializedPose, ::hexa::config::kCoxaToBottom,
       ::hexa::config::kFootRadius, preset_setups_from_config(),
-      ::hexa::config::kDefaultPreset);
+      ::hexa::config::kDefaultPreset, gesture::gesture_specs_from_config());
 }
 
 std::string leg_set_value(LegSet set) {
@@ -1754,6 +1826,7 @@ std::string state_value(EngineState s) {
     case EngineState::RESEATING: return "reseating";
     case EngineState::FOLDING_PAIR: return "folding_pair";
     case EngineState::UNFOLDING_PAIR: return "unfolding_pair";
+    case EngineState::GESTURE: return "gesture";
     case EngineState::FAULT: return "fault";
   }
   return "unknown";
@@ -1771,6 +1844,7 @@ std::string state_name(EngineState s) {
     case EngineState::RESEATING: return "RESEATING";
     case EngineState::FOLDING_PAIR: return "FOLDING_PAIR";
     case EngineState::UNFOLDING_PAIR: return "UNFOLDING_PAIR";
+    case EngineState::GESTURE: return "GESTURE";
     case EngineState::FAULT: return "FAULT";
   }
   return "UNKNOWN";

@@ -97,6 +97,11 @@ struct JoyOutput {
   // Only the ROS node fills it, from the latched /cmd_preset.
   bool has_preset_select = false;
   std::string_view preset_select = "";
+  // A gesture to play. map_joy NEVER sets this either: the pad has no gesture
+  // control and the golden trace must not move. The ROS node fills it from
+  // /cmd_gesture.
+  bool has_gesture_select = false;
+  std::string_view gesture_select = "";
   bool has_animation_name = false;
   std::string_view animation_name = "";
 };

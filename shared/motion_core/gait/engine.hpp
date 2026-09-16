@@ -21,6 +21,7 @@
 #include "gait/reversal.hpp"
 #include "gait/stand_transition.hpp"
 #include "gait/types.hpp"
+#include "gesture/player.hpp"
 
 namespace hexa::gait {
 
@@ -39,6 +40,9 @@ enum class EngineState {
   // leg_set_ is HEXAPOD throughout both — it flips only once the pair arrives.
   FOLDING_PAIR,
   UNFOLDING_PAIR,
+  // A keyframed gesture playing from a stand, on the default preset only. The
+  // command is ignored until it hands the stand back.
+  GESTURE,
   FAULT,
 };
 
@@ -244,7 +248,8 @@ class Engine {
          // The preset table, in declaration order. Empty synthesizes a single
          // unnamed hexapod preset from the arguments above.
          std::vector<PresetSetup> presets = {},
-         std::size_t default_preset = 0);
+         std::size_t default_preset = 0,
+         std::vector<gesture::GestureSpec> gestures = {});
 
   EngineState state() const { return state_; }
   float master_phase() const;
@@ -279,6 +284,12 @@ class Engine {
   bool start_initialize();
   bool start_fold();
   bool request_fold();
+  // Play a gesture by id. Accepted only from a stand on the default preset
+  // with no preset change or fold armed; the STAND branch of update() starts
+  // it on the next tick. Refused everywhere else, and for an unknown id.
+  bool request_gesture(const std::string& id);
+  // The running gesture, if any: its id, elapsed time and body term.
+  std::optional<gesture::GestureProgress> gesture() const;
   // Latch into FAULT from any state; servos go limp on the real board. Recovery
   // is start_initialize(). Idempotent while already faulted.
   void enter_fault();
@@ -409,6 +420,9 @@ class Engine {
   // margin for as long as the pair is in the air.
   void commit_preset_change();
   std::map<std::string, LegOutput> tick_fold(float dt);
+  // Never reads the command. Hands back a stand on nominal when the player is
+  // done, the INITIALIZE -> STAND handoff.
+  std::map<std::string, LegOutput> tick_gesture(float dt);
   std::map<std::string, LegOutput> tick_engagement(
       float dt, std::pair<float, float> v_body_xy, float omega_z);
   void capture_state(const std::map<std::string, LegOutput>& out);
@@ -434,6 +448,11 @@ class Engine {
   // offset; nominal_ tracks whichever one is applied, at the applied height.
   std::vector<PresetSetup> presets_;
   std::size_t preset_ = 0;
+  // The one preset gestures run on; their keyframes are written for its stance.
+  std::size_t default_preset_ = 0;
+  std::vector<gesture::GestureSpec> gestures_;
+  std::unique_ptr<gesture::GesturePlayer> gesture_;
+  std::optional<std::size_t> pending_gesture_;
   // The last hexapod preset and strategy applied. FAULT recovery reverts to
   // both, so the folded baseline is never paired with a four-leg stance.
   std::size_t fallback_preset_ = 0;
@@ -585,7 +604,8 @@ std::unique_ptr<Engine> make_default_engine(
     // The preset table, already solved to feet (solve_presets). `standing_pose`
     // above must be the default preset's, since it is what the leg contexts and
     // the six-leg reseat geometry come from.
-    std::vector<PresetSetup> presets, std::size_t default_preset);
+    std::vector<PresetSetup> presets, std::size_t default_preset,
+    std::vector<gesture::GestureSpec> gestures = {});
 
 // Wire string for /gait/leg_set — the same two words hexa_common's gait catalog
 // uses, so no mapping table is needed between them.

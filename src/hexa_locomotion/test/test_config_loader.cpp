@@ -1,11 +1,12 @@
 // Parity test: the runtime yaml-cpp loader reproduces PipelineConfig::baked()
 // field by field over the same source YAMLs gen_config.py bakes from
-// (GEOMETRY_YAML / TUNING_YAML, injected by CMake).
+// (GEOMETRY_YAML / TUNING_YAML / GESTURES_YAML, injected by CMake).
 #include <cmath>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include "leg_index.hpp"
 #include "pipeline_config.hpp"
 #include "pipeline_config_loader.hpp"
 
@@ -27,7 +28,7 @@ void expect_vec3_near(const hexa::Vec3& a, const hexa::Vec3& b,
 TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   const PipelineConfig baked = PipelineConfig::baked();
   const PipelineConfig loaded =
-      load_pipeline_config_from_yaml(GEOMETRY_YAML, TUNING_YAML);
+      load_pipeline_config_from_yaml(GEOMETRY_YAML, TUNING_YAML, GESTURES_YAML);
 
   for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
     const std::string leg = "leg[" + std::to_string(i) + "]";
@@ -197,6 +198,47 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.nominal_body_height,
               loaded.presets[loaded.default_preset].standing.body_height, kTol);
   EXPECT_EQ(lp.gait_body_animations_enabled, bp.gait_body_animations_enabled);
+
+  // Gestures, position by position: the id, the return time, every per-leg
+  // track and every keyframe field. Both sides flatten the multi-leg authoring
+  // format, so this is also the check that the two flattenings agree.
+  ASSERT_EQ(loaded.gestures.size(), baked.gestures.size());
+  for (std::size_t gi = 0; gi < baked.gestures.size(); ++gi) {
+    const auto& lg = loaded.gestures[gi];
+    const auto& bg = baked.gestures[gi];
+    ASSERT_EQ(lg.id, bg.id) << "gesture " << gi << " is out of order";
+    EXPECT_NEAR(lg.return_time, bg.return_time, kTol) << lg.id;
+    ASSERT_EQ(lg.legs.size(), bg.legs.size()) << lg.id;
+    for (std::size_t ti = 0; ti < bg.legs.size(); ++ti) {
+      const auto& lt = lg.legs[ti];
+      const auto& bt = bg.legs[ti];
+      const std::string track = lg.id + "." + std::string(hexa::leg_name(bt.leg));
+      ASSERT_EQ(lt.leg, bt.leg) << track;
+      ASSERT_EQ(lt.keys.size(), bt.keys.size()) << track;
+      for (std::size_t ki = 0; ki < bt.keys.size(); ++ki) {
+        const std::string key = track + "[" + std::to_string(ki) + "]";
+        EXPECT_NEAR(lt.keys[ki].t, bt.keys[ki].t, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].angle, bt.keys[ki].angle, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].reach, bt.keys[ki].reach, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].height, bt.keys[ki].height, kTol) << key;
+        EXPECT_EQ(lt.keys[ki].transition, bt.keys[ki].transition) << key;
+        EXPECT_EQ(lt.keys[ki].preserve, bt.keys[ki].preserve) << key;
+      }
+    }
+    ASSERT_EQ(lg.body.size(), bg.body.size()) << lg.id;
+    for (std::size_t ki = 0; ki < bg.body.size(); ++ki) {
+      const std::string key = lg.id + ".body[" + std::to_string(ki) + "]";
+      EXPECT_NEAR(lg.body[ki].t, bg.body[ki].t, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].x, bg.body[ki].x, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].y, bg.body[ki].y, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].z, bg.body[ki].z, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].roll, bg.body[ki].roll, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].pitch, bg.body[ki].pitch, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].yaw, bg.body[ki].yaw, kTol) << key;
+      EXPECT_EQ(lg.body[ki].transition, bg.body[ki].transition) << key;
+      EXPECT_EQ(lg.body[ki].preserve, bg.body[ki].preserve) << key;
+    }
+  }
 }
 
 }  // namespace

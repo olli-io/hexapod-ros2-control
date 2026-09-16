@@ -34,6 +34,7 @@ PipelineConfig PipelineConfig::baked() {
   c.default_gait = std::string(cfg::kDefaultGait);
   c.control = cfg::kControl;
   c.posture = cfg::kPosture;
+  c.gestures = ::hexa::gesture::gesture_specs_from_config();
   return c;
 }
 

@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './app/__root'
 import { Route as IndexRouteImport } from './app/index'
+import { Route as GestureRouteImport } from './app/gesture'
 import { Route as LogRouteImport } from './app/log'
 import { Route as NetworkRouteImport } from './app/network'
 import { Route as PresetRouteImport } from './app/preset'
@@ -17,6 +18,11 @@ import { Route as PresetRouteImport } from './app/preset'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GestureRoute = GestureRouteImport.update({
+  id: '/gesture',
+  path: '/gesture',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogRoute = LogRouteImport.update({
@@ -37,12 +43,14 @@ const PresetRoute = PresetRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/gesture': typeof GestureRoute
   '/log': typeof LogRoute
   '/network': typeof NetworkRoute
   '/preset': typeof PresetRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/gesture': typeof GestureRoute
   '/log': typeof LogRoute
   '/network': typeof NetworkRoute
   '/preset': typeof PresetRoute
@@ -50,20 +58,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/gesture': typeof GestureRoute
   '/log': typeof LogRoute
   '/network': typeof NetworkRoute
   '/preset': typeof PresetRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/log' | '/network' | '/preset'
+  fullPaths: '/' | '/gesture' | '/log' | '/network' | '/preset'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/log' | '/network' | '/preset'
-  id: '__root__' | '/' | '/log' | '/network' | '/preset'
+  to: '/' | '/gesture' | '/log' | '/network' | '/preset'
+  id: '__root__' | '/' | '/gesture' | '/log' | '/network' | '/preset'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  GestureRoute: typeof GestureRoute
   LogRoute: typeof LogRoute
   NetworkRoute: typeof NetworkRoute
   PresetRoute: typeof PresetRoute
@@ -76,6 +86,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gesture': {
+      id: '/gesture'
+      path: '/gesture'
+      fullPath: '/gesture'
+      preLoaderRoute: typeof GestureRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/log': {
@@ -104,6 +121,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  GestureRoute: GestureRoute,
   LogRoute: LogRoute,
   NetworkRoute: NetworkRoute,
   PresetRoute: PresetRoute,

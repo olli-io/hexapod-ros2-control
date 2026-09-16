@@ -231,6 +231,9 @@ bool posture_active(gait::EngineState state) {
     // it was holding, which is exactly the jump the pin exists to avoid.
     case E::FOLDING_PAIR:
     case E::UNFOLDING_PAIR:
+    // The body stands on planted feet the whole way, and the gesture's own body
+    // track is a posture term.
+    case E::GESTURE:
       return true;
     case E::FOLDED:
     case E::INITIALIZE:
@@ -252,16 +255,22 @@ float slew_toward(float current, float target, float rate_per_s, float dt) {
   return std::max(target, current - step);
 }
 
+PoseLimits pose_limits_from(const config::PostureConfig& p) {
+  return PoseLimits{p.pose_limit_x,
+                    p.pose_limit_y,
+                    // BodyPose::z is a delta from the nominal stance.
+                    p.body_height_max - p.nominal_body_height,
+                    p.body_height_min - p.nominal_body_height,
+                    p.pose_limit_roll,
+                    p.pose_limit_pitch,
+                    p.pose_limit_yaw};
+}
+
 PostureController::PostureController()
     : PostureController(config::kPosture) {}
 
 PostureController::PostureController(const config::PostureConfig& p)
-    : limits_{p.pose_limit_x, p.pose_limit_y,
-              // The one place absolute belly clearance becomes a pose offset:
-              // BodyPose::z is a delta from the nominal stance.
-              p.body_height_max - p.nominal_body_height,
-              p.body_height_min - p.nominal_body_height,
-              p.pose_limit_roll, p.pose_limit_pitch, p.pose_limit_yaw},
+    : limits_(pose_limits_from(p)),
       gait_body_animations_enabled_(p.gait_body_animations_enabled),
       activation_slew_rate_(p.gait_activation_slew_rate),
       centroid_tau_(p.support_centroid_tau),
@@ -321,7 +330,8 @@ bool PostureController::set_animation_mode(std::string_view mode) {
 BodyPose PostureController::update(
     const std::map<std::string, gait::LegOutput>& legs, float master_phase,
     bool walking, gait::EngineState state, std::string_view gait_name,
-    gait::LegSet leg_set, float dt, float t) {
+    gait::LegSet leg_set, float dt, float t,
+    std::optional<BodyPose> gesture_pose) {
   // Hold the previous raw through a degenerate frame.
   if (auto raw = stance_centroid_xy(legs)) {
     latest_raw_centroid_ = raw;
@@ -401,9 +411,10 @@ BodyPose PostureController::update(
   const BodyPose user_smoothed =
       pose_smoother_.step(clamp(user_pose_, limits_), limits_, dt);
 
-  // One shared envelope: the user pose and the animation both spend it, and the
-  // sum is clamped to it.
-  return clamp(add(user_smoothed, animated), limits_);
+  // One shared envelope: the user pose, the animation and a gesture's body track
+  // all spend it, and the sum is clamped to it.
+  return clamp(add(add(user_smoothed, animated), gesture_pose.value_or(IDENTITY)),
+               limits_);
 }
 
 }  // namespace hexa::posture

@@ -923,3 +923,47 @@ TEST(SupportShift, QuadrupedAppliesTheUserPose) {
   EXPECT_NEAR(out.pitch, user.pitch, 1e-3f);
   EXPECT_NEAR(out.yaw, user.yaw, 1e-3f);
 }
+
+// ── Gesture body term ──
+
+TEST(PostureGesture, ActiveInGestureState) {
+  EXPECT_TRUE(hexa::posture::posture_active(EngineState::GESTURE));
+}
+
+TEST(PostureGesture, GesturePoseSumsWithTheUserPoseUnderTheClamp) {
+  PostureController posture;
+  const hexa::posture::PoseLimits& limits = posture.limits();
+  std::map<std::string, LegOutput> legs;
+  for (const auto& name : hexa::gait::LEG_NAMES) {
+    LegOutput leg;
+    leg.foot_target = hexa::Vec3{0.1f, 0.1f, -0.08f};
+    legs[name] = leg;
+  }
+  const BodyPose user{0.03f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+  posture.set_user_pose(user);
+  const auto run = [&](std::optional<BodyPose> gesture) {
+    BodyPose out;
+    float t = 0.0f;
+    for (int i = 0; i < 600; ++i) {
+      out = posture.update(legs, 0.0f, /*walking=*/false, EngineState::GESTURE,
+                           "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t,
+                           gesture);
+      t += kDt;
+    }
+    return out;
+  };
+  // Inside the envelope the two add.
+  EXPECT_NEAR(run(BodyPose{0.01f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}).x, 0.04f, 1e-3f);
+  // Past it the sum is clamped, so a held pose distorts a body track rather than
+  // exceeding the limit.
+  ASSERT_LT(limits.x, 0.06f);
+  EXPECT_NEAR(run(BodyPose{0.03f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}).x, limits.x,
+              1e-4f);
+  // The term is not smoothed: dropping it removes it on the same tick.
+  const BodyPose with = run(BodyPose{0.0f, 0.0f, 0.0f, 0.0f, 0.1f, 0.0f});
+  EXPECT_NEAR(with.pitch, 0.1f, 1e-4f);
+  const BodyPose without = posture.update(
+      legs, 0.0f, false, EngineState::GESTURE, "tripod",
+      hexa::gait::LegSet::HEXAPOD, kDt, 0.0f, std::nullopt);
+  EXPECT_NEAR(without.pitch, 0.0f, 1e-6f);
+}

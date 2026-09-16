@@ -19,6 +19,10 @@ values. Every consumer loads them at runtime, or generates code from them.
 - `config/tuning.yaml` — gait, control, posture and teleop tuning, including
   the `presets` list and `default_standing_pose`. Shared by sim, web teleop and
   the Pico firmware.
+- `config/gestures.yaml` — gestures: keyframed leg + body motions played from
+  a stand. Leg keyframes in leg-polar coordinates, body keyframes as pose
+  offsets, written for the default preset's stance. The file header documents
+  the format.
 - `config/hardware.yaml` — Servo2040 connection, servo pin wiring, direction,
   `deg_at_center`, and the undervoltage ladder.
 - `config/servo_calibration.yaml` — per-servo endpoint pulse widths, one
@@ -26,9 +30,9 @@ values. Every consumer loads them at runtime, or generates code from them.
 
 ## Consumers
 
-- `hexa_locomotion` — loads `geometry.yaml` + `tuning.yaml` into a
-  `PipelineConfig` at startup.
-- `shared/motion_core/tools/gen_config.py` — bakes all four files into the
+- `hexa_locomotion` — loads `geometry.yaml` + `tuning.yaml` + `gestures.yaml`
+  into a `PipelineConfig` at startup.
+- `shared/motion_core/tools/gen_config.py` — bakes all five files into the
   Pico firmware's constexpr config. A parity test keeps the two paths equal.
 - `hexa_hardware` — reads `hardware.yaml` and `servo_calibration.yaml`.
 - `hexa_teleop`, `hexa_webteleop`, `hexa_common` — read preset ids and limits

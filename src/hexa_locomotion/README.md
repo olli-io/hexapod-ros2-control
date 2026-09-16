@@ -15,8 +15,9 @@ swap with no `#ifdef`. Only the seams differ here:
   topics, handed to the core `tick`. `map_joy` is bypassed, so the node is
   `cmd_vel`-native (Nav2, `twist_mux`, `teleop_twist_*`).
 - **Config** — `PipelineConfig` loaded at startup from
-  [`geometry.yaml`](../hexa_description/config/geometry.yaml) and
-  [`tuning.yaml`](../hexa_description/config/tuning.yaml) by
+  [`geometry.yaml`](../hexa_description/config/geometry.yaml),
+  [`tuning.yaml`](../hexa_description/config/tuning.yaml) and
+  [`gestures.yaml`](../hexa_description/config/gestures.yaml) by
   `src/pipeline_config_loader.cpp`. On a load error it falls back to the baked
   defaults, which [`gen_config.py`](../../shared/motion_core/tools/gen_config.py)
   bakes from the same YAMLs at build time. The knobs themselves are documented in
@@ -36,6 +37,9 @@ Subscribed:
   latched) — gait, preset and posture-animation selection. The preset is
   re-asserted every tick so a restarted node comes back on the operator's preset.
 - **`/gait/initialize`** (`std_msgs/Empty`) — stand up from the belly, or fold.
+- **`/cmd_gesture`** (`std_msgs/String`, volatile) — play a gesture by id from
+  `gestures.yaml`. Accepted only from a stand on the default preset; a
+  refusal is logged with the state and preset. Consumed once, never replayed.
 - **`/body/pose`** (`hexa_interfaces/BodyPose`) — posture offsets.
 - **`/hardware/fault`** (`std_msgs/Bool`, latched) — over-current level from
   [`hexa_hardware`](../hexa_hardware/README.md).
@@ -51,13 +55,16 @@ Published, all latched and on change only:
 - **`/gait/leg_set`**, **`/gait/preset`** (`String`) — what the engine has
   *applied*. Report topics, never commands: the command topics are latched, so
   a refused request stays on them.
+- **`/gait/gesture`** (`String`) — the running gesture's id, `""` between
+  gestures.
 - **`/hardware/relay_cmd`** (`Bool`) — servo-rail arm intent for `hexa_hardware`.
 - **`/hardware/undervoltage`** (`UInt8`) — undervoltage rung 0–3, escalate-only.
 
-Service **`~/reload_config`** (`std_srvs/Trigger`) re-reads both YAMLs and swaps
-in a fresh pipeline without a restart (`./hexa sim reload`). The pipeline
-cold-starts at `FOLDED`; a bad file keeps the current pipeline; a latched
-undervoltage cutoff refuses the swap.
+Service **`~/reload_config`** (`std_srvs/Trigger`) re-reads all three YAMLs
+and swaps in a fresh pipeline without a restart (`./hexa sim reload`). The
+pipeline cold-starts at `FOLDED`; a bad file, including a gesture keyframe the
+legs cannot reach, keeps the current pipeline; a latched undervoltage cutoff
+refuses the swap.
 
 ## Vocabulary
 
@@ -67,8 +74,8 @@ Gait, posture and transition terms follow
 ## Tests
 
 - **`test/test_config_loader.cpp`** — parity: the runtime loader reproduces
-  `PipelineConfig::baked()` field by field over the same YAMLs, so a YAML edit
-  can never drift from the codegen.
+  `PipelineConfig::baked()` field by field over the same YAMLs, gestures
+  included, so a YAML edit can never drift from the codegen.
 - The brain itself is covered off-target in
   [`shared/motion_core/test`](../../shared/motion_core/test/README.md).
 

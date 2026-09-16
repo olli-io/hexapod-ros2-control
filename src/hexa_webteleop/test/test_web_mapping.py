@@ -9,8 +9,10 @@ from hexa_webteleop import (
     StickMap,
     battery_payload,
     gait_selectable,
+    gesture_refusal,
     input_is_stale,
     load_animation_preset,
+    load_gesture_ids,
     load_web_config,
     map_web,
     neutral_inputs,
@@ -827,3 +829,64 @@ def test_preset_pending_expired():
     assert preset_pending_expired(10.0, 9.5) is False
     # Nothing pending never expires.
     assert preset_pending_expired(None, 1e9) is False
+
+
+# ─── Gesture view ───────────────────────────────────────────────────
+
+_GESTURES_YAML = """
+gestures:
+  - id: wave
+    return_time: 0.6
+    legs:
+      - t: 0.5
+        transition: ease
+        l_front: {angle_deg: 45, reach: 0.11, height: 0.08}
+  - id: bow
+    return_time: 0.6
+    body:
+      - {t: 0.8, pitch_deg: -10, transition: ease}
+"""
+
+
+def test_load_gesture_ids_in_declaration_order(tmp_path):
+    path = tmp_path / "gestures.yaml"
+    path.write_text(_GESTURES_YAML)
+    assert load_gesture_ids(path) == ("wave", "bow")
+
+
+def test_load_gesture_ids_rejects_duplicates(tmp_path):
+    path = tmp_path / "gestures.yaml"
+    path.write_text("gestures:\n  - id: wave\n  - id: wave\n")
+    with pytest.raises(ValueError):
+        load_gesture_ids(path)
+
+
+def _refusal(gesture="wave", state="stand", preset="normal", pending=None):
+    return gesture_refusal(
+        gesture, ("wave", "bow"), state, preset, "normal", "NORMAL", pending
+    )
+
+
+def test_gesture_is_sent_from_a_stand_on_the_gesture_preset():
+    assert _refusal() is None
+
+
+def test_gesture_refused_off_the_gesture_preset():
+    # The view's modal offers the switch; the node says why in the same words.
+    assert _refusal(preset="fast") == "gestures need the NORMAL preset"
+    assert _refusal(preset=None) == "gestures need the NORMAL preset"
+
+
+def test_gesture_refused_outside_a_stand():
+    assert _refusal(state="gait") == "not while walking — stop first"
+    assert _refusal(state="gesture") == "a gesture is playing"
+    assert _refusal(state="folded") == "stand first"
+    assert _refusal(state="settling") == "stand first"
+
+
+def test_gesture_refused_while_a_preset_change_is_in_flight():
+    assert _refusal(pending="normal") == "switching mode — wait"
+
+
+def test_unknown_gesture_is_refused():
+    assert _refusal(gesture="moonwalk") == "no such gesture"

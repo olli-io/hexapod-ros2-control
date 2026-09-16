@@ -1,11 +1,14 @@
 #include "pipeline_config_loader.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <exception>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <yaml-cpp/yaml.h>
@@ -14,6 +17,8 @@
 #include "gait/gaits/registry.hpp"
 #include "gait/limits.hpp"
 #include "gait/types.hpp"
+#include "gesture/player.hpp"
+#include "leg_index.hpp"
 #include "vec3.hpp"
 
 namespace hexa::locomotion {
@@ -35,10 +40,211 @@ double to_urdf_rad(const std::string& joint_type, double deg) {
   throw std::runtime_error("unknown joint type: " + joint_type);
 }
 
+// ── gestures.yaml ──
+// Mirrors gen_config.py gestures(): the same checks, the same flattening of the
+// multi-leg authoring format into per-leg tables, so the parity test can compare
+// the two position by position.
+
+hexa::config::GestureTransition transition_from(const YAML::Node& kf,
+                                                const std::string& where) {
+  const std::string name = kf["transition"] ? kf["transition"].as<std::string>() : "";
+  if (name == "ease") return hexa::config::GestureTransition::EASE;
+  if (name == "continuous") return hexa::config::GestureTransition::CONTINUOUS;
+  throw std::runtime_error(where + ": transition must be ease or continuous");
+}
+
+// t and transition, shared by both tracks; t strictly increasing and > 0.
+float keyframe_t(const YAML::Node& kf, const std::string& where,
+                 float prev_t, bool have_prev) {
+  if (!kf.IsMap()) {
+    throw std::runtime_error(where + ": a keyframe must be a mapping");
+  }
+  if (!kf["t"]) {
+    throw std::runtime_error(where + ": missing t");
+  }
+  const float t = f(kf["t"]);
+  if (!(t > 0.0f)) {
+    throw std::runtime_error(where + ": t must be > 0 (the start is implicit)");
+  }
+  if (have_prev && !(t > prev_t)) {
+    throw std::runtime_error(where + ": t must increase down the list");
+  }
+  return t;
+}
+
+bool is_preserve(const YAML::Node& kf) {
+  return kf["preserve"] && kf["preserve"].as<bool>();
+}
+
+void reject_unknown_keys(const YAML::Node& map, const std::set<std::string>& known,
+                         const std::string& where) {
+  for (const auto& kv : map) {
+    const auto key = kv.first.as<std::string>();
+    if (!known.count(key)) {
+      throw std::runtime_error(where + ": unknown key " + key);
+    }
+  }
+}
+
+std::vector<hexa::gesture::GestureSpec> load_gestures(
+    const std::string& path) {
+  static const std::set<std::string> kLegKeyframeKeys = {
+      "t", "transition", "preserve", "l_front", "l_middle", "l_rear",
+      "r_front", "r_middle", "r_rear"};
+  static const std::set<std::string> kLegEntryKeys = {"angle_deg", "reach",
+                                                      "height"};
+  static const std::set<std::string> kBodyKeyframeKeys = {
+      "t", "transition", "preserve", "x", "y", "z",
+      "roll_deg", "pitch_deg", "yaw_deg"};
+  static const std::set<std::string> kGestureKeys = {"id", "return_time",
+                                                     "legs", "body"};
+  const YAML::Node doc = YAML::LoadFile(path);
+  const YAML::Node list = doc["gestures"];
+  std::vector<hexa::gesture::GestureSpec> out;
+  if (!list || list.IsNull()) {
+    return out;
+  }
+  std::set<std::string> seen;
+  for (const auto& entry : list) {
+    hexa::gesture::GestureSpec spec;
+    spec.id = entry["id"].as<std::string>();
+    const std::string gwhere = "gestures.yaml " + spec.id;
+    if (!seen.insert(spec.id).second) {
+      throw std::runtime_error("gestures.yaml: duplicate id " + spec.id);
+    }
+    reject_unknown_keys(entry, kGestureKeys, gwhere);
+    spec.return_time = entry["return_time"] ? f(entry["return_time"]) : 0.0f;
+    if (!(spec.return_time > 0.0f)) {
+      throw std::runtime_error(gwhere + ": return_time must be > 0");
+    }
+
+    const YAML::Node keyframes = entry["legs"];
+    // Pass 1: validate, and find every leg the gesture moves.
+    std::vector<std::string> moved;
+    float prev_t = 0.0f;
+    bool have_prev = false;
+    for (std::size_t i = 0; keyframes && i < keyframes.size(); ++i) {
+      const YAML::Node kf = keyframes[i];
+      const std::string where = gwhere + ".legs[" + std::to_string(i) + "]";
+      prev_t = keyframe_t(kf, where, prev_t, have_prev);
+      have_prev = true;
+      transition_from(kf, where);
+      reject_unknown_keys(kf, kLegKeyframeKeys, where);
+      std::vector<std::string> legs_here;
+      for (const auto& leg : hexa::gait::LEG_NAMES) {
+        if (kf[leg]) legs_here.push_back(leg);
+      }
+      if (is_preserve(kf)) {
+        if (!legs_here.empty()) {
+          throw std::runtime_error(where + ": preserve: true takes no leg entries");
+        }
+        continue;
+      }
+      if (legs_here.empty()) {
+        throw std::runtime_error(
+            where + ": names no leg (use preserve: true to hold all)");
+      }
+      for (const auto& leg : legs_here) {
+        const YAML::Node v = kf[leg];
+        if (v.IsScalar() && v.as<std::string>() == "preserve") {
+          // held
+        } else if (v.IsMap()) {
+          reject_unknown_keys(v, kLegEntryKeys, where + "." + leg);
+          if (!v["angle_deg"] || !v["reach"] || !v["height"]) {
+            throw std::runtime_error(where + "." + leg +
+                                     ": needs angle_deg, reach and height");
+          }
+          if (!(f(v["reach"]) > 0.0f)) {
+            throw std::runtime_error(where + "." + leg + ": reach must be > 0");
+          }
+          if (f(v["height"]) < 0.0f) {
+            throw std::runtime_error(where + "." + leg + ": height must be >= 0");
+          }
+        } else {
+          throw std::runtime_error(where + "." + leg +
+                                   ": a mapping or the word preserve");
+        }
+        if (std::find(moved.begin(), moved.end(), leg) == moved.end()) {
+          moved.push_back(leg);
+        }
+      }
+    }
+    // Pass 2: per-leg tables, legs in Leg order.
+    for (std::size_t li = 0; li < hexa::kNumLegs; ++li) {
+      const std::string& leg = hexa::gait::LEG_NAMES[li];
+      if (std::find(moved.begin(), moved.end(), leg) == moved.end()) {
+        continue;
+      }
+      hexa::gesture::LegTrack track;
+      track.leg = static_cast<hexa::Leg>(li);
+      for (std::size_t i = 0; i < keyframes.size(); ++i) {
+        const YAML::Node kf = keyframes[i];
+        const bool all = is_preserve(kf);
+        if (!all && !kf[leg]) {
+          continue;
+        }
+        const YAML::Node v = kf[leg];
+        const bool held = all || (v.IsScalar() && v.as<std::string>() == "preserve");
+        hexa::config::LegKeyframe row{};
+        row.t = f(kf["t"]);
+        row.transition = transition_from(kf, gwhere);
+        row.preserve = held;
+        if (!held) {
+          row.angle = static_cast<float>(v["angle_deg"].as<double>() * M_PI / 180.0);
+          row.reach = f(v["reach"]);
+          row.height = f(v["height"]);
+        }
+        track.keys.push_back(row);
+      }
+      spec.legs.push_back(std::move(track));
+    }
+
+    const YAML::Node body = entry["body"];
+    prev_t = 0.0f;
+    have_prev = false;
+    for (std::size_t i = 0; body && i < body.size(); ++i) {
+      const YAML::Node kf = body[i];
+      const std::string where = gwhere + ".body[" + std::to_string(i) + "]";
+      hexa::config::BodyKeyframe row{};
+      row.t = keyframe_t(kf, where, prev_t, have_prev);
+      prev_t = row.t;
+      have_prev = true;
+      row.transition = transition_from(kf, where);
+      reject_unknown_keys(kf, kBodyKeyframeKeys, where);
+      row.preserve = is_preserve(kf);
+      const bool any_axis = kf["x"] || kf["y"] || kf["z"] || kf["roll_deg"] ||
+                            kf["pitch_deg"] || kf["yaw_deg"];
+      if (row.preserve && any_axis) {
+        throw std::runtime_error(where + ": preserve: true takes no axis values");
+      }
+      if (!row.preserve) {
+        const auto deg = [&](const char* key) {
+          return kf[key] ? static_cast<float>(kf[key].as<double>() * M_PI / 180.0)
+                         : 0.0f;
+        };
+        row.x = kf["x"] ? f(kf["x"]) : 0.0f;
+        row.y = kf["y"] ? f(kf["y"]) : 0.0f;
+        row.z = kf["z"] ? f(kf["z"]) : 0.0f;
+        row.roll = deg("roll_deg");
+        row.pitch = deg("pitch_deg");
+        row.yaw = deg("yaw_deg");
+      }
+      spec.body.push_back(row);
+    }
+
+    if (spec.legs.empty() && spec.body.empty()) {
+      throw std::runtime_error(gwhere + ": has no keyframes");
+    }
+    out.push_back(std::move(spec));
+  }
+  return out;
+}
+
 }  // namespace
 
 hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
-    const std::string& geometry_path, const std::string& tuning_path) {
+    const std::string& geometry_path, const std::string& tuning_path,
+    const std::string& gestures_path) {
   const YAML::Node geo = YAML::LoadFile(geometry_path);
   const YAML::Node tun = YAML::LoadFile(tuning_path);
   const YAML::Node g = params(tun, "gait_node");
@@ -295,6 +501,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     }
   }
 
+  cfg.gestures = load_gestures(gestures_path);
+
   return cfg;
 }
 
@@ -303,14 +511,17 @@ hexa::pipeline::PipelineConfig load_pipeline_config(rclcpp::Node& node) {
       ament_index_cpp::get_package_share_directory("hexa_description");
   const std::string geometry_path = share + "/config/geometry.yaml";
   const std::string tuning_path = share + "/config/tuning.yaml";
+  const std::string gestures_path = share + "/config/gestures.yaml";
 
   try {
-    hexa::pipeline::PipelineConfig cfg =
-        load_pipeline_config_from_yaml(geometry_path, tuning_path);
+    hexa::pipeline::PipelineConfig cfg = load_pipeline_config_from_yaml(
+        geometry_path, tuning_path, gestures_path);
     RCLCPP_INFO(node.get_logger(),
-                "hexa_locomotion: loaded runtime config (gait=%s) from %s + %s",
-                cfg.default_gait.c_str(), geometry_path.c_str(),
-                tuning_path.c_str());
+                "hexa_locomotion: loaded runtime config (gait=%s, %zu gestures) "
+                "from %s + %s + %s",
+                cfg.default_gait.c_str(), cfg.gestures.size(),
+                geometry_path.c_str(), tuning_path.c_str(),
+                gestures_path.c_str());
     return cfg;
   } catch (const std::exception& ex) {
     RCLCPP_ERROR(node.get_logger(),
