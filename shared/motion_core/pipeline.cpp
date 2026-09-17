@@ -157,6 +157,12 @@ int Pipeline::compose_gait(
       theta_[i * 3 + 2] = folded_pose_[idx][2];
       continue;
     }
+    if (leg.direct) {
+      theta_[i * 3 + 0] = leg.joints[0];
+      theta_[i * 3 + 1] = leg.joints[1];
+      theta_[i * 3 + 2] = leg.joints[2];
+      continue;
+    }
     const hexa::Vec3& target = leg.foot_target;
     const hexa::Vec3 in_offset = hexa::apply_body_pose(target, body_pose);
     const hexa::Vec3 in_leg = hexa::body_to_leg(in_offset, spec);

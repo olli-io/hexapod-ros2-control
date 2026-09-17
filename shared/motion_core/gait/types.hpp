@@ -61,6 +61,11 @@ struct LegOutput {
   // weight and taking no phase. `stance` is meaningless while this is set, so
   // every collective predicate tests this one first.
   bool parked = false;
+  // Commanded in joint space: `joints` go to the servos as they are, with no
+  // body pose and no IK; foot_target is their FK, for the support geometry.
+  // A gesture's tracked legs.
+  bool direct = false;
+  JointAngles joints{};
 };
 
 template <typename Value>

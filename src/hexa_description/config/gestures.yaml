@@ -1,11 +1,13 @@
 # Gestures: keyframed leg + body motions played from a stand on /cmd_gesture.
 # Units: m, s, rad — except keys ending in `_deg`.
 #
-# angle_deg  — coxa swivel in the leg's own mount frame; 0 = straight out
-#              along the mount yaw, positive counter-clockwise (REP-103). Not
-#              mirrored per side: a right leg swinging forward is negative.
-# reach      — planar distance coxa axis -> foot tip.
-# height     — foot lift above the standing ground plane; 0 = planted.
+# A leg keyframe is the leg's three joint angles, in the same intuitive sense
+# as geometry.yaml's joint limits:
+# coxa_deg   — fore/aft sweep about the coxa axis; 0 = centred on the mount
+#              yaw, positive counter-clockwise (REP-103). Not mirrored per
+#              side: a right leg swinging forward is negative.
+# femur_deg  — lift above horizontal; positive raises the knee.
+# tibia_deg  — interior knee angle; 179 = fully extended.
 # transition — how the track ARRIVES at this keyframe: `ease` (smoothstep,
 #              stops there) or `continuous` (a smooth curve through it).
 #
@@ -18,25 +20,33 @@
 # keyframes are offsets from the standing pose and must sit inside the
 # posture_node pose limits; a live /body/pose adds on top of them.
 #
-# Gestures run only on the default preset (tuning.yaml default_preset); reach
-# and angle are written for that stance. Which legs may be in the air together
-# is the designer's responsibility.
+# Each joint interpolates on its own and never leaves the range spanned by its
+# neighbouring keyframes, so every keyframe is checked against the joint
+# limits and against the ground plane, and that check covers the whole path.
+# A tracked leg is commanded in joint space directly: the body track and a
+# live /body/pose move the body, not the leg. Whether the foot dips into the
+# ground between two keyframes, and which legs may be in the air together, is
+# the designer's responsibility.
+#
+# Gestures run only on the default preset (tuning.yaml default_preset); the
+# standing leg there is roughly coxa as tuning.yaml splays it, femur 37,
+# tibia 66.
 gestures:
   - id: wave
     return_time: 0.6
     legs:
       - t: 0.5
         transition: ease
-        l_front: { angle_deg: 45, reach: 0.11, height: 0.08 }
+        l_front: { coxa_deg: 45, femur_deg: 100, tibia_deg: 30 }
       - t: 0.9
         transition: continuous
-        l_front: { angle_deg: 65, reach: 0.12, height: 0.10 }
+        l_front: { coxa_deg: 65, femur_deg: 105, tibia_deg: 45 }
       - t: 1.3
         transition: continuous
-        l_front: { angle_deg: 25, reach: 0.12, height: 0.10 }
+        l_front: { coxa_deg: 25, femur_deg: 105, tibia_deg: 45 }
       - t: 1.7
         transition: continuous
-        l_front: { angle_deg: 65, reach: 0.12, height: 0.10 }
+        l_front: { coxa_deg: 65, femur_deg: 105, tibia_deg: 45 }
     body:
       - { t: 0.5, y: -0.015, roll_deg: -3, transition: ease }
       - { t: 1.7, preserve: true, transition: ease }
@@ -45,8 +55,8 @@ gestures:
     legs:
       - t: 0.8
         transition: ease
-        l_front: { angle_deg: 60, reach: 0.16, height: 0.05 }
-        r_front: { angle_deg: -60, reach: 0.16, height: 0.05 }
+        l_front: { coxa_deg: 60, femur_deg: 64, tibia_deg: 65 }
+        r_front: { coxa_deg: -60, femur_deg: 64, tibia_deg: 65 }
       - { t: 1.6, preserve: true, transition: ease }
     body:
       - { t: 0.8, x: -0.02, pitch_deg: 8, transition: ease }

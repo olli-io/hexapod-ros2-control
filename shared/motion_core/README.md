@@ -36,9 +36,12 @@ hardware. The seams each caller supplies — input, config source, clock, output
   (`breathing`, `gait_sway`, `support_shift`, `gait_bounce`, body rolls).
 - **`gesture/`** — keyframed leg + body motions played from a stand
   (`gestures.yaml`). `keyframe` samples one track (`ease` smoothstep or a
-  `continuous` Hermite run); `GesturePlayer` completes a gesture's per-leg and
-  body tables with the implicit start and return knots and plays them off one
-  clock; `validate_gestures` solves every gesture through IK at construction.
+  `continuous` Hermite run, slope-capped so a component never leaves the
+  range its knots span); `GesturePlayer` completes a gesture's per-leg joint
+  tables and body table with the implicit start and return knots (the stance
+  solved through IK once) and plays them off one clock, reporting each
+  tracked leg `direct` with its joint angles; `validate_gestures` checks every
+  leg knot against the joint limits and the ground plane at construction.
   Its leg track is neither gait nor animation; its body track is a posture
   term, not an animation layer.
 - **`kinematics/`** — `apply_body_pose`, `body_to_leg`, `inverse_kinematics`
@@ -74,14 +77,16 @@ overload runs `map_joy` first, then the same core.
    holds the gait clock while the shaped command crosses zero.
 8. **Velocity shaping** — `Control::shape` on the applied leg set.
 9. **Gait engine** — `Engine::update(dt, v, wz)` → per-leg `LegOutput`
-   (foot target, stance flag, phase, parked). In `GESTURE` the player's feet
-   come out here and the command is ignored.
+   (foot target, stance flag, phase, parked, direct joints). In `GESTURE` the
+   player's legs come out here and the command is ignored.
 10. **Posture** — user pose (pinned to identity while the middle pair is in
     flight) + animation stack, gated on `walking` and engine state, plus a
     running gesture's body term, all under one clamp → `BodyPose`.
 11. **Compose / IK** — per leg: `apply_body_pose` → `body_to_leg` →
     `inverse_kinematics`. An unreachable target holds that leg's last-good
-    angles. A parked leg writes the folded pose directly.
+    angles. A parked leg writes the folded pose directly; a direct leg (a
+    gesture's tracked leg) writes its joint angles directly, so the body pose
+    moves the body under it, not the leg.
 12. **Report** — 18 joint angles, engine state, applied leg set / preset,
     master phase, supervisor decision, and the raw intent for the face.
 

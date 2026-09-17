@@ -62,8 +62,8 @@ Published, all latched and on change only:
 
 Service **`~/reload_config`** (`std_srvs/Trigger`) re-reads all three YAMLs
 and swaps in a fresh pipeline without a restart (`./hexa sim reload`). The
-pipeline cold-starts at `FOLDED`; a bad file, including a gesture keyframe the
-legs cannot reach, keeps the current pipeline; a latched undervoltage cutoff
+pipeline cold-starts at `FOLDED`; a bad file, including a gesture keyframe
+outside the joint limits, keeps the current pipeline; a latched undervoltage cutoff
 refuses the swap.
 
 ## Vocabulary

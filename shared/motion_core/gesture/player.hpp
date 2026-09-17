@@ -41,22 +41,25 @@ struct GestureProgress {
   BodyPose body;   // the body track's term, nominal-relative
 };
 
-// Below this lift a tracked foot counts as planted.
+// Below this lift above the standing ground plane a tracked foot counts as
+// planted.
 inline constexpr float kPlantedHeight = 1e-4f;
 
 class GesturePlayer {
  public:
   // start_feet is where the feet stand as the gesture begins (the implicit
   // start knot); nominal is where every track returns to. Both in the body
-  // frame. Legs without a track are held at nominal.
+  // frame; each is solved to joint angles once, here. Legs without a track are
+  // held at nominal.
   GesturePlayer(const GestureSpec& spec,
                 const std::map<std::string, Vec3>& start_feet,
                 const std::map<std::string, Vec3>& nominal,
                 const std::map<std::string, gait::kin::LegSpec>& leg_specs);
 
-  // Advance by dt and return all six legs. A tracked leg carries the gesture's
-  // progress as its phase and `stance` = planted; an untracked one is nominal,
-  // phase 0, stance.
+  // Advance by dt and return all six legs. A tracked leg is `direct`: its
+  // joint angles are the sampled track, its foot_target their FK, its phase
+  // the gesture's progress and `stance` = planted. An untracked one is
+  // nominal, phase 0, stance.
   std::map<std::string, gait::LegOutput> update(float dt);
 
   BodyPose body() const;
@@ -72,6 +75,9 @@ class GesturePlayer {
     float ground_z = 0.0f;  // standing tip z in the leg frame
     std::vector<LegKeyframe> keys;  // complete: start, knots, return
   };
+
+  // A track's sampled joint angles at the current time.
+  static JointAngles sample(const Track& track, float t);
 
   std::string id_;
   std::vector<Track> tracks_;

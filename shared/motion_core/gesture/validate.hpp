@@ -1,6 +1,7 @@
-// Construction-time check of a gesture table against the stance it will run
-// on. Exhaustive because a gesture runs only on the default preset at a zero
-// height offset, so the stance sampled here is the stance it plays on.
+// Construction-time check of a gesture table against the joint limits and the
+// stance it will run on. Per knot only: each joint interpolates inside the
+// range its neighbouring knots span, and a tracked leg is commanded in joint
+// space with no body pose on top, so the knots bound the whole path.
 #pragma once
 
 #include <map>
@@ -14,11 +15,11 @@
 
 namespace hexa::gesture {
 
-// Sample every gesture at 100 Hz from `nominal_stance` (the default preset's,
-// body frame) and solve each tracked and planted foot through the body track,
-// exactly as the pipeline composes it. Throws std::invalid_argument naming the
-// gesture, leg and time on an unreachable sample, and on a body keyframe
-// outside `limits` — the pose clamp would otherwise bend the track silently.
+// Throws std::invalid_argument naming the gesture, leg, joint and time on a
+// leg knot outside kJointLimits, naming the gesture, leg and time on a knot
+// whose foot sits below the default preset's ground plane (`nominal_stance`,
+// body frame), and on a body keyframe outside `limits` — the pose clamp would
+// otherwise bend the track silently.
 void validate_gestures(
     const std::vector<GestureSpec>& specs,
     const std::map<std::string, gait::kin::LegSpec>& leg_specs,

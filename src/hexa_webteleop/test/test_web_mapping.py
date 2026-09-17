@@ -840,7 +840,7 @@ gestures:
     legs:
       - t: 0.5
         transition: ease
-        l_front: {angle_deg: 45, reach: 0.11, height: 0.08}
+        l_front: {coxa_deg: 45, femur_deg: 100, tibia_deg: 30}
   - id: bow
     return_time: 0.6
     body:

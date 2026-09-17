@@ -508,8 +508,13 @@ TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
     EXPECT_GT(cfg::kGestureLegKeyframes[t.first].t, 0.0f);
     for (std::size_t k = 0; k < t.count; ++k) {
       const auto& key = cfg::kGestureLegKeyframes[t.first + k];
-      EXPECT_GE(key.height, 0.0f);
-      if (!key.preserve) EXPECT_GT(key.reach, 0.0f);
+      if (!key.preserve) {
+        const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
+        for (std::size_t j = 0; j < 3; ++j) {
+          EXPECT_GE(a[j], cfg::kJointLimits[j].lower) << "joint " << j;
+          EXPECT_LE(a[j], cfg::kJointLimits[j].upper) << "joint " << j;
+        }
+      }
       if (k > 0) {
         EXPECT_LT(cfg::kGestureLegKeyframes[t.first + k - 1].t, key.t);
       }

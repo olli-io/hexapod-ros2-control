@@ -1,7 +1,11 @@
-// Keyframe sampling for gestures: the leg-polar currency, the two segment
-// shapes, and a sampler over a complete keyframe table. Stateless.
+// Keyframe sampling for gestures: the two segment shapes and a sampler over a
+// complete keyframe table. Stateless. Leg tracks are sampled per joint, body
+// tracks per pose axis; every component stays inside the range its
+// neighbouring knots span, which is what lets a per-knot check cover the path.
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 #include "config_generated.hpp"
@@ -12,19 +16,6 @@ namespace hexa::gesture {
 using ::hexa::config::BodyKeyframe;
 using ::hexa::config::GestureTransition;
 using ::hexa::config::LegKeyframe;
-
-// One foot in its leg's mount frame: coxa swivel, planar reach, and lift above
-// the standing ground plane. The currency gestures.yaml is written in.
-struct LegPolar {
-  float angle = 0.0f;   // rad, 0 along the mount yaw, positive CCW
-  float reach = 0.0f;   // m, planar coxa axis -> tip
-  float height = 0.0f;  // m above the ground plane; 0 = planted
-};
-
-// ground_z is the standing tip z in the leg frame (the tip-sphere centre, so
-// height is exactly the contact lift).
-LegPolar polar_from_leg_frame(const Vec3& p_leg, float ground_z);
-Vec3 leg_frame_from_polar(const LegPolar& polar, float ground_z);
 
 // Quintic smoothstep — the same curve gait/gaits/base.hpp's ease5 draws.
 inline float ease5(float u) {
@@ -39,7 +30,9 @@ float hermite(float p0, float m0, float p1, float m1, float u);
 // not skew the curve. Zero at the table's ends, where either adjacent segment
 // is `ease`, and where the two secants disagree in sign or either is zero —
 // that last rule is what makes two equal consecutive keyframes a hold and
-// keeps a turning point from overshooting.
+// keeps a turning point from overshooting. The Fritsch-Carlson cap (no slope
+// past three times the shallower secant) keeps a monotone run inside its knots
+// however uneven the steps.
 template <typename Key, typename Get>
 float knot_slope(const Key* keys, std::size_t n, std::size_t i, Get get) {
   if (i == 0 || i + 1 >= n) {
@@ -59,7 +52,9 @@ float knot_slope(const Key* keys, std::size_t n, std::size_t i, Get get) {
   if (s_in == 0.0f || s_out == 0.0f || (s_in < 0.0f) != (s_out < 0.0f)) {
     return 0.0f;
   }
-  return (get(keys[i + 1]) - get(keys[i - 1])) / (dt_in + dt_out);
+  const float m = (get(keys[i + 1]) - get(keys[i - 1])) / (dt_in + dt_out);
+  const float cap = 3.0f * std::min(std::fabs(s_in), std::fabs(s_out));
+  return std::copysign(std::min(std::fabs(m), cap), m);
 }
 
 // Sample one component of a COMPLETE table (implicit start and return already

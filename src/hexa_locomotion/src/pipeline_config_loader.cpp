@@ -1,6 +1,7 @@
 #include "pipeline_config_loader.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -38,6 +39,24 @@ double to_urdf_rad(const std::string& joint_type, double deg) {
   if (joint_type == "femur") return -rad;
   if (joint_type == "tibia") return M_PI - rad;
   throw std::runtime_error("unknown joint type: " + joint_type);
+}
+
+// Mirrors gen_config.py joint_limits(): geometry.yaml joints.<type> windows in
+// URDF rad, ordered coxa, femur, tibia like a JointAngles triple.
+std::array<hexa::config::JointLimits, 3> load_joint_limits(const YAML::Node& geo) {
+  static constexpr std::array<const char*, 3> kJointTypes = {"coxa", "femur",
+                                                              "tibia"};
+  std::array<hexa::config::JointLimits, 3> out{};
+  for (std::size_t j = 0; j < 3; ++j) {
+    const YAML::Node cfg = geo["joints"][kJointTypes[j]];
+    const double a = to_urdf_rad(kJointTypes[j], cfg["lower_limit_deg"].as<double>());
+    const double b = to_urdf_rad(kJointTypes[j], cfg["upper_limit_deg"].as<double>());
+    out[j].lower = static_cast<float>(std::min(a, b));
+    out[j].upper = static_cast<float>(std::max(a, b));
+    out[j].effort = f(cfg["effort"]);
+    out[j].velocity = f(cfg["velocity"]);
+  }
+  return out;
 }
 
 // ── gestures.yaml ──
@@ -86,13 +105,36 @@ void reject_unknown_keys(const YAML::Node& map, const std::set<std::string>& kno
   }
 }
 
+// A leg keyframe's (coxa, femur, tibia) in URDF rad, inside the limits. Each
+// joint interpolates within the range its neighbouring keyframes span, so a
+// per-keyframe check covers the whole path.
+hexa::JointAngles leg_entry_angles(
+    const YAML::Node& v, const std::array<hexa::config::JointLimits, 3>& limits,
+    const std::string& where) {
+  static constexpr std::array<const char*, 3> kJointTypes = {"coxa", "femur",
+                                                              "tibia"};
+  hexa::JointAngles out{};
+  for (std::size_t j = 0; j < 3; ++j) {
+    const std::string key = std::string(kJointTypes[j]) + "_deg";
+    const double deg = v[key].as<double>();
+    const float rad = static_cast<float>(to_urdf_rad(kJointTypes[j], deg));
+    if (rad < limits[j].lower || rad > limits[j].upper) {
+      throw std::runtime_error(where + ": " + key + " = " + std::to_string(deg) +
+                               " is outside the joint limits in geometry.yaml");
+    }
+    out[j] = rad;
+  }
+  return out;
+}
+
 std::vector<hexa::gesture::GestureSpec> load_gestures(
-    const std::string& path) {
+    const std::string& path,
+    const std::array<hexa::config::JointLimits, 3>& limits) {
   static const std::set<std::string> kLegKeyframeKeys = {
       "t", "transition", "preserve", "l_front", "l_middle", "l_rear",
       "r_front", "r_middle", "r_rear"};
-  static const std::set<std::string> kLegEntryKeys = {"angle_deg", "reach",
-                                                      "height"};
+  static const std::set<std::string> kLegEntryKeys = {"coxa_deg", "femur_deg",
+                                                      "tibia_deg"};
   static const std::set<std::string> kBodyKeyframeKeys = {
       "t", "transition", "preserve", "x", "y", "z",
       "roll_deg", "pitch_deg", "yaw_deg"};
@@ -150,16 +192,11 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
           // held
         } else if (v.IsMap()) {
           reject_unknown_keys(v, kLegEntryKeys, where + "." + leg);
-          if (!v["angle_deg"] || !v["reach"] || !v["height"]) {
-            throw std::runtime_error(where + "." + leg +
-                                     ": needs angle_deg, reach and height");
+          if (!v["coxa_deg"] || !v["femur_deg"] || !v["tibia_deg"]) {
+            throw std::runtime_error(
+                where + "." + leg + ": needs coxa_deg, femur_deg and tibia_deg");
           }
-          if (!(f(v["reach"]) > 0.0f)) {
-            throw std::runtime_error(where + "." + leg + ": reach must be > 0");
-          }
-          if (f(v["height"]) < 0.0f) {
-            throw std::runtime_error(where + "." + leg + ": height must be >= 0");
-          }
+          leg_entry_angles(v, limits, where + "." + leg);
         } else {
           throw std::runtime_error(where + "." + leg +
                                    ": a mapping or the word preserve");
@@ -190,9 +227,11 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
         row.transition = transition_from(kf, gwhere);
         row.preserve = held;
         if (!held) {
-          row.angle = static_cast<float>(v["angle_deg"].as<double>() * M_PI / 180.0);
-          row.reach = f(v["reach"]);
-          row.height = f(v["height"]);
+          const hexa::JointAngles a =
+              leg_entry_angles(v, limits, gwhere + "." + leg);
+          row.coxa = a[0];
+          row.femur = a[1];
+          row.tibia = a[2];
         }
         track.keys.push_back(row);
       }
@@ -501,7 +540,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     }
   }
 
-  cfg.gestures = load_gestures(gestures_path);
+  cfg.gestures = load_gestures(gestures_path, load_joint_limits(geo));
 
   return cfg;
 }

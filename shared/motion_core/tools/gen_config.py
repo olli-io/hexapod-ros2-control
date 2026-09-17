@@ -338,7 +338,7 @@ def presets(gait: dict, geometry: dict):
 
 GESTURE_TRANSITIONS = ("ease", "continuous")
 LEG_KEYFRAME_KEYS = {"t", "transition", "preserve"} | set(LEG_NAMES)
-LEG_ENTRY_KEYS = {"angle_deg", "reach", "height"}
+LEG_ENTRY_KEYS = {"coxa_deg", "femur_deg", "tibia_deg"}
 BODY_AXES = ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg")
 BODY_KEYFRAME_KEYS = {"t", "transition", "preserve"} | set(BODY_AXES)
 
@@ -361,7 +361,25 @@ def keyframe_common(entry, where: str, prev_t):
     return t, transition
 
 
-def gestures(doc):
+def leg_entry_angles(v: dict, limits: dict, where: str):
+    """A leg keyframe's (coxa, femur, tibia) in URDF rad, inside the limits.
+
+    Each joint interpolates within the range its neighbouring keyframes span,
+    so a per-keyframe check covers the whole path.
+    """
+    out = []
+    for jt in JOINT_TYPES:
+        rad = to_urdf_rad(jt, float(v[f"{jt}_deg"]))
+        lim = limits[jt]
+        if not lim["lower"] <= rad <= lim["upper"]:
+            raise ValueError(
+                f"{where}: {jt}_deg = {v[f'{jt}_deg']} is outside the joint "
+                f"limits in geometry.yaml")
+        out.append(rad)
+    return out
+
+
+def gestures(doc, geometry: dict):
     """Flatten gestures.yaml into per-leg keyframe tables.
 
     The authoring format is multi-leg (one keyframe positions several legs at
@@ -370,6 +388,7 @@ def gestures(doc):
     one preserve knot per leg the gesture moves anywhere. Mirrored by
     pipeline_config_loader.cpp, which the parity test holds to this output.
     """
+    limits = joint_limits(geometry)
     entries = (doc or {}).get("gestures") or []
     out = []
     seen = set()
@@ -413,10 +432,7 @@ def gestures(doc):
                         raise ValueError(
                             f"{where}.{leg}: needs exactly "
                             f"{sorted(LEG_ENTRY_KEYS)}")
-                    if not float(v["reach"]) > 0.0:
-                        raise ValueError(f"{where}.{leg}: reach must be > 0")
-                    if float(v["height"]) < 0.0:
-                        raise ValueError(f"{where}.{leg}: height must be >= 0")
+                    leg_entry_angles(v, limits, f"{where}.{leg}")
                 else:
                     raise ValueError(
                         f"{where}.{leg}: a mapping or the word preserve")
@@ -435,13 +451,12 @@ def gestures(doc):
                     v = kf[leg]
                 else:
                     continue
-                row = dict(t=float(kf["t"]), angle=0.0, reach=0.0, height=0.0,
+                row = dict(t=float(kf["t"]), coxa=0.0, femur=0.0, tibia=0.0,
                            transition=str(kf["transition"]),
                            preserve=(v == "preserve"))
                 if v != "preserve":
-                    row["angle"] = math.radians(float(v["angle_deg"]))
-                    row["reach"] = float(v["reach"])
-                    row["height"] = float(v["height"])
+                    row["coxa"], row["femur"], row["tibia"] = leg_entry_angles(
+                        v, limits, f"gestures.yaml {gid}.{leg}")
                 rows.append(row)
             tracks.append((leg, rows))
 
@@ -668,7 +683,7 @@ def hardware_joints(hw: dict, calibration: dict, limits: dict):
 def emit(geometry, gait, teleop, posture, control, hardware, calibration,
          webteleop, display, gestures_doc, sources) -> str:
     specs = leg_specs(geometry)
-    gesture_rows_src = gestures(gestures_doc)
+    gesture_rows_src = gestures(gestures_doc, geometry)
     limits = joint_limits(geometry)
     preset_rows, default_preset_idx = presets(gait, geometry)
     default_entry = gait["presets"][default_preset_idx]
@@ -936,10 +951,10 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("// before it; its value fields are zero here, the player resolves them.")
     w("enum class GestureTransition : std::uint8_t { EASE, CONTINUOUS };")
     w("struct LegKeyframe {")
-    w("  float t;       // s from gesture start")
-    w("  float angle;   // rad, coxa swivel in the mount frame")
-    w("  float reach;   // m, planar coxa axis -> tip")
-    w("  float height;  // m above the standing ground plane")
+    w("  float t;      // s from gesture start")
+    w("  float coxa;   // rad, IK convention, inside kJointLimits")
+    w("  float femur;")
+    w("  float tibia;")
     w("  GestureTransition transition;  // how the track arrives here")
     w("  bool preserve;")
     w("};")
@@ -981,8 +996,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w(f"inline constexpr std::array<LegKeyframe, {len(leg_keys)}> "
       "kGestureLegKeyframes = {{")
     for gid, leg, r in leg_keys:
-        w(f"    {{{fl(r['t'])}, {fl(r['angle'])}, {fl(r['reach'])}, "
-          f"{fl(r['height'])}, {trans(r['transition'])}, {bo(r['preserve'])}}},"
+        w(f"    {{{fl(r['t'])}, {fl(r['coxa'])}, {fl(r['femur'])}, "
+          f"{fl(r['tibia'])}, {trans(r['transition'])}, {bo(r['preserve'])}}},"
           f"  // {gid} {leg}")
     w("}};")
     w(f"inline constexpr std::array<BodyKeyframe, {len(body_keys)}> "

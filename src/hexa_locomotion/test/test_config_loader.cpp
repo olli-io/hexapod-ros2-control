@@ -218,9 +218,9 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
       for (std::size_t ki = 0; ki < bt.keys.size(); ++ki) {
         const std::string key = track + "[" + std::to_string(ki) + "]";
         EXPECT_NEAR(lt.keys[ki].t, bt.keys[ki].t, kTol) << key;
-        EXPECT_NEAR(lt.keys[ki].angle, bt.keys[ki].angle, kTol) << key;
-        EXPECT_NEAR(lt.keys[ki].reach, bt.keys[ki].reach, kTol) << key;
-        EXPECT_NEAR(lt.keys[ki].height, bt.keys[ki].height, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].coxa, bt.keys[ki].coxa, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].femur, bt.keys[ki].femur, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].tibia, bt.keys[ki].tibia, kTol) << key;
         EXPECT_EQ(lt.keys[ki].transition, bt.keys[ki].transition) << key;
         EXPECT_EQ(lt.keys[ki].preserve, bt.keys[ki].preserve) << key;
       }

@@ -1,21 +1,6 @@
 #include "gesture/keyframe.hpp"
 
-#include <cmath>
-
 namespace hexa::gesture {
-
-LegPolar polar_from_leg_frame(const Vec3& p_leg, float ground_z) {
-  LegPolar out;
-  out.angle = std::atan2(p_leg.y, p_leg.x);
-  out.reach = std::hypot(p_leg.x, p_leg.y);
-  out.height = p_leg.z - ground_z;
-  return out;
-}
-
-Vec3 leg_frame_from_polar(const LegPolar& polar, float ground_z) {
-  return Vec3(polar.reach * std::cos(polar.angle),
-              polar.reach * std::sin(polar.angle), ground_z + polar.height);
-}
 
 float hermite(float p0, float m0, float p1, float m1, float u) {
   const float u2 = u * u;

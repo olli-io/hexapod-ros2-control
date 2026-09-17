@@ -20,9 +20,9 @@ values. Every consumer loads them at runtime, or generates code from them.
   the `presets` list and `default_standing_pose`. Shared by sim, web teleop and
   the Pico firmware.
 - `config/gestures.yaml` — gestures: keyframed leg + body motions played from
-  a stand. Leg keyframes in leg-polar coordinates, body keyframes as pose
-  offsets, written for the default preset's stance. The file header documents
-  the format.
+  a stand. Leg keyframes as joint angles in geometry.yaml's joint sense, body
+  keyframes as pose offsets, written for the default preset's stance. The file
+  header documents the format.
 - `config/hardware.yaml` — Servo2040 connection, servo pin wiring, direction,
   `deg_at_center`, and the undervoltage ladder.
 - `config/servo_calibration.yaml` — per-servo endpoint pulse widths, one

@@ -2,8 +2,10 @@
 // player (implicit start / return knots, preserve resolution, per-leg tracks)
 // and the engine's GESTURE state with its guards.
 
+#include <cmath>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -13,7 +15,9 @@
 #include "gait/engine.hpp"
 #include "gesture/keyframe.hpp"
 #include "gesture/player.hpp"
+#include "gesture/validate.hpp"
 #include "kinematics/body_transform.hpp"
+#include "kinematics/leg_ik.hpp"
 
 namespace g = hexa::gait;
 namespace gs = hexa::gesture;
@@ -54,14 +58,14 @@ std::vector<g::EngineState> run_until_stand(g::Engine& e, int max_ticks = 1000) 
 LegKeyframe key(float t, float value, GestureTransition tr) {
   LegKeyframe k{};
   k.t = t;
-  k.angle = value;
-  k.reach = value;
-  k.height = value;
+  k.coxa = value;
+  k.femur = value;
+  k.tibia = value;
   k.transition = tr;
   return k;
 }
 
-float angle_of(const LegKeyframe& k) { return k.angle; }
+float angle_of(const LegKeyframe& k) { return k.coxa; }
 
 float sample(const std::vector<LegKeyframe>& keys, float t) {
   return gs::track_value(keys.data(), keys.size(), t, angle_of);
@@ -89,13 +93,13 @@ gs::GestureSpec one_leg_spec(hexa::Leg leg, const std::vector<LegKeyframe>& keys
   return spec;
 }
 
-LegKeyframe polar_key(float t, float angle, float reach, float height,
+LegKeyframe joint_key(float t, const hexa::JointAngles& a,
                       GestureTransition tr = GestureTransition::EASE) {
   LegKeyframe k{};
   k.t = t;
-  k.angle = angle;
-  k.reach = reach;
-  k.height = height;
+  k.coxa = a[0];
+  k.femur = a[1];
+  k.tibia = a[2];
   k.transition = tr;
   return k;
 }
@@ -108,13 +112,23 @@ LegKeyframe preserve_key(float t, GestureTransition tr = GestureTransition::EASE
   return k;
 }
 
-// The default preset's l_front foot in its own polar currency.
-gs::LegPolar nominal_polar(const std::string& leg) {
+// Joint angles that put `leg`'s foot at its default-preset stance, swivelled
+// by dangle about the coxa axis, moved dreach radially and lifted by height.
+// Tests think in foot geometry; the tracks are written in joints.
+hexa::JointAngles joints_at(const std::string& leg, float dangle, float dreach,
+                            float height) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
   const hexa::Vec3 in_leg = hexa::body_to_leg(nominal.at(leg), specs.at(leg));
-  return gs::polar_from_leg_frame(in_leg, in_leg.z);
+  const float angle = std::atan2(in_leg.y, in_leg.x) + dangle;
+  const float reach = std::hypot(in_leg.x, in_leg.y) + dreach;
+  return hexa::inverse_kinematics(
+      hexa::Vec3(reach * std::cos(angle), reach * std::sin(angle),
+                 in_leg.z + height),
+      specs.at(leg));
 }
+
+hexa::JointAngles joints_of(const g::LegOutput& out) { return out.joints; }
 
 bool near(const hexa::Vec3& a, const hexa::Vec3& b, float tol = kTol) {
   return (a - b).norm() <= tol;
@@ -146,7 +160,7 @@ TEST(Keyframe, ContinuousRunPassesThroughEveryKnot) {
       key(3.0f, 2.0f, GestureTransition::CONTINUOUS),
       key(4.0f, 0.0f, GestureTransition::EASE)};
   for (const auto& k : keys) {
-    EXPECT_NEAR(sample(keys, k.t), k.angle, kTol) << "t=" << k.t;
+    EXPECT_NEAR(sample(keys, k.t), k.coxa, kTol) << "t=" << k.t;
   }
 }
 
@@ -217,18 +231,47 @@ TEST(Keyframe, TurningPointDoesNotOvershoot) {
   }
 }
 
+TEST(Keyframe, MonotoneUnevenKnotsStayInsideTheirRange) {
+  // A steep step after a shallow one: an uncapped Catmull-Rom tangent at the
+  // middle knot would pull the shallow segment below its start.
+  const std::vector<LegKeyframe> keys = {
+      key(0.0f, 0.0f, GestureTransition::CONTINUOUS),
+      key(1.0f, 1.0f, GestureTransition::CONTINUOUS),
+      key(2.0f, 100.0f, GestureTransition::CONTINUOUS),
+      key(3.0f, 101.0f, GestureTransition::CONTINUOUS)};
+  for (std::size_t i = 1; i < keys.size(); ++i) {
+    for (float t = keys[i - 1].t; t <= keys[i].t; t += 0.01f) {
+      const float v = sample(keys, t);
+      EXPECT_GE(v, keys[i - 1].coxa - kTol) << "t=" << t;
+      EXPECT_LE(v, keys[i].coxa + kTol) << "t=" << t;
+    }
+  }
+}
+
 // ── Player ──
 
-TEST(Player, PolarRoundTripReproducesNominalExactly) {
+TEST(Player, TrackedLegIsDirectAndUntrackedIsNot) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  for (const auto& leg : g::LEG_NAMES) {
-    const hexa::Vec3 in_leg = hexa::body_to_leg(nominal.at(leg), specs.at(leg));
-    const gs::LegPolar p = gs::polar_from_leg_frame(in_leg, in_leg.z);
-    EXPECT_NEAR(p.height, 0.0f, 1e-7f) << leg;
-    const hexa::Vec3 back =
-        hexa::leg_to_body(gs::leg_frame_from_polar(p, in_leg.z), specs.at(leg));
-    EXPECT_TRUE(near(back, nominal.at(leg), 1e-6f)) << leg;
+  const auto spec = one_leg_spec(
+      hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
+  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  while (!player.done()) {
+    const auto out = player.update(kDt);
+    const auto& l = out.at("l_front");
+    EXPECT_TRUE(l.direct);
+    // foot_target is the joints' FK, in the body frame.
+    EXPECT_TRUE(near(l.foot_target,
+                     hexa::leg_to_body(hexa::forward_kinematics(
+                                           l.joints, specs.at("l_front")),
+                                       specs.at("l_front")),
+                     1e-6f))
+        << "t=" << player.t();
+    for (const auto& leg : g::LEG_NAMES) {
+      if (leg != "l_front") {
+        EXPECT_FALSE(out.at(leg).direct) << leg;
+      }
+    }
   }
 }
 
@@ -238,10 +281,9 @@ TEST(Player, StartsAtTheCurrentFootAndReturnsToNominal) {
   auto start = nominal;
   start["l_front"] = nominal.at("l_front") + hexa::Vec3(0.01f, -0.005f, 0.0f);
 
-  const gs::LegPolar home = nominal_polar("l_front");
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {polar_key(0.5f, home.angle + 0.3f, home.reach - 0.02f, 0.05f)});
+      {joint_key(0.5f, joints_at("l_front", 0.3f, -0.02f, 0.05f))});
   gs::GesturePlayer player(spec, start, nominal, specs);
 
   auto out = player.update(1e-5f);
@@ -261,9 +303,8 @@ TEST(Player, StartsAtTheCurrentFootAndReturnsToNominal) {
 TEST(Player, UntrackedLegsStayPlanted) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  const gs::LegPolar home = nominal_polar("l_front");
   const auto spec = one_leg_spec(
-      hexa::Leg::L_FRONT, {polar_key(0.5f, home.angle, home.reach, 0.05f)});
+      hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   while (!player.done()) {
     const auto out = player.update(kDt);
@@ -280,9 +321,8 @@ TEST(Player, UntrackedLegsStayPlanted) {
 TEST(Player, LiftedLegReportsSwingOnlyWhileAboveTheGround) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  const gs::LegPolar home = nominal_polar("l_front");
   const auto spec = one_leg_spec(
-      hexa::Leg::L_FRONT, {polar_key(0.5f, home.angle, home.reach, 0.05f)});
+      hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   auto out = player.update(1e-5f);
   EXPECT_TRUE(out.at("l_front").stance) << "planted at the start";
@@ -327,8 +367,9 @@ TEST(Player, BodyTrackReturnsToIdentity) {
 TEST(Player, LegAbsentFromAMiddleKeyframeInterpolatesAcrossIt) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  const gs::LegPolar l = nominal_polar("l_front");
-  const gs::LegPolar r = nominal_polar("r_front");
+  const hexa::JointAngles a = joints_at("l_front", 0.0f, 0.0f, 0.02f);
+  const hexa::JointAngles c = joints_at("l_front", 0.0f, 0.0f, 0.06f);
+  const hexa::JointAngles b = joints_at("r_front", 0.0f, 0.0f, 0.03f);
   gs::GestureSpec spec;
   spec.id = "test";
   spec.return_time = 0.5f;
@@ -336,35 +377,33 @@ TEST(Player, LegAbsentFromAMiddleKeyframeInterpolatesAcrossIt) {
   // flattened tracks carry that directly, so l_front eases A -> C over B.
   gs::LegTrack left;
   left.leg = hexa::Leg::L_FRONT;
-  left.keys = {polar_key(0.5f, l.angle, l.reach, 0.02f),
-               polar_key(1.5f, l.angle, l.reach, 0.06f)};
+  left.keys = {joint_key(0.5f, a), joint_key(1.5f, c)};
   gs::LegTrack right;
   right.leg = hexa::Leg::R_FRONT;
-  right.keys = {polar_key(1.0f, r.angle, r.reach, 0.03f)};
+  right.keys = {joint_key(1.0f, b)};
   spec.legs = {left, right};
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   for (int i = 0; i < 50; ++i) player.update(kDt);  // t = 1.0
   const auto out = player.update(0.0f);
-  const float lift_l = out.at("l_front").foot_target.z - nominal.at("l_front").z;
-  const float lift_r = out.at("r_front").foot_target.z - nominal.at("r_front").z;
-  EXPECT_NEAR(lift_l, 0.04f, 1e-4f) << "midway A -> C, ease5(0.5) = 0.5";
-  EXPECT_NEAR(lift_r, 0.03f, 1e-4f);
+  for (std::size_t j = 0; j < 3; ++j) {
+    EXPECT_NEAR(joints_of(out.at("l_front"))[j], 0.5f * (a[j] + c[j]), 1e-4f)
+        << "joint " << j << " midway A -> C, ease5(0.5) = 0.5";
+    EXPECT_NEAR(joints_of(out.at("r_front"))[j], b[j], 1e-4f) << "joint " << j;
+  }
 }
 
 TEST(Player, TwoLegsInOneKeyframeMoveTogether) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  const gs::LegPolar l = nominal_polar("l_front");
-  const gs::LegPolar r = nominal_polar("r_front");
   gs::GestureSpec spec;
   spec.id = "test";
   spec.return_time = 0.5f;
   gs::LegTrack left;
   left.leg = hexa::Leg::L_FRONT;
-  left.keys = {polar_key(0.8f, l.angle, l.reach, 0.04f)};
+  left.keys = {joint_key(0.8f, joints_at("l_front", 0.0f, 0.0f, 0.04f))};
   gs::LegTrack right;
   right.leg = hexa::Leg::R_FRONT;
-  right.keys = {polar_key(0.8f, r.angle, r.reach, 0.04f)};
+  right.keys = {joint_key(0.8f, joints_at("r_front", 0.0f, 0.0f, 0.04f))};
   spec.legs = {left, right};
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   while (!player.done()) {
@@ -379,10 +418,9 @@ TEST(Player, TwoLegsInOneKeyframeMoveTogether) {
 TEST(Player, PreserveKnotHoldsThePreviousValue) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  const gs::LegPolar home = nominal_polar("l_front");
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {polar_key(0.5f, home.angle + 0.2f, home.reach, 0.05f), preserve_key(1.0f)});
+      {joint_key(0.5f, joints_at("l_front", 0.2f, 0.0f, 0.05f)), preserve_key(1.0f)});
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
   const hexa::Vec3 at_knot = player.update(0.0f).at("l_front").foot_target;
@@ -399,10 +437,9 @@ TEST(Player, LeadingPreserveKnotHoldsTheStartPosition) {
   const auto specs = g::leg_specs_from_config();
   auto start = nominal;
   start["l_front"] = nominal.at("l_front") + hexa::Vec3(0.0f, 0.0f, 0.02f);
-  const gs::LegPolar home = nominal_polar("l_front");
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {preserve_key(0.5f), polar_key(1.0f, home.angle, home.reach, 0.05f)});
+      {preserve_key(0.5f), joint_key(1.0f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
   gs::GesturePlayer player(spec, start, nominal, specs);
   for (int i = 0; i < 25; ++i) {
     const auto out = player.update(kDt);
@@ -446,6 +483,50 @@ TEST(Player, BakedTableRoundTripsThroughTheSpecs) {
     EXPECT_EQ(specs[i].legs.size(), hexa::config::kGestures[i].leg_track_count);
     EXPECT_EQ(specs[i].body.size(), hexa::config::kGestures[i].body_key_count);
   }
+}
+
+// ── Validation ──
+
+TEST(Validate, AcceptsTheBakedTable) {
+  EXPECT_NO_THROW(gs::validate_gestures(
+      gs::gesture_specs_from_config(), g::leg_specs_from_config(),
+      g::nominal_stance_from_config(),
+      hexa::posture::PoseLimits{}));
+}
+
+TEST(Validate, RejectsAKnotPastAJointLimit) {
+  hexa::JointAngles a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  a[1] = hexa::config::kJointLimits[1].lower - 0.01f;
+  const auto spec = one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, a)});
+  try {
+    gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                          g::nominal_stance_from_config(),
+                          hexa::posture::PoseLimits{});
+    FAIL() << "accepted a femur past its limit";
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("l_front"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("femur"), std::string::npos) << msg;
+  }
+}
+
+TEST(Validate, RejectsAKnotBelowTheGroundPlane) {
+  const auto spec = one_leg_spec(
+      hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, -0.01f))});
+  EXPECT_THROW(gs::validate_gestures(
+                   {spec}, g::leg_specs_from_config(),
+                   g::nominal_stance_from_config(),
+                   hexa::posture::PoseLimits{}),
+               std::invalid_argument);
+}
+
+TEST(Validate, PreserveKnotsAreNotChecked) {
+  const auto spec = one_leg_spec(
+      hexa::Leg::L_FRONT,
+      {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)), preserve_key(1.0f)});
+  EXPECT_NO_THROW(gs::validate_gestures(
+      {spec}, g::leg_specs_from_config(), g::nominal_stance_from_config(),
+      hexa::posture::PoseLimits{}));
 }
 
 // ── Engine ──

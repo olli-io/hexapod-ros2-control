@@ -2,16 +2,19 @@
 
 #include <algorithm>
 
+#include "kinematics/leg_ik.hpp"
+
 namespace hexa::gesture {
 
 namespace {
 
-LegKeyframe leg_knot(float t, const LegPolar& p, GestureTransition transition) {
+LegKeyframe leg_knot(float t, const JointAngles& a,
+                     GestureTransition transition) {
   LegKeyframe k{};
   k.t = t;
-  k.angle = p.angle;
-  k.reach = p.reach;
-  k.height = p.height;
+  k.coxa = a[0];
+  k.femur = a[1];
+  k.tibia = a[2];
   k.transition = transition;
   k.preserve = false;
   return k;
@@ -39,9 +42,9 @@ void resolve_preserve(std::vector<LegKeyframe>& keys) {
     if (!keys[i].preserve) {
       continue;
     }
-    keys[i].angle = keys[i - 1].angle;
-    keys[i].reach = keys[i - 1].reach;
-    keys[i].height = keys[i - 1].height;
+    keys[i].coxa = keys[i - 1].coxa;
+    keys[i].femur = keys[i - 1].femur;
+    keys[i].tibia = keys[i - 1].tibia;
     keys[i].preserve = false;
   }
 }
@@ -81,10 +84,11 @@ GesturePlayer::GesturePlayer(
     t.spec = leg_specs.at(t.name);
     const Vec3 nominal_leg = body_to_leg(nominal.at(t.name), t.spec);
     t.ground_z = nominal_leg.z;
-    const LegPolar start =
-        polar_from_leg_frame(body_to_leg(start_feet.at(t.name), t.spec),
-                             t.ground_z);
-    const LegPolar home = polar_from_leg_frame(nominal_leg, t.ground_z);
+    // Both stand on the default preset, inside the reach annulus by
+    // construction; an exact FK round trip.
+    const JointAngles start = gait::kin::inverse_kinematics(
+        body_to_leg(start_feet.at(t.name), t.spec), t.spec);
+    const JointAngles home = gait::kin::inverse_kinematics(nominal_leg, t.spec);
     t.keys.reserve(track.keys.size() + 2);
     t.keys.push_back(leg_knot(0.0f, start, GestureTransition::EASE));
     t.keys.insert(t.keys.end(), track.keys.begin(), track.keys.end());
@@ -116,21 +120,24 @@ std::map<std::string, gait::LegOutput> GesturePlayer::update(float dt) {
     out[n] = gait::LegOutput{nominal_.at(n), 0.0f, true};
   }
   for (const Track& track : tracks_) {
-    const LegKeyframe* keys = track.keys.data();
-    const std::size_t n = track.keys.size();
-    LegPolar p;
-    p.angle = track_value(keys, n, elapsed_,
-                          [](const LegKeyframe& k) { return k.angle; });
-    p.reach = track_value(keys, n, elapsed_,
-                          [](const LegKeyframe& k) { return k.reach; });
-    p.height = track_value(keys, n, elapsed_,
-                           [](const LegKeyframe& k) { return k.height; });
-    const Vec3 target =
-        leg_to_body(leg_frame_from_polar(p, track.ground_z), track.spec);
-    out[track.name] =
-        gait::LegOutput{target, progress, p.height <= kPlantedHeight};
+    const JointAngles a = sample(track, elapsed_);
+    const Vec3 in_leg = gait::kin::forward_kinematics(a, track.spec);
+    gait::LegOutput& leg = out[track.name];
+    leg.foot_target = leg_to_body(in_leg, track.spec);
+    leg.phase = progress;
+    leg.stance = in_leg.z - track.ground_z <= kPlantedHeight;
+    leg.direct = true;
+    leg.joints = a;
   }
   return out;
+}
+
+JointAngles GesturePlayer::sample(const Track& track, float t) {
+  const LegKeyframe* keys = track.keys.data();
+  const std::size_t n = track.keys.size();
+  return {track_value(keys, n, t, [](const LegKeyframe& k) { return k.coxa; }),
+          track_value(keys, n, t, [](const LegKeyframe& k) { return k.femur; }),
+          track_value(keys, n, t, [](const LegKeyframe& k) { return k.tibia; })};
 }
 
 BodyPose GesturePlayer::body() const {
