@@ -17,7 +17,7 @@ void check_body_keyframe(const std::string& id, const BodyKeyframe& k,
                                 std::to_string(k.t) + " s: " + axis +
                                 " is outside the posture pose limits");
   };
-  if (k.preserve) {
+  if (k.hold || k.home) {
     return;
   }
   if (std::fabs(k.x) > limits.x) fail("x");
@@ -31,7 +31,7 @@ void check_body_keyframe(const std::string& id, const BodyKeyframe& k,
 void check_leg_keyframe(const std::string& id, const std::string& leg,
                         const LegKeyframe& k, const gait::kin::LegSpec& spec,
                         float ground_z) {
-  if (k.preserve) {
+  if (k.hold || k.home) {
     return;
   }
   static constexpr std::array<const char*, 3> kJointNames = {"coxa", "femur",
@@ -67,8 +67,17 @@ void validate_gestures(
     for (const BodyKeyframe& k : spec.body) {
       check_body_keyframe(spec.id, k, limits);
     }
+    if (!spec.body.empty() && !spec.body.back().home) {
+      throw std::invalid_argument("gesture '" + spec.id +
+                                  "': the body track must end with a home "
+                                  "keyframe");
+    }
     for (const LegTrack& track : spec.legs) {
       const std::string leg(leg_name(track.leg));
+      if (track.keys.empty() || !track.keys.back().home) {
+        throw std::invalid_argument("gesture '" + spec.id + "': " + leg +
+                                    " must end with a home keyframe");
+      }
       const gait::kin::LegSpec& ls = leg_specs.at(leg);
       const float ground_z = body_to_leg(nominal_stance.at(leg), ls).z;
       for (const LegKeyframe& k : track.keys) {

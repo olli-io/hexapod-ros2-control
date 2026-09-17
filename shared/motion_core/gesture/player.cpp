@@ -16,7 +16,6 @@ LegKeyframe leg_knot(float t, const JointAngles& a,
   k.femur = a[1];
   k.tibia = a[2];
   k.transition = transition;
-  k.preserve = false;
   return k;
 }
 
@@ -31,36 +30,40 @@ BodyKeyframe body_knot(float t, const BodyPose& p,
   k.pitch = p.pitch;
   k.yaw = p.yaw;
   k.transition = transition;
-  k.preserve = false;
   return k;
 }
 
-// A preserve knot takes the previous knot's value; the implicit start is
-// always knot 0, so there is always one.
-void resolve_preserve(std::vector<LegKeyframe>& keys) {
+// A hold knot takes the previous knot's value (the implicit start is always
+// knot 0, so there is one); a home knot takes the stance.
+void resolve_stand_ins(std::vector<LegKeyframe>& keys, const JointAngles& home) {
   for (std::size_t i = 1; i < keys.size(); ++i) {
-    if (!keys[i].preserve) {
-      continue;
+    if (keys[i].hold) {
+      keys[i].coxa = keys[i - 1].coxa;
+      keys[i].femur = keys[i - 1].femur;
+      keys[i].tibia = keys[i - 1].tibia;
+    } else if (keys[i].home) {
+      keys[i].coxa = home[0];
+      keys[i].femur = home[1];
+      keys[i].tibia = home[2];
     }
-    keys[i].coxa = keys[i - 1].coxa;
-    keys[i].femur = keys[i - 1].femur;
-    keys[i].tibia = keys[i - 1].tibia;
-    keys[i].preserve = false;
+    keys[i].hold = false;
+    keys[i].home = false;
   }
 }
 
-void resolve_preserve(std::vector<BodyKeyframe>& keys) {
+// The body's home is the identity pose, which a zeroed knot already is.
+void resolve_stand_ins(std::vector<BodyKeyframe>& keys) {
   for (std::size_t i = 1; i < keys.size(); ++i) {
-    if (!keys[i].preserve) {
-      continue;
+    if (keys[i].hold) {
+      keys[i].x = keys[i - 1].x;
+      keys[i].y = keys[i - 1].y;
+      keys[i].z = keys[i - 1].z;
+      keys[i].roll = keys[i - 1].roll;
+      keys[i].pitch = keys[i - 1].pitch;
+      keys[i].yaw = keys[i - 1].yaw;
     }
-    keys[i].x = keys[i - 1].x;
-    keys[i].y = keys[i - 1].y;
-    keys[i].z = keys[i - 1].z;
-    keys[i].roll = keys[i - 1].roll;
-    keys[i].pitch = keys[i - 1].pitch;
-    keys[i].yaw = keys[i - 1].yaw;
-    keys[i].preserve = false;
+    keys[i].hold = false;
+    keys[i].home = false;
   }
 }
 
@@ -89,23 +92,19 @@ GesturePlayer::GesturePlayer(
     const JointAngles start = gait::kin::inverse_kinematics(
         body_to_leg(start_feet.at(t.name), t.spec), t.spec);
     const JointAngles home = gait::kin::inverse_kinematics(nominal_leg, t.spec);
-    t.keys.reserve(track.keys.size() + 2);
+    t.keys.reserve(track.keys.size() + 1);
     t.keys.push_back(leg_knot(0.0f, start, GestureTransition::EASE));
     t.keys.insert(t.keys.end(), track.keys.begin(), track.keys.end());
-    t.keys.push_back(leg_knot(track.keys.back().t + spec.return_time, home,
-                              GestureTransition::EASE));
-    resolve_preserve(t.keys);
+    resolve_stand_ins(t.keys, home);
     duration_ = std::max(duration_, t.keys.back().t);
     tracks_.push_back(std::move(t));
   }
 
   if (!spec.body.empty()) {
-    body_.reserve(spec.body.size() + 2);
+    body_.reserve(spec.body.size() + 1);
     body_.push_back(body_knot(0.0f, BodyPose{}, GestureTransition::EASE));
     body_.insert(body_.end(), spec.body.begin(), spec.body.end());
-    body_.push_back(body_knot(spec.body.back().t + spec.return_time,
-                              BodyPose{}, GestureTransition::EASE));
-    resolve_preserve(body_);
+    resolve_stand_ins(body_);
     duration_ = std::max(duration_, body_.back().t);
   }
 }
@@ -166,7 +165,6 @@ std::vector<GestureSpec> gesture_specs_from_config() {
   for (const auto& g : cfg::kGestures) {
     GestureSpec spec;
     spec.id = std::string(g.id);
-    spec.return_time = g.return_time;
     for (std::size_t ti = 0; ti < g.leg_track_count; ++ti) {
       const auto& row = cfg::kGestureLegTracks[g.first_leg_track + ti];
       LegTrack track;

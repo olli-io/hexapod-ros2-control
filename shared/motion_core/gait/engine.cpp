@@ -1409,8 +1409,8 @@ std::map<std::string, LegOutput> Engine::tick_gesture(float dt) {
   }
   gesture_.reset();
   state_ = EngineState::STAND;
-  // The return knot lands on nominal exactly; stated so STAND holds no stale
-  // target.
+  // Every track ends on a home knot, which lands on nominal exactly; stated
+  // so STAND holds no stale target.
   last_targets_ = nominal_;
   for (const auto& n : LEG_NAMES) last_stance_[n] = true;
   return out;

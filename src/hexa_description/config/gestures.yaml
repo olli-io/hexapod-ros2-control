@@ -9,15 +9,19 @@
 # femur_deg  — lift above horizontal; positive raises the knee.
 # tibia_deg  — interior knee angle; 179 = fully extended.
 # transition — how the track ARRIVES at this keyframe: `ease` (smoothstep,
-#              stops there) or `continuous` (a smooth curve through it).
+#              stops there) or `continuous` (a smooth curve through it). A
+#              `hold: true` or `home: true` keyframe takes none: a hold is
+#              static, and a home always eases in.
 #
 # A leg keyframe positions any number of legs at one time t; a leg not named
-# in it keeps interpolating toward its next keyframe. `preserve` holds a track
-# at its previous value: per leg (`l_front: preserve`), for a whole leg
-# keyframe (`preserve: true`, every leg the gesture moves), or for the body
-# (`preserve: true`). Every track starts at the current stance / identity body
-# at t = 0 and returns there over return_time after its last keyframe. Body
-# keyframes are offsets from the standing pose and must sit inside the
+# in it keeps interpolating toward its next keyframe. Two words stand in for
+# a value, per leg (`l_front: hold`), for a whole leg keyframe
+# (`hold: true`, every leg the gesture moves) or for the body:
+# hold   — hold the track at its previous value.
+# home       — the standing leg / the identity body. Every track starts there
+#              at t = 0 and must END on a home keyframe; its t is when the
+#              track is back.
+# Body keyframes are offsets from the standing pose and must sit inside the
 # posture_node pose limits; a live /body/pose adds on top of them.
 #
 # Each joint interpolates on its own and never leaves the range spanned by its
@@ -33,36 +37,40 @@
 # tibia 66.
 gestures:
   - id: wave
-    return_time: 0.6
     legs:
       - t: 0.5
         transition: ease
-        l_front: { coxa_deg: 45, femur_deg: 100, tibia_deg: 30 }
-      - t: 0.9
+        l_front: { coxa_deg: -30, femur_deg: 100, tibia_deg: 150 }
+      - t: 0.8
         transition: continuous
-        l_front: { coxa_deg: 65, femur_deg: 105, tibia_deg: 45 }
-      - t: 1.3
+        l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
+      - t: 1.1
         transition: continuous
-        l_front: { coxa_deg: 25, femur_deg: 105, tibia_deg: 45 }
-      - t: 1.7
+        l_front: { coxa_deg: -30, femur_deg: 105, tibia_deg: 150 }
+      - t: 1.4
         transition: continuous
-        l_front: { coxa_deg: 65, femur_deg: 105, tibia_deg: 45 }
+        l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
+      - { t: 2.3, home: true }
     body:
-      - { t: 0.5, y: -0.015, roll_deg: -3, transition: ease }
-      - { t: 1.7, preserve: true, transition: ease }
+      - { t: 0.5, y: -0.015, transition: ease }
+      - { t: 0.8, y: -0.015, roll_deg: -6, transition: continuous }
+      - { t: 1.1, y: -0.015, roll_deg: 6, transition: continuous }
+      - { t: 1.4, y: -0.015, roll_deg: -6, transition: continuous }
+      - { t: 2.3, home: true }
   - id: stretch
-    return_time: 0.8
     legs:
       - t: 0.8
         transition: ease
-        l_front: { coxa_deg: 60, femur_deg: 64, tibia_deg: 65 }
-        r_front: { coxa_deg: -60, femur_deg: 64, tibia_deg: 65 }
-      - { t: 1.6, preserve: true, transition: ease }
+        l_front: { coxa_deg: -30, femur_deg: 64, tibia_deg: 65 }
+        r_front: { coxa_deg: 30, femur_deg: 64, tibia_deg: 65 }
+      - { t: 1.6, hold: true }
+      - { t: 2.4, home: true }
     body:
       - { t: 0.8, x: -0.02, pitch_deg: 8, transition: ease }
-      - { t: 2.2, preserve: true, transition: ease }
+      - { t: 2.2, hold: true }
+      - { t: 3.0, home: true }
   - id: bow
-    return_time: 0.6
     body:
       - { t: 0.8, x: 0.02, z: -0.01, pitch_deg: -10, transition: ease }
-      - { t: 1.6, preserve: true, transition: ease }
+      - { t: 1.6, hold: true }
+      - { t: 2.2, home: true }

@@ -476,7 +476,6 @@ TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
     EXPECT_TRUE(std::find(ids.begin(), ids.end(), g.id) == ids.end())
         << "duplicate gesture id " << g.id;
     ids.push_back(g.id);
-    EXPECT_GT(g.return_time, 0.0f) << g.id;
     EXPECT_EQ(g.first_leg_track, next_track) << g.id;
     EXPECT_EQ(g.first_body_key, next_body) << g.id;
     ASSERT_LE(g.first_leg_track + g.leg_track_count, cfg::kGestureLegTracks.size())
@@ -492,6 +491,8 @@ TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
     }
     if (g.body_key_count > 0) {
       EXPECT_GT(cfg::kGestureBodyKeyframes[g.first_body_key].t, 0.0f) << g.id;
+      EXPECT_TRUE(cfg::kGestureBodyKeyframes[g.first_body_key + g.body_key_count - 1].home)
+          << g.id << " body does not end at home";
     }
     next_track += g.leg_track_count;
     next_body += g.body_key_count;
@@ -506,9 +507,12 @@ TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
     ASSERT_LE(t.first + t.count, cfg::kGestureLegKeyframes.size());
     EXPECT_LT(static_cast<int>(t.leg), hexa::kNumLegs);
     EXPECT_GT(cfg::kGestureLegKeyframes[t.first].t, 0.0f);
+    EXPECT_TRUE(cfg::kGestureLegKeyframes[t.first + t.count - 1].home)
+        << "track " << t.first << " does not end at home";
     for (std::size_t k = 0; k < t.count; ++k) {
       const auto& key = cfg::kGestureLegKeyframes[t.first + k];
-      if (!key.preserve) {
+      EXPECT_FALSE(key.hold && key.home);
+      if (!key.hold && !key.home) {
         const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
         for (std::size_t j = 0; j < 3; ++j) {
           EXPECT_GE(a[j], cfg::kJointLimits[j].lower) << "joint " << j;

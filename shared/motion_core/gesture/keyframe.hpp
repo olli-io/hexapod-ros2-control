@@ -58,7 +58,7 @@ float knot_slope(const Key* keys, std::size_t n, std::size_t i, Get get) {
 }
 
 // Sample one component of a COMPLETE table (implicit start and return already
-// in place, every preserve knot resolved) at time t. The segment arriving at
+// in place, every hold knot resolved) at time t. The segment arriving at
 // knot i is shaped by knot i's transition. Before the first knot the first
 // value holds; after the last, the last.
 template <typename Key, typename Get>

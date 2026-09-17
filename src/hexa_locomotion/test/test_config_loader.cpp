@@ -207,7 +207,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     const auto& lg = loaded.gestures[gi];
     const auto& bg = baked.gestures[gi];
     ASSERT_EQ(lg.id, bg.id) << "gesture " << gi << " is out of order";
-    EXPECT_NEAR(lg.return_time, bg.return_time, kTol) << lg.id;
     ASSERT_EQ(lg.legs.size(), bg.legs.size()) << lg.id;
     for (std::size_t ti = 0; ti < bg.legs.size(); ++ti) {
       const auto& lt = lg.legs[ti];
@@ -222,7 +221,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
         EXPECT_NEAR(lt.keys[ki].femur, bt.keys[ki].femur, kTol) << key;
         EXPECT_NEAR(lt.keys[ki].tibia, bt.keys[ki].tibia, kTol) << key;
         EXPECT_EQ(lt.keys[ki].transition, bt.keys[ki].transition) << key;
-        EXPECT_EQ(lt.keys[ki].preserve, bt.keys[ki].preserve) << key;
+        EXPECT_EQ(lt.keys[ki].hold, bt.keys[ki].hold) << key;
+        EXPECT_EQ(lt.keys[ki].home, bt.keys[ki].home) << key;
       }
     }
     ASSERT_EQ(lg.body.size(), bg.body.size()) << lg.id;
@@ -236,7 +236,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
       EXPECT_NEAR(lg.body[ki].pitch, bg.body[ki].pitch, kTol) << key;
       EXPECT_NEAR(lg.body[ki].yaw, bg.body[ki].yaw, kTol) << key;
       EXPECT_EQ(lg.body[ki].transition, bg.body[ki].transition) << key;
-      EXPECT_EQ(lg.body[ki].preserve, bg.body[ki].preserve) << key;
+      EXPECT_EQ(lg.body[ki].hold, bg.body[ki].hold) << key;
+      EXPECT_EQ(lg.body[ki].home, bg.body[ki].home) << key;
     }
   }
 }

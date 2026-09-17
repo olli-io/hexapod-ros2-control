@@ -1,5 +1,5 @@
 // Gestures: keyframe sampling (the two segment shapes and their joins), the
-// player (implicit start / return knots, preserve resolution, per-leg tracks)
+// player (implicit start / return knots, hold resolution, per-leg tracks)
 // and the engine's GESTURE state with its guards.
 
 #include <cmath>
@@ -80,15 +80,40 @@ float one_sided_slope(const std::vector<LegKeyframe>& keys, float t, float dir,
   return (sample(keys, t + dir * h) - sample(keys, t)) / (dir * h);
 }
 
-// A gesture spec moving one leg through one keyframe.
-gs::GestureSpec one_leg_spec(hexa::Leg leg, const std::vector<LegKeyframe>& keys,
+LegKeyframe hold_key(float t, GestureTransition tr = GestureTransition::EASE) {
+  LegKeyframe k{};
+  k.t = t;
+  k.transition = tr;
+  k.hold = true;
+  return k;
+}
+
+LegKeyframe home_key(float t, GestureTransition tr = GestureTransition::EASE) {
+  LegKeyframe k{};
+  k.t = t;
+  k.transition = tr;
+  k.home = true;
+  return k;
+}
+
+BodyKeyframe body_home_key(float t) {
+  BodyKeyframe k{};
+  k.t = t;
+  k.transition = GestureTransition::EASE;
+  k.home = true;
+  return k;
+}
+
+// A gesture spec moving one leg through `keys`, then home `return_time` after
+// the last of them.
+gs::GestureSpec one_leg_spec(hexa::Leg leg, std::vector<LegKeyframe> keys,
                              float return_time = 0.5f) {
   gs::GestureSpec spec;
   spec.id = "test";
-  spec.return_time = return_time;
+  keys.push_back(home_key(keys.back().t + return_time));
   gs::LegTrack track;
   track.leg = leg;
-  track.keys = keys;
+  track.keys = std::move(keys);
   spec.legs.push_back(track);
   return spec;
 }
@@ -101,14 +126,6 @@ LegKeyframe joint_key(float t, const hexa::JointAngles& a,
   k.femur = a[1];
   k.tibia = a[2];
   k.transition = tr;
-  return k;
-}
-
-LegKeyframe preserve_key(float t, GestureTransition tr = GestureTransition::EASE) {
-  LegKeyframe k{};
-  k.t = t;
-  k.transition = tr;
-  k.preserve = true;
   return k;
 }
 
@@ -342,13 +359,12 @@ TEST(Player, BodyTrackReturnsToIdentity) {
   const auto specs = g::leg_specs_from_config();
   gs::GestureSpec spec;
   spec.id = "bow";
-  spec.return_time = 0.5f;
   BodyKeyframe k{};
   k.t = 0.5f;
   k.pitch = -0.2f;
   k.x = 0.02f;
   k.transition = GestureTransition::EASE;
-  spec.body.push_back(k);
+  spec.body = {k, body_home_key(1.0f)};
   gs::GesturePlayer player(spec, nominal, nominal, specs);
 
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
@@ -372,15 +388,14 @@ TEST(Player, LegAbsentFromAMiddleKeyframeInterpolatesAcrossIt) {
   const hexa::JointAngles b = joints_at("r_front", 0.0f, 0.0f, 0.03f);
   gs::GestureSpec spec;
   spec.id = "test";
-  spec.return_time = 0.5f;
   // l_front is named at A (0.5) and C (1.5); r_front alone at B (1.0). The
   // flattened tracks carry that directly, so l_front eases A -> C over B.
   gs::LegTrack left;
   left.leg = hexa::Leg::L_FRONT;
-  left.keys = {joint_key(0.5f, a), joint_key(1.5f, c)};
+  left.keys = {joint_key(0.5f, a), joint_key(1.5f, c), home_key(2.0f)};
   gs::LegTrack right;
   right.leg = hexa::Leg::R_FRONT;
-  right.keys = {joint_key(1.0f, b)};
+  right.keys = {joint_key(1.0f, b), home_key(1.5f)};
   spec.legs = {left, right};
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   for (int i = 0; i < 50; ++i) player.update(kDt);  // t = 1.0
@@ -397,13 +412,14 @@ TEST(Player, TwoLegsInOneKeyframeMoveTogether) {
   const auto specs = g::leg_specs_from_config();
   gs::GestureSpec spec;
   spec.id = "test";
-  spec.return_time = 0.5f;
   gs::LegTrack left;
   left.leg = hexa::Leg::L_FRONT;
-  left.keys = {joint_key(0.8f, joints_at("l_front", 0.0f, 0.0f, 0.04f))};
+  left.keys = {joint_key(0.8f, joints_at("l_front", 0.0f, 0.0f, 0.04f)),
+               home_key(1.3f)};
   gs::LegTrack right;
   right.leg = hexa::Leg::R_FRONT;
-  right.keys = {joint_key(0.8f, joints_at("r_front", 0.0f, 0.0f, 0.04f))};
+  right.keys = {joint_key(0.8f, joints_at("r_front", 0.0f, 0.0f, 0.04f)),
+                home_key(1.3f)};
   spec.legs = {left, right};
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   while (!player.done()) {
@@ -415,12 +431,12 @@ TEST(Player, TwoLegsInOneKeyframeMoveTogether) {
   }
 }
 
-TEST(Player, PreserveKnotHoldsThePreviousValue) {
+TEST(Player, HoldKnotHoldsThePreviousValue) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {joint_key(0.5f, joints_at("l_front", 0.2f, 0.0f, 0.05f)), preserve_key(1.0f)});
+      {joint_key(0.5f, joints_at("l_front", 0.2f, 0.0f, 0.05f)), hold_key(1.0f)});
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
   const hexa::Vec3 at_knot = player.update(0.0f).at("l_front").foot_target;
@@ -432,14 +448,14 @@ TEST(Player, PreserveKnotHoldsThePreviousValue) {
   EXPECT_NEAR(player.duration(), 1.5f, 1e-6f);
 }
 
-TEST(Player, LeadingPreserveKnotHoldsTheStartPosition) {
+TEST(Player, LeadingHoldKnotHoldsTheStartPosition) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
   auto start = nominal;
   start["l_front"] = nominal.at("l_front") + hexa::Vec3(0.0f, 0.0f, 0.02f);
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {preserve_key(0.5f), joint_key(1.0f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
+      {hold_key(0.5f), joint_key(1.0f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
   gs::GesturePlayer player(spec, start, nominal, specs);
   for (int i = 0; i < 25; ++i) {
     const auto out = player.update(kDt);
@@ -448,12 +464,11 @@ TEST(Player, LeadingPreserveKnotHoldsTheStartPosition) {
   }
 }
 
-TEST(Player, BodyPreserveKnotHoldsThePreviousPose) {
+TEST(Player, BodyHoldKnotHoldsThePreviousPose) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
   gs::GestureSpec spec;
   spec.id = "test";
-  spec.return_time = 0.5f;
   BodyKeyframe a{};
   a.t = 0.5f;
   a.roll = 0.1f;
@@ -462,8 +477,8 @@ TEST(Player, BodyPreserveKnotHoldsThePreviousPose) {
   BodyKeyframe hold{};
   hold.t = 1.5f;
   hold.transition = GestureTransition::EASE;
-  hold.preserve = true;
-  spec.body = {a, hold};
+  hold.hold = true;
+  spec.body = {a, hold, body_home_key(2.0f)};
   gs::GesturePlayer player(spec, nominal, nominal, specs);
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
   for (int i = 0; i < 50; ++i) {
@@ -520,13 +535,62 @@ TEST(Validate, RejectsAKnotBelowTheGroundPlane) {
                std::invalid_argument);
 }
 
-TEST(Validate, PreserveKnotsAreNotChecked) {
+TEST(Validate, HoldAndHomeKnotsAreNotChecked) {
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)), preserve_key(1.0f)});
+      {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)), hold_key(1.0f)});
   EXPECT_NO_THROW(gs::validate_gestures(
       {spec}, g::leg_specs_from_config(), g::nominal_stance_from_config(),
       hexa::posture::PoseLimits{}));
+}
+
+TEST(Validate, RejectsATrackThatDoesNotEndAtHome) {
+  gs::GestureSpec spec;
+  spec.id = "test";
+  gs::LegTrack track;
+  track.leg = hexa::Leg::L_FRONT;
+  track.keys = {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))};
+  spec.legs.push_back(track);
+  EXPECT_THROW(gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                                     g::nominal_stance_from_config(),
+                                     hexa::posture::PoseLimits{}),
+               std::invalid_argument);
+  spec.legs.clear();
+  BodyKeyframe k{};
+  k.t = 0.5f;
+  k.pitch = -0.1f;
+  k.transition = GestureTransition::EASE;
+  spec.body = {k};
+  EXPECT_THROW(gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                                     g::nominal_stance_from_config(),
+                                     hexa::posture::PoseLimits{}),
+               std::invalid_argument);
+}
+
+TEST(Player, HomeKnotLandsOnNominalAtItsOwnTime) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
+  // Two legs with different home times: each is home at its own t.
+  gs::GestureSpec spec;
+  spec.id = "test";
+  gs::LegTrack left;
+  left.leg = hexa::Leg::L_FRONT;
+  left.keys = {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)),
+               home_key(1.0f)};
+  gs::LegTrack right;
+  right.leg = hexa::Leg::R_FRONT;
+  right.keys = {joint_key(0.5f, joints_at("r_front", 0.0f, 0.0f, 0.05f)),
+                home_key(2.0f)};
+  spec.legs = {left, right};
+  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  EXPECT_NEAR(player.duration(), 2.0f, 1e-6f);
+  for (int i = 0; i < 50; ++i) player.update(kDt);  // t = 1.0
+  auto out = player.update(0.0f);
+  EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-5f));
+  EXPECT_TRUE(out.at("l_front").stance);
+  EXPECT_FALSE(out.at("r_front").stance);
+  while (!player.done()) out = player.update(kDt);
+  EXPECT_TRUE(near(out.at("r_front").foot_target, nominal.at("r_front"), 1e-5f));
 }
 
 // ── Engine ──

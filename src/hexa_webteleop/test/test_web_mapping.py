@@ -836,15 +836,15 @@ def test_preset_pending_expired():
 _GESTURES_YAML = """
 gestures:
   - id: wave
-    return_time: 0.6
     legs:
       - t: 0.5
         transition: ease
         l_front: {coxa_deg: 45, femur_deg: 100, tibia_deg: 30}
+      - {t: 1.0, home: true}
   - id: bow
-    return_time: 0.6
     body:
       - {t: 0.8, pitch_deg: -10, transition: ease}
+      - {t: 1.4, home: true}
 """
 
 

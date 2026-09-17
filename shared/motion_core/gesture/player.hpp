@@ -18,7 +18,7 @@
 
 namespace hexa::gesture {
 
-// One leg's keyframes, in time order, as configured (preserve knots
+// One leg's keyframes, in time order, as configured (hold and home knots
 // unresolved). The baked kGestureLegTracks rows and the YAML loader both land
 // here.
 struct LegTrack {
@@ -26,10 +26,10 @@ struct LegTrack {
   std::vector<LegKeyframe> keys;
 };
 
+// Every track ends on a home knot (validate_gestures enforces it), so the
+// gesture hands a clean stand back.
 struct GestureSpec {
   std::string id;
-  // Each track eases back to nominal / identity over this after its last knot.
-  float return_time = 0.0f;
   std::vector<LegTrack> legs;
   std::vector<BodyKeyframe> body;
 };
@@ -48,9 +48,9 @@ inline constexpr float kPlantedHeight = 1e-4f;
 class GesturePlayer {
  public:
   // start_feet is where the feet stand as the gesture begins (the implicit
-  // start knot); nominal is where every track returns to. Both in the body
-  // frame; each is solved to joint angles once, here. Legs without a track are
-  // held at nominal.
+  // start knot); nominal is what a home knot means. Both in the body frame;
+  // each is solved to joint angles once, here. Legs without a track are held
+  // at nominal.
   GesturePlayer(const GestureSpec& spec,
                 const std::map<std::string, Vec3>& start_feet,
                 const std::map<std::string, Vec3>& nominal,
@@ -73,7 +73,7 @@ class GesturePlayer {
     std::string name;
     gait::kin::LegSpec spec;
     float ground_z = 0.0f;  // standing tip z in the leg frame
-    std::vector<LegKeyframe> keys;  // complete: start, knots, return
+    std::vector<LegKeyframe> keys;  // complete: start knot, then the table
   };
 
   // A track's sampled joint angles at the current time.

@@ -38,8 +38,9 @@ hardware. The seams each caller supplies — input, config source, clock, output
   (`gestures.yaml`). `keyframe` samples one track (`ease` smoothstep or a
   `continuous` Hermite run, slope-capped so a component never leaves the
   range its knots span); `GesturePlayer` completes a gesture's per-leg joint
-  tables and body table with the implicit start and return knots (the stance
-  solved through IK once) and plays them off one clock, reporting each
+  tables and body table with the implicit start knot (the stance solved
+  through IK once), resolves `hold` and `home` knots, and plays them off one
+  clock; every track ends on a home knot. It reports each
   tracked leg `direct` with its joint angles; `validate_gestures` checks every
   leg knot against the joint limits and the ground plane at construction.
   Its leg track is neither gait nor animation; its body track is a posture

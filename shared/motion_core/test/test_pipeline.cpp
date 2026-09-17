@@ -1285,7 +1285,7 @@ TEST(Gesture, TrackedLegStaysInsideItsKnotsAndEveryJointInsideItsLimits) {
       }
       for (std::size_t k = 0; k < track.count; ++k) {
         const auto& key = hexa::config::kGestureLegKeyframes[track.first + k];
-        if (key.preserve) continue;
+        if (key.hold || key.home) continue;
         const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
         for (std::size_t j = 0; j < 3; ++j) {
           lo[j] = std::min(lo[j], a[j]);

@@ -18,8 +18,9 @@ namespace hexa::gesture {
 // Throws std::invalid_argument naming the gesture, leg, joint and time on a
 // leg knot outside kJointLimits, naming the gesture, leg and time on a knot
 // whose foot sits below the default preset's ground plane (`nominal_stance`,
-// body frame), and on a body keyframe outside `limits` — the pose clamp would
-// otherwise bend the track silently.
+// body frame), on a body keyframe outside `limits` — the pose clamp would
+// otherwise bend the track silently — and on a track that does not end with a
+// home knot, since the engine hands back a stand when the gesture is done.
 void validate_gestures(
     const std::vector<GestureSpec>& specs,
     const std::map<std::string, gait::kin::LegSpec>& leg_specs,

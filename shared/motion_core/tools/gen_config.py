@@ -337,10 +337,11 @@ def presets(gait: dict, geometry: dict):
 # ── gestures ────────────────────────────────────────────────────────────────
 
 GESTURE_TRANSITIONS = ("ease", "continuous")
-LEG_KEYFRAME_KEYS = {"t", "transition", "preserve"} | set(LEG_NAMES)
+LEG_KEYFRAME_KEYS = {"t", "transition", "hold", "home"} | set(LEG_NAMES)
 LEG_ENTRY_KEYS = {"coxa_deg", "femur_deg", "tibia_deg"}
 BODY_AXES = ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg")
-BODY_KEYFRAME_KEYS = {"t", "transition", "preserve"} | set(BODY_AXES)
+BODY_KEYFRAME_KEYS = {"t", "transition", "hold", "home"} | set(BODY_AXES)
+STAND_IN_WORDS = ("hold", "home")
 
 
 def keyframe_common(entry, where: str, prev_t):
@@ -354,11 +355,30 @@ def keyframe_common(entry, where: str, prev_t):
         raise ValueError(f"{where}: t must be > 0 (the start is implicit)")
     if prev_t is not None and not t > prev_t:
         raise ValueError(f"{where}: t must increase down the list")
-    transition = str(entry.get("transition", ""))
+    return t, keyframe_transition(entry, where)
+
+
+def keyframe_transition(kf: dict, where: str) -> str:
+    """A hold or home keyframe implies its transition: a hold is static and a
+    home always eases in. Any other keyframe must say."""
+    stand_in = stand_in_word(kf, where)
+    if stand_in:
+        if "transition" in kf:
+            raise ValueError(f"{where}: {stand_in}: true takes no transition")
+        return "ease"
+    transition = str(kf.get("transition", ""))
     if transition not in GESTURE_TRANSITIONS:
         raise ValueError(
             f"{where}: transition must be one of {GESTURE_TRANSITIONS}")
-    return t, transition
+    return transition
+
+
+def stand_in_word(kf: dict, where: str):
+    """'hold' or 'home' when the keyframe stands in for every track, else None."""
+    words = [w for w in STAND_IN_WORDS if kf.get(w, False)]
+    if len(words) > 1:
+        raise ValueError(f"{where}: hold and home exclude each other")
+    return words[0] if words else None
 
 
 def leg_entry_angles(v: dict, limits: dict, where: str):
@@ -384,8 +404,8 @@ def gestures(doc, geometry: dict):
 
     The authoring format is multi-leg (one keyframe positions several legs at
     one t); the baked tables, the runtime GestureSpec and the player are per
-    leg, so the flattening happens here. A keyframe-level `preserve` expands to
-    one preserve knot per leg the gesture moves anywhere. Mirrored by
+    leg, so the flattening happens here. A keyframe-level `hold` expands to
+    one hold knot per leg the gesture moves anywhere. Mirrored by
     pipeline_config_loader.cpp, which the parity test holds to this output.
     """
     limits = joint_limits(geometry)
@@ -397,12 +417,13 @@ def gestures(doc, geometry: dict):
         if gid in seen:
             raise ValueError(f"gestures.yaml: duplicate id {gid!r}")
         seen.add(gid)
-        unknown = set(entry) - {"id", "return_time", "legs", "body"}
+        if "return_time" in entry:
+            raise ValueError(
+                f"gestures.yaml {gid}: return_time is gone; end every track "
+                f"with a home keyframe instead")
+        unknown = set(entry) - {"id", "legs", "body"}
         if unknown:
             raise ValueError(f"gestures.yaml {gid}: unknown keys {sorted(unknown)}")
-        return_time = float(entry.get("return_time", 0.0))
-        if not return_time > 0.0:
-            raise ValueError(f"gestures.yaml {gid}: return_time must be > 0")
 
         keyframes = entry.get("legs") or []
         # Pass 1: validate, and find every leg the gesture moves.
@@ -415,17 +436,18 @@ def gestures(doc, geometry: dict):
             if unknown:
                 raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
             legs_here = [n for n in LEG_NAMES if n in kf]
-            if kf.get("preserve", False):
+            stand_in = stand_in_word(kf, where)
+            if stand_in:
                 if legs_here:
-                    raise ValueError(
-                        f"{where}: preserve: true takes no leg entries")
+                    raise ValueError(f"{where}: {stand_in}: true takes no leg entries")
                 continue
             if not legs_here:
                 raise ValueError(
-                    f"{where}: names no leg (use preserve: true to hold all)")
+                    f"{where}: names no leg (use hold: true or home: true "
+                    f"for all)")
             for leg in legs_here:
                 v = kf[leg]
-                if v == "preserve":
+                if v in STAND_IN_WORDS:
                     pass
                 elif isinstance(v, dict):
                     if set(v) != LEG_ENTRY_KEYS:
@@ -435,7 +457,7 @@ def gestures(doc, geometry: dict):
                     leg_entry_angles(v, limits, f"{where}.{leg}")
                 else:
                     raise ValueError(
-                        f"{where}.{leg}: a mapping or the word preserve")
+                        f"{where}.{leg}: a mapping, hold or home")
                 if leg not in moved:
                     moved.append(leg)
         # Pass 2: per-leg tables, legs in Leg order.
@@ -445,19 +467,24 @@ def gestures(doc, geometry: dict):
                 continue
             rows = []
             for kf in keyframes:
-                if kf.get("preserve", False):
-                    v = "preserve"
+                stand_in = stand_in_word(kf, "")
+                if stand_in:
+                    v = stand_in
                 elif leg in kf:
                     v = kf[leg]
                 else:
                     continue
                 row = dict(t=float(kf["t"]), coxa=0.0, femur=0.0, tibia=0.0,
-                           transition=str(kf["transition"]),
-                           preserve=(v == "preserve"))
-                if v != "preserve":
+                           transition=keyframe_transition(kf, ""),
+                           hold=(v == "hold"), home=(v == "home"))
+                if v not in STAND_IN_WORDS:
                     row["coxa"], row["femur"], row["tibia"] = leg_entry_angles(
                         v, limits, f"gestures.yaml {gid}.{leg}")
                 rows.append(row)
+            if not rows[-1]["home"]:
+                raise ValueError(
+                    f"gestures.yaml {gid}.{leg}: the track must end with a "
+                    f"home keyframe")
             tracks.append((leg, rows))
 
         body_rows = []
@@ -469,13 +496,14 @@ def gestures(doc, geometry: dict):
             unknown = set(kf) - BODY_KEYFRAME_KEYS
             if unknown:
                 raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
-            preserve = bool(kf.get("preserve", False))
+            stand_in = stand_in_word(kf, where)
             axes = [a for a in BODY_AXES if a in kf]
-            if preserve and axes:
-                raise ValueError(f"{where}: preserve: true takes no axis values")
+            if stand_in and axes:
+                raise ValueError(f"{where}: {stand_in}: true takes no axis values")
             row = dict(t=t, x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0,
-                       transition=transition, preserve=preserve)
-            if not preserve:
+                       transition=transition, hold=(stand_in == "hold"),
+                       home=(stand_in == "home"))
+            if not stand_in:
                 row["x"] = float(kf.get("x", 0.0))
                 row["y"] = float(kf.get("y", 0.0))
                 row["z"] = float(kf.get("z", 0.0))
@@ -484,10 +512,13 @@ def gestures(doc, geometry: dict):
                 row["yaw"] = math.radians(float(kf.get("yaw_deg", 0.0)))
             body_rows.append(row)
 
+        if body_rows and not body_rows[-1]["home"]:
+            raise ValueError(
+                f"gestures.yaml {gid}.body: the track must end with a home "
+                f"keyframe")
         if not tracks and not body_rows:
             raise ValueError(f"gestures.yaml {gid}: has no keyframes")
-        out.append(dict(id=gid, return_time=return_time, legs=tracks,
-                        body=body_rows))
+        out.append(dict(id=gid, legs=tracks, body=body_rows))
     return out
 
 
@@ -947,8 +978,10 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("// ── Gestures (hexa_description/config/gestures.yaml) ──")
     w("// Keyframed leg + body motions played from a stand. Flat tables plus")
     w("// index ranges; the per-leg form is the flattening of the YAML's")
-    w("// multi-leg keyframes. A `preserve` knot repeats the value of the knot")
-    w("// before it; its value fields are zero here, the player resolves them.")
+    w("// multi-leg keyframes. A `hold` knot repeats the value of the knot")
+    w("// before it and a `home` knot is the stance / identity body; their value")
+    w("// fields are zero here, the player resolves them. Every track ends on a")
+    w("// home knot.")
     w("enum class GestureTransition : std::uint8_t { EASE, CONTINUOUS };")
     w("struct LegKeyframe {")
     w("  float t;      // s from gesture start")
@@ -956,14 +989,16 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  float femur;")
     w("  float tibia;")
     w("  GestureTransition transition;  // how the track arrives here")
-    w("  bool preserve;")
+    w("  bool hold;")
+    w("  bool home;")
     w("};")
     w("struct BodyKeyframe {")
     w("  float t;")
     w("  float x, y, z;           // m, offsets from the standing pose")
     w("  float roll, pitch, yaw;  // rad")
     w("  GestureTransition transition;")
-    w("  bool preserve;")
+    w("  bool hold;")
+    w("  bool home;")
     w("};")
     w("struct GestureLegTrack {  // one leg's keyframes, into kGestureLegKeyframes")
     w("  hexa::Leg leg;")
@@ -972,7 +1007,6 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("};")
     w("struct GestureConfig {")
     w("  std::string_view id;")
-    w("  float return_time;  // s, a track's last keyframe -> nominal")
     w("  std::size_t first_leg_track;  // into kGestureLegTracks")
     w("  std::size_t leg_track_count;")
     w("  std::size_t first_body_key;   // into kGestureBodyKeyframes")
@@ -997,7 +1031,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       "kGestureLegKeyframes = {{")
     for gid, leg, r in leg_keys:
         w(f"    {{{fl(r['t'])}, {fl(r['coxa'])}, {fl(r['femur'])}, "
-          f"{fl(r['tibia'])}, {trans(r['transition'])}, {bo(r['preserve'])}}},"
+          f"{fl(r['tibia'])}, {trans(r['transition'])}, {bo(r['hold'])}, "
+          f"{bo(r['home'])}}},"
           f"  // {gid} {leg}")
     w("}};")
     w(f"inline constexpr std::array<BodyKeyframe, {len(body_keys)}> "
@@ -1005,7 +1040,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     for gid, r in body_keys:
         w(f"    {{{fl(r['t'])}, {fl(r['x'])}, {fl(r['y'])}, {fl(r['z'])}, "
           f"{fl(r['roll'])}, {fl(r['pitch'])}, {fl(r['yaw'])}, "
-          f"{trans(r['transition'])}, {bo(r['preserve'])}}},  // {gid}")
+          f"{trans(r['transition'])}, {bo(r['hold'])}, {bo(r['home'])}}},"
+          f"  // {gid}")
     w("}};")
     w(f"inline constexpr std::array<GestureLegTrack, {len(leg_tracks)}> "
       "kGestureLegTracks = {{")
@@ -1015,7 +1051,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w(f"inline constexpr std::array<GestureConfig, {len(gesture_rows)}> "
       "kGestures = {{")
     for gst, ft, tc, fb, bc in gesture_rows:
-        w(f"    {{{cstr(gst['id'])}, {fl(gst['return_time'])}, {ft}, {tc}, "
+        w(f"    {{{cstr(gst['id'])}, {ft}, {tc}, "
           f"{fb}, {bc}}},")
     w("}};")
     w("")
