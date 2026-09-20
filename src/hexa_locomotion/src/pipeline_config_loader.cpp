@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -62,19 +63,37 @@ std::array<hexa::config::JointLimits, 3> load_joint_limits(const YAML::Node& geo
 
 // ── gestures.yaml ──
 // Mirrors gen_config.py gestures(): the same checks, the same flattening of the
-// multi-leg authoring format into per-leg tables, so the parity test can compare
-// the two position by position.
+// multi-leg authoring format (one pose positions several legs at one t) into
+// per-leg tables, so the parity test can compare the two position by position.
 
-// t and transition, shared by both tracks; t strictly increasing and > 0.
-float keyframe_t(const YAML::Node& kf, const std::string& where,
-                 float prev_t, bool have_prev) {
-  if (!kf.IsMap()) {
-    throw std::runtime_error(where + ": a keyframe must be a mapping");
+// A keyframe is one mapping whose single key is its type; returns the type
+// and the mapping under it.
+std::pair<std::string, YAML::Node> keyframe_type(
+    const YAML::Node& kf, const std::string& where,
+    const std::vector<std::string>& types) {
+  std::string kind;
+  if (kf.IsMap() && kf.size() == 1) {
+    kind = kf.begin()->first.as<std::string>();
   }
-  if (!kf["t"]) {
+  if (std::find(types.begin(), types.end(), kind) == types.end()) {
+    std::string list;
+    for (const auto& t : types) list += (list.empty() ? "" : ", ") + t;
+    throw std::runtime_error(where + ": a keyframe is one of " + list);
+  }
+  const YAML::Node inner = kf.begin()->second;
+  if (!inner.IsMap()) {
+    throw std::runtime_error(where + ": " + kind + " must be a mapping");
+  }
+  return {kind, inner};
+}
+
+// t, shared by both tracks; strictly increasing and > 0.
+float keyframe_t(const YAML::Node& inner, const std::string& where,
+                 float prev_t, bool have_prev) {
+  if (!inner["t"]) {
     throw std::runtime_error(where + ": missing t");
   }
-  const float t = f(kf["t"]);
+  const float t = f(inner["t"]);
   if (!(t > 0.0f)) {
     throw std::runtime_error(where + ": t must be > 0 (the start is implicit)");
   }
@@ -84,40 +103,26 @@ float keyframe_t(const YAML::Node& kf, const std::string& where,
   return t;
 }
 
-// The stand-in words a leg keyframe may carry, and the two a body one may.
+const std::vector<std::string> kLegKeyframeTypes = {"start", "pose", "hold",
+                                                    "home"};
+const std::vector<std::string> kBodyKeyframeTypes = {"pose", "hold", "home"};
+// The words a leg may take in place of its angles inside a pose.
 const std::vector<std::string> kLegStandIns = {"hold", "home", "start"};
-const std::vector<std::string> kBodyStandIns = {"hold", "home"};
 
-// The stand-in word set on the keyframe for every track, else "".
-std::string stand_in_word(const YAML::Node& kf, const std::string& where,
-                          const std::vector<std::string>& words) {
-  std::string found;
-  for (const auto& w : words) {
-    if (kf[w] && kf[w].as<bool>()) {
-      if (!found.empty()) {
-        throw std::runtime_error(where + ": " + found + " and " + w +
-                                 " exclude each other");
-      }
-      found = w;
-    }
-  }
-  return found;
-}
-
-// A stand-in keyframe implies its transition: a hold is static, a start is
-// where the track begins and a home always eases in. Any other keyframe must
-// say.
-hexa::config::GestureTransition transition_from(
-    const YAML::Node& kf, const std::string& where,
-    const std::vector<std::string>& words) {
-  const std::string stand_in = stand_in_word(kf, where, words);
-  if (!stand_in.empty()) {
-    if (kf["transition"]) {
-      throw std::runtime_error(where + ": " + stand_in + ": true takes no transition");
+// A start, hold or home takes only t and implies its transition: a hold is
+// static, a start is where the track begins and a home always eases in. A
+// pose must say.
+hexa::config::GestureTransition transition_from(const std::string& kind,
+                                                const YAML::Node& inner,
+                                                const std::string& where) {
+  if (kind != "pose") {
+    if (inner.size() != 1 || !inner["t"]) {
+      throw std::runtime_error(where + ": " + kind + " takes only t");
     }
     return hexa::config::GestureTransition::EASE;
   }
-  const std::string name = kf["transition"] ? kf["transition"].as<std::string>() : "";
+  const std::string name =
+      inner["transition"] ? inner["transition"].as<std::string>() : "";
   if (name == "ease") return hexa::config::GestureTransition::EASE;
   if (name == "continuous") return hexa::config::GestureTransition::CONTINUOUS;
   throw std::runtime_error(where + ": transition must be ease or continuous");
@@ -165,14 +170,13 @@ hexa::JointAngles leg_entry_angles(
 std::vector<hexa::gesture::GestureSpec> load_gestures(
     const std::string& path,
     const std::array<hexa::config::JointLimits, 3>& limits) {
-  static const std::set<std::string> kLegKeyframeKeys = {
-      "t", "transition", "hold", "home", "start", "l_front", "l_middle",
-      "l_rear", "r_front", "r_middle", "r_rear"};
+  static const std::set<std::string> kLegPoseKeys = {
+      "t", "transition", "l_front", "l_middle", "l_rear", "r_front", "r_middle",
+      "r_rear"};
   static const std::set<std::string> kLegEntryKeys = {"coxa_deg", "femur_deg",
                                                       "tibia_deg"};
-  static const std::set<std::string> kBodyKeyframeKeys = {
-      "t", "transition", "hold", "home", "x", "y", "z",
-      "roll_deg", "pitch_deg", "yaw_deg"};
+  static const std::set<std::string> kBodyPoseKeys = {
+      "t", "transition", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"};
   static const std::set<std::string> kGestureKeys = {"id", "legs", "body"};
   const YAML::Node doc = YAML::LoadFile(path);
   const YAML::Node list = doc["gestures"];
@@ -201,31 +205,25 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
     float prev_t = 0.0f;
     bool have_prev = false;
     for (std::size_t i = 0; keyframes && i < keyframes.size(); ++i) {
-      const YAML::Node kf = keyframes[i];
       const std::string where = gwhere + ".legs[" + std::to_string(i) + "]";
-      prev_t = keyframe_t(kf, where, prev_t, have_prev);
+      const auto [kind, inner] =
+          keyframe_type(keyframes[i], where, kLegKeyframeTypes);
+      prev_t = keyframe_t(inner, where, prev_t, have_prev);
       have_prev = true;
-      transition_from(kf, where, kLegStandIns);
-      reject_unknown_keys(kf, kLegKeyframeKeys, where);
-      std::vector<std::string> legs_here;
-      for (const auto& leg : hexa::gait::LEG_NAMES) {
-        if (kf[leg]) legs_here.push_back(leg);
-      }
-      const std::string stand_in = stand_in_word(kf, where, kLegStandIns);
-      if (!stand_in.empty()) {
-        if (!legs_here.empty()) {
-          throw std::runtime_error(where + ": " + stand_in +
-                                   ": true takes no leg entries");
-        }
+      transition_from(kind, inner, where);
+      if (kind != "pose") {
         continue;
       }
+      reject_unknown_keys(inner, kLegPoseKeys, where);
+      std::vector<std::string> legs_here;
+      for (const auto& leg : hexa::gait::LEG_NAMES) {
+        if (inner[leg]) legs_here.push_back(leg);
+      }
       if (legs_here.empty()) {
-        throw std::runtime_error(
-            where +
-            ": names no leg (use hold: true, home: true or start: true for all)");
+        throw std::runtime_error(where + ": pose names no leg");
       }
       for (const auto& leg : legs_here) {
-        const YAML::Node v = kf[leg];
+        const YAML::Node v = inner[leg];
         if (is_leg_stand_in_word(v)) {
           // a stand-in
         } else if (v.IsMap()) {
@@ -253,18 +251,19 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
       hexa::gesture::LegTrack track;
       track.leg = static_cast<hexa::Leg>(li);
       for (std::size_t i = 0; i < keyframes.size(); ++i) {
-        const YAML::Node kf = keyframes[i];
-        std::string stand_in = stand_in_word(kf, gwhere, kLegStandIns);
-        if (stand_in.empty() && !kf[leg]) {
+        const auto [kind, inner] =
+            keyframe_type(keyframes[i], gwhere, kLegKeyframeTypes);
+        std::string stand_in = kind == "pose" ? "" : kind;
+        if (kind == "pose" && !inner[leg]) {
           continue;
         }
-        const YAML::Node v = kf[leg];
+        const YAML::Node v = inner[leg];
         if (stand_in.empty() && is_leg_stand_in_word(v)) {
           stand_in = v.as<std::string>();
         }
         hexa::config::LegKeyframe row{};
-        row.t = f(kf["t"]);
-        row.transition = transition_from(kf, gwhere, kLegStandIns);
+        row.t = f(inner["t"]);
+        row.transition = transition_from(kind, inner, gwhere);
         row.hold = stand_in == "hold";
         row.home = stand_in == "home";
         row.start = stand_in == "start";
@@ -285,31 +284,26 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
     prev_t = 0.0f;
     have_prev = false;
     for (std::size_t i = 0; body && i < body.size(); ++i) {
-      const YAML::Node kf = body[i];
       const std::string where = gwhere + ".body[" + std::to_string(i) + "]";
+      const auto [kind, inner] =
+          keyframe_type(body[i], where, kBodyKeyframeTypes);
       hexa::config::BodyKeyframe row{};
-      row.t = keyframe_t(kf, where, prev_t, have_prev);
+      row.t = keyframe_t(inner, where, prev_t, have_prev);
       prev_t = row.t;
       have_prev = true;
-      reject_unknown_keys(kf, kBodyKeyframeKeys, where);
-      row.transition = transition_from(kf, where, kBodyStandIns);
-      const std::string stand_in = stand_in_word(kf, where, kBodyStandIns);
-      row.hold = stand_in == "hold";
-      row.home = stand_in == "home";
-      const bool any_axis = kf["x"] || kf["y"] || kf["z"] || kf["roll_deg"] ||
-                            kf["pitch_deg"] || kf["yaw_deg"];
-      if (!stand_in.empty() && any_axis) {
-        throw std::runtime_error(where + ": " + stand_in +
-                                 ": true takes no axis values");
-      }
-      if (stand_in.empty()) {
+      row.transition = transition_from(kind, inner, where);
+      row.hold = kind == "hold";
+      row.home = kind == "home";
+      if (kind == "pose") {
+        reject_unknown_keys(inner, kBodyPoseKeys, where);
         const auto deg = [&](const char* key) {
-          return kf[key] ? static_cast<float>(kf[key].as<double>() * M_PI / 180.0)
-                         : 0.0f;
+          return inner[key]
+                     ? static_cast<float>(inner[key].as<double>() * M_PI / 180.0)
+                     : 0.0f;
         };
-        row.x = kf["x"] ? f(kf["x"]) : 0.0f;
-        row.y = kf["y"] ? f(kf["y"]) : 0.0f;
-        row.z = kf["z"] ? f(kf["z"]) : 0.0f;
+        row.x = inner["x"] ? f(inner["x"]) : 0.0f;
+        row.y = inner["y"] ? f(inner["y"]) : 0.0f;
+        row.z = inner["z"] ? f(inner["z"]) : 0.0f;
         row.roll = deg("roll_deg");
         row.pitch = deg("pitch_deg");
         row.yaw = deg("yaw_deg");

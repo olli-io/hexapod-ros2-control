@@ -631,7 +631,7 @@ TEST(Validate, RejectsAContinuousKeyframeAfterALiveKnot) {
   const auto a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
   const auto b = joints_at("l_front", 0.2f, 0.0f, 0.05f);
   // After the implicit start, after a start, after a home and after a hold
-  // of one; fine after a joint keyframe or a hold of one.
+  // of one; fine after a pose or a hold of one.
   for (const auto& keys : std::vector<std::vector<LegKeyframe>>{
            {joint_key(0.5f, a, GestureTransition::CONTINUOUS), joint_key(1.0f, b)},
            {start_key(0.2f), joint_key(0.5f, a, GestureTransition::CONTINUOUS),

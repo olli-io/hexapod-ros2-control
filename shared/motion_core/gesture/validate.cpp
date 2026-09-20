@@ -66,7 +66,7 @@ void check_track_shape(const std::vector<LegKeyframe>& keys,
     if (k.start) {
       if (seen_joints) {
         throw std::invalid_argument(
-            where + ": start must come before the first joint keyframe");
+            where + ": start must come before the first pose");
       }
       live = true;
     } else if (k.home) {
@@ -75,7 +75,7 @@ void check_track_shape(const std::vector<LegKeyframe>& keys,
       if (live && k.transition == GestureTransition::CONTINUOUS) {
         throw std::invalid_argument(
             where + ": a continuous keyframe at t=" + std::to_string(k.t) +
-            " must follow a joint keyframe, not start, home or a hold of them");
+            " must follow a pose, not start, home or a hold of them");
       }
       live = false;
       seen_joints = true;

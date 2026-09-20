@@ -337,50 +337,51 @@ def presets(gait: dict, geometry: dict):
 # ── gestures ────────────────────────────────────────────────────────────────
 
 GESTURE_TRANSITIONS = ("ease", "continuous")
+LEG_KEYFRAME_TYPES = ("start", "pose", "hold", "home")
+BODY_KEYFRAME_TYPES = ("pose", "hold", "home")
 LEG_STAND_IN_WORDS = ("hold", "home", "start")
-BODY_STAND_IN_WORDS = ("hold", "home")
-LEG_KEYFRAME_KEYS = {"t", "transition"} | set(LEG_STAND_IN_WORDS) | set(LEG_NAMES)
+LEG_POSE_KEYS = {"t", "transition"} | set(LEG_NAMES)
 LEG_ENTRY_KEYS = {"coxa_deg", "femur_deg", "tibia_deg"}
 BODY_AXES = ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg")
-BODY_KEYFRAME_KEYS = {"t", "transition"} | set(BODY_STAND_IN_WORDS) | set(BODY_AXES)
+BODY_POSE_KEYS = {"t", "transition"} | set(BODY_AXES)
 
 
-def keyframe_common(entry, where: str, prev_t, words):
+def keyframe_type(kf, where: str, types):
+    """A keyframe is one mapping whose single key is its type; returns the
+    type and the mapping under it."""
+    if not isinstance(kf, dict) or len(kf) != 1 or next(iter(kf)) not in types:
+        raise ValueError(f"{where}: a keyframe is one of {', '.join(types)}")
+    kind, inner = next(iter(kf.items()))
+    if not isinstance(inner, dict):
+        raise ValueError(f"{where}: {kind} must be a mapping")
+    return kind, inner
+
+
+def keyframe_common(kind: str, inner: dict, where: str, prev_t):
     """t (strictly increasing, > 0) and transition; shared by both tracks."""
-    if not isinstance(entry, dict):
-        raise ValueError(f"{where}: a keyframe must be a mapping")
-    if "t" not in entry:
+    if "t" not in inner:
         raise ValueError(f"{where}: missing t")
-    t = float(entry["t"])
+    t = float(inner["t"])
     if not t > 0.0:
         raise ValueError(f"{where}: t must be > 0 (the start is implicit)")
     if prev_t is not None and not t > prev_t:
         raise ValueError(f"{where}: t must increase down the list")
-    return t, keyframe_transition(entry, where, words)
+    return t, keyframe_transition(kind, inner, where)
 
 
-def keyframe_transition(kf: dict, where: str, words) -> str:
-    """A stand-in keyframe implies its transition: a hold is static, a start
-    is where the track begins and a home always eases in. Any other keyframe
-    must say."""
-    stand_in = stand_in_word(kf, where, words)
-    if stand_in:
-        if "transition" in kf:
-            raise ValueError(f"{where}: {stand_in}: true takes no transition")
+def keyframe_transition(kind: str, inner: dict, where: str) -> str:
+    """A start, hold or home takes only t and implies its transition: a hold
+    is static, a start is where the track begins and a home always eases in.
+    A pose must say."""
+    if kind != "pose":
+        if set(inner) != {"t"}:
+            raise ValueError(f"{where}: {kind} takes only t")
         return "ease"
-    transition = str(kf.get("transition", ""))
+    transition = str(inner.get("transition", ""))
     if transition not in GESTURE_TRANSITIONS:
         raise ValueError(
             f"{where}: transition must be one of {GESTURE_TRANSITIONS}")
     return transition
-
-
-def stand_in_word(kf: dict, where: str, words):
-    """The stand-in word set on the keyframe for every track, else None."""
-    found = [w for w in words if kf.get(w, False)]
-    if len(found) > 1:
-        raise ValueError(f"{where}: {' and '.join(found)} exclude each other")
-    return found[0] if found else None
 
 
 def check_track_shape(rows, where: str):
@@ -389,7 +390,7 @@ def check_track_shape(rows, where: str):
     A `start` and a `home` knot are live: their value is the standing leg
     under whatever body pose is on at that moment, which only the pipeline
     knows, and a hold after one is live too. So a `start` must come before
-    the track's first joint keyframe, a `continuous` keyframe needs a fixed
+    the track's first pose, a `continuous` pose needs a fixed
     knot before it to draw a slope from, and the track must end on a home.
     """
     live = True
@@ -398,7 +399,7 @@ def check_track_shape(rows, where: str):
         if row["start"]:
             if seen_joints:
                 raise ValueError(
-                    f"{where}: start must come before the first joint keyframe")
+                    f"{where}: start must come before the first pose")
             live = True
         elif row["home"]:
             live = True
@@ -406,8 +407,7 @@ def check_track_shape(rows, where: str):
             if live and row["transition"] == "continuous":
                 raise ValueError(
                     f"{where}: a continuous keyframe at t={row['t']} must "
-                    f"follow a joint keyframe, not start, home or a hold of "
-                    f"them")
+                    f"follow a pose, not start, home or a hold of them")
             live = False
             seen_joints = True
     if not rows[-1]["home"]:
@@ -435,10 +435,10 @@ def leg_entry_angles(v: dict, limits: dict, where: str):
 def gestures(doc, geometry: dict):
     """Flatten gestures.yaml into per-leg keyframe tables.
 
-    The authoring format is multi-leg (one keyframe positions several legs at
-    one t); the baked tables, the runtime GestureSpec and the player are per
-    leg, so the flattening happens here. A keyframe-level `hold` expands to
-    one hold knot per leg the gesture moves anywhere. Mirrored by
+    The authoring format is multi-leg (one pose positions several legs at one
+    t); the baked tables, the runtime GestureSpec and the player are per leg,
+    so the flattening happens here. A start, hold or home keyframe expands to
+    one knot per leg the gesture moves anywhere. Mirrored by
     pipeline_config_loader.cpp, which the parity test holds to this output.
     """
     limits = joint_limits(geometry)
@@ -464,22 +464,18 @@ def gestures(doc, geometry: dict):
         prev_t = None
         for i, kf in enumerate(keyframes):
             where = f"gestures.yaml {gid}.legs[{i}]"
-            prev_t = keyframe_common(kf, where, prev_t, LEG_STAND_IN_WORDS)[0]
-            unknown = set(kf) - LEG_KEYFRAME_KEYS
+            kind, inner = keyframe_type(kf, where, LEG_KEYFRAME_TYPES)
+            prev_t = keyframe_common(kind, inner, where, prev_t)[0]
+            if kind != "pose":
+                continue
+            unknown = set(inner) - LEG_POSE_KEYS
             if unknown:
                 raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
-            legs_here = [n for n in LEG_NAMES if n in kf]
-            stand_in = stand_in_word(kf, where, LEG_STAND_IN_WORDS)
-            if stand_in:
-                if legs_here:
-                    raise ValueError(f"{where}: {stand_in}: true takes no leg entries")
-                continue
+            legs_here = [n for n in LEG_NAMES if n in inner]
             if not legs_here:
-                raise ValueError(
-                    f"{where}: names no leg (use hold: true, home: true or "
-                    f"start: true for all)")
+                raise ValueError(f"{where}: pose names no leg")
             for leg in legs_here:
-                v = kf[leg]
+                v = inner[leg]
                 if v in LEG_STAND_IN_WORDS:
                     pass
                 elif isinstance(v, dict):
@@ -500,16 +496,15 @@ def gestures(doc, geometry: dict):
                 continue
             rows = []
             for kf in keyframes:
-                stand_in = stand_in_word(kf, "", LEG_STAND_IN_WORDS)
-                if stand_in:
-                    v = stand_in
-                elif leg in kf:
-                    v = kf[leg]
+                kind, inner = keyframe_type(kf, "", LEG_KEYFRAME_TYPES)
+                if kind != "pose":
+                    v = kind
+                elif leg in inner:
+                    v = inner[leg]
                 else:
                     continue
-                row = dict(t=float(kf["t"]), coxa=0.0, femur=0.0, tibia=0.0,
-                           transition=keyframe_transition(
-                               kf, "", LEG_STAND_IN_WORDS),
+                row = dict(t=float(inner["t"]), coxa=0.0, femur=0.0, tibia=0.0,
+                           transition=keyframe_transition(kind, inner, ""),
                            hold=(v == "hold"), home=(v == "home"),
                            start=(v == "start"))
                 if v not in LEG_STAND_IN_WORDS:
@@ -523,27 +518,22 @@ def gestures(doc, geometry: dict):
         prev_t = None
         for i, kf in enumerate(entry.get("body") or []):
             where = f"gestures.yaml {gid}.body[{i}]"
-            if not isinstance(kf, dict):
-                raise ValueError(f"{where}: a keyframe must be a mapping")
-            unknown = set(kf) - BODY_KEYFRAME_KEYS
-            if unknown:
-                raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
-            t, transition = keyframe_common(kf, where, prev_t, BODY_STAND_IN_WORDS)
+            kind, inner = keyframe_type(kf, where, BODY_KEYFRAME_TYPES)
+            t, transition = keyframe_common(kind, inner, where, prev_t)
             prev_t = t
-            stand_in = stand_in_word(kf, where, BODY_STAND_IN_WORDS)
-            axes = [a for a in BODY_AXES if a in kf]
-            if stand_in and axes:
-                raise ValueError(f"{where}: {stand_in}: true takes no axis values")
             row = dict(t=t, x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0,
-                       transition=transition, hold=(stand_in == "hold"),
-                       home=(stand_in == "home"))
-            if not stand_in:
-                row["x"] = float(kf.get("x", 0.0))
-                row["y"] = float(kf.get("y", 0.0))
-                row["z"] = float(kf.get("z", 0.0))
-                row["roll"] = math.radians(float(kf.get("roll_deg", 0.0)))
-                row["pitch"] = math.radians(float(kf.get("pitch_deg", 0.0)))
-                row["yaw"] = math.radians(float(kf.get("yaw_deg", 0.0)))
+                       transition=transition, hold=(kind == "hold"),
+                       home=(kind == "home"))
+            if kind == "pose":
+                unknown = set(inner) - BODY_POSE_KEYS
+                if unknown:
+                    raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
+                row["x"] = float(inner.get("x", 0.0))
+                row["y"] = float(inner.get("y", 0.0))
+                row["z"] = float(inner.get("z", 0.0))
+                row["roll"] = math.radians(float(inner.get("roll_deg", 0.0)))
+                row["pitch"] = math.radians(float(inner.get("pitch_deg", 0.0)))
+                row["yaw"] = math.radians(float(inner.get("yaw_deg", 0.0)))
             body_rows.append(row)
 
         if body_rows and not body_rows[-1]["home"]:

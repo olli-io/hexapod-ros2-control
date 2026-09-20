@@ -837,14 +837,15 @@ _GESTURES_YAML = """
 gestures:
   - id: wave
     legs:
-      - t: 0.5
-        transition: ease
-        l_front: {coxa_deg: 45, femur_deg: 100, tibia_deg: 30}
-      - {t: 1.0, home: true}
+      - pose:
+          t: 0.5
+          transition: ease
+          l_front: {coxa_deg: 45, femur_deg: 100, tibia_deg: 30}
+      - home: {t: 1.0}
   - id: bow
     body:
-      - {t: 0.8, pitch_deg: -10, transition: ease}
-      - {t: 1.4, home: true}
+      - pose: {t: 0.8, pitch_deg: -10, transition: ease}
+      - home: {t: 1.4}
 """
 
 

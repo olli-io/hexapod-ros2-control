@@ -35,7 +35,8 @@ hardware. The seams each caller supplies — input, config source, clock, output
   `BodyPose` offset. Animations are pure `AnimationContext → BodyPose`
   (`breathing`, `gait_sway`, `support_shift`, `gait_bounce`, body rolls).
 - **`gesture/`** — keyframed leg + body motions played from a stand
-  (`gestures.yaml`). `keyframe` samples one track (`ease` smoothstep or a
+  (`gestures.yaml`: `start`, `pose`, `hold` and `home` keyframes, a `pose`
+  carrying the values). `keyframe` samples one track (`ease` smoothstep or a
   `continuous` Hermite run, slope-capped so a component never leaves the
   range its knots span); `GesturePlayer` completes a gesture's per-leg joint
   tables and body table with the implicit start knot, resolves `hold`, `home`

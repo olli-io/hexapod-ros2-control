@@ -21,7 +21,7 @@ namespace hexa::gesture {
 // std::invalid_argument prefixed with `where`. A start and a home knot are
 // live: their value is the standing leg under whatever body pose is on at
 // that moment, which only the pipeline knows, and a hold after one is live
-// too. So a start must come before the track's first joint keyframe, a
+// too. So a start must come before the track's first pose, a
 // continuous keyframe needs a fixed knot before it to draw a slope from, and
 // the track must end on a home. The YAML loaders call this too.
 void check_track_shape(const std::vector<LegKeyframe>& keys,
