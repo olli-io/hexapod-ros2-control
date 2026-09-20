@@ -61,10 +61,14 @@ struct LegOutput {
   // weight and taking no phase. `stance` is meaningless while this is set, so
   // every collective predicate tests this one first.
   bool parked = false;
-  // Commanded in joint space: `joints` go to the servos as they are, with no
-  // body pose and no IK; foot_target is their FK, for the support geometry.
-  // A gesture's tracked legs.
+  // Commanded in joint space, a gesture's tracked leg. `joints` go to the
+  // servos weighted by `direct_weight`; the rest of the weight is the IK
+  // solution for foot_target under the live body pose, so a leg easing out of
+  // or back into its stand follows the body while it does. At weight 1 the
+  // joints go as they are and foot_target is their FK, for the support
+  // geometry; below 1 foot_target is the stance the live part stands on.
   bool direct = false;
+  float direct_weight = 1.0f;
   JointAngles joints{};
 };
 

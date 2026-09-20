@@ -31,7 +31,7 @@ void check_body_keyframe(const std::string& id, const BodyKeyframe& k,
 void check_leg_keyframe(const std::string& id, const std::string& leg,
                         const LegKeyframe& k, const gait::kin::LegSpec& spec,
                         float ground_z) {
-  if (k.hold || k.home) {
+  if (k.hold || k.home || k.start) {
     return;
   }
   static constexpr std::array<const char*, 3> kJointNames = {"coxa", "femur",
@@ -58,6 +58,35 @@ void check_leg_keyframe(const std::string& id, const std::string& leg,
 
 }  // namespace
 
+void check_track_shape(const std::vector<LegKeyframe>& keys,
+                       const std::string& where) {
+  bool live = true;
+  bool seen_joints = false;
+  for (const LegKeyframe& k : keys) {
+    if (k.start) {
+      if (seen_joints) {
+        throw std::invalid_argument(
+            where + ": start must come before the first joint keyframe");
+      }
+      live = true;
+    } else if (k.home) {
+      live = true;
+    } else if (!k.hold) {
+      if (live && k.transition == GestureTransition::CONTINUOUS) {
+        throw std::invalid_argument(
+            where + ": a continuous keyframe at t=" + std::to_string(k.t) +
+            " must follow a joint keyframe, not start, home or a hold of them");
+      }
+      live = false;
+      seen_joints = true;
+    }
+  }
+  if (keys.empty() || !keys.back().home) {
+    throw std::invalid_argument(where +
+                                ": the track must end with a home keyframe");
+  }
+}
+
 void validate_gestures(
     const std::vector<GestureSpec>& specs,
     const std::map<std::string, gait::kin::LegSpec>& leg_specs,
@@ -74,10 +103,7 @@ void validate_gestures(
     }
     for (const LegTrack& track : spec.legs) {
       const std::string leg(leg_name(track.leg));
-      if (track.keys.empty() || !track.keys.back().home) {
-        throw std::invalid_argument("gesture '" + spec.id + "': " + leg +
-                                    " must end with a home keyframe");
-      }
+      check_track_shape(track.keys, "gesture '" + spec.id + "': " + leg);
       const gait::kin::LegSpec& ls = leg_specs.at(leg);
       const float ground_z = body_to_leg(nominal_stance.at(leg), ls).z;
       for (const LegKeyframe& k : track.keys) {

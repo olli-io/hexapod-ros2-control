@@ -38,11 +38,17 @@ hardware. The seams each caller supplies — input, config source, clock, output
   (`gestures.yaml`). `keyframe` samples one track (`ease` smoothstep or a
   `continuous` Hermite run, slope-capped so a component never leaves the
   range its knots span); `GesturePlayer` completes a gesture's per-leg joint
-  tables and body table with the implicit start knot (the stance solved
-  through IK once), resolves `hold` and `home` knots, and plays them off one
-  clock; every track ends on a home knot. It reports each
-  tracked leg `direct` with its joint angles; `validate_gestures` checks every
-  leg knot against the joint limits and the ground plane at construction.
+  tables and body table with the implicit start knot, resolves `hold`, `home`
+  and `start` knots, and plays them off one clock; every track ends on a home
+  knot. A leg's `start` and `home` knots are *live*: the standing leg under
+  the body pose of that moment, which only the pipeline knows. So between two
+  fixed knots a tracked leg is reported `direct` with its joint angles; easing
+  out of or into a live knot it is `direct` at the ease weight, and the
+  pipeline blends the fixed knot's angles with the live IK, so the leg keeps
+  following the body and lands home on the ground plane at its own time; on a
+  live stretch it is a plain stance leg. `validate_gestures` checks every leg
+  knot against the joint limits and the ground plane at construction, and the
+  track shape (`check_track_shape`, shared with the YAML loaders).
   Its leg track is neither gait nor animation; its body track is a posture
   term, not an animation layer.
 - **`kinematics/`** — `apply_body_pose`, `body_to_leg`, `inverse_kinematics`
@@ -86,10 +92,13 @@ overload runs `map_joy` first, then the same core.
 11. **Compose / IK** — per leg: `apply_body_pose` → `body_to_leg` →
     `inverse_kinematics`. An unreachable target holds that leg's last-good
     angles. A parked leg writes the folded pose directly; a direct leg (a
-    gesture's tracked leg) writes its joint angles directly, so the body pose
-    moves the body under it, not the leg.
-12. **Report** — 18 joint angles, engine state, applied leg set / preset,
-    master phase, supervisor decision, and the raw intent for the face.
+    gesture's tracked leg) writes its joint angles at `direct_weight`, the rest
+    of the weight being the IK of its stance under the body pose. At weight 1
+    the body pose moves the body under it, not the leg; below 1 the leg is
+    easing between its stand and a fixed knot and still rides the body.
+12. **Report** — 18 joint angles, the applied body pose, engine state,
+    applied leg set / preset, master phase, supervisor decision, and the raw
+    intent for the face.
 
 ## Engine states
 

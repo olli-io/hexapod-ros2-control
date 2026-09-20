@@ -79,6 +79,7 @@ struct TickResult {
   hexa::gait::EngineState engine_state = hexa::gait::EngineState::FOLDED;
   float master_phase = 0.0f;
   bool walking = false;                  // shaped-command non-zero (posture gate)
+  hexa::posture::BodyPose body_pose{};   // the composed pose compose_gait applied
 
   // Raw teleop intent for an on-board face policy: pre-shaping, so gaze tracks
   // the stick rather than the slew. The pose-mode expressions need the body shift

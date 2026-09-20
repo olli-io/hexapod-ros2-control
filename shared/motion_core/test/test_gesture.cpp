@@ -1,6 +1,6 @@
 // Gestures: keyframe sampling (the two segment shapes and their joins), the
-// player (implicit start / return knots, hold resolution, per-leg tracks)
-// and the engine's GESTURE state with its guards.
+// player (live start / home knots and the blend weights next to them, hold
+// resolution, per-leg tracks) and the engine's GESTURE state with its guards.
 
 #include <cmath>
 #include <map>
@@ -94,6 +94,22 @@ LegKeyframe home_key(float t, GestureTransition tr = GestureTransition::EASE) {
   k.transition = tr;
   k.home = true;
   return k;
+}
+
+LegKeyframe start_key(float t) {
+  LegKeyframe k{};
+  k.t = t;
+  k.transition = GestureTransition::EASE;
+  k.start = true;
+  return k;
+}
+
+// The l_front foot the pipeline would solve a live knot to with no body pose
+// on: nominal, as the player reports it.
+hexa::Vec3 foot_of(const g::LegOutput& out, const std::string& leg) {
+  const auto specs = g::leg_specs_from_config();
+  return hexa::leg_to_body(hexa::forward_kinematics(out.joints, specs.at(leg)),
+                           specs.at(leg));
 }
 
 BodyKeyframe body_home_key(float t) {
@@ -270,20 +286,29 @@ TEST(Keyframe, MonotoneUnevenKnotsStayInsideTheirRange) {
 TEST(Player, TrackedLegIsDirectAndUntrackedIsNot) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  const auto spec = one_leg_spec(
-      hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  const auto k1 = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  const auto k2 = joints_at("l_front", 0.2f, 0.0f, 0.05f);
+  const auto spec = one_leg_spec(hexa::Leg::L_FRONT,
+                                 {joint_key(0.5f, k1), joint_key(1.0f, k2)});
+  gs::GesturePlayer player(spec, nominal, specs);
   while (!player.done()) {
     const auto out = player.update(kDt);
+    const float t = player.t();
     const auto& l = out.at("l_front");
-    EXPECT_TRUE(l.direct);
-    // foot_target is the joints' FK, in the body frame.
-    EXPECT_TRUE(near(l.foot_target,
-                     hexa::leg_to_body(hexa::forward_kinematics(
-                                           l.joints, specs.at("l_front")),
-                                       specs.at("l_front")),
-                     1e-6f))
-        << "t=" << player.t();
+    if (t > 0.5f && t < 1.0f) {
+      // Between two fixed knots: fully direct, foot_target the joints' FK.
+      EXPECT_TRUE(l.direct) << "t=" << t;
+      EXPECT_EQ(l.direct_weight, 1.0f) << "t=" << t;
+      EXPECT_TRUE(near(l.foot_target, foot_of(l, "l_front"), 1e-6f)) << "t=" << t;
+    } else if (t < 0.5f) {
+      // Easing out of the live start: the first knot's angles at the ease
+      // weight, anchored on the stance.
+      EXPECT_TRUE(l.direct) << "t=" << t;
+      EXPECT_GT(l.direct_weight, 0.0f) << "t=" << t;
+      EXPECT_LT(l.direct_weight, 1.0f) << "t=" << t;
+      for (std::size_t j = 0; j < 3; ++j) EXPECT_FLOAT_EQ(l.joints[j], k1[j]);
+      EXPECT_TRUE(near(l.foot_target, nominal.at("l_front"), 1e-7f)) << "t=" << t;
+    }
     for (const auto& leg : g::LEG_NAMES) {
       if (leg != "l_front") {
         EXPECT_FALSE(out.at(leg).direct) << leg;
@@ -292,19 +317,19 @@ TEST(Player, TrackedLegIsDirectAndUntrackedIsNot) {
   }
 }
 
-TEST(Player, StartsAtTheCurrentFootAndReturnsToNominal) {
+TEST(Player, StartsLiveAndReturnsLive) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  auto start = nominal;
-  start["l_front"] = nominal.at("l_front") + hexa::Vec3(0.01f, -0.005f, 0.0f);
-
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
       {joint_key(0.5f, joints_at("l_front", 0.3f, -0.02f, 0.05f))});
-  gs::GesturePlayer player(spec, start, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
 
+  // Just off the start the weight is as good as zero: the leg is the stance.
   auto out = player.update(1e-5f);
-  EXPECT_TRUE(near(out.at("l_front").foot_target, start.at("l_front"), 1e-3f));
+  EXPECT_LT(out.at("l_front").direct_weight * float(out.at("l_front").direct), 1e-6f);
+  EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-7f));
+  EXPECT_TRUE(out.at("l_front").stance);
   EXPECT_FALSE(player.done());
 
   for (int i = 0; i < 200 && !player.done(); ++i) {
@@ -312,9 +337,30 @@ TEST(Player, StartsAtTheCurrentFootAndReturnsToNominal) {
   }
   EXPECT_TRUE(player.done());
   EXPECT_NEAR(player.duration(), 1.0f, 1e-6f);
-  EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-5f));
+  EXPECT_FALSE(out.at("l_front").direct);
+  EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-7f));
   EXPECT_TRUE(out.at("l_front").stance);
   EXPECT_NEAR(out.at("l_front").phase, 1.0f, 1e-6f);
+}
+
+TEST(Player, BlendWeightsEaseOutOfStartAndBackIntoHome) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
+  const auto k = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  const auto spec = one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, k)}, 0.5f);
+  gs::GesturePlayer player(spec, nominal, specs);
+  for (int i = 0; i < 12; ++i) player.update(kDt);  // t = 0.24
+  auto l = player.update(0.01f).at("l_front");        // t = 0.25, u = 0.5
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, gs::ease5(0.5f), 1e-5f);
+  for (std::size_t j = 0; j < 3; ++j) EXPECT_FLOAT_EQ(l.joints[j], k[j]);
+  l = player.update(0.25f).at("l_front");  // t = 0.5, at the knot
+  EXPECT_NEAR(l.direct_weight, 1.0f, 1e-5f);
+  l = player.update(0.25f).at("l_front");  // t = 0.75, halfway home
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, 1.0f - gs::ease5(0.5f), 1e-5f);
+  for (std::size_t j = 0; j < 3; ++j) EXPECT_FLOAT_EQ(l.joints[j], k[j]);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front"), 1e-7f));
 }
 
 TEST(Player, UntrackedLegsStayPlanted) {
@@ -322,7 +368,7 @@ TEST(Player, UntrackedLegsStayPlanted) {
   const auto specs = g::leg_specs_from_config();
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   while (!player.done()) {
     const auto out = player.update(kDt);
     for (const auto& leg : g::LEG_NAMES) {
@@ -335,22 +381,28 @@ TEST(Player, UntrackedLegsStayPlanted) {
   }
 }
 
-TEST(Player, LiftedLegReportsSwingOnlyWhileAboveTheGround) {
+TEST(Player, LiftedLegReportsSwingWhileOffTheGround) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT, {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   auto out = player.update(1e-5f);
   EXPECT_TRUE(out.at("l_front").stance) << "planted at the start";
-  bool saw_swing = false;
+  // Planted, then in the air, then planted again: exactly two flips, and the
+  // knot itself is in the air.
+  int flips = 0;
+  bool last = true;
   while (!player.done()) {
     out = player.update(kDt);
-    const float lift = out.at("l_front").foot_target.z - nominal.at("l_front").z;
-    EXPECT_EQ(out.at("l_front").stance, lift <= gs::kPlantedHeight);
-    saw_swing = saw_swing || !out.at("l_front").stance;
+    const bool stance = out.at("l_front").stance;
+    flips += stance != last;
+    last = stance;
+    if (std::fabs(player.t() - 0.5f) < kDt / 2) {
+      EXPECT_FALSE(stance) << "at the lifted knot";
+    }
   }
-  EXPECT_TRUE(saw_swing);
+  EXPECT_EQ(flips, 2);
   EXPECT_TRUE(out.at("l_front").stance) << "planted at the end";
 }
 
@@ -365,7 +417,7 @@ TEST(Player, BodyTrackReturnsToIdentity) {
   k.x = 0.02f;
   k.transition = GestureTransition::EASE;
   spec.body = {k, body_home_key(1.0f)};
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
 
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
   EXPECT_NEAR(player.body().pitch, -0.2f, 1e-4f);
@@ -397,7 +449,7 @@ TEST(Player, LegAbsentFromAMiddleKeyframeInterpolatesAcrossIt) {
   right.leg = hexa::Leg::R_FRONT;
   right.keys = {joint_key(1.0f, b), home_key(1.5f)};
   spec.legs = {left, right};
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   for (int i = 0; i < 50; ++i) player.update(kDt);  // t = 1.0
   const auto out = player.update(0.0f);
   for (std::size_t j = 0; j < 3; ++j) {
@@ -421,7 +473,7 @@ TEST(Player, TwoLegsInOneKeyframeMoveTogether) {
   right.keys = {joint_key(0.8f, joints_at("r_front", 0.0f, 0.0f, 0.04f)),
                 home_key(1.3f)};
   spec.legs = {left, right};
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   while (!player.done()) {
     const auto out = player.update(kDt);
     const float lift_l = out.at("l_front").foot_target.z - nominal.at("l_front").z;
@@ -437,7 +489,7 @@ TEST(Player, HoldKnotHoldsThePreviousValue) {
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
       {joint_key(0.5f, joints_at("l_front", 0.2f, 0.0f, 0.05f)), hold_key(1.0f)});
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
   const hexa::Vec3 at_knot = player.update(0.0f).at("l_front").foot_target;
   for (int i = 0; i < 25; ++i) {
@@ -448,20 +500,40 @@ TEST(Player, HoldKnotHoldsThePreviousValue) {
   EXPECT_NEAR(player.duration(), 1.5f, 1e-6f);
 }
 
-TEST(Player, LeadingHoldKnotHoldsTheStartPosition) {
+TEST(Player, StartKnotKeepsTheLegLiveUntilItsTime) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
-  auto start = nominal;
-  start["l_front"] = nominal.at("l_front") + hexa::Vec3(0.0f, 0.0f, 0.02f);
+  const auto k = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  const auto spec = one_leg_spec(hexa::Leg::L_FRONT,
+                                 {start_key(0.5f), joint_key(1.0f, k)});
+  gs::GesturePlayer player(spec, nominal, specs);
+  for (int i = 0; i < 24; ++i) {  // to t = 0.48, short of the start knot
+    const auto out = player.update(kDt);
+    EXPECT_FALSE(out.at("l_front").direct) << "t=" << player.t();
+    EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-7f))
+        << "t=" << player.t();
+    EXPECT_TRUE(out.at("l_front").stance) << "t=" << player.t();
+    EXPECT_GT(out.at("l_front").phase, 0.0f) << "still a tracked leg";
+  }
+  // The ease into the first knot runs from the start knot, not from t = 0.
+  const auto l = player.update(0.75f - player.t()).at("l_front");  // u = 0.5
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, gs::ease5(0.5f), 1e-5f);
+  for (std::size_t j = 0; j < 3; ++j) EXPECT_FLOAT_EQ(l.joints[j], k[j]);
+}
+
+TEST(Player, HoldAfterStartIsLive) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
       {hold_key(0.5f), joint_key(1.0f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
-  gs::GesturePlayer player(spec, start, nominal, specs);
-  for (int i = 0; i < 25; ++i) {
+  gs::GesturePlayer player(spec, nominal, specs);
+  for (int i = 0; i < 24; ++i) {  // to t = 0.48, short of the hold knot
     const auto out = player.update(kDt);
-    EXPECT_TRUE(near(out.at("l_front").foot_target, start.at("l_front"), 1e-5f))
-        << "t=" << player.t();
+    EXPECT_FALSE(out.at("l_front").direct) << "t=" << player.t();
   }
+  EXPECT_TRUE(player.update(0.27f).at("l_front").direct);
 }
 
 TEST(Player, BodyHoldKnotHoldsThePreviousPose) {
@@ -479,7 +551,7 @@ TEST(Player, BodyHoldKnotHoldsThePreviousPose) {
   hold.transition = GestureTransition::EASE;
   hold.hold = true;
   spec.body = {a, hold, body_home_key(2.0f)};
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   for (int i = 0; i < 25; ++i) player.update(kDt);  // t = 0.5
   for (int i = 0; i < 50; ++i) {
     player.update(kDt);
@@ -535,13 +607,56 @@ TEST(Validate, RejectsAKnotBelowTheGroundPlane) {
                std::invalid_argument);
 }
 
-TEST(Validate, HoldAndHomeKnotsAreNotChecked) {
+TEST(Validate, StandInKnotsAreNotChecked) {
   const auto spec = one_leg_spec(
       hexa::Leg::L_FRONT,
-      {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)), hold_key(1.0f)});
+      {start_key(0.2f), joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)),
+       hold_key(1.0f)});
   EXPECT_NO_THROW(gs::validate_gestures(
       {spec}, g::leg_specs_from_config(), g::nominal_stance_from_config(),
       hexa::posture::PoseLimits{}));
+}
+
+TEST(Validate, RejectsAStartAfterAJointKeyframe) {
+  const auto spec = one_leg_spec(
+      hexa::Leg::L_FRONT,
+      {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f)), start_key(1.0f)});
+  EXPECT_THROW(gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                                     g::nominal_stance_from_config(),
+                                     hexa::posture::PoseLimits{}),
+               std::invalid_argument);
+}
+
+TEST(Validate, RejectsAContinuousKeyframeAfterALiveKnot) {
+  const auto a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  const auto b = joints_at("l_front", 0.2f, 0.0f, 0.05f);
+  // After the implicit start, after a start, after a home and after a hold
+  // of one; fine after a joint keyframe or a hold of one.
+  for (const auto& keys : std::vector<std::vector<LegKeyframe>>{
+           {joint_key(0.5f, a, GestureTransition::CONTINUOUS), joint_key(1.0f, b)},
+           {start_key(0.2f), joint_key(0.5f, a, GestureTransition::CONTINUOUS),
+            joint_key(1.0f, b)},
+           {joint_key(0.5f, a), home_key(1.0f),
+            joint_key(1.5f, b, GestureTransition::CONTINUOUS), joint_key(2.0f, a)},
+           {hold_key(0.2f), joint_key(0.5f, a, GestureTransition::CONTINUOUS),
+            joint_key(1.0f, b)}}) {
+    EXPECT_THROW(gs::validate_gestures({one_leg_spec(hexa::Leg::L_FRONT, keys)},
+                                       g::leg_specs_from_config(),
+                                       g::nominal_stance_from_config(),
+                                       hexa::posture::PoseLimits{}),
+                 std::invalid_argument);
+  }
+  for (const auto& keys : std::vector<std::vector<LegKeyframe>>{
+           {joint_key(0.5f, a), joint_key(1.0f, b, GestureTransition::CONTINUOUS),
+            joint_key(1.5f, a, GestureTransition::CONTINUOUS)},
+           {joint_key(0.5f, a), hold_key(0.8f),
+            joint_key(1.0f, b, GestureTransition::CONTINUOUS),
+            joint_key(1.5f, a, GestureTransition::CONTINUOUS)}}) {
+    EXPECT_NO_THROW(gs::validate_gestures({one_leg_spec(hexa::Leg::L_FRONT, keys)},
+                                          g::leg_specs_from_config(),
+                                          g::nominal_stance_from_config(),
+                                          hexa::posture::PoseLimits{}));
+  }
 }
 
 TEST(Validate, RejectsATrackThatDoesNotEndAtHome) {
@@ -582,15 +697,18 @@ TEST(Player, HomeKnotLandsOnNominalAtItsOwnTime) {
   right.keys = {joint_key(0.5f, joints_at("r_front", 0.0f, 0.0f, 0.05f)),
                 home_key(2.0f)};
   spec.legs = {left, right};
-  gs::GesturePlayer player(spec, nominal, nominal, specs);
+  gs::GesturePlayer player(spec, nominal, specs);
   EXPECT_NEAR(player.duration(), 2.0f, 1e-6f);
   for (int i = 0; i < 50; ++i) player.update(kDt);  // t = 1.0
   auto out = player.update(0.0f);
-  EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-5f));
+  EXPECT_FALSE(out.at("l_front").direct) << "home: the stance under the body";
+  EXPECT_TRUE(near(out.at("l_front").foot_target, nominal.at("l_front"), 1e-7f));
   EXPECT_TRUE(out.at("l_front").stance);
+  EXPECT_TRUE(out.at("r_front").direct);
   EXPECT_FALSE(out.at("r_front").stance);
   while (!player.done()) out = player.update(kDt);
-  EXPECT_TRUE(near(out.at("r_front").foot_target, nominal.at("r_front"), 1e-5f));
+  EXPECT_FALSE(out.at("r_front").direct);
+  EXPECT_TRUE(near(out.at("r_front").foot_target, nominal.at("r_front"), 1e-7f));
 }
 
 // ── Engine ──

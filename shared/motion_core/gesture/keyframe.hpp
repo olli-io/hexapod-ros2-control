@@ -57,10 +57,12 @@ float knot_slope(const Key* keys, std::size_t n, std::size_t i, Get get) {
   return std::copysign(std::min(std::fabs(m), cap), m);
 }
 
-// Sample one component of a COMPLETE table (implicit start and return already
-// in place, every hold knot resolved) at time t. The segment arriving at
-// knot i is shaped by knot i's transition. Before the first knot the first
-// value holds; after the last, the last.
+// Sample one component of a COMPLETE table (implicit start knot in place,
+// every hold knot resolved) at time t. The segment arriving at knot i is
+// shaped by knot i's transition. Before the first knot the first value holds;
+// after the last, the last. A leg track's live knots carry no value: the
+// player samples only between two fixed knots here and eases the segments
+// next to a live knot itself.
 template <typename Key, typename Get>
 float track_value(const Key* keys, std::size_t n, float t, Get get) {
   if (n == 0) {

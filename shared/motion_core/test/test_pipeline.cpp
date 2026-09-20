@@ -1266,38 +1266,42 @@ TEST(Gesture, NoJointCommandOutrunsItsServo) {
 }
 
 // A tracked leg is commanded in joint space: each of its joints stays inside
-// the range its own knots span, however the body track moves the body, and no
-// joint of any leg leaves its limits.
+// the range its own knots and its stand under that tick's body pose span, so
+// the body track moves the leg only through the live start and home knots,
+// and no joint of any leg leaves its limits.
 TEST(Gesture, TrackedLegStaysInsideItsKnotsAndEveryJointInsideItsLimits) {
+  const auto home = nominal_feet();
   for (const auto& g : hexa::config::kGestures) {
     pl::Pipeline p;
     std::uint64_t now_us = 0;
     ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
-    const pl::TickResult standing = tick_cmd(p, pl::CommandIntent{}, now_us);
     const auto steps = run_gesture(p, now_us, g.id);
     ASSERT_TRUE(steps.front().gesture_accepted) << g.id;
     for (std::size_t ti = 0; ti < g.leg_track_count; ++ti) {
       const auto& track = hexa::config::kGestureLegTracks[g.first_leg_track + ti];
       const std::size_t li = static_cast<std::size_t>(track.leg);
+      const auto& spec = hexa::config::kLegSpecs[li];
       std::array<float, 3> lo{}, hi{};
-      for (std::size_t j = 0; j < 3; ++j) {
-        lo[j] = hi[j] = standing.theta[li * 3 + j];
-      }
+      bool first = true;
       for (std::size_t k = 0; k < track.count; ++k) {
         const auto& key = hexa::config::kGestureLegKeyframes[track.first + k];
-        if (key.hold || key.home) continue;
+        if (key.hold || key.home || key.start) continue;
         const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
         for (std::size_t j = 0; j < 3; ++j) {
-          lo[j] = std::min(lo[j], a[j]);
-          hi[j] = std::max(hi[j], a[j]);
+          lo[j] = first ? a[j] : std::min(lo[j], a[j]);
+          hi[j] = first ? a[j] : std::max(hi[j], a[j]);
         }
+        first = false;
       }
       for (const auto& r : steps) {
         if (r.engine_state != EngineState::GESTURE) continue;
+        const hexa::JointAngles live = hexa::inverse_kinematics(
+            hexa::body_to_leg(hexa::apply_body_pose(home[li], r.body_pose), spec),
+            spec);
         for (std::size_t j = 0; j < 3; ++j) {
-          EXPECT_GE(r.theta[li * 3 + j], lo[j] - 1e-4f)
+          EXPECT_GE(r.theta[li * 3 + j], std::min(lo[j], live[j]) - 1e-4f)
               << g.id << " " << hexa::gait::LEG_NAMES[li] << " joint " << j;
-          EXPECT_LE(r.theta[li * 3 + j], hi[j] + 1e-4f)
+          EXPECT_LE(r.theta[li * 3 + j], std::max(hi[j], live[j]) + 1e-4f)
               << g.id << " " << hexa::gait::LEG_NAMES[li] << " joint " << j;
         }
       }

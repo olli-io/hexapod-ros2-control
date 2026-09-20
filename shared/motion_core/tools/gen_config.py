@@ -337,14 +337,15 @@ def presets(gait: dict, geometry: dict):
 # ── gestures ────────────────────────────────────────────────────────────────
 
 GESTURE_TRANSITIONS = ("ease", "continuous")
-LEG_KEYFRAME_KEYS = {"t", "transition", "hold", "home"} | set(LEG_NAMES)
+LEG_STAND_IN_WORDS = ("hold", "home", "start")
+BODY_STAND_IN_WORDS = ("hold", "home")
+LEG_KEYFRAME_KEYS = {"t", "transition"} | set(LEG_STAND_IN_WORDS) | set(LEG_NAMES)
 LEG_ENTRY_KEYS = {"coxa_deg", "femur_deg", "tibia_deg"}
 BODY_AXES = ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg")
-BODY_KEYFRAME_KEYS = {"t", "transition", "hold", "home"} | set(BODY_AXES)
-STAND_IN_WORDS = ("hold", "home")
+BODY_KEYFRAME_KEYS = {"t", "transition"} | set(BODY_STAND_IN_WORDS) | set(BODY_AXES)
 
 
-def keyframe_common(entry, where: str, prev_t):
+def keyframe_common(entry, where: str, prev_t, words):
     """t (strictly increasing, > 0) and transition; shared by both tracks."""
     if not isinstance(entry, dict):
         raise ValueError(f"{where}: a keyframe must be a mapping")
@@ -355,13 +356,14 @@ def keyframe_common(entry, where: str, prev_t):
         raise ValueError(f"{where}: t must be > 0 (the start is implicit)")
     if prev_t is not None and not t > prev_t:
         raise ValueError(f"{where}: t must increase down the list")
-    return t, keyframe_transition(entry, where)
+    return t, keyframe_transition(entry, where, words)
 
 
-def keyframe_transition(kf: dict, where: str) -> str:
-    """A hold or home keyframe implies its transition: a hold is static and a
-    home always eases in. Any other keyframe must say."""
-    stand_in = stand_in_word(kf, where)
+def keyframe_transition(kf: dict, where: str, words) -> str:
+    """A stand-in keyframe implies its transition: a hold is static, a start
+    is where the track begins and a home always eases in. Any other keyframe
+    must say."""
+    stand_in = stand_in_word(kf, where, words)
     if stand_in:
         if "transition" in kf:
             raise ValueError(f"{where}: {stand_in}: true takes no transition")
@@ -373,12 +375,43 @@ def keyframe_transition(kf: dict, where: str) -> str:
     return transition
 
 
-def stand_in_word(kf: dict, where: str):
-    """'hold' or 'home' when the keyframe stands in for every track, else None."""
-    words = [w for w in STAND_IN_WORDS if kf.get(w, False)]
-    if len(words) > 1:
-        raise ValueError(f"{where}: hold and home exclude each other")
-    return words[0] if words else None
+def stand_in_word(kf: dict, where: str, words):
+    """The stand-in word set on the keyframe for every track, else None."""
+    found = [w for w in words if kf.get(w, False)]
+    if len(found) > 1:
+        raise ValueError(f"{where}: {' and '.join(found)} exclude each other")
+    return found[0] if found else None
+
+
+def check_track_shape(rows, where: str):
+    """The structural rules one leg's table must meet.
+
+    A `start` and a `home` knot are live: their value is the standing leg
+    under whatever body pose is on at that moment, which only the pipeline
+    knows, and a hold after one is live too. So a `start` must come before
+    the track's first joint keyframe, a `continuous` keyframe needs a fixed
+    knot before it to draw a slope from, and the track must end on a home.
+    """
+    live = True
+    seen_joints = False
+    for row in rows:
+        if row["start"]:
+            if seen_joints:
+                raise ValueError(
+                    f"{where}: start must come before the first joint keyframe")
+            live = True
+        elif row["home"]:
+            live = True
+        elif not row["hold"]:
+            if live and row["transition"] == "continuous":
+                raise ValueError(
+                    f"{where}: a continuous keyframe at t={row['t']} must "
+                    f"follow a joint keyframe, not start, home or a hold of "
+                    f"them")
+            live = False
+            seen_joints = True
+    if not rows[-1]["home"]:
+        raise ValueError(f"{where}: the track must end with a home keyframe")
 
 
 def leg_entry_angles(v: dict, limits: dict, where: str):
@@ -431,23 +464,23 @@ def gestures(doc, geometry: dict):
         prev_t = None
         for i, kf in enumerate(keyframes):
             where = f"gestures.yaml {gid}.legs[{i}]"
-            prev_t = keyframe_common(kf, where, prev_t)[0]
+            prev_t = keyframe_common(kf, where, prev_t, LEG_STAND_IN_WORDS)[0]
             unknown = set(kf) - LEG_KEYFRAME_KEYS
             if unknown:
                 raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
             legs_here = [n for n in LEG_NAMES if n in kf]
-            stand_in = stand_in_word(kf, where)
+            stand_in = stand_in_word(kf, where, LEG_STAND_IN_WORDS)
             if stand_in:
                 if legs_here:
                     raise ValueError(f"{where}: {stand_in}: true takes no leg entries")
                 continue
             if not legs_here:
                 raise ValueError(
-                    f"{where}: names no leg (use hold: true or home: true "
-                    f"for all)")
+                    f"{where}: names no leg (use hold: true, home: true or "
+                    f"start: true for all)")
             for leg in legs_here:
                 v = kf[leg]
-                if v in STAND_IN_WORDS:
+                if v in LEG_STAND_IN_WORDS:
                     pass
                 elif isinstance(v, dict):
                     if set(v) != LEG_ENTRY_KEYS:
@@ -457,7 +490,7 @@ def gestures(doc, geometry: dict):
                     leg_entry_angles(v, limits, f"{where}.{leg}")
                 else:
                     raise ValueError(
-                        f"{where}.{leg}: a mapping, hold or home")
+                        f"{where}.{leg}: a mapping, hold, home or start")
                 if leg not in moved:
                     moved.append(leg)
         # Pass 2: per-leg tables, legs in Leg order.
@@ -467,7 +500,7 @@ def gestures(doc, geometry: dict):
                 continue
             rows = []
             for kf in keyframes:
-                stand_in = stand_in_word(kf, "")
+                stand_in = stand_in_word(kf, "", LEG_STAND_IN_WORDS)
                 if stand_in:
                     v = stand_in
                 elif leg in kf:
@@ -475,28 +508,29 @@ def gestures(doc, geometry: dict):
                 else:
                     continue
                 row = dict(t=float(kf["t"]), coxa=0.0, femur=0.0, tibia=0.0,
-                           transition=keyframe_transition(kf, ""),
-                           hold=(v == "hold"), home=(v == "home"))
-                if v not in STAND_IN_WORDS:
+                           transition=keyframe_transition(
+                               kf, "", LEG_STAND_IN_WORDS),
+                           hold=(v == "hold"), home=(v == "home"),
+                           start=(v == "start"))
+                if v not in LEG_STAND_IN_WORDS:
                     row["coxa"], row["femur"], row["tibia"] = leg_entry_angles(
                         v, limits, f"gestures.yaml {gid}.{leg}")
                 rows.append(row)
-            if not rows[-1]["home"]:
-                raise ValueError(
-                    f"gestures.yaml {gid}.{leg}: the track must end with a "
-                    f"home keyframe")
+            check_track_shape(rows, f"gestures.yaml {gid}.{leg}")
             tracks.append((leg, rows))
 
         body_rows = []
         prev_t = None
         for i, kf in enumerate(entry.get("body") or []):
             where = f"gestures.yaml {gid}.body[{i}]"
-            t, transition = keyframe_common(kf, where, prev_t)
-            prev_t = t
+            if not isinstance(kf, dict):
+                raise ValueError(f"{where}: a keyframe must be a mapping")
             unknown = set(kf) - BODY_KEYFRAME_KEYS
             if unknown:
                 raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
-            stand_in = stand_in_word(kf, where)
+            t, transition = keyframe_common(kf, where, prev_t, BODY_STAND_IN_WORDS)
+            prev_t = t
+            stand_in = stand_in_word(kf, where, BODY_STAND_IN_WORDS)
             axes = [a for a in BODY_AXES if a in kf]
             if stand_in and axes:
                 raise ValueError(f"{where}: {stand_in}: true takes no axis values")
@@ -979,7 +1013,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("// Keyframed leg + body motions played from a stand. Flat tables plus")
     w("// index ranges; the per-leg form is the flattening of the YAML's")
     w("// multi-leg keyframes. A `hold` knot repeats the value of the knot")
-    w("// before it and a `home` knot is the stance / identity body; their value")
+    w("// before it; a leg `start` or `home` knot is the standing leg under the")
+    w("// live body pose and a body `home` knot the identity body. Their value")
     w("// fields are zero here, the player resolves them. Every track ends on a")
     w("// home knot.")
     w("enum class GestureTransition : std::uint8_t { EASE, CONTINUOUS };")
@@ -991,6 +1026,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  GestureTransition transition;  // how the track arrives here")
     w("  bool hold;")
     w("  bool home;")
+    w("  bool start;")
     w("};")
     w("struct BodyKeyframe {")
     w("  float t;")
@@ -1032,7 +1068,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     for gid, leg, r in leg_keys:
         w(f"    {{{fl(r['t'])}, {fl(r['coxa'])}, {fl(r['femur'])}, "
           f"{fl(r['tibia'])}, {trans(r['transition'])}, {bo(r['hold'])}, "
-          f"{bo(r['home'])}}},"
+          f"{bo(r['home'])}, {bo(r['start'])}}},"
           f"  // {gid} {leg}")
     w("}};")
     w(f"inline constexpr std::array<BodyKeyframe, {len(body_keys)}> "

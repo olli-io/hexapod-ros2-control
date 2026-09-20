@@ -920,8 +920,8 @@ std::map<std::string, LegOutput> Engine::update(
     if (pending_gesture_.has_value()) {
       const std::size_t idx = *pending_gesture_;
       pending_gesture_.reset();
-      gesture_ = std::make_unique<gesture::GesturePlayer>(
-          gestures_[idx], last_targets_, nominal_, *leg_specs_);
+      gesture_ = std::make_unique<gesture::GesturePlayer>(gestures_[idx],
+                                                          nominal_, *leg_specs_);
       state_ = EngineState::GESTURE;
       return tick_gesture(dt);
     }

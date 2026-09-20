@@ -157,7 +157,7 @@ int Pipeline::compose_gait(
       theta_[i * 3 + 2] = folded_pose_[idx][2];
       continue;
     }
-    if (leg.direct) {
+    if (leg.direct && leg.direct_weight >= 1.0f) {
       theta_[i * 3 + 0] = leg.joints[0];
       theta_[i * 3 + 1] = leg.joints[1];
       theta_[i * 3 + 2] = leg.joints[2];
@@ -167,7 +167,15 @@ int Pipeline::compose_gait(
     const hexa::Vec3 in_offset = hexa::apply_body_pose(target, body_pose);
     const hexa::Vec3 in_leg = hexa::body_to_leg(in_offset, spec);
     try {
-      const hexa::JointAngles a = hexa::inverse_kinematics(in_leg, spec);
+      hexa::JointAngles a = hexa::inverse_kinematics(in_leg, spec);
+      if (leg.direct) {
+        // The ease between a live knot and a fixed one, taken here where the
+        // live end is known.
+        const float w = leg.direct_weight;
+        for (std::size_t j = 0; j < 3; ++j) {
+          a[j] += (leg.joints[j] - a[j]) * w;
+        }
+      }
       theta_[i * 3 + 0] = a[0];
       theta_[i * 3 + 1] = a[1];
       theta_[i * 3 + 2] = a[2];
@@ -430,6 +438,7 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   r.unreachable = compose_gait(out, body_pose);
   // What compose_gait actually applied, for next tick's neutral-pose check.
   last_body_pose_ = body_pose;
+  r.body_pose = body_pose;
   std::copy(std::begin(theta_), std::end(theta_), std::begin(r.theta));
 
   r.engine_state = st;

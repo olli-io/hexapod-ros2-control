@@ -223,6 +223,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
         EXPECT_EQ(lt.keys[ki].transition, bt.keys[ki].transition) << key;
         EXPECT_EQ(lt.keys[ki].hold, bt.keys[ki].hold) << key;
         EXPECT_EQ(lt.keys[ki].home, bt.keys[ki].home) << key;
+        EXPECT_EQ(lt.keys[ki].start, bt.keys[ki].start) << key;
       }
     }
     ASSERT_EQ(lg.body.size(), bg.body.size()) << lg.id;

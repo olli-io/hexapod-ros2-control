@@ -511,8 +511,8 @@ TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
         << "track " << t.first << " does not end at home";
     for (std::size_t k = 0; k < t.count; ++k) {
       const auto& key = cfg::kGestureLegKeyframes[t.first + k];
-      EXPECT_FALSE(key.hold && key.home);
-      if (!key.hold && !key.home) {
+      EXPECT_LE(int(key.hold) + int(key.home) + int(key.start), 1);
+      if (!key.hold && !key.home && !key.start) {
         const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
         for (std::size_t j = 0; j < 3; ++j) {
           EXPECT_GE(a[j], cfg::kJointLimits[j].lower) << "joint " << j;

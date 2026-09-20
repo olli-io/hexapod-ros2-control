@@ -10,27 +10,38 @@
 # tibia_deg  — interior knee angle; 179 = fully extended.
 # transition — how the track ARRIVES at this keyframe: `ease` (smoothstep,
 #              stops there) or `continuous` (a smooth curve through it). A
-#              `hold: true` or `home: true` keyframe takes none: a hold is
-#              static, and a home always eases in.
+#              `hold`, `home` or `start` keyframe takes none: a hold is
+#              static, a start is where the track begins, and a home always
+#              eases in.
 #
 # A leg keyframe positions any number of legs at one time t; a leg not named
-# in it keeps interpolating toward its next keyframe. Two words stand in for
+# in it keeps interpolating toward its next keyframe. Three words stand in for
 # a value, per leg (`l_front: hold`), for a whole leg keyframe
-# (`hold: true`, every leg the gesture moves) or for the body:
+# (`hold: true`, every leg the gesture moves) or, hold and home only, for the
+# body:
 # hold   — hold the track at its previous value.
-# home       — the standing leg / the identity body. Every track starts there
-#              at t = 0 and must END on a home keyframe; its t is when the
-#              track is back.
+# home   — the standing leg / the identity body. Every track must END on a
+#          home keyframe; its t is when the track is back.
+# start  — legs only: when the track takes the leg over. Before it the leg
+#          stands on its default position and follows the body; the ease into
+#          the first joint keyframe begins here. Without one the track starts
+#          at t = 0. Must come before the leg's first joint keyframe.
+# A leg's `start` and `home` are the standing leg under the body pose of that
+# moment, so a leg easing out of or back into its stand keeps riding the body
+# track and a live /body/pose, and a home lands on the ground plane at its
+# own t whatever the body is doing. Because that position is only known at
+# run time, a `continuous` keyframe cannot directly follow a start, a home or
+# a hold of one; arrive with `ease`.
 # Body keyframes are offsets from the standing pose and must sit inside the
 # posture_node pose limits; a live /body/pose adds on top of them.
 #
 # Each joint interpolates on its own and never leaves the range spanned by its
 # neighbouring keyframes, so every keyframe is checked against the joint
 # limits and against the ground plane, and that check covers the whole path.
-# A tracked leg is commanded in joint space directly: the body track and a
-# live /body/pose move the body, not the leg. Whether the foot dips into the
-# ground between two keyframes, and which legs may be in the air together, is
-# the designer's responsibility.
+# Between joint keyframes a tracked leg is commanded in joint space directly:
+# the body track and a live /body/pose move the body, not the leg. Whether the
+# foot dips into the ground between two keyframes, and which legs may be in
+# the air together, is the designer's responsibility.
 #
 # Gestures run only on the default preset (tuning.yaml default_preset); the
 # standing leg there is roughly coxa as tuning.yaml splays it, femur 37,
@@ -69,6 +80,92 @@ gestures:
       - { t: 0.8, x: -0.02, pitch_deg: 8, transition: ease }
       - { t: 2.2, hold: true }
       - { t: 3.0, home: true }
+  # Chitter: the body shifts back onto the rear pairs first, then both front
+  # legs fold up close together in front and alternate: one lifts, sweeps in
+  # and folds the knee while the other drops, sweeps out and extends, like a
+  # spider working its mandibles. Coxa -45/+45 keeps the tips ~90 mm apart at
+  # the crossing.
+  - id: chitter
+    legs:
+      - { t: 0.4, start: true }
+      - t: 1.0
+        transition: ease
+        l_front: { coxa_deg: -35, femur_deg: 75, tibia_deg: 60 }
+        r_front: { coxa_deg: 35, femur_deg: 75, tibia_deg: 60 }
+      - t: 1.16
+        transition: continuous
+        l_front: { coxa_deg: -40, femur_deg: 79, tibia_deg: 53 }
+        r_front: { coxa_deg: 30, femur_deg: 75, tibia_deg: 68 }
+      - t: 1.32
+        transition: continuous
+        l_front: { coxa_deg: -30, femur_deg: 75, tibia_deg: 68 }
+        r_front: { coxa_deg: 40, femur_deg: 79, tibia_deg: 53 }
+      - t: 1.48
+        transition: continuous
+        l_front: { coxa_deg: -40, femur_deg: 79, tibia_deg: 53 }
+        r_front: { coxa_deg: 30, femur_deg: 75, tibia_deg: 68 }
+      - t: 1.64
+        transition: continuous
+        l_front: { coxa_deg: -30, femur_deg: 75, tibia_deg: 68 }
+        r_front: { coxa_deg: 40, femur_deg: 79, tibia_deg: 53 }
+      - t: 1.80
+        transition: continuous
+        l_front: { coxa_deg: -40, femur_deg: 79, tibia_deg: 53 }
+        r_front: { coxa_deg: 30, femur_deg: 75, tibia_deg: 68 }
+      - t: 1.96
+        transition: continuous
+        l_front: { coxa_deg: -30, femur_deg: 75, tibia_deg: 68 }
+        r_front: { coxa_deg: 40, femur_deg: 79, tibia_deg: 53 }
+      - t: 2.12
+        transition: continuous
+        l_front: { coxa_deg: -40, femur_deg: 79, tibia_deg: 53 }
+        r_front: { coxa_deg: 30, femur_deg: 75, tibia_deg: 68 }
+      - t: 2.28
+        transition: continuous
+        l_front: { coxa_deg: -30, femur_deg: 75, tibia_deg: 68 }
+        r_front: { coxa_deg: 40, femur_deg: 79, tibia_deg: 53 }
+      - t: 2.46
+        transition: ease
+        l_front: { coxa_deg: -35, femur_deg: 75, tibia_deg: 60 }
+        r_front: { coxa_deg: 35, femur_deg: 75, tibia_deg: 60 }
+      - { t: 3.16, home: true }
+    body:
+      # The small yaw twitch follows the beat.
+      - { t: 0.5, x: -0.025, pitch_deg: 4, yaw_deg: -2, transition: ease }
+      - {
+          t: 1.16,
+          x: -0.025,
+          pitch_deg: 4,
+          yaw_deg: -2,
+          transition: continuous,
+        }
+      - { t: 1.32, x: -0.025, pitch_deg: 4, yaw_deg: 2, transition: continuous }
+      - {
+          t: 1.48,
+          x: -0.025,
+          pitch_deg: 4,
+          yaw_deg: -2,
+          transition: continuous,
+        }
+      - { t: 1.64, x: -0.025, pitch_deg: 4, yaw_deg: 2, transition: continuous }
+      - {
+          t: 1.80,
+          x: -0.025,
+          pitch_deg: 4,
+          yaw_deg: -2,
+          transition: continuous,
+        }
+      - { t: 1.96, x: -0.025, pitch_deg: 4, yaw_deg: 2, transition: continuous }
+      - {
+          t: 2.12,
+          x: -0.025,
+          pitch_deg: 4,
+          yaw_deg: -2,
+          transition: continuous,
+        }
+      - { t: 2.28, x: -0.025, pitch_deg: 4, yaw_deg: 2, transition: continuous }
+      - { t: 2.46, x: -0.025, pitch_deg: 4, transition: ease }
+      - { t: 3.36, home: true }
   - id: bow
     body:
       - { t: 0.8, x: 0.02, z: -0.01, pitch_deg: -10, transition: ease }
