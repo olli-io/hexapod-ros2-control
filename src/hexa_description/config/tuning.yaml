@@ -298,7 +298,7 @@ posture_node:
     pose_limit_y: 0.05
     pose_limit_roll: 0.35
     pose_limit_pitch: 0.35
-    pose_limit_yaw: 0.50
+    pose_limit_yaw: 0.35
 
 # How far a stick may pose the body in posture mode.
 teleop_node:
