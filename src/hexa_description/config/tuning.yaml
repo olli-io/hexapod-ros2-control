@@ -308,7 +308,7 @@ teleop_node:
       y_max: 0.04
       roll_max_deg: 15.0
       pitch_max_deg: 15.0
-      yaw_max_deg: 25.0
+      yaw_max_deg: 20.0
       # Low-pass on the eased yaw and wiggle inputs.
       yaw_tau_s: 0.10
       # Low-pass on the init-button revert to the default posture.
