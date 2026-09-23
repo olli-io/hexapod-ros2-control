@@ -17,6 +17,7 @@ from hexa_teleop import (
     map_joy,
     resolve_functions,
 )
+from hexa_teleop.joy_mapping import pose_saved
 
 
 # Independent of teleop_joy.PUBLISH_RATE_HZ — map_joy is rate-correct. Tick
@@ -1162,6 +1163,25 @@ def test_select_folds_yaw_current_into_recorded_yaw():
     out2 = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
     assert math.isclose(state.yaw_current, alpha * cfg.posture.yaw_max, rel_tol=1e-6)
     assert math.isclose(out2.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
+
+
+def test_second_select_reverts_the_saved_pose():
+    cfg = _cfg()
+    state = JoyState(mode=POSTURE)
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert pose_saved(state)
+    map_joy(_axes(), _buttons(record=True), cfg, state, DT)
+    assert state.reverting and not pose_saved(state)
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    for _ in range(500):
+        out = map_joy(_axes(), _buttons(), cfg, state, DT)
+    assert not state.reverting
+    assert state.recorded_roll == 0.0
+    assert out.pose_roll == 0.0
+    # The next press records again.
+    map_joy(_axes(left_x=1.0), _buttons(record=True), cfg, state, DT)
+    assert pose_saved(state)
 
 
 def test_select_in_gait_mode_is_noop():

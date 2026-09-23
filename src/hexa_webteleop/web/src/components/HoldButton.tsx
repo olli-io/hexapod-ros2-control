@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
+import type { ReactNode } from "react";
 
 interface Props {
   className: string;
-  // May carry a newline (\n): the CSS breaks it onto a second line.
-  label: string;
+  // A string may carry a newline (\n): the CSS breaks it onto a second line.
+  // Or an icon.
+  label: ReactNode;
   pressed: boolean;
   // Inert and dimmed. The listeners stay attached — a disabled button fires no
   // events — so the caller must not disable one that is currently held: the

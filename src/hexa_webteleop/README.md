@@ -37,9 +37,13 @@ tint. The bar never leaves the screen, so no view carries a back arrow.
 
 ### Control
 
-Two touch joysticks flanking three mode buttons (Gait / Posture / Anim) — a
-column in landscape, a row in portrait. Nothing else sits in the middle of the
+Two touch joysticks flanking three mode buttons (GAIT / POSE / ANIM) — a
+row of squares in landscape, a wide bar in portrait. Nothing else sits in the middle of the
 screen, because a thumb on a stick cannot reach it.
+
+Each knob carries an icon for what the stick does in the current mode: the
+left stick is always **move**; the right stick is **turn** (rotating arrows) in
+gait and animation mode and **tilt** (3D rotate) in posture mode.
 
 Every other function is at a joystick corner, positioned against each circle's
 own bounding square so it follows the sticks in both orientations. `CORNERS` in
@@ -47,17 +51,20 @@ own bounding square so it follows the sticks in both orientations. `CORNERS` in
 both by the JSX and by the pass that releases a held button when a mode change
 takes it off the screen.
 
-- Right circle, left corners — body up / body down.
-- Outer top corner of each circle — yaw left / yaw right.
-- Outer bottom corner of each circle — wiggle left / wiggle right.
+- Right circle, left corners — body up / body down (dashed big arrows).
+- Outer top corner of each circle — yaw left / yaw right (rotate CCW / CW).
+- Outer bottom corner of each circle — wiggle left / wiggle right (dashed big
+  arrows). These six are icon-only; the rest carry words.
 - Left circle, bottom-right — **stand**; top-right — **save pose** (`record`).
+  Save pose turns green while a pose is saved; the next press reverts it. The
+  node reports the flag on the `pose_saved` message.
 - Animation mode instead spends the right circle's two bottom corners on
   animation prev / next.
 
 Stand is offered in every mode, height/yaw/wiggle in gait and posture, record in
 posture alone. Stand is a plain stand, not a leg-set one: from the belly it
 stands on the last six-leg preset applied, off the belly it folds. It is **red
-while folded**.
+in both states**.
 
 A **status strip** above the mode column reads the current preset, gait,
 animation and pack voltage/current, each keyed by an icon. It stays visible while
@@ -90,9 +97,15 @@ drop the socket. Both sticks re-centre on the way in.
   tap, never the latched `/cmd_preset`, which keeps a refused id forever. Before
   the first report no tile is lit. During the ~2 s change the current tile stays
   filled, the target goes dashed, and every tile is inert.
-- **On the belly a `STAND` button replaces the preset grid outright**, since the
-  stand itself chooses the leg set. It asks for the same `init` function the
-  Control view's stand does.
+- **On the belly a whole-view `STAND` overlay covers the Mode and Gesture
+  views**, one button and nothing else, since neither view can do anything until
+  the robot stands and the stand itself chooses the leg set. It asks for the
+  same `init` function the Control view's stand does, then carries the
+  *Standing up* spinner in the button's place. It is drawn inside the view, not
+  over the tab bar, so the other tabs stay reachable. The mode box's own button
+  is therefore `FOLD` alone, seen only from a stand. Both are **red**, like the
+  Control view's stand/fold corner. Shared component:
+  `web/src/components/StandOverlay.tsx`.
 - The gait grid shows **every declared gait**; the ones the preset in force does
   not walk are dimmed in place, so the row never changes shape. Names come from
   the presets' own `gait_cycle`s, shipped in the `init` message. Live on the
@@ -124,11 +137,13 @@ The engine plays a gesture only from a stand on the default preset
 (`tuning.yaml`'s `gait_node.default_preset`, shipped as `preset_gesture`), so
 the view is gated the same way, off the engine's reports:
 
+- On the belly the same **`STAND` overlay** the Mode view carries covers this
+  one, so the way up is here rather than a tab away.
 - Off that preset a **modal replaces the view** with the fix: a *Switch to
   NORMAL* button, which is the Mode view's own `select_preset` request and
   lands under the same rules — live from a stand only, pending until
-  `/gait/preset` reports it, spinner meanwhile. On the belly or mid-walk the
-  button is dimmed and the second button leads to the Mode view, where STAND is.
+  `/gait/preset` reports it, spinner meanwhile. Mid-walk the button is dimmed
+  and the second button leads to the Mode view.
 - On the preset but not standing, the tiles are dimmed with *Stand to activate*
   on the heading. While a gesture plays every tile is inert and the running one
   keeps its fill.
@@ -209,7 +224,8 @@ it. The logic is `hexa_teleop.teleop_arbitration` — pure, shared, unit-tested.
 Preset switches, gait switches, gestures and inits are **exempt**: they touch
 neither `/cmd_vel` nor `/body/pose`, and are one-shot or idempotent writes to
 selection topics both teleops already read. So the Mode view works while a controller drives, which is
-the point of it — and its `STAND` is the only stand a webapp can reach then.
+the point of it — and its `STAND` overlay is the only stand a webapp can reach
+then.
 
 ## HTTP endpoints
 
@@ -268,7 +284,8 @@ pnpm dev         # dev server on :5173, /ws and /logs proxied to :8080
   `src/routeTree.gen.ts` is generated from this directory and **committed**,
   because `pnpm build` type-checks first and a fresh checkout has to type-check.
 - `web/src/hooks/useTeleopSocket.ts` — every piece of server state in one
-  reducer, one case per `/ws` message type.
+  reducer, one case per `/ws` message type. `useTap.ts` is the press-and-release
+  a view without a keepalive sends for a function.
 - `web/src/types/protocol.ts` — the wire contract, both ways.
 - `web/src/utils/` — `views.ts` is the tab order and each route's path, so the
   bar and the routes agree by construction; `labels.ts` is the display strings;

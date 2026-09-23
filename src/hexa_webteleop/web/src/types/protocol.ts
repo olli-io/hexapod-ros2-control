@@ -43,6 +43,7 @@ export interface InitMessage {
   arbitration_enabled: boolean;
   owner: Owner;
   mode: Mode;
+  pose_saved?: boolean;
   gait: string;
   animation: string;
   gait_state: string;
@@ -73,6 +74,12 @@ export interface BusyMessage {
 export interface ModeMessage {
   type: "mode";
   mode: Mode;
+}
+
+// A recorded posture is held; the next record press reverts it.
+export interface PoseSavedMessage {
+  type: "pose_saved";
+  saved: boolean;
 }
 
 export interface OwnerMessage {
@@ -120,6 +127,7 @@ export type ServerMessage =
   | InitMessage
   | BusyMessage
   | ModeMessage
+  | PoseSavedMessage
   | OwnerMessage
   | GaitMessage
   | AnimationMessage

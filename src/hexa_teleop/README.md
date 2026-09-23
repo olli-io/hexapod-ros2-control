@@ -98,6 +98,8 @@ the robot walks.
   An offset already held bleeds through and eases off.
 - **Record** folds `yaw_current` into `recorded_yaw` in posture mode alone. An
   init edge over a held yaw arms the revert rather than standing.
+- **Record toggles.** A press over a saved pose arms the same revert init does,
+  instead of adding to it; the press after that records again.
 
 ## Presets
 

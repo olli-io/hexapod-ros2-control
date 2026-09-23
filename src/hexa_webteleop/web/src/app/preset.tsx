@@ -1,34 +1,20 @@
-import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { CornerRightDown } from "lucide-react";
 import { MODES, modeLocked } from "../components/ModeStack";
 import Spinner from "../components/Spinner";
+import StandOverlay from "../components/StandOverlay";
 import StatusBar from "../components/StatusBar";
+import { useTap } from "../hooks/useTap";
 import { useModal } from "../providers/ModalProvider";
 import { animationAvailable, useTeleop } from "../providers/TeleopProvider";
 import { animationLabel, buzz, gaitLabel, presetLabel } from "../utils/labels";
-import type { ActionName } from "../types/protocol";
-
-// How long a tap here holds the function down before letting go. This view has
-// no keepalive — it is not the one a thumb sits on — so a press sent from it
-// would otherwise stay in the node's action set until the input watchdog
-// cleared it. Long enough that the 60 Hz tick cannot miss the edge; short
-// enough that the window is no press at all.
-const TAP_PRESS_MS = 150;
-
-// The two whole-robot moves the belly button starts, and what the modal calls
-// each while it runs. Both take a few seconds of ladder that no press can
-// shorten, and the engine refuses a second one anyway — the same situation a
-// preset change puts the view in, so it gets the same answer.
-const TRANSITION_LABELS: Record<string, string> = {
-  initialize: "Standing up",
-  folding: "Folding down",
-};
 
 export const Route = createFileRoute("/preset")({ component: PresetRoute });
 
 function PresetRoute() {
   const { state, send } = useTeleop();
   const Modal = useModal();
+  const tap = useTap(send);
 
   const folded = state.gaitState === "folded";
   // The one engine state a preset change runs from. Narrower than what the node
@@ -40,8 +26,6 @@ function PresetRoute() {
   const pending = state.pendingPreset;
   // The label of the preset in flight, for the modal below.
   const pendingLabel = presetLabel(state.presets, pending);
-  // Non-null only while the robot is between the belly and a stand.
-  const transition = TRANSITION_LABELS[state.gaitState] ?? null;
   const animationAllowed = animationAvailable(state);
   const animating = state.mode === "animation";
 
@@ -64,21 +48,6 @@ function PresetRoute() {
   // way to another preset is to leave the mode first.
   const presetLocked = (id: string) =>
     animating && state.animationPreset !== null && id !== state.animationPreset;
-
-  // Every button on this view is a tap, never a hold: press, then let go a
-  // moment later. The state machine reads all of these on the rising edge.
-  const tap = useCallback(
-    (action: ActionName) => {
-      send({ type: "action", action, pressed: true });
-      window.setTimeout(
-        () => send({ type: "action", action, pressed: false }),
-        TAP_PRESS_MS,
-      );
-    },
-    [send],
-  );
-
-  const onStand = useCallback(() => tap("init"), [tap]);
 
   return (
     <div id="preset-view">
@@ -139,27 +108,21 @@ function PresetRoute() {
                 </button>
               ))}
 
-              {/* One button for both halves of the same press: `init` stands
-                  the robot from the belly and folds it from a stand, so a
-                  second button would be a second name for one action — and the
-                  label is read off /gait/state, never off what was last
-                  pressed, so it cannot claim a stand the robot did not make. In
-                  the mode box, on its own row across all three slots: it is the
-                  press the modes above are worth nothing without, and on the
-                  belly — where the preset box below is dimmed — it is the
-                  view's one live action. */}
+              {/* The fold: the same `init` function that stands the robot
+                  from the belly, where the STAND overlay is the one that sends
+                  it, so this button is only ever seen from a stand. In the mode
+                  box, on its own row across all three slots: it is the press
+                  that ends everything the modes above do. */}
               <button
                 id="preset-stand"
-                className={folded ? "folded" : undefined}
                 disabled={pending !== null}
                 onClick={() => {
                   buzz(15);
-                  onStand();
+                  tap("init");
                 }}
               >
-                <span className="preset-label">
-                  {folded ? "STAND" : "FOLD"}
-                </span>
+                <CornerRightDown aria-hidden />
+                <span className="preset-label">FOLD</span>
               </button>
             </div>
           </section>
@@ -306,17 +269,9 @@ function PresetRoute() {
         </Modal>
       )}
 
-      {/* The stand and the fold, said the same way: the ladder takes a few
-          seconds, nothing on the view can be pressed through it, and the
-          backdrop is what keeps a second press off the button that started it.
-          Only one of the two boxes is ever up — a preset change runs from a
-          stand and never passes through either of these states. */}
-      {pending === null && transition !== null && (
-        <Modal id="preset-transition">
-          <Spinner />
-          <p>{transition}</p>
-        </Modal>
-      )}
+      {/* STAND across the view on the belly, and the stand or fold ladder's
+          spinner while one runs. */}
+      <StandOverlay />
 
       {/* Empty until the node refuses something, so it reserves no space. */}
       <p id="preset-note" className={state.refusal ? "refused" : undefined}>

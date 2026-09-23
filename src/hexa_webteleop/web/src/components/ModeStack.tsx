@@ -11,9 +11,9 @@ import HoldButton from "./HoldButton";
 // go of its stick — or on the Mode view, which owns preset and gait selection.
 export const MODES: readonly { action: ActionName; mode: Mode; label: string }[] =
   [
-    { action: "gait_mode", mode: "gait", label: "Gait" },
-    { action: "posture_mode", mode: "posture", label: "Posture" },
-    { action: "animation_mode", mode: "animation", label: "Anim" },
+    { action: "gait_mode", mode: "gait", label: "GAIT" },
+    { action: "posture_mode", mode: "posture", label: "POSE" },
+    { action: "animation_mode", mode: "animation", label: "ANIM" },
   ];
 
 interface Props {

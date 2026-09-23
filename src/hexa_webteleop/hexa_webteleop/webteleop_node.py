@@ -59,7 +59,7 @@ from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Empty, String
 
 from hexa_common import default_preset_id, gait_params
-from hexa_teleop.joy_mapping import ANIMATION, GAIT, JoyState
+from hexa_teleop.joy_mapping import ANIMATION, GAIT, JoyState, pose_saved
 from hexa_teleop.teleop_arbitration import (
     GAMEPAD,
     WEB,
@@ -330,6 +330,7 @@ class WebTeleopNode(Node):
         # Latest gait state for WS broadcast (main thread detects change,
         # schedules broadcast on the asyncio loop)
         self._last_broadcast_gait_state = ""
+        self._last_broadcast_pose_saved = False
         self._ws_clients: list = []  # aiohttp WebSocketResponse objects
         self._ws_clients_lock = threading.Lock()
 
@@ -556,6 +557,11 @@ class WebTeleopNode(Node):
                 "type": "mode",
                 "mode": self._state.mode,
             })
+
+        saved = pose_saved(self._state)
+        if saved != self._last_broadcast_pose_saved:
+            self._last_broadcast_pose_saved = saved
+            self._broadcast_to_clients({"type": "pose_saved", "saved": saved})
 
         # Ahead of the ownership gate, and exempt from it for the reason a
         # Mode-view switch is: a stand or fold is discrete and supervisory — one
@@ -789,6 +795,7 @@ class WebTeleopNode(Node):
             "gaits": list(self._cfg.gait_cycle),
             "animations": list(self._cfg.animation_list),
             "mode": self._state.mode,
+            "pose_saved": pose_saved(self._state),
             "owner": self._arbitration.owner if self._arbitration_enabled else GAMEPAD,
             "arbitration_enabled": self._arbitration_enabled,
             "gait_state": self._latest_gait_state,

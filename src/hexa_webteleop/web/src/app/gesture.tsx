@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import Spinner from "../components/Spinner";
+import StandOverlay from "../components/StandOverlay";
 import { useModal } from "../providers/ModalProvider";
 import { useTeleop } from "../providers/TeleopProvider";
 import { buzz, presetLabel } from "../utils/labels";
@@ -17,6 +18,7 @@ function GestureRoute() {
   const navigate = useNavigate();
 
   const standing = state.gaitState === "stand";
+  const folded = state.gaitState === "folded";
   const playing = state.gesture !== "";
   const pending = state.pendingPreset;
   // Gestures are written for one preset's stance. Before the first
@@ -65,21 +67,24 @@ function GestureRoute() {
         </div>
       </section>
 
+      {/* STAND across the view on the belly, and the stand ladder's spinner
+          while it runs — the same overlay the Mode view carries, so the fix
+          is here rather than a tab away. */}
+      <StandOverlay />
+
       {/* Off the gesture preset the view cannot be used, so instead of a box of
           dimmed tiles the operator meets the fix: the switch to that preset,
-          which is a stand-only move — on the belly or mid-walk the button is
-          dimmed and the way out is the Mode view, where STAND lives. The
-          switch itself is the Mode view's own request, so it lands under the
-          same rules: refused mid-walk, pending until /gait/preset reports it.
-          Hidden while the switch is in flight, where the spinner below takes
-          over. */}
-      {!onGesturePreset && pending === null && (
+          which is a stand-only move — mid-walk the button is dimmed and the
+          way out is the Mode view. The switch itself is the Mode view's own
+          request, so it lands under the same rules: refused mid-walk, pending
+          until /gait/preset reports it. Hidden on the belly, where the STAND
+          overlay has the view, and while the switch is in flight, where the
+          spinner below takes over. */}
+      {!onGesturePreset && !folded && pending === null && (
         <Modal id="gesture-preset">
           <p>Gestures need the {gesturePresetLabel} preset</p>
           <p className="dialog-sub">
-            {standing
-              ? "Switch to it to continue."
-              : "Stand up first, on the Mode view."}
+            {standing ? "Switch to it to continue." : "Stop and stand first."}
           </p>
           <div className="dialog-actions">
             <button

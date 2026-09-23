@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import {
+  ArrowBigDownDash,
+  ArrowBigLeftDash,
+  ArrowBigRightDash,
+  ArrowBigUpDash,
+  Move,
+  RefreshCw,
+  Rotate3d,
+  RotateCcw,
+  RotateCw,
+} from "lucide-react";
+import type { ReactNode } from "react";
 import Joystick from "../components/Joystick";
 import type { JoystickHandle } from "../components/Joystick";
 import StatusBar from "../components/StatusBar";
@@ -199,7 +211,7 @@ function ControlRoute() {
   const corner = (
     action: ActionName,
     position: string,
-    label: string,
+    label: ReactNode,
     extra = "",
   ) => (
     <HoldButton
@@ -219,30 +231,30 @@ function ControlRoute() {
   // own button is the same press under the same two words.
   const offers = (action: ActionName) => CORNERS[state.mode].includes(action);
 
+  // The right stick turns the robot in gait and animation mode and tilts the
+  // body in posture mode; the left stick moves in every mode.
+  const RightIcon = state.mode === "posture" ? Rotate3d : RefreshCw;
+
   return (
     <div id="control-area">
       <Joystick
         side="left"
-        label="Left"
+        icon={<Move />}
         send={send}
         handleRef={leftJoyRef}
       >
-        {offers("yaw_left") && corner("yaw_left", "tl", "Yaw\n\u25c0")}
-        {offers("record") && corner("record", "tr", "Save\npose")}
-        {offers("wiggle_left") && corner("wiggle_left", "bl", "Wiggle\n\u25c0")}
-        {/* Red on the belly: the one press that has to happen before anything
-            else on screen does anything, and the only state the operator can
-            read off the button itself. The word follows /gait/state for the
-            same reason — one press does both halves, and a button labelled
-            Stand from a stand would fold the robot under a hand reaching for
-            the opposite. */}
+        {offers("yaw_left") && corner("yaw_left", "tl", <RotateCcw />)}
+        {offers("record") &&
+          corner("record", "tr", "Save\npose", state.poseSaved ? "saved" : "")}
+        {offers("wiggle_left") &&
+          corner("wiggle_left", "bl", <ArrowBigLeftDash />)}
+        {/* Red in both states: on the belly it is the one press that has to
+            happen before anything else on screen does anything; from a stand
+            it drops the robot. The word follows /gait/state — one press does
+            both halves, and a button labelled Stand from a stand would fold
+            the robot under a hand reaching for the opposite. */}
         {offers("init") &&
-          corner(
-            "init",
-            "br",
-            folded ? "Stand" : "Fold",
-            folded ? "folded" : "",
-          )}
+          corner("init", "br", folded ? "Stand" : "Fold", "stand-fold")}
       </Joystick>
 
       {/* Center column: status strip over the mode selector. */}
@@ -267,15 +279,16 @@ function ControlRoute() {
 
       <Joystick
         side="right"
-        label="Right"
+        icon={<RightIcon />}
         send={send}
         handleRef={rightJoyRef}
       >
-        {offers("yaw_right") && corner("yaw_right", "tr", "Yaw\n\u25b6")}
-        {offers("height_up") && corner("height_up", "tl", "Body\n\u25b2")}
-        {offers("height_down") && corner("height_down", "bl", "Body\n\u25bc")}
+        {offers("yaw_right") && corner("yaw_right", "tr", <RotateCw />)}
+        {offers("height_up") && corner("height_up", "tl", <ArrowBigUpDash />)}
+        {offers("height_down") &&
+          corner("height_down", "bl", <ArrowBigDownDash />)}
         {offers("wiggle_right") &&
-          corner("wiggle_right", "br", "Wiggle\n\u25b6")}
+          corner("wiggle_right", "br", <ArrowBigRightDash />)}
         {/* The height-down and wiggle corners, in the one mode that offers
             neither. */}
         {offers("animation_prev") &&

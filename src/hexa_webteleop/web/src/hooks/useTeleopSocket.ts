@@ -18,6 +18,7 @@ export interface TeleopState {
   arbitrationEnabled: boolean;
   owner: Owner;
   mode: Mode;
+  poseSaved: boolean;
   // Names as latched on /cmd_gait and /animation/mode; an empty animation means
   // nothing latched yet (pipeline startup default) -> placeholder.
   gait: string;
@@ -62,6 +63,7 @@ const INITIAL: TeleopState = {
   arbitrationEnabled: false,
   owner: "gamepad",
   mode: "gait",
+  poseSaved: false,
   gait: "",
   animation: "",
   gaitState: "",
@@ -109,6 +111,7 @@ function reduce(state: TeleopState, action: Action): TeleopState {
         arbitrationEnabled: msg.arbitration_enabled,
         owner: msg.owner,
         mode: msg.mode,
+        poseSaved: msg.pose_saved ?? false,
         gait: msg.gait,
         animation: msg.animation,
         gaitState: msg.gait_state,
@@ -129,6 +132,8 @@ function reduce(state: TeleopState, action: Action): TeleopState {
       return { ...state, busy: true };
     case "mode":
       return { ...state, mode: msg.mode };
+    case "pose_saved":
+      return { ...state, poseSaved: msg.saved };
     case "owner":
       return { ...state, owner: msg.owner };
     case "gait":

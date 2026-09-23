@@ -18,9 +18,10 @@
      sizing has to reserve the half of one that hangs off each edge of the pad
      — a circle sized without that slack pushes its own top corners off the
      screen. */
-  --corner-btn: clamp(3rem, 11vmin, 3.8rem);
-  /* What .joystick-label costs under the pad: its margin plus one line. */
-  --joy-label:  1.2rem;
+  --corner-btn: clamp(3.78rem, 13.86vmin, 4.79rem);
+  /* How far a corner button sits out from the pad's corner, beyond the half of
+     it that hangs off anyway. */
+  --corner-gap: 0.3rem;
 }
 
 * {
@@ -259,6 +260,41 @@ html, body {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  /* What the STAND overlay is sized against: the view's own box, so it covers
+     the tiles and not the tab bar beside them. */
+  position: relative;
+}
+
+/* The belly, over the Mode and Gesture views: one press across the whole view.
+   Absolute within the view rather than a fixed portal like the dialogs, so the
+   tab bar stays reachable — the belly is a state the operator may sit in for a
+   while, and the other tabs still have work to do there. */
+#stand-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--view-gap);
+  background: var(--bg);
+}
+
+/* Red like the Control view's stand/fold corner. A press still flashes accent
+   over it (`.panel-btn:active` below). */
+#stand-overlay-btn {
+  margin-top: 0;
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* The ladder, in the button's place: the dialogs' spinner over its word. */
+.stand-overlay-transition {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 0.9rem;
+  color: var(--fg);
 }
 
 /* Each choice in its own rounded box, the same one the network view's panels
@@ -375,8 +411,8 @@ html, body {
    do not: a flat share of the screen, with the same floor and a higher
    ceiling. */
 #gesture-view {
-  --tile-h: clamp(1.7rem, 9vh, 3.6rem);
-  --tile-h: clamp(1.7rem, 9svh, 3.6rem);
+  --tile-h: clamp(2.4rem, 13vh, 5rem);
+  --tile-h: clamp(2.4rem, 13svh, 5rem);
 }
 
 /* The presets as tiles, not rows, on a 2x2: a phone is narrow, and four abreast
@@ -548,21 +584,23 @@ html, body {
    preset labels are rather than the way a gait name is. */
 .preset-mode { text-transform: uppercase; letter-spacing: 0.04em; }
 
-/* The stand/fold press, the mode group's last row and the full width of its
-   three slots — it is not a fourth mode, and a mode tile is too narrow to carry
-   two words anyway. Drawn in the border the inactive tiles carry from a stand,
-   where folding is available rather than the thing to do next, and in the
-   accent a preset tile only takes when active on the belly, where nothing else
-   on the view does anything until it is pressed. */
+/* The fold press, the mode group's last row and the full width of its three
+   slots — it is not a fourth mode, and a mode tile is too narrow to carry the
+   word anyway. Red like the STAND overlay and the Control view's stand/fold
+   corner: one colour for the press that puts the robot down or up. */
 #preset-stand {
   grid-column: 1 / -1;
+  flex-direction: row;
+  gap: 0.4rem;
   background: var(--surface);
-  border-color: var(--border);
+  border-color: var(--red);
+  color: var(--red);
 }
 
-#preset-stand.folded {
-  border-color: var(--accent);
-  color: var(--accent);
+#preset-stand svg {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
 }
 
 #preset-stand:active {
@@ -790,13 +828,12 @@ html, body {
   /* Mirror of the portrait sizing (axes swapped): the panel scales to a
      viewport fraction so it shrinks, leaving the joysticks at a stable size
      instead of the panel claiming full height and squeezing them. */
-  #center-panel { --panel-size: min(52vh, 30vw, 500px); }
-
-  /* The label hangs under the pad, so a column centred as pad + label puts the
-     circle half a label high — the slack the eye reads as the view sitting
-     above its own middle. Reserving the label's height above the pad as well
-     centres the circle itself, which is what the corner buttons hang off. */
-  .joystick { padding-top: var(--joy-label); }
+  #center-panel {
+    --panel-size: min(52vh, 30vw, 500px);
+    /* As tall as a joystick, corner buttons included. */
+    height: calc(var(--pad-size) + var(--corner-btn) + var(--corner-gap) * 2);
+  }
+  #control-area { --pad-size: min(60vh, 24vw, 170px); }
 
   /* Equal max-width/height so a clamp on either axis keeps the pad square
      (aspect-ratio alone won't prevent an oval when the two caps differ). The
@@ -805,15 +842,14 @@ html, body {
      landscape spends the screen's SHORT axis on the circle, and the pad plus
      the half corner button hanging off its top and bottom edges is already most
      of a phone's landscape height. */
-  .joystick-pad { max-width: min(60vh, 24vw, 170px); max-height: min(60vh, 24vw, 170px); }
+  .joystick-pad { max-width: var(--pad-size); max-height: var(--pad-size); }
 }
 
 /* Portrait stacks the two joysticks and the mode bar vertically, so a circle
    sized off the viewport's width alone overruns the height the column has left
    — which is what clipped the top pad's corner buttons on a short phone. Here
    the pad takes the height its own row was given instead: `.joystick` is a
-   flex item with a definite height, the pad fills what the label leaves of it,
-   and `aspect-ratio: 1` derives the width, so the circle is only ever as big as
+   flex item with a definite height, the pad fills it, and `aspect-ratio: 1` derives the width, so the circle is only ever as big as
    the column can afford. The row's padding starts from the half corner button
    that hangs off the pad's top and bottom edges — slack the pad must not eat,
    since the topmost one has the screen edge right above it. The two caps stay
@@ -825,20 +861,14 @@ html, body {
     /* What the mode bar and the status strip are both laid out from. */
     --panel-width: min(92vw, 520px);
   }
-  /* Half a corner button top and bottom, plus the label's height on top only:
-     the label hangs under the pad either way, so a row padded evenly centres
-     pad + label and leaves the circle half a label high. With the extra reserve
-     above, the circle is centred in its own row — and it is centred whether the
-     pad is sized by the row (`height` below) or held at the cap, since the two
-     cases put the label's cost on the same side. It costs the pad nothing on a
-     phone, where the cap is what binds. */
+  /* Half a corner button plus its gap, top and bottom. */
   .joystick {
-    padding-top: calc(var(--corner-btn) / 2 + var(--joy-label));
-    padding-bottom: calc(var(--corner-btn) / 2);
+    padding-top: calc(var(--corner-btn) / 2 + var(--corner-gap));
+    padding-bottom: calc(var(--corner-btn) / 2 + var(--corner-gap));
   }
   .joystick-pad {
     width: auto;
-    height: calc(100% - var(--joy-label));
+    height: 100%;
     max-width: min(60vw, 200px);
     max-height: min(60vw, 200px);
   }
@@ -894,7 +924,7 @@ html, body {
   border-radius: 50%;
   color: var(--fg);
   font-family: inherit;
-  font-size: clamp(0.55rem, 2.2vmin, 0.72rem);
+  font-size: clamp(0.69rem, 2.77vmin, 0.9rem);
   font-weight: 600;
   line-height: 1.2;
   /* Labels carry a newline: the caption over the glyph. */
@@ -905,17 +935,28 @@ html, body {
   transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
-.corner-btn.tl { top: 0; left: 0; transform: translate(-50%, -50%); }
-.corner-btn.tr { top: 0; right: 0; transform: translate(50%, -50%); }
-.corner-btn.bl { bottom: 0; left: 0; transform: translate(-50%, 50%); }
-.corner-btn.br { bottom: 0; right: 0; transform: translate(50%, 50%); }
+/* Icon-only corners: height, yaw, wiggle. */
+.corner-btn svg {
+  width: 55%;
+  height: 55%;
+}
 
-/* The stand button on the belly. Ahead of the pressed rule below, so a press
-   still flashes accent over the red rather than the red swallowing the
-   feedback. */
-.corner-btn.folded {
+.corner-btn.tl { top: calc(-1 * var(--corner-gap)); left: calc(-1 * var(--corner-gap)); transform: translate(-50%, -50%); }
+.corner-btn.tr { top: calc(-1 * var(--corner-gap)); right: calc(-1 * var(--corner-gap)); transform: translate(50%, -50%); }
+.corner-btn.bl { bottom: calc(-1 * var(--corner-gap)); left: calc(-1 * var(--corner-gap)); transform: translate(-50%, 50%); }
+.corner-btn.br { bottom: calc(-1 * var(--corner-gap)); right: calc(-1 * var(--corner-gap)); transform: translate(50%, 50%); }
+
+/* The stand/fold button. Ahead of the pressed rule below, so a press still
+   flashes accent over the red rather than the red swallowing the feedback. */
+.corner-btn.stand-fold {
   border-color: var(--red);
   color: var(--red);
+}
+
+/* Save pose while a pose is held; the next press reverts it. */
+.corner-btn.saved {
+  border-color: var(--green);
+  color: var(--green);
 }
 
 .corner-btn:active,
@@ -925,12 +966,20 @@ html, body {
   color: var(--accent);
 }
 
-.joystick-label {
-  margin-top: 0.4rem;
-  font-size: 0.7rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
+/* Rides the knob: draw() sizes it to the knob and translates it with the thumb.
+   No pointer events, so the touch lands on the canvas underneath. */
+.joystick-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  pointer-events: none;
+  color: var(--bg);
+}
+
+.joystick-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* ── Center panel (status strip over mode column / prompt) ──────── */
@@ -953,13 +1002,11 @@ html, body {
   gap: 0;
 }
 
-/* The square the mode column fills in landscape, sized per orientation above.
-   It keeps the square rather than shrinking to three buttons' worth of height,
-   so the joysticks either side sit at the size the panel leaves them. */
-#mode-stack {
-  width: var(--panel-size);
-  height: var(--panel-size);
-}
+/* Landscape: the modes are one row of square buttons at the panel's foot; the
+   status strip takes the height left above. */
+#mode-stack { width: var(--panel-size); }
+
+#mode-stack button { aspect-ratio: 1; }
 
 /* Current preset, gait, animation mode and pack telemetry. Compact so it
    doesn't steal height from the joysticks. Wraps rather than widening: the same --panel-size holds it to
@@ -969,11 +1016,14 @@ html, body {
    in its own rounded surface box, so the readings read as one panel over the
    mode column rather than loose text floating above it. */
 #status-bar {
+  flex: 1 1 auto;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.15rem 0.8rem;
-  max-width: var(--panel-size);
+  align-content: center;
+  gap: 0.4rem 0.8rem;
+  /* Flush with the buttons, which sit one --stack-gap in from each side. */
+  width: calc(var(--panel-size) - var(--stack-gap) * 2);
   /* Even padding: 0.3rem was as tight as a box can be drawn round one line of
      text, and the readings sit better with the same room above and below them
      as they have at the ends. It is the only thing setting the bar's height —
@@ -1010,13 +1060,12 @@ html, body {
 
 /* ── Mode selector (three buttons, one line) ────────────────────── */
 
-/* Three equal slots filling the panel box — a column in landscape, a row in
-   portrait (below): the buttons are the only thing in the middle of the screen
-   now, so each one is a whole third of it to hit. */
+/* Three equal slots in one row: squares in landscape, a wide bar in portrait
+   (below). */
 #mode-stack {
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: var(--stack-gap);
   padding: var(--stack-gap);
 }
@@ -1133,9 +1182,9 @@ html, body {
      square spends on its own padding and its two gaps. */
   #mode-stack {
     width: var(--panel-width);
-    flex-direction: row;
     height: calc((var(--panel-size) - 2rem) / 3 + 1rem);
   }
+  #mode-stack button { aspect-ratio: auto; }
 
   /* The strip runs the width of the row of buttons under it — the stack's width
      less the padding the buttons sit inside — so the two boxes share an edge
@@ -1148,6 +1197,25 @@ html, body {
     width: calc(var(--panel-width) - var(--stack-gap) * 2);
     max-width: none;
     justify-content: space-evenly;
+  }
+}
+
+/* Landscape: one reading per line, with the panel's height to spend on them. */
+@media (orientation: landscape) {
+  #center-panel #status-bar {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: space-evenly;
+    padding: 0.7rem 1rem;
+    font-size: 0.8rem;
+  }
+
+  #center-panel .status-item { gap: 0.6rem; }
+
+  #center-panel .status-icon {
+    width: 1.8em;
+    height: 1.8em;
   }
 }
 

@@ -505,6 +505,21 @@ def _clip(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def pose_saved(state: JoyState) -> bool:
+    """True while a recorded baseline is held and no revert is easing it out."""
+    return not state.reverting and any(
+        abs(v) > 1e-4
+        for v in (
+            state.recorded_x,
+            state.recorded_y,
+            state.recorded_z,
+            state.recorded_roll,
+            state.recorded_pitch,
+            state.recorded_yaw,
+        )
+    )
+
+
 def validate_bindings(
     section: str,
     bindings: Mapping[str, str],
@@ -942,7 +957,10 @@ def map_functions(
     # body into the next support triangle, and that margin is
     # millimetres. Height is exempt by construction: it rides
     # ``height_current``, not the record.
-    if record_edge and state.mode == POSTURE and not state.quadruped:
+    # A second press over a saved pose reverts it instead: record toggles.
+    if record_edge and state.mode == POSTURE and pose_saved(state):
+        state.reverting = True
+    elif record_edge and state.mode == POSTURE and not state.quadruped:
         # A new baseline trumps any in-flight revert.
         state.reverting = False
         state.recorded_x = _clip(

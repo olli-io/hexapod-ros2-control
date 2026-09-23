@@ -14,7 +14,9 @@ export interface JoystickHandle {
 
 interface Props {
   side: StickSide;
-  label: string;
+  // What the stick does in the current mode. Drawn on the knob, so it rides
+  // with the thumb.
+  icon: ReactNode;
   send: SendFn;
   handleRef: RefObject<JoystickHandle | null>;
   // Corner buttons, placed by the caller against the circle's bounding square.
@@ -27,12 +29,13 @@ interface Props {
 // are passive and cannot preventDefault().
 export default function Joystick({
   side,
-  label,
+  icon,
   send,
   handleRef,
   children,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const iconRef = useRef<HTMLDivElement>(null);
   const sendRef = useRef(send);
   sendRef.current = send;
 
@@ -86,6 +89,16 @@ export default function Joystick({
       ctx.strokeStyle = "#89b482";
       ctx.lineWidth = 2;
       ctx.stroke();
+
+      // The icon is DOM, not canvas, so it follows the knob by transform here
+      // rather than through a render.
+      const icon = iconRef.current;
+      if (icon) {
+        const size = knobR * 1.3;
+        icon.style.width = `${size}px`;
+        icon.style.height = `${size}px`;
+        icon.style.transform = `translate(${s.knobX}px, ${s.knobY}px) translate(-50%, -50%)`;
+      }
     }
 
     function resize() {
@@ -223,9 +236,11 @@ export default function Joystick({
           are positioned against. */}
       <div className="joystick-pad">
         <canvas ref={canvasRef} />
+        <div className="joystick-icon" ref={iconRef} aria-hidden>
+          {icon}
+        </div>
         {children}
       </div>
-      <span className="joystick-label">{label}</span>
     </div>
   );
 }
