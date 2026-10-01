@@ -7,7 +7,7 @@
 #
 # Workstation-only commands (Pi target):
 #   build [--fresh]    cross-build ARM64 image, save to .deploy/<sha>.tar.gz
-#   push <host>        scp image + compose + launcher, ssh-load + start (energizes on launch)
+#   push <host>        scp image + compose + launcher, ssh-load; starts nothing
 #   sync-config <host> refresh the Pi's config from repo defaults — no image, no restart
 #
 # Pico target:
@@ -25,10 +25,8 @@ cd "${REPO_ROOT}"
 
 IMAGE_REPO="hexa-robot"
 COMPOSE_FILE="docker-compose.robot.yaml"
-# Buzzer PWM overlay. Added only when the Pi has the tree — see robot.sh, which
-# makes the same check for every other compose invocation.
+# Buzzer PWM overlay. Shipped always; robot.sh adds it only when the Pi has the tree.
 BUZZER_COMPOSE_FILE="docker-compose.buzzer.yaml"
-BUZZER_PWM_DEFAULT="/sys/bus/platform/devices/1f00098000.pwm/pwm"
 SIM_COMPOSE_FILE="docker-compose.sim.yaml"
 DEPLOY_DIR=".deploy"
 
@@ -40,11 +38,13 @@ Raspberry Pi robot (ARM64 image):
   build [--fresh]             Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
                               Incremental (ccache + colcon build/ are cached across
                               builds); --fresh drops those caches and recompiles all.
-  push <host>                 scp + ssh-load the latest tarball to <host>, then start (energizes on launch).
+  push <host>                 scp + ssh-load the latest tarball to <host>. Starts nothing:
+                              configure the robot, then 'hexa robot up'.
   sync-config <host> [--force]
                               Refresh config from repo defaults — no image, no restart.
                               Merges new keys into .env (existing values kept), overwrites
-                              tuning.yaml, re-ships the host-side systemd payload.
+                              tuning.yaml, seeds a missing servo_calibration.yaml,
+                              re-ships the host-side systemd payload.
                               --force overwrites .env outright. Backs up what it replaces.
 
 Pi Pico 2 W firmware (RP2350 .uf2):
@@ -223,8 +223,11 @@ cmd_push() {
     # with. Any on-Pi edit is preserved as tuning.yaml.bak, not discarded.
     scp "src/hexa_description/config/tuning.yaml" \
         "${host}:~/hexa-robot/tuning.yaml.default"
+    # Servo calibration overlay: seeded once, then the robot's own.
+    scp "src/hexa_description/config/servo_calibration.yaml" \
+        "${host}:~/hexa-robot/servo_calibration.yaml.default"
 
-    echo ">> Loading image and bringing service up on ${host} (energizes on launch)"
+    echo ">> Loading image on ${host} (nothing is started)"
     # shellcheck disable=SC2087
     ssh "${host}" bash -s <<EOF
 set -euo pipefail
@@ -241,25 +244,27 @@ if [ -f tuning.yaml ] && ! cmp -s tuning.yaml tuning.yaml.default; then
     echo ">> on-Pi tuning.yaml differed from the repo — saved as tuning.yaml.bak"
 fi
 cp tuning.yaml.default tuning.yaml
+# Seed-once: this robot's calibration, never overwritten by a deploy.
+if [ -f servo_calibration.yaml ]; then
+    cmp -s servo_calibration.yaml servo_calibration.yaml.default \
+        || echo ">> kept this robot's servo_calibration.yaml (differs from the repo default)"
+else
+    cp servo_calibration.yaml.default servo_calibration.yaml
+    echo ">> servo_calibration.yaml seeded from the repo default — calibrate this robot"
+fi
 chmod +x systemd/network-mode.sh
 # Superseded by hexa_buzzer — see the same line in sync-config.
 rm -f systemd/buzzer.sh systemd/hexa-tune-spool.path systemd/hexa-tune-spool.service
-# The buzzer's PWM mount, only when the Pi has the tree: a bind whose source is
-# missing stops the container from starting at all. Same check robot.sh makes.
-compose_args="-f ${COMPOSE_FILE}"
-buzzer_pwm="\$(grep -E '^BUZZER_PWM=' .env 2>/dev/null | cut -d= -f2- || true)"
-# An if, not a && short-circuit: under 'set -e' a false test would end the
-# deploy on every robot that has no buzzer fitted.
-if [ -d "\${buzzer_pwm:-${BUZZER_PWM_DEFAULT}}" ]; then
-    compose_args="\${compose_args} -f ${BUZZER_COMPOSE_FILE}"
+# Starting energizes the servos, so it stays the operator's call. A container
+# already running keeps the old image until it is recreated.
+if [ "\$(docker inspect -f '{{.State.Running}}' hexa-robot 2>/dev/null || true)" = "true" ]; then
+    echo ">> hexa-robot is still running the previous image — 'hexa robot restart' to switch"
 fi
-# shellcheck disable=SC2086  # word splitting is the point
-docker compose \${compose_args} up -d --no-build
 EOF
 
-    echo ">> Deployed and energized. The servo rail closes once teleop publishes; the"
-    echo "   robot takes up the folded pose one leg at a time and stops there."
-    echo "   Stand it:       gamepad Start (or publish /gait/initialize)."
+    echo ">> Deployed. Nothing was started."
+    echo "   Configure:      ~/hexa-robot/servo_calibration.yaml and tuning.yaml on ${host}"
+    echo "   Start:          hexa robot -H ${host} up   (energizes the servos)"
     echo "   Status:         hexa robot -H ${host} status"
     echo "   Start on boot:  ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-service'"
     echo "   Hotspot toggle: ssh -t ${host} 'cd ~/hexa-robot && ./hexa robot install-network'"
@@ -296,6 +301,7 @@ cmd_sync_config() {
     echo ">> Shipping config defaults to ${host}:~/hexa-robot/"
     scp ".env.robot.sample" "${host}:~/hexa-robot/"
     scp "src/hexa_description/config/tuning.yaml" "${host}:~/hexa-robot/tuning.yaml.default"
+    scp "src/hexa_description/config/servo_calibration.yaml" "${host}:~/hexa-robot/servo_calibration.yaml.default"
     scp "systemd/network-mode.sh" \
         "systemd/hexa-robot.service" \
         "systemd/hexa-boot-tune.service" \
@@ -397,6 +403,14 @@ fi
 cp tuning.yaml.default tuning.yaml
 echo "   refreshed from the repo"
 
+echo ">> servo_calibration.yaml"
+if [ -f servo_calibration.yaml ]; then
+    echo "   kept (per-robot; the repo default is servo_calibration.yaml.default)"
+else
+    cp servo_calibration.yaml.default servo_calibration.yaml
+    echo "   did not exist — seeded from the repo default; calibrate this robot"
+fi
+
 chmod +x systemd/network-mode.sh
 echo ">> systemd/ payload refreshed (shipped only — nothing installed, nothing reloaded)"
 echo ">> hexa_buzzer/ player refreshed (run by the boot and shutdown units)"
@@ -420,7 +434,7 @@ REMOTE
 
     echo ">> Config synced. Nothing was restarted."
     echo "   .env changes need a container recreate:  hexa robot -H ${host} restart"
-    echo "   tuning.yaml is re-read on that same restart (no image rebuild)."
+    echo "   tuning.yaml and servo_calibration.yaml are re-read on that same restart (no image rebuild)."
 }
 
 if [[ $# -lt 1 ]]; then

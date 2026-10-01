@@ -58,6 +58,10 @@ services:
       # so the mount can never pin a stale schema. If it's absent the node
       # falls through to the packages' base YAML defaults.
       - ./tuning.yaml:/workspace/install/share/hexa_description/config/tuning.yaml:ro
+      # Per-robot servo calibration, mounted the same way but seeded once: a
+      # deploy never overwrites it, because the repo cannot know this robot's
+      # pulse widths. Edit, then `hexa robot restart`.
+      - ./servo_calibration.yaml:/workspace/install/share/hexa_description/config/servo_calibration.yaml:ro
     device_cgroup_rules:
       - 'c 13:* rmw'
     # Real-time scheduling for the controller_manager control thread. Docker

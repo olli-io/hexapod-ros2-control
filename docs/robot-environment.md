@@ -121,13 +121,14 @@ curl -fsSL https://raw.githubusercontent.com/olli-io/hexapod-ros2-control/main/i
 `install.sh` checks the dependencies before it downloads anything (64-bit
 userland, Docker + compose v2, free space, RAM, and the UART / SPI / PWM this
 section's wiring should have produced), then pulls the release's ARM64 image
-tarball plus the matching compose, launcher, systemd templates, `tuning.yaml`
-and buzzer player, loads the image, and seeds `.env` with **this** Pi's group
+tarball plus the matching compose, launcher, systemd templates, `tuning.yaml`,
+`servo_calibration.yaml` and buzzer player, loads the image, and seeds `.env` with **this** Pi's group
 IDs and device names — so §4 and §6 are already done for you. It starts
 nothing unless you pass `--start`. Useful flags: `--check-only` (checks, then
 stop), `--tag <tag>` (a specific release), `--dir <path>`, `--keep-archive`.
 Re-running it later is the upgrade path: it keeps your `.env` values and only
-appends keys the release added, exactly as `sync-config` does (§9).
+appends keys the release added, exactly as `sync-config` does (§9), and it
+never touches an existing `servo_calibration.yaml`.
 
 Those releases are produced by `.github/workflows/release.yml`: pushing a
 `release-x.x.x` tag reachable from `main` builds this image on a native arm64
@@ -163,10 +164,10 @@ a registered aarch64 handler.
 
 This ships the image tarball, the compose file, and the launcher (`hexa` +
 `scripts/robot.sh`) to `~/hexa-robot/`, loads the image, seeds
-`~/hexa-robot/.env` from `.env.robot.sample`, and starts the container **cold**
-(relay open, hardware inactive).
+`~/hexa-robot/.env` from `.env.robot.sample`. It starts nothing: configure the
+robot first (below), then `hexa robot up`.
 
-Two files on the Pi are config rather than image content:
+Three files on the Pi are config rather than image content:
 
 - **`~/hexa-robot/.env`** — seeded once, never touched by a redeploy. It holds
   host-specific GIDs and device names. Use `hexa deploy sync-config` (§9) to
@@ -176,6 +177,11 @@ Two files on the Pi are config rather than image content:
   deploy saves it as `tuning.yaml.bak` and says so, then overwrites. Tune on the
   Pi freely between deploys (`hexa robot restart` re-reads it) — just fold
   anything worth keeping back into `src/hexa_description/config/tuning.yaml`.
+- **`~/hexa-robot/servo_calibration.yaml`** — this robot's servo calibration.
+  Seeded once from the repo default, never overwritten by a deploy, install or
+  `sync-config` (the bind-mount shadows the image's baked copy). Edit it on the
+  Pi; `hexa robot restart` re-reads it. The repo default ships beside it as
+  `servo_calibration.yaml.default`.
 
 ## 6. Edit `~/hexa-robot/.env` on the Pi
 
@@ -224,7 +230,8 @@ trip also drops the rail and holds it open until Start recovers.
 ./hexa deploy push pi@<host>
 ```
 
-The container restarts cold after each redeploy — re-run `hexa robot up`.
+A redeploy starts nothing. A running container keeps the old image until
+`hexa robot restart`.
 
 ## 9. Refreshing config without a deploy
 
@@ -241,13 +248,14 @@ but the image did not.
 - **`--force`** — overwrite `.env` from the sample instead, host-specific values
   included. For re-provisioning. Still backs up.
 - **`tuning.yaml`** — refreshed from the repo, on-Pi edit → `tuning.yaml.bak`.
+- **`servo_calibration.yaml`** — kept; seeded only when missing.
 - **`systemd/`** — re-ships `network-mode.sh` and the unit templates, plus
   `hexa_buzzer/` (the tune player the boot and shutdown units run). Scripts go
   live at once; installed units are rendered copies, so re-run the matching
   `hexa robot install-*`.
 
 `.env` changes need a container recreate (`hexa robot -H <host> restart`), which
-also re-reads `tuning.yaml`.
+also re-reads `tuning.yaml` and `servo_calibration.yaml`.
 
 ## 10. Undervoltage ladder
 

@@ -6,9 +6,9 @@
 #
 # What it does, in order: check every dependency and refuse early if one is
 # missing; download the release's ARM64 image tarball plus the matching support
-# files (compose, launcher, systemd templates, tuning, buzzer player); load the
-# image; seed ~/hexa-robot/.env from the sample with this Pi's own GIDs and
-# device names filled in. It does NOT start the stack unless asked (--start):
+# files (compose, launcher, systemd templates, tuning, calibration, buzzer
+# player); load the image; seed ~/hexa-robot/.env from the sample with this
+# Pi's own GIDs and device names filled in. It does NOT start the stack unless asked (--start):
 # bringing the container up energizes the servos, which is the operator's call.
 #
 # This is the standalone counterpart to `hexa deploy push` from a workstation —
@@ -389,6 +389,7 @@ SUPPORT_PATHS=(
     'scripts/robot.sh'
     'systemd/*'
     'src/hexa_description/config/tuning.yaml'
+    'src/hexa_description/config/servo_calibration.yaml'
     'src/hexa_buzzer/hexa_buzzer/__init__.py'
     'src/hexa_buzzer/hexa_buzzer/tunes.py'
     'src/hexa_buzzer/hexa_buzzer/catalog.py'
@@ -430,6 +431,8 @@ fetch_support_files() {
     cp "${stage}/scripts/robot.sh" "${INSTALL_DIR}/scripts/"
     cp "${stage}"/systemd/* "${INSTALL_DIR}/systemd/"
     cp "${stage}/src/hexa_description/config/tuning.yaml" "${INSTALL_DIR}/tuning.yaml.default"
+    cp "${stage}/src/hexa_description/config/servo_calibration.yaml" \
+       "${INSTALL_DIR}/servo_calibration.yaml.default"
     cp "${stage}"/src/hexa_buzzer/hexa_buzzer/*.py "${INSTALL_DIR}/hexa_buzzer/"
     cp "${stage}"/src/hexa_buzzer/config/*.yaml "${INSTALL_DIR}/hexa_buzzer/config/"
 
@@ -541,6 +544,17 @@ seed_tuning() {
     ok "tuning.yaml refreshed from ${RELEASE_TAG}"
 }
 
+# The calibration overlay is the robot's own: seeded once, never overwritten.
+seed_calibration() {
+    local c="${INSTALL_DIR}/servo_calibration.yaml"
+    if [ -f "${c}" ]; then
+        ok "servo_calibration.yaml kept (per-robot)"
+    else
+        cp "${INSTALL_DIR}/servo_calibration.yaml.default" "${c}"
+        warn "servo_calibration.yaml seeded from the release default — calibrate this robot"
+    fi
+}
+
 # ----------------------------------------------------------------------- main
 
 main() {
@@ -570,6 +584,7 @@ main() {
     echo
     seed_env
     seed_tuning
+    seed_calibration
     printf '%s\n' "${RELEASE_TAG}" > "${INSTALL_DIR}/.hexa-release"
 
     echo

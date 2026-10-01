@@ -14,7 +14,10 @@ The URDF declares `hexa_hardware/HexaHardware`
 (`hexa_description/urdf/hexapod.urdf.xacro`, `<xacro:unless use_sim>`).
 Config is read from `hexa_description`'s share directory: `hardware.yaml`
 (wiring) and `servo_calibration.yaml` (per-servo endpoint pulses). Override
-with `<param name="config_path">` / `<param name="calibration_path">`.
+with `<param name="config_path">` / `<param name="calibration_path">`. On the
+robot, `~/hexa-robot/servo_calibration.yaml` is bind-mounted over the image's
+copy, so calibration is per-robot and survives image updates
+(`docs/robot-environment.md` §5a).
 
 ## Seams
 
