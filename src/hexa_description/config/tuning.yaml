@@ -59,7 +59,8 @@ gait_node:
         step_height: 0.04
 
       # Stands lower and reaches further, and spends the extra reach on a
-      # longer stride at a quicker cadence — roughly twice normal's top speed.
+      # longer stride, at about 1.25x normal's top speed. min_swing_time is the
+      # shortest that keeps the coxa inside its servo speed in every direction.
       - id: fast
         leg_set: hexapod
         standing_pose:
@@ -75,9 +76,9 @@ gait_node:
             coxa_deg: 10
         stride_length: 0.11
         stride_length_radial: 0.085
-        min_swing_time: 0.4
-        max_swing_time: 0.5
-        step_height: 0.015
+        min_swing_time: 0.5
+        max_swing_time: 0.6
+        step_height: 0.030
 
       # Tall and deliberate: belly clearance for what the robot is walking
       # over, a foot that clears far more than it needs on flat ground, and a
