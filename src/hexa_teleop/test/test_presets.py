@@ -33,6 +33,8 @@ from hexa_teleop.joy_mapping import (
 from hexa_teleop.presets import (
     HEXAPOD,
     QUADRUPED,
+    animation_entry_blocked,
+    animation_preset_in_force,
     load_presets,
     preset_switch_allowed,
     resync_gait,
@@ -518,3 +520,21 @@ def test_preset_switch_allowed_only_where_the_engine_takes_one():
         "",
     ):
         assert not preset_switch_allowed(state), state
+
+
+def test_animation_entry_needs_a_stand_off_its_preset(registry):
+    registry.note_preset("fast")
+    assert not animation_preset_in_force(registry, "normal")
+    assert animation_entry_blocked(registry, "normal", "gait")
+    assert not animation_entry_blocked(registry, "normal", "stand")
+
+
+def test_animation_entry_is_free_on_its_own_preset(registry):
+    registry.note_preset("normal")
+    assert animation_preset_in_force(registry, "normal")
+    assert not animation_entry_blocked(registry, "normal", "gait")
+
+
+def test_no_animation_preset_blocks_nothing(registry):
+    registry.note_preset("fast")
+    assert not animation_entry_blocked(registry, None, "gait")

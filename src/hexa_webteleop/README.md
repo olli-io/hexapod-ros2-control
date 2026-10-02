@@ -5,11 +5,12 @@ same ROS topics as the gamepad teleop (`hexa_teleop`), so the two are
 interchangeable and only one drives at a time.
 
 - **Publishes** — `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/cmd_preset`,
-  `/cmd_gesture`, `/animation/mode`, `/gait/initialize`, `/teleop/owner`.
+  `/cmd_gesture`, `/animation/mode`, `/gait/initialize`, `/teleop/owner`,
+  `/teleop/mode`.
 - **Subscribes** — `/gait/state` (switch gating), `/gait/preset`,
   `/gait/leg_set` and `/gait/gesture` (the engine's reports), the latched
-  `/cmd_gait`, `/cmd_preset` and `/animation/mode` (the current *selection*,
-  heard from both teleops and from its own publishes), and
+  `/cmd_gait`, `/cmd_preset`, `/animation/mode` and `/teleop/mode` (the
+  current *selection*, heard from both teleops and from its own publishes), and
   `sensor_msgs/BatteryState`.
 
 `/cmd_gait` does double duty: it drives the status strip *and* resyncs the
@@ -114,10 +115,13 @@ drop the socket. Both sticks re-centre on the way in.
 - The animation grid is the `animation_mode_animations` list, dimmed outside
   animation mode rather than hidden.
 - **Animation mode lives on one preset**, `presets.animation` in
-  [`config/webteleop.yaml`](config/webteleop.yaml) — `normal`. `ANIM` is dimmed
-  on every other preset and on four legs, off one predicate
-  (`animationAvailable`) shared with the Control view's column. While the mode is
-  in force every other preset tile is inert, so the way out is to leave the mode.
+  [`config/webteleop.yaml`](config/webteleop.yaml) — `normal`. Entering the mode
+  switches to that preset, forces `tripod` and eases any saved pose out; leaving
+  it clears the animation. `ANIM` is dimmed on four legs, and on another preset
+  where the engine cannot take a preset change (not at a stand), off one
+  predicate (`animationAvailable`) shared with the Control view's column. While
+  the mode is in force every other preset tile is inert, so the way out is to
+  leave the mode.
 - A switch is **refused** where the engine would not take one (a preset change is
   legal only from a stand). The node gates on `/gait/state` and holds a deadline
   for what it cannot predict; a reason appears under the grids and the lit tile
@@ -144,7 +148,7 @@ the view is gated the same way, off the engine's reports:
   lands under the same rules — live from a stand only, pending until
   `/gait/preset` reports it, spinner meanwhile. Mid-walk the button is dimmed
   and the second button leads to the Mode view.
-- On the preset but not standing, the tiles are dimmed with *Stand to activate*
+- On the preset but not standing, the tiles are dimmed with *Unavailable while moving*
   on the heading. While a gesture plays every tile is inert and the running one
   keeps its fill.
 - The node pre-gates the request (`gesture_refusal`, pure and unit-tested) so a
@@ -220,6 +224,13 @@ Both nodes run at once; only one publishes **drive** commands. A single latched
 writes it. **Take control** → `request_control` → owner `web`, and the gamepad
 goes dormant; releasing (toggle, disconnect, or `POST /control/release`) resumes
 it. The logic is `hexa_teleop.teleop_arbitration` — pure, shared, unit-tested.
+
+**The mode is shared.** Both teleops publish a mode change on the latched
+`/teleop/mode` and adopt the other's (`hexa_teleop.joy_mapping.adopt_mode`). The
+teleop that changed the mode publishes its side effects — animation, preset,
+forced gait — whoever owns `/cmd_vel`; the other only updates its own state. So
+the Mode view's mode buttons drive a robot the pad owns, and a pad mode press
+lights the view.
 
 Preset switches, gait switches, gestures and inits are **exempt**: they touch
 neither `/cmd_vel` nor `/body/pose`, and are one-shot or idempotent writes to

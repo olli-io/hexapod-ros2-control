@@ -45,6 +45,7 @@ from .joy_mapping import (
     JoyState,
     ModeConfig,
     PostureConfig,
+    adopt_mode,
     cross_section_function_check,
     map_joy,
     validate_bindings,
@@ -53,6 +54,9 @@ from .presets import (
     HEXAPOD,
     QUADRUPED,
     PresetRegistry,
+    animation_entry_blocked,
+    animation_preset_in_force,
+    load_animation_preset,
     load_presets,
     resync_gait,
     resync_preset,
@@ -120,7 +124,7 @@ def _parse_mode_bindings(
 
 def _load_config(
     path: Path, gait_yaml: Path, posture_yaml: Path, geometry_yaml: Path
-) -> tuple[JoyConfig, str, str, VelocityCaps, bool, PresetRegistry]:
+) -> tuple[JoyConfig, str, str, VelocityCaps, bool, PresetRegistry, str | None]:
     with path.open() as f:
         raw = yaml.safe_load(f)
     caps = load_velocity_caps(gait_yaml, geometry_yaml)
@@ -192,7 +196,15 @@ def _load_config(
         )
     arbitration_raw = raw.get("arbitration", {})
     arbitration_enabled = bool(arbitration_raw.get("enabled", True))
-    return cfg, initial_mode, default_gait, caps, arbitration_enabled, registry
+    return (
+        cfg,
+        initial_mode,
+        default_gait,
+        caps,
+        arbitration_enabled,
+        registry,
+        load_animation_preset(raw, registry),
+    )
 
 
 class TeleopJoyNode(Node):
@@ -225,6 +237,7 @@ class TeleopJoyNode(Node):
             self._caps,
             self._arbitration_enabled,
             self._presets,
+            self._animation_preset,
         ) = _load_config(
             cfg_path, tuning_yaml_path, tuning_yaml_path, geometry_yaml_path
         )
@@ -340,6 +353,18 @@ class TeleopJoyNode(Node):
         self._pub_animation_mode = self.create_publisher(
             String, "/animation/mode", animation_qos
         )
+        # And read it back, for the cycler index: the web app's Mode view
+        # selects an animation by name.
+        self._sub_animation_mode = self.create_subscription(
+            String, "/animation/mode", self._on_animation_mode, animation_qos
+        )
+        # The mode both teleops are in. Supervisory, so never gated on
+        # ownership: the web app's Mode view changes it while the pad drives,
+        # and a pad press changes what the view shows.
+        self._pub_mode = self.create_publisher(String, "/teleop/mode", gait_qos)
+        self._sub_mode = self.create_subscription(
+            String, "/teleop/mode", self._on_teleop_mode, gait_qos
+        )
 
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
 
@@ -420,7 +445,62 @@ class TeleopJoyNode(Node):
             # mode — and tell the pipeline, which is still holding the last
             # selected animation.
             self.get_logger().info("animation mode left (quadruped leg set)")
-            self._pub_animation_mode.publish(String(data=""))
+            self._leave_animation_mode()
+        elif self._state.mode == ANIMATION and not animation_preset_in_force(
+            self._presets, self._animation_preset
+        ):
+            self.get_logger().info(
+                f"animation mode left (preset {msg.data!r} is not "
+                f"{self._animation_preset!r})"
+            )
+            self._state.mode = GAIT
+            self._leave_animation_mode()
+
+    def _leave_animation_mode(self) -> None:
+        self._state.animation_name = ""
+        self._pub_animation_mode.publish(String(data=""))
+        self._pub_mode.publish(String(data=self._state.mode))
+
+    def _on_animation_mode(self, msg: String) -> None:
+        if msg.data in self._cfg.animation_list:
+            self._state.current_animation_idx = self._cfg.animation_list.index(
+                msg.data
+            )
+            self._state.animation_name = msg.data
+
+    def _on_teleop_mode(self, msg: String) -> None:
+        """The mode the web app changed to, or our own heard back."""
+        if adopt_mode(msg.data, self._cfg, self._state):
+            self.get_logger().info(f"mode={self._state.mode} (from /teleop/mode)")
+
+    def _publish_mode_selections(self, out) -> None:
+        """A mode change's animation, preset and forced gait, in that order.
+
+        Ungated on ownership. Entering animation mode switches to its preset
+        first: the engine measures the forced gait against the preset in force.
+        """
+        if out.animation_name is not None:
+            self.get_logger().info(
+                f"publishing /animation/mode={out.animation_name!r}"
+            )
+            self._pub_animation_mode.publish(String(data=out.animation_name))
+        if self._state.mode == ANIMATION and not animation_preset_in_force(
+            self._presets, self._animation_preset
+        ):
+            # ``animation_blocked`` kept the mode out where this would be refused.
+            preset = self._presets.get(self._animation_preset)
+            gait = self._presets.entry_gait(preset.id, self._active_gait)
+            self.get_logger().info(
+                f"animation mode — switching to preset {preset.id!r}"
+            )
+            self._pub_cmd_preset.publish(String(data=preset.id))
+            self._pub_cmd_gait.publish(String(data=gait))
+        if (
+            out.gait_select is not None
+            and self._latest_gait_state in _GAIT_SWITCH_STATES
+        ):
+            self.get_logger().info(f"switching gait to {out.gait_select!r}")
+            self._pub_cmd_gait.publish(String(data=out.gait_select))
 
     def _on_owner(self, msg: String) -> None:
         prev = self._arbitration.owner
@@ -431,6 +511,9 @@ class TeleopJoyNode(Node):
             )
 
     def _tick(self) -> None:
+        self._state.animation_blocked = animation_entry_blocked(
+            self._presets, self._animation_preset, self._latest_gait_state
+        )
         out = map_joy(
             self._latest_axes,
             self._latest_buttons,
@@ -440,12 +523,16 @@ class TeleopJoyNode(Node):
         )
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
+            self._pub_mode.publish(String(data=self._state.mode))
         # Arbitration: map_joy always runs (keeps prev_* edge trackers
         # fresh so no spurious edges on resume), but all publishes are
-        # gated on ownership. When web owns, gamepad goes dormant.
+        # gated on ownership. When web owns, gamepad goes dormant — except
+        # for a mode change's own selections: the mode is shared.
         if self._arbitration_enabled and not should_publish(
             self._arbitration, GAMEPAD
         ):
+            if out.mode_changed:
+                self._publish_mode_selections(out)
             if not self._was_dormant:
                 self._was_dormant = True
                 self.get_logger().info("web teleop owns /cmd_vel — gamepad dormant")
@@ -453,18 +540,21 @@ class TeleopJoyNode(Node):
         if self._was_dormant:
             self._was_dormant = False
             self.get_logger().info("gamepad regained /cmd_vel ownership")
-        if out.animation_name is not None:
+        if out.mode_changed:
+            self._publish_mode_selections(out)
+        elif out.animation_name is not None:
             self.get_logger().info(
                 f"publishing /animation/mode={out.animation_name!r}"
             )
             self._pub_animation_mode.publish(String(data=out.animation_name))
-        if out.gait_select is not None:
+        if out.gait_select is not None and not out.mode_changed:
             # Gate on the engine states that accept a switch so a stale
             # request never sits on the wire. The JoyState index has
             # already advanced — the next press resumes from that slot
             # regardless.
             if self._latest_gait_state in _GAIT_SWITCH_STATES:
                 self.get_logger().info(f"switching gait to {out.gait_select!r}")
+                self._pub_cmd_gait.publish(String(data=out.gait_select))
                 # Caps and cycler bookkeeping happens in _on_cmd_gait when
                 # this publish loops back — one path, whichever teleop
                 # initiated it. Sticks run on the old cap for the tick or two

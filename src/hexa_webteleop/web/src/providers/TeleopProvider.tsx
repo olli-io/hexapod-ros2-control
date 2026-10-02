@@ -40,18 +40,20 @@ export function useTeleop(): TeleopSocket {
   return session;
 }
 
-// Whether animation mode may be entered at all. Two reasons it may not, and
-// they are different facts: the robot stands on four legs (every animation is
-// written for six, and the shared mapping refuses the mode there off its own
-// leg-set flag), or it stands on a six-leg preset the animations are not
-// written for — `presets.animation` names the one that carries them, and no key
-// means no restriction. Both read the ENGINE's reports, never the tap: before
-// the first `/gait/preset` there is no preset in force and the answer is no,
-// which is the same honesty the unlit tiles show.
+// The engine states a preset change runs from — hexa_teleop's
+// PRESET_SWITCH_STATES.
+const PRESET_SWITCH_STATES = new Set(["folded", "fault", "stand"]);
+
+// Whether animation mode may be entered now. Never on four legs: every
+// animation is written for six, and the shared mapping refuses the mode there.
+// Entering it switches to the preset `presets.animation` names, so off that
+// preset the engine has to be in a state a preset change runs from. Both read
+// the ENGINE's reports, never the tap.
 export function animationAvailable(state: TeleopState): boolean {
   if (state.activeLegSet === "quadruped") return false;
   if (state.animationPreset === null) return true;
-  return state.activePreset === state.animationPreset;
+  if (state.activePreset === state.animationPreset) return true;
+  return PRESET_SWITCH_STATES.has(state.gaitState);
 }
 
 // A controller is active whenever arbitration is on and the web app does not

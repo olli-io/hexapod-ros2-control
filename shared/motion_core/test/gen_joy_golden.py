@@ -145,6 +145,15 @@ def build_trace():
     f.append(frame(l2=-32767))
     f.append(frame(buttons=1 << 1))                    # toggle back to GAIT
     f.append(frame())
+    # ── a saved pose, then straight into ANIMATION: entry eases it out ──
+    f.append(frame(buttons=1 << 3))                    # POSTURE
+    f.append(frame(lx=22000, ry=-12000, buttons=1 << 6))  # record
+    f.append(frame())
+    f.append(frame(buttons=1 << 1))                    # enter ANIMATION
+    f.append(frame())
+    f.append(frame())
+    f.append(frame(buttons=1 << 1))                    # toggle back to GAIT
+    f.append(frame())
     return f
 
 

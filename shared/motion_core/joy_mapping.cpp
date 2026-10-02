@@ -200,6 +200,8 @@ JoyOutput map_joy(const std::int16_t axes[bt_teleop::kNumAxes],
       has_animation_name = true;
       animation_name_out = cfgns::kAnimationModeAnimations[0];
     }
+    // The animation owns the body: ease any saved pose out.
+    state.reverting = true;
     has_forced_gait = true;
     forced_gait = "tripod";
     for (std::size_t i = 0; i < cfgns::kGaitCycle.size(); ++i) {

@@ -2,7 +2,9 @@
 
 Gamepad teleop. Publishes the high-level command topics the rest of the stack
 consumes: `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/animation/mode`,
-`/gait/initialize`. Deliberately thin — the swappable producer of high-level
+`/gait/initialize`. Shares its mode with `hexa_webteleop` on the latched
+`/teleop/mode`: it publishes its own mode changes, ungated by ownership, and
+adopts the web app's. Deliberately thin — the swappable producer of high-level
 commands; an autonomy node would publish the same topics and replace it
 transparently.
 
@@ -149,6 +151,9 @@ the belly both buttons mean fold.
   slot the operator was on is kept in its own index.
 - Animation mode is unavailable while quadruped — every animation is written for
   six legs. Gait and posture stay available.
+- Entering animation mode switches to `presets.animation` (`normal`), forces
+  `tripod` and eases any saved pose out. Off that preset the press is refused
+  unless the engine is at a stand, where a preset change runs.
 - Posture mode poses the body on four feet as it does on six; what it will not do
   there is **record**. A recorded pose bleeds through into gait mode, where it
   would spend the same x-y envelope the support shift needs, and that margin is

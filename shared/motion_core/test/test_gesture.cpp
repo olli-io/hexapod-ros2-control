@@ -18,6 +18,7 @@
 #include "gesture/validate.hpp"
 #include "kinematics/body_transform.hpp"
 #include "kinematics/leg_ik.hpp"
+#include "posture/posture.hpp"
 
 namespace g = hexa::gait;
 namespace gs = hexa::gesture;
@@ -578,7 +579,7 @@ TEST(Validate, AcceptsTheBakedTable) {
   EXPECT_NO_THROW(gs::validate_gestures(
       gs::gesture_specs_from_config(), g::leg_specs_from_config(),
       g::nominal_stance_from_config(),
-      hexa::posture::PoseLimits{}));
+      hexa::posture::pose_limits_from(hexa::config::kPosture)));
 }
 
 TEST(Validate, RejectsAKnotPastAJointLimit) {

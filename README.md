@@ -7,13 +7,13 @@ Companion repo: [hexapod-servo2040-driver](https://github.com/olli-io/hexapod-se
 ## Hardware
 
 - Raspberry Pi 5 (2 GB minimum), Raspberry Pi OS Lite — runs ROS 2.
-- Raspberry Pi Pico 2 W — runs the locomotion firmware.
+- Raspberry Pi Pico 2 W — runs the locomotion firmware. **WARNING: totally untested!**
 - Pimoroni Servo 2040 — drives the 18 servos.
 - Optional: 256×64 SH1122 OLED on SPI for the eyes.
 
 ## Deploy the robot
 
-Install a released image on the Pi:
+Install the latest released image on the Pi:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/olli-io/hexapod-ros2-control/main/install.sh | bash

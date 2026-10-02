@@ -69,26 +69,33 @@ gestures:
           t: 1.4
           transition: continuous
           l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
-      - home: { t: 2.3 }
+      - pose:
+          t: 1.7
+          transition: continuous
+          l_front: { coxa_deg: -30, femur_deg: 105, tibia_deg: 150 }
+      - pose:
+          t: 2.0
+          transition: continuous
+          l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
+      - pose:
+          t: 2.3
+          transition: continuous
+          l_front: { coxa_deg: -30, femur_deg: 105, tibia_deg: 150 }
+      - pose:
+          t: 2.6
+          transition: continuous
+          l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
+      - home: { t: 3.5 }
     body:
       - pose: { t: 0.5, y: -0.015, transition: ease }
       - pose: { t: 0.8, y: -0.015, roll_deg: -6, transition: continuous }
       - pose: { t: 1.1, y: -0.015, roll_deg: 6, transition: continuous }
       - pose: { t: 1.4, y: -0.015, roll_deg: -6, transition: continuous }
-      - home: { t: 2.3 }
-  - id: stretch
-    legs:
-      - pose:
-          t: 0.8
-          transition: ease
-          l_front: { coxa_deg: -30, femur_deg: 64, tibia_deg: 150 }
-          r_front: { coxa_deg: 30, femur_deg: 64, tibia_deg: 150 }
-      - hold: { t: 1.6 }
-      - home: { t: 2.4 }
-    body:
-      - pose: { t: 0.8, x: -0.02, pitch_deg: 8, transition: ease }
-      - hold: { t: 2.2 }
-      - home: { t: 3.0 }
+      - pose: { t: 1.7, y: -0.015, roll_deg: 6, transition: continuous }
+      - pose: { t: 2.0, y: -0.015, roll_deg: -6, transition: continuous }
+      - pose: { t: 2.3, y: -0.015, roll_deg: 6, transition: continuous }
+      - pose: { t: 2.6, y: -0.015, roll_deg: -6, transition: continuous }
+      - home: { t: 3.5 }
   # Chitter: the body shifts back onto the rear pairs first, then both front
   # legs fold up close together in front and alternate: one lifts, sweeps in
   # and folds the knee while the other drops, sweeps out and extends, like a
@@ -219,7 +226,7 @@ gestures:
       - home: { t: 3.36 }
   - id: bow
     body:
-      - pose: { t: 0.8, x: 0.02, z: -0.01, pitch_deg: 10, transition: ease }
+      - pose: { t: 0.8, x: 0.02, z: -0.01, pitch_deg: 20, transition: ease }
       - hold: { t: 1.6 }
       - home: { t: 2.2 }
   # Peacock: the body walks its weight forward onto the front and middle
@@ -375,6 +382,9 @@ gestures:
   # a quarter beat ahead of it (y = cos, roll = sin 2), so the roll is zero at
   # either side and at centre and peaks between them. As in the wave, a knot
   # sits only where y or roll peaks; the crossings fall between knots.
+# At each roll peak the leg knots sit on the sway's smoothstep and add the
+# roll to the femur of the side tilting down (subtract on the side tilting
+# up), so the pair holds its height against the ground.
   - id: boogie
     legs:
       - start: { t: 0.4 }
@@ -394,35 +404,105 @@ gestures:
           l_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
           r_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
       - pose:
+          t: 1.6
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+      - pose:
+          t: 1.8
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+      - pose:
           t: 1.9
           transition: continuous
           l_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
           r_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
+      - pose:
+          t: 2.0
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 48, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 42, tibia_deg: 140 }
+      - pose:
+          t: 2.2
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 42, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 48, tibia_deg: 75 }
       - pose:
           t: 2.3
           transition: continuous
           l_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
           r_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
       - pose:
+          t: 2.4
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+      - pose:
+          t: 2.6
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+      - pose:
           t: 2.7
           transition: continuous
           l_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
           r_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
+      - pose:
+          t: 2.8
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 48, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 42, tibia_deg: 140 }
+      - pose:
+          t: 3.0
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 42, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 48, tibia_deg: 75 }
       - pose:
           t: 3.1
           transition: continuous
           l_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
           r_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
       - pose:
+          t: 3.2
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+      - pose:
+          t: 3.4
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+      - pose:
           t: 3.5
           transition: continuous
           l_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
           r_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
       - pose:
+          t: 3.6
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 48, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 42, tibia_deg: 140 }
+      - pose:
+          t: 3.8
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 42, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 48, tibia_deg: 75 }
+      - pose:
           t: 3.9
           transition: continuous
           l_middle: { coxa_deg: 0, femur_deg: 20, tibia_deg: 155 }
           r_middle: { coxa_deg: 0, femur_deg: 70, tibia_deg: 60 }
+      - pose:
+          t: 4.0
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
+          r_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+      - pose:
+          t: 4.2
+          transition: continuous
+          l_middle: { coxa_deg: 0, femur_deg: 76, tibia_deg: 75 }
+          r_middle: { coxa_deg: 0, femur_deg: 14, tibia_deg: 140 }
       - pose:
           t: 4.3
           transition: continuous

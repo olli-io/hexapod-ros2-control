@@ -34,11 +34,11 @@ function GestureRoute() {
       <section className="preset-section" data-section="gesture">
         {/* Why the tiles are dimmed, on the heading's own line as the Mode view
             says it. Absent while a gesture plays: the lit tile says what is
-            happening, and the robot is not waiting for a stand. */}
+            happening, and the robot is not waiting to stop. */}
         <h2 className="preset-section-title">
           GESTURE
           {!standing && !playing && (
-            <span className="preset-hint">Stand to activate</span>
+            <span className="preset-hint">Unavailable while moving</span>
           )}
         </h2>
         <div id="gesture-list">

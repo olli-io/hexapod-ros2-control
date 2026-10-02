@@ -159,7 +159,10 @@ target_compile_options(test_reversal PRIVATE -fexceptions)
 
 # Gestures: keyframe sampling, the player's implicit start / return knots and
 # preserve resolution, and the engine's GESTURE state and its guards.
-hexa_host_test(test_gesture test_gesture.cpp ${FW_GAIT_SOURCES})
+hexa_host_test(test_gesture test_gesture.cpp ${FW_GAIT_SOURCES}
+  ${FW_SRC}/posture/pose.cpp
+  ${FW_SRC}/posture/animations.cpp
+  ${FW_SRC}/posture/posture.cpp)
 target_compile_options(test_gesture PRIVATE -fexceptions)
 
 # ── Control velocity shaping (part 07) ──

@@ -23,6 +23,10 @@ allow_unstable_gaits: true # when false, surf and crawl are skipped
 # state machine never learns how many there are.
 presets:
   default: normal
+  # The one preset animation mode runs on: entering the mode switches to it,
+  # which the engine takes only from a stand. Keep in step with
+  # hexa_webteleop's webteleop.yaml — the two teleops share the mode.
+  animation: normal
   # How long the web app's Mode view waits for /gait/preset to change before
   # calling a switch refused. Comfortably over the ~2 s the change takes.
   switch_timeout_s: 4.0

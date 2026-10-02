@@ -19,9 +19,9 @@ export const MODES: readonly { action: ActionName; mode: Mode; label: string }[]
 interface Props {
   mode: Mode;
   // Animation mode may be entered — `animationAvailable` in
-  // `TeleopProvider.tsx` says when, and why not. False dims the ANIM button rather than hiding it: the
-  // mode exists, this is not where it lives, and the way in is a preset change,
-  // which is the Mode view's.
+  // `TeleopProvider.tsx` says when, and why not. False dims the ANIM button
+  // rather than hiding it: the mode exists, but not on four legs, and not while
+  // the robot walks on a preset other than the one the mode switches to.
   animationAllowed: boolean;
   pressed: ReadonlySet<ActionName>;
   onPress: (action: ActionName) => void;

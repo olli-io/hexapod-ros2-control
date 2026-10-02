@@ -365,6 +365,45 @@ def load_presets(
     )
 
 
+def load_animation_preset(raw: Mapping, registry: PresetRegistry) -> str | None:
+    """``presets.animation``: the one preset animation mode runs on.
+
+    Entering the mode switches to it. ``None`` where the key is absent, which
+    leaves animation mode on every preset. Validated here rather than at the
+    point of use so a typo fails at load with the declared ids in the message.
+    """
+    block = raw.get("presets")
+    if not isinstance(block, Mapping):
+        return None
+    pid = block.get("animation")
+    if pid is None:
+        return None
+    pid = str(pid)
+    if registry.get(pid) is None:
+        raise ValueError(
+            f"presets.animation={pid!r} names no preset; have "
+            f"{sorted(p.id for p in registry.presets)}"
+        )
+    return pid
+
+
+def animation_preset_in_force(
+    registry: PresetRegistry, animation_preset: str | None
+) -> bool:
+    """True where animation mode may stay in force without a preset change."""
+    return animation_preset is None or registry.current_id() == animation_preset
+
+
+def animation_entry_blocked(
+    registry: PresetRegistry, animation_preset: str | None, gait_state: str
+) -> bool:
+    """True where entering animation mode needs a preset change the engine
+    cannot take now. Feeds ``JoyState.animation_blocked``."""
+    return not animation_preset_in_force(
+        registry, animation_preset
+    ) and not preset_switch_allowed(gait_state)
+
+
 def resync_gait(
     name: str,
     cfg: JoyConfig,

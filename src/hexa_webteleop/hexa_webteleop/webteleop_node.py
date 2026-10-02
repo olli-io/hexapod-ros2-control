@@ -59,7 +59,13 @@ from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Empty, String
 
 from hexa_common import default_preset_id, gait_params
-from hexa_teleop.joy_mapping import ANIMATION, GAIT, JoyState, pose_saved
+from hexa_teleop.joy_mapping import (
+    ANIMATION,
+    GAIT,
+    JoyState,
+    adopt_mode,
+    pose_saved,
+)
 from hexa_teleop.teleop_arbitration import (
     GAMEPAD,
     WEB,
@@ -69,6 +75,9 @@ from hexa_teleop.teleop_arbitration import (
 )
 
 from hexa_teleop.presets import (
+    animation_entry_blocked,
+    animation_preset_in_force,
+    load_animation_preset,
     preset_switch_allowed,
     resync_gait,
     resync_preset,
@@ -82,7 +91,6 @@ from .web_mapping import (
     gait_selectable,
     gesture_refusal,
     input_is_stale,
-    load_animation_preset,
     load_gesture_ids,
     load_web_config,
     map_web,
@@ -183,7 +191,7 @@ class WebTeleopNode(Node):
             import yaml
 
             raw = yaml.safe_load(f)
-        # The preset animation mode is pinned to. Read from the raw config
+        # The preset animation mode switches to. Read from the raw config
         # rather than threaded through ``load_web_config``'s tuple: it is the
         # web node's own policy, not part of the shared JoyConfig the mapping
         # runs on.
@@ -229,8 +237,7 @@ class WebTeleopNode(Node):
         )
         if self._animation_preset is not None:
             self.get_logger().info(
-                f"animation mode is available on preset "
-                f"{self._animation_preset!r} only"
+                f"animation mode runs on preset {self._animation_preset!r}"
             )
 
         # Shared input state (WS thread writes, timer reads)
@@ -275,6 +282,13 @@ class WebTeleopNode(Node):
         # subscriber replaying one would move the legs.
         self._pub_cmd_gesture = self.create_publisher(String, "/cmd_gesture", 10)
         self._pub_owner = self.create_publisher(String, "/teleop/owner", latched_qos)
+        # The mode both teleops are in. Supervisory, so never gated on
+        # ownership: the Mode view changes it while a controller drives, and a
+        # pad press changes what the view shows.
+        self._pub_mode = self.create_publisher(String, "/teleop/mode", latched_qos)
+        self._sub_mode = self.create_subscription(
+            String, "/teleop/mode", self._on_teleop_mode, latched_qos
+        )
         # TRANSIENT_LOCAL to match hexa_locomotion's latched publisher:
         # /gait/state publishes on change only, so a late-joining node
         # would otherwise wait for the next state change to learn the state.
@@ -441,13 +455,13 @@ class WebTeleopNode(Node):
             # pipeline, which is still holding the last selected animation.
             self.get_logger().info("animation mode left (quadruped leg set)")
             self._leave_animation_mode()
-        elif self._state.mode == ANIMATION and not self._animation_mode_allowed():
+        elif self._state.mode == ANIMATION and not animation_preset_in_force(
+            self._presets, self._animation_preset
+        ):
             # Same shape, one preset finer: a six-leg preset the animations are
-            # not written for. Only reachable from outside — the mode cannot be
-            # entered from one of these, and the Mode view will not switch preset
-            # while it is in force — but /cmd_preset is a public topic, so
-            # arriving on one has to leave the mode rather than sit in a state
-            # the two rules above exist to prevent.
+            # not written for. Only reachable from outside — entering the mode
+            # switches to its preset, and the Mode view will not switch away
+            # while it is in force — but /cmd_preset is a public topic.
             self.get_logger().info(
                 f"animation mode left (preset {msg.data!r} is not "
                 f"{self._animation_preset!r})"
@@ -457,29 +471,36 @@ class WebTeleopNode(Node):
         self._broadcast_preset()
 
     def _leave_animation_mode(self) -> None:
-        """Drop the animation and tell both ends the mode moved.
+        """Drop the animation and tell the pipeline, the pad and the client.
 
         The pipeline is still holding the last selected animation, so the empty
         publish is not optional; the client is showing ANIM lit, so neither is
         the broadcast.
         """
+        self._state.animation_name = ""
         self._pub_animation_mode.publish(String(data=""))
+        self._pub_mode.publish(String(data=self._state.mode))
         self._broadcast_to_clients({
             "type": "mode",
             "mode": self._state.mode,
         })
 
-    def _animation_mode_allowed(self) -> bool:
-        """True where animation mode may be in force: on its own preset.
+    def _on_teleop_mode(self, msg: String) -> None:
+        """The mode the gamepad changed to, or our own heard back."""
+        if not adopt_mode(msg.data, self._cfg, self._state):
+            return
+        self.get_logger().info(f"mode={self._state.mode} (from /teleop/mode)")
+        self._broadcast_to_clients({"type": "mode", "mode": self._state.mode})
 
-        ``presets.animation`` names the one preset the animations are written
-        for; without the key nothing is gated and any preset will do. The
-        four-legged case is not this function's — the shared mapping already
-        refuses to enter the mode there, off ``JoyState.quadruped``.
+    def _enter_animation_preset(self) -> None:
+        """Switch to the animation preset on the way into animation mode.
+
+        ``JoyState.animation_blocked`` has already kept the mode out where the
+        engine cannot take the switch.
         """
-        if self._animation_preset is None:
-            return True
-        return self._presets.current_id() == self._animation_preset
+        if animation_preset_in_force(self._presets, self._animation_preset):
+            return
+        self._select_preset(self._animation_preset)
 
     def _broadcast_preset(self, refused: str | None = None) -> None:
         self._broadcast_to_clients({
@@ -533,6 +554,9 @@ class WebTeleopNode(Node):
         # inputs so /cmd_vel falls to zero instead of latching the last
         # commanded velocity. map_web still runs so the state machine sees
         # the releases and edge state stays consistent.
+        self._state.animation_blocked = animation_entry_blocked(
+            self._presets, self._animation_preset, self._latest_gait_state
+        )
         stale = input_is_stale(last_input, time.monotonic(), self._input_timeout_s)
         publishing = web_owns or not self._arbitration_enabled
         if stale and not self._input_stale and publishing:
@@ -553,10 +577,14 @@ class WebTeleopNode(Node):
 
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
+            self._pub_mode.publish(String(data=self._state.mode))
             self._broadcast_to_clients({
                 "type": "mode",
                 "mode": self._state.mode,
             })
+            if self._state.mode == ANIMATION:
+                # Preset first: the forced gait below is measured against it.
+                self._enter_animation_preset()
 
         saved = pose_saved(self._state)
         if saved != self._last_broadcast_pose_saved:
@@ -584,8 +612,10 @@ class WebTeleopNode(Node):
 
         # Arbitration: map_web always runs (keeps prev_* fresh), but the
         # continuous streams and the plain cycler publishes are gated on
-        # ownership.
-        if self._arbitration_enabled and not web_owns:
+        # ownership. A mode change's own selections are not: the mode is
+        # shared, so its animation and forced gait go out whoever drives.
+        gated = self._arbitration_enabled and not web_owns
+        if gated and not out.mode_changed:
             return
 
         if out.animation_name is not None:
@@ -596,6 +626,8 @@ class WebTeleopNode(Node):
         # An init request's own gait already went out above.
         if out.gait_select is not None and not out.init_request:
             self._publish_gait_select(out.gait_select)
+        if gated:
+            return
 
         stamp = self.get_clock().now().to_msg()
         twist = Twist()
@@ -881,29 +913,27 @@ class WebTeleopNode(Node):
             if action not in ACTIONS:
                 self.get_logger().warning(f"unknown action {action!r} ignored")
                 return
-            # The one action the node refuses outright rather than passing to
-            # the mapping. The button is already dimmed on a preset that does
-            # not carry animation mode, so this is only ever a stale client —
-            # but the mapping has no preset to check against (that gate would
-            # have to go in the parity-locked half), and it is easier to not
-            # enter the mode than to back out of it: entry snaps an animation
-            # and forces tripod on the way through.
+            # Entering animation mode switches to its preset, which the engine
+            # takes only from a stand. The mapping refuses the entry off
+            # ``animation_blocked``; this says why.
             if (
                 pressed
                 and action == "animation_mode"
-                and not self._animation_mode_allowed()
+                and self._state.mode != ANIMATION
+                and animation_entry_blocked(
+                    self._presets, self._animation_preset,
+                    self._latest_gait_state,
+                )
             ):
                 self.get_logger().info(
-                    f"animation mode refused — preset is "
-                    f"{self._presets.current_id()!r}, not "
-                    f"{self._animation_preset!r}"
+                    f"animation mode refused — preset "
+                    f"{self._animation_preset!r} needs a stand, engine in "
+                    f"{self._latest_gait_state!r}"
                 )
-                # The label, not the id: it is the word on the tile the
-                # operator has to press. Non-None whenever the guard above
-                # says no.
-                wanted = self._presets.get(self._animation_preset)
                 self._broadcast_preset(
-                    refused=f"animation mode needs the {wanted.label} preset"
+                    refused="not while walking — stop first"
+                    if self._latest_gait_state == "gait"
+                    else "the robot is busy"
                 )
                 return
             with self._lock:
@@ -1097,6 +1127,12 @@ class WebTeleopNode(Node):
             f"or the body pose never returned to neutral"
         )
         self._broadcast_preset(refused="the robot did not switch")
+        if self._state.mode == ANIMATION and not animation_preset_in_force(
+            self._presets, self._animation_preset
+        ):
+            self.get_logger().info("animation mode left (preset never switched)")
+            self._state.mode = GAIT
+            self._leave_animation_mode()
 
     def _claim_control(self) -> None:
         with self._lock:

@@ -27,14 +27,11 @@ allow_unstable_gaits: true # when false, surf and crawl are skipped
 # state machine never learns how many there are.
 presets:
   default: normal
-  # The one preset animation mode is available on. ANIM is dimmed everywhere
-  # else and the node drops the press: the animations are written for the
-  # six-leg stance this preset stands in, and there is nothing to be gained from
-  # swinging the body around on a preset picked for speed or for clearance. The
-  # Mode view greys the other presets out while the mode is in force, so the two
-  # halves of the rule cannot contradict each other. Web-only, deliberately —
-  # the pad has no preset control at all (see hexa_teleop's README), so the same
-  # key in teleop_joy.yaml would be a dead value.
+  # The one preset animation mode runs on: entering the mode switches to it,
+  # which the engine takes only from a stand, and the Mode view greys the other
+  # presets out while the mode is in force. The animations are written for the
+  # six-leg stance this preset stands in. Keep in step with hexa_teleop's
+  # teleop_joy.yaml — the two teleops share the mode on /teleop/mode.
   animation: normal
   # How long the web app's Mode view waits for /gait/preset to change before
   # calling a switch refused. Comfortably over the ~2 s the change takes.

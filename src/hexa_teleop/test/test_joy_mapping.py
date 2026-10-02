@@ -12,6 +12,7 @@ from hexa_teleop import (
     JoyState,
     ModeConfig,
     PostureConfig,
+    adopt_mode,
     apply_deadband,
     fit_drive_to_envelope,
     map_joy,
@@ -1573,6 +1574,68 @@ def test_animation_mode_entry_snaps_to_first_in_list():
     assert state.current_animation_idx == 0
     assert state.animation_name == "vertical_body_roll"
     assert out.animation_name == "vertical_body_roll"
+
+
+def _press_b() -> tuple[int, ...]:
+    pressed = list(_buttons())
+    pressed[1] = 1
+    return tuple(pressed)
+
+
+def test_animation_mode_entry_eases_the_saved_pose_out():
+    state = JoyState(mode=POSTURE, recorded_x=0.01, recorded_roll=0.1)
+    assert pose_saved(state)
+    map_joy(_axes(), _press_b(), _cfg(), state, DT)
+    assert state.mode == ANIMATION
+    assert state.reverting
+    assert not pose_saved(state)
+
+
+def test_animation_mode_entry_forces_tripod():
+    out = map_joy(_axes(), _press_b(), _cfg(), JoyState(mode=GAIT), DT)
+    assert out.gait_select == "tripod"
+
+
+def test_animation_blocked_refuses_entry():
+    state = JoyState(mode=GAIT, animation_blocked=True)
+    out = map_joy(_axes(), _press_b(), _cfg(), state, DT)
+    assert state.mode == GAIT
+    assert out.mode_changed is False
+    assert out.animation_name is None
+
+
+def test_animation_blocked_still_lets_the_mode_be_left():
+    state = JoyState(
+        mode=ANIMATION, animation_name="vertical_body_roll",
+        animation_blocked=True,
+    )
+    out = map_joy(_axes(), _press_b(), _cfg(), state, DT)
+    assert state.mode == GAIT
+    assert out.animation_name == ""
+
+
+def test_adopt_mode_into_animation_matches_a_press():
+    cfg = _cfg()
+    state = JoyState(mode=GAIT, current_animation_idx=2, recorded_x=0.01)
+    assert adopt_mode(ANIMATION, cfg, state)
+    assert state.mode == ANIMATION
+    assert state.animation_name == "vertical_body_roll"
+    assert state.current_animation_idx == 0
+    assert state.reverting
+
+
+def test_adopt_mode_out_of_animation_clears_the_selection():
+    state = JoyState(mode=ANIMATION, animation_name="vertical_body_roll")
+    assert adopt_mode(POSTURE, _cfg(), state)
+    assert state.mode == POSTURE
+    assert state.animation_name == ""
+
+
+def test_adopt_mode_ignores_the_mode_in_force_and_unknown_names():
+    state = JoyState(mode=GAIT)
+    assert not adopt_mode(GAIT, _cfg(), state)
+    assert not adopt_mode("dance", _cfg(), state)
+    assert state.mode == GAIT
 
 
 # ---- Binding flexibility (portability across controllers) ------------------

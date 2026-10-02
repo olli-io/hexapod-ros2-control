@@ -214,6 +214,10 @@ class JoyState:
     # Index into ``cfg.quadruped_gait_cycle``. Reset to
     # ``default_quadruped_gait`` on every accepted quad init.
     current_quadruped_gait_idx: int = 0
+    # Set by the ROS layer each tick: animation mode may not be entered now,
+    # because the preset it needs cannot be switched to from the engine state.
+    # The four-legged gate is ``quadruped``, the mapping's own.
+    animation_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -652,6 +656,49 @@ def resolve_gait_cycle(
     return filtered
 
 
+def _mode_side_effects(
+    prev_mode: str, cfg: JoyConfig, state: JoyState
+) -> tuple[str | None, str | None]:
+    """Leave or enter ANIMATION. Returns ``(animation_name, forced_gait)``.
+
+    Shared by a press and by ``adopt_mode``, so a mode taken from the other
+    teleop leaves this state where a press of its own would have.
+    """
+    if prev_mode == ANIMATION and state.mode != ANIMATION:
+        # Leaving ANIMATION: tell posture to restore the default stack.
+        state.animation_name = ""
+        return "", None
+    if prev_mode != ANIMATION and state.mode == ANIMATION:
+        # Entering ANIMATION: force tripod (animations are tripod-only),
+        # ease any saved pose out (the animation owns the body), and snap
+        # to the first entry in ``animation_list`` so the body is visibly
+        # animated immediately.
+        animation_name_out: str | None = None
+        if cfg.animation_list:
+            state.current_animation_idx = 0
+            state.animation_name = cfg.animation_list[0]
+            animation_name_out = cfg.animation_list[0]
+        state.reverting = True
+        if cfg.gait_cycle and "tripod" in cfg.gait_cycle:
+            state.current_gait_idx = cfg.gait_cycle.index("tripod")
+        return animation_name_out, "tripod"
+    return None, None
+
+
+def adopt_mode(mode: str, cfg: JoyConfig, state: JoyState) -> bool:
+    """Take a mode the other teleop published on ``/teleop/mode``.
+
+    State only: the teleop that changed the mode publishes its side effects.
+    False where ``mode`` is unknown or already in force.
+    """
+    if mode not in (POSTURE, GAIT, ANIMATION) or mode == state.mode:
+        return False
+    prev_mode = state.mode
+    state.mode = mode
+    _mode_side_effects(prev_mode, cfg, state)
+    return True
+
+
 def map_functions(
     source: FunctionSource,
     cfg: JoyConfig,
@@ -697,7 +744,9 @@ def map_functions(
     elif gait_edge and state.mode != GAIT:
         state.mode = GAIT
         mode_changed = True
-    elif animation_edge and not state.quadruped:
+    elif animation_edge and not state.quadruped and not (
+        state.animation_blocked and state.mode != ANIMATION
+    ):
         # Rising-edge toggle between GAIT and ANIMATION. From POSTURE,
         # animation_mode hops directly into ANIMATION. Inert in
         # quadruped mode: every animation is written for six legs, and
@@ -712,24 +761,7 @@ def map_functions(
     if mode_changed:
         active = source(state.mode)
 
-    # Side effects of leaving / entering ANIMATION mode.
-    animation_name_out: str | None = None
-    forced_gait: str | None = None
-    if prev_mode == ANIMATION and state.mode != ANIMATION:
-        # Leaving ANIMATION: tell posture to restore the default stack.
-        state.animation_name = ""
-        animation_name_out = ""
-    elif prev_mode != ANIMATION and state.mode == ANIMATION:
-        # Entering ANIMATION: force tripod (animations are tripod-only)
-        # and snap to the first entry in ``animation_list`` so the
-        # body is visibly animated immediately.
-        if cfg.animation_list:
-            state.current_animation_idx = 0
-            state.animation_name = cfg.animation_list[0]
-            animation_name_out = cfg.animation_list[0]
-        forced_gait = "tripod"
-        if cfg.gait_cycle and "tripod" in cfg.gait_cycle:
-            state.current_gait_idx = cfg.gait_cycle.index("tripod")
+    animation_name_out, forced_gait = _mode_side_effects(prev_mode, cfg, state)
 
     # The two init buttons, with the two-press revert they share when
     # the chassis is in a non-default posture. Start asks for the

@@ -42,9 +42,8 @@ function PresetRoute() {
     state.presets.find((p) => p.id === state.activePreset)?.gaits ?? [],
   );
 
-  // Animation mode lives on one preset, named by the config. While the mode is
-  // in force the others are inert — the other half of the same rule the ANIM
-  // button enforces on the way in, so the two can never be true at once: the
+  // Animation mode lives on one preset, named by the config. ANIM switches to
+  // it on the way in; while the mode is in force the others are inert, so the
   // way to another preset is to leave the mode first.
   const presetLocked = (id: string) =>
     animating && state.animationPreset !== null && id !== state.animationPreset;
@@ -80,9 +79,9 @@ function PresetRoute() {
               same table, so the two can never disagree about which functions
               exist. Here because the animation row below is inert outside
               animation mode, and the way into that mode was on the other view.
-              ANIM is locked wherever the robot cannot be in it — on four legs,
-              and on a six-leg preset the animations are not written for — and
-              the way out of that is the preset grid right underneath. */}
+              Live while a controller drives: the mode is shared with the pad
+              on /teleop/mode. ANIM switches to the animation preset, so it is
+              locked on four legs and while walking on another preset. */}
           <section className="preset-section" data-section="mode">
             <h2 className="preset-section-title">MODE</h2>
             <div id="preset-modes">
@@ -143,7 +142,7 @@ function PresetRoute() {
             <h2 className="preset-section-title">
               PRESET
               {!standing && (
-                <span className="preset-hint">Stand to activate</span>
+                <span className="preset-hint">Unavailable while moving</span>
               )}
             </h2>
             <div id="preset-list">
