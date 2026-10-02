@@ -61,7 +61,7 @@ presets:
 
 base:
   deadband: 0.1
-  trigger_threshold: 0.5 # analog triggers as binary; press = axis < this
+  trigger_threshold: 0.8 # analog triggers as binary; press = axis < this (~10 % travel)
 
   # sensor_msgs/Joy indices — edit to support a different controller.
   buttons:
