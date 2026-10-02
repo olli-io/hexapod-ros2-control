@@ -20,15 +20,10 @@ curl -fsSL https://raw.githubusercontent.com/olli-io/hexapod-ros2-control/main/i
 ```
 
 The script checks the dependencies, then downloads the latest ARM64 image into
-`~/hexa-robot/`. It does not start the stack.
+`~/hexa-robot/` and installs the host services. From the next power-on, the
+stack starts by itself. The script does not start the stack now.
 
 Options: `--check-only`, `--tag release-x.x.x`, `--start`.
-
-To start the robot on each power-on, run this once in `~/hexa-robot/`:
-
-```
-./hexa robot install-service
-```
 
 ## Configure the robot
 

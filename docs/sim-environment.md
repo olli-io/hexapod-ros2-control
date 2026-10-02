@@ -48,12 +48,6 @@ Stack lifecycle lives host-side (`hexa sim up/down`); the build runs *inside*
 the container via colcon:
 
 ```
-
-Pelasta Kivikon metsä
-Mira Grönroos
-832 allekirjoitusta
-762 Allekirjoitukset / 30 päivää
-04.06.2026
 hexa sim build                                  # colcon build --symlink-install
 hexa sim build --packages-select hexa_locomotion   # extra args forward to colcon
 ```
@@ -85,19 +79,18 @@ drive nodes in the container, or vice-versa.
 If you ever need to isolate two containers on the same host, give them different
 `ROS_DOMAIN_ID` values.
 
-## Hardware passthrough (future)
+## Cross-building for the robot
 
-When the Pimoroni Servo 2040 is connected:
+`./hexa deploy build` builds the `linux/arm64` robot image under QEMU. The
+workstation needs an aarch64 binfmt_misc handler with a **static** interpreter;
+`scripts/deploy.sh` refuses to build without one. On Arch, set it up once:
 
-1. Plug it in; confirm with `lsusb` on the host. Note the device path
-   (typically `/dev/ttyACM0`).
-2. Uncomment the `devices:` block in `docker-compose.sim.yaml`.
-3. Rebuild the image: `./hexa sim up --clean`.
+```
+sudo install -m 644 /usr/lib/binfmt.d/qemu-aarch64.conf /etc/binfmt.d/qemu-aarch64.conf
+sudo sed -i 's|/usr/bin/qemu-aarch64|/usr/bin/qemu-aarch64-static|' /etc/binfmt.d/qemu-aarch64.conf
+echo -1 | sudo tee /proc/sys/fs/binfmt_misc/qemu-aarch64
+sudo systemctl restart systemd-binfmt
+```
 
-`usbutils` is already installed in the image, so `lsusb` inside the container
-works once the device is mapped in.
-
-A controller plugged into the host is exposed via `/dev/input/event*`;
-`scripts/sim.sh` forwards the host's `input` group GID so `joy_node` inside the
-container can read it without root.
-
+The `interpreter` line in `/proc/sys/fs/binfmt_misc/qemu-aarch64` must end in
+`-static`. Other distros may register it automatically.

@@ -8,8 +8,10 @@
 # missing; download the release's ARM64 image tarball plus the matching support
 # files (compose, launcher, systemd templates, tuning, calibration, buzzer
 # player); load the image; seed ~/hexa-robot/.env from the sample with this
-# Pi's own GIDs and device names filled in. It does NOT start the stack unless asked (--start):
-# bringing the container up energizes the servos, which is the operator's call.
+# Pi's own GIDs and device names filled in; install and enable the host services
+# (start-on-boot, boot / shutdown tunes, hotspot button). It does NOT start the
+# stack unless asked (--start): bringing the container up energizes the servos,
+# which is the operator's call.
 #
 # This is the standalone counterpart to `hexa deploy push` from a workstation —
 # same ~/hexa-robot/ layout, same files, no ssh and no cross-build.
@@ -167,10 +169,15 @@ check_deps() {
         ok "${ram_mb} MB RAM installed"
     fi
 
-    if command -v systemctl >/dev/null 2>&1; then
-        ok "systemd (needed by 'hexa robot install-service')"
-    else
+    HAVE_SERVICES=0
+    if ! command -v systemctl >/dev/null 2>&1; then
         warn "no systemctl — start-on-boot, the boot tunes and the network button stay unavailable"
+    elif ! sudo -v; then
+        # Asked now, so the password prompt does not wait behind the download.
+        warn "no sudo — host services skipped; install them later with ./hexa robot install-*"
+    else
+        ok "systemd + sudo (host services)"
+        HAVE_SERVICES=1
     fi
 
     [ "$(id -u)" -eq 0 ] && warn "running as root — the install lands in ${INSTALL_DIR}"
@@ -197,7 +204,7 @@ check_hardware() {
         case "${PI_MODEL}" in
             *"Raspberry Pi 5"*) echo "         add dtparam=uart0=on to /boot/firmware/config.txt and reboot" ;;
             *"Raspberry Pi 4"*) echo "         sudo raspi-config nonint do_serial_hw 0 && sudo raspi-config nonint do_serial_cons 1" ;;
-            *)                  echo "         enable the header UART on GPIO14/15 (docs/robot-environment.md §3)" ;;
+            *)                  echo "         enable the header UART on GPIO14/15 (docs/robot-environment.md §1)" ;;
         esac
     fi
 
@@ -470,7 +477,7 @@ load_image() {
 # --------------------------------------------------------------------- config
 
 # Fill this Pi's own values into a freshly seeded .env — the GIDs and device
-# names §4/§6 of docs/robot-environment.md otherwise ask you to look up by hand.
+# names §3 of docs/robot-environment.md otherwise ask you to look up by hand.
 # Only keys we actually resolved are touched; the sample's default stands for
 # the rest.
 seed_env() {
@@ -555,6 +562,29 @@ seed_calibration() {
     fi
 }
 
+# ------------------------------------------------------------- host services
+
+# Every run, so an upgrade also renders the installed units again from the new
+# templates. A service whose hardware is absent is skipped, not failed.
+install_services() {
+    [ "${HAVE_SERVICES}" -eq 1 ] || return 0
+    say "Installing host services"
+    local cmd
+    for cmd in install-service install-tune install-network; do
+        case "${cmd}" in
+            install-tune)
+                [ -n "${BUZZER_PWM_GUESS}" ] || { warn "tunes skipped — no PWM block, no buzzer"; continue; } ;;
+            install-network)
+                command -v nmcli >/dev/null 2>&1 || { warn "hotspot skipped — needs NetworkManager (nmcli)"; continue; } ;;
+        esac
+        if ( cd "${INSTALL_DIR}" && ./hexa robot "${cmd}" ) 2>&1 | sed 's/^/   /'; then
+            ok "${cmd}"
+        else
+            warn "${cmd} failed — run './hexa robot ${cmd}' in ${INSTALL_DIR}"
+        fi
+    done
+}
+
 # ----------------------------------------------------------------------- main
 
 main() {
@@ -586,6 +616,8 @@ main() {
     seed_tuning
     seed_calibration
     printf '%s\n' "${RELEASE_TAG}" > "${INSTALL_DIR}/.hexa-release"
+    echo
+    install_services
 
     echo
     if [ -n "${previous}" ] && [ "${previous}" != "${RELEASE_TAG}" ]; then
@@ -606,7 +638,7 @@ main() {
         cat <<EOF
 
 ${C_BOLD}Next${C_OFF}
-  1. Check ${INSTALL_DIR}/.env against this Pi (docs/robot-environment.md §6).
+  1. Check ${INSTALL_DIR}/.env against this Pi (docs/robot-environment.md §3).
   2. cd ${INSTALL_DIR} && ./hexa robot up
 EOF
         [ "${running}" = "running" ] && cat <<EOF
@@ -614,10 +646,6 @@ EOF
      replace it. Use ./hexa robot restart.
 EOF
         cat <<EOF
-  3. Optional, each needs sudo on a TTY:
-       ./hexa robot install-service   start the stack on power-on
-       ./hexa robot install-tune      boot / shutdown buzzer tunes
-       ./hexa robot install-network   hold the info button 3 s to flip to hotspot
 
   'up' energizes the servos: the robot takes up its folded pose one leg at a
   time and stops there. Standing it takes gamepad Start (or /gait/initialize).

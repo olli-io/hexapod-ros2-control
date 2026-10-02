@@ -17,7 +17,7 @@ Config is read from `hexa_description`'s share directory: `hardware.yaml`
 with `<param name="config_path">` / `<param name="calibration_path">`. On the
 robot, `~/hexa-robot/servo_calibration.yaml` is bind-mounted over the image's
 copy, so calibration is per-robot and survives image updates
-(`docs/robot-environment.md` §5a).
+(`docs/robot-environment.md` §3).
 
 ## Seams
 
@@ -79,6 +79,19 @@ Undervoltage policy lives in the locomotion supervisor
 (`shared/motion_core/supervisor.hpp`), published on `/hardware/undervoltage`
 (`std_msgs/UInt8`, 0–3). This node acts on rung 1 (buzzer) and rung 3 (sticky
 relay-off latch, reset only by restarting the process).
+
+The ladder:
+
+- **rung 1 — warn.** `undervolt` tune and fault LED cadence. Still drivable.
+- **rung 2 — fold.** Gait command zeroed, fold queued, rail cut once parked.
+- **rung 3 — cutoff.** Rail cut at once and latched. Cleared only by a power
+  cycle; `~/reload_config` is refused from rung 2 up.
+
+It only escalates: a cut rail unloads the pack and the voltage rebounds.
+Thresholds are `battery:` in `hardware.yaml` and ship **disabled** (`0.0`)
+because the Servo 2040's divider is uncalibrated. Measure the pack against
+`~/battery_state`, then set all three in descending order (codegen rejects a
+mis-ordered ladder).
 
 ## Threading
 

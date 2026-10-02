@@ -57,7 +57,7 @@ Host runs `systemd/network-mode.sh` and owns the mode, SSID and password, so
 the node sends `toggle` and renders what comes back. The token is a per-process
 nonce so a stale reply is never read as an ack. Ends: host `result=`, no ack
 within `network_ack_timeout_s` (units not installed), or `network_timeout_s`.
-Inert until `./hexa robot install-network`. See `docs/robot-environment.md` §14.
+Inert until `./hexa robot install-network`. See `docs/robot-environment.md` §6.
 
 ## Layout
 

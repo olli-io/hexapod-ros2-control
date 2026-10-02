@@ -35,12 +35,34 @@ PyYAML). `test_package_purity.py` enforces this.
 
 Adding an event is one line in each file, no code.
 
+To audition an RTTTL string on the Pi without editing anything:
+
+```
+cd ~/hexa-robot
+sudo PYTHONPATH=. python3 -m hexa_buzzer.player --rtttl "coin:d=4,o=6,b=200:16b5,2e"
+```
+
+Each tune carries its own `b=` (tempo). `--pwm-dev` and `--channel` select a
+different block or pin.
+
 ## PWM access
 
 The container gets the PWM tree as a writable bind mount at `/pwm`
 (`docker-compose.buzzer.yaml`). `scripts/robot.sh` adds the overlay only when
 the host has the tree. Wiring and `config.txt` overlay: `docs/robot-environment.md`
-§15.
+(Hardware, §1).
+
+`BUZZER_PWM` in `.env` overrides the source directory. The default is the Pi 5's
+RP1 PWM0; a Pi 4 has the block at a different platform address. Channel 0 is
+GPIO12 on both. The block is found by platform address, not `pwmchipN`, because
+that number is kernel probe order.
+
+A missing source would stop the container from starting, so `up` prints which
+case it found:
+
+```
+>> Buzzer PWM at /sys/bus/platform/devices/1f00098000.pwm/pwm -> /pwm
+```
 
 ## Topic
 

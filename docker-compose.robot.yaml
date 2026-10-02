@@ -7,71 +7,31 @@ services:
     ipc: host
     restart: unless-stopped
     working_dir: /workspace
-    # Supplementary GIDs for the container user. INPUT_GID forwards the Pi's
-    # `input` group so joy_node can read /dev/input/event* (the joystick).
+    # See docs/robot-environment.md for the GID values.
     group_add:
       - "${INPUT_GID:-994}"
-      # SPI + GPIO groups so hexa_display can open the OLED bus and control
-      # lines. Set SPI_GID / GPIO_GID in .env from the Pi's actual group
-      # IDs (`getent group spi|gpio`); see docs/robot-environment.md.
       - "${SPI_GID:-999}"
       - "${GPIO_GID:-993}"
-    # Process-level environment for the ROS stack, sourced from .env (the same
-    # file deploy seeds from .env.robot.sample, at ~/hexa-robot/.env). Any
-    # ROS-facing var added there flows into the container without editing this
-    # file. Optional so compose still parses on a host without a .env. Note the
-    # device / GID vars below stay as ${...} interpolations by necessity —
-    # they configure the container itself at create time, not the process env —
-    # and env changes still require a container recreate (`hexa robot restart`),
-    # never a bare `docker compose restart`.
     env_file:
       - path: .env
         required: false
-    # Servo 2040 on the Pi's header UART (GPIO14/15). SERVO_DEVICE defaults to
-    # the Pi 5 name for those pins, /dev/ttyAMA0 (RP1 uart0, needs
-    # dtparam=uart0=on); on a Pi 4 set it to /dev/ttyS0, the mini-UART, since
-    # that model's ttyAMA0 is owned by the Bluetooth the gamepad pairs over.
-    # See docs/robot-environment.md. The container-side path is fixed, so
-    # hardware.yaml names one node whatever the host calls it.
+    # Pi 4: SERVO_DEVICE=/dev/ttyS0 (see docs/robot-environment.md).
     devices:
       - "${SERVO_DEVICE:-/dev/ttyAMA0}:/dev/ttyAMA0"
-      # SH1122 OLED face: hexa_display renders the eyes directly from the Pi
-      # over spidev + the kernel GPIO character device. Requires
-      # dtparam=spi=on on the Pi; see docs/robot-environment.md.
       - "${SPI_DEVICE:-/dev/spidev0.0}:/dev/spidev0.0"
       - "${GPIO_CHIP:-/dev/gpiochip0}:/dev/gpiochip0"
-    # Joystick passthrough (same shape as the dev compose): bind /dev/input
-    # rshared so hot-plugged controllers become visible without restarting
-    # the container; device_cgroup_rules grants char-device access.
     volumes:
+      # rshared bind, not `devices:`, so hot-plugged joysticks appear.
       - type: bind
         source: /dev/input
         target: /dev/input
         bind:
           propagation: rshared
       - ./log:/workspace/log
-      # Runtime-tuning overlay, mounted over the image's baked copy so an edit
-      # to ~/hexa-robot/tuning.yaml applies on a bare `hexa robot restart` — the
-      # node re-reads it at startup, no image rebuild and no container recreate.
-      # Every deploy refreshes this file from the repo copy (shipped alongside
-      # as tuning.yaml.default), backing up an on-Pi edit as tuning.yaml.bak —
-      # so the mount can never pin a stale schema. If it's absent the node
-      # falls through to the packages' base YAML defaults.
       - ./tuning.yaml:/workspace/install/share/hexa_description/config/tuning.yaml:ro
-      # Per-robot servo calibration, mounted the same way but seeded once: a
-      # deploy never overwrites it, because the repo cannot know this robot's
-      # pulse widths. Edit, then `hexa robot restart`.
       - ./servo_calibration.yaml:/workspace/install/share/hexa_description/config/servo_calibration.yaml:ro
     device_cgroup_rules:
       - 'c 13:* rmw'
-    # Real-time scheduling for the controller_manager control thread. Docker
-    # hands a container RLIMIT_RTPRIO 0, so ros2_control_node's
-    # sched_setscheduler(SCHED_FIFO) is refused ("Could not enable FIFO RT
-    # scheduling policy: Operation not permitted") and the 200 Hz cycle competes
-    # with every other thread for CFS timeslices. A non-zero rtprio limit is
-    # enough on its own — Linux lets an unprivileged process take SCHED_FIFO up
-    # to its own limit, no capability needed. The priority actually used is
-    # controller_manager's `thread_priority` (50) in
-    # hexa_bringup/config/ros2_controllers.yaml; this only raises the ceiling.
+    # Lets ros2_control_node use SCHED_FIFO.
     ulimits:
       rtprio: 99

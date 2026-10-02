@@ -238,6 +238,16 @@ selection topics both teleops already read. So the Mode view works while a contr
 the point of it — and its `STAND` overlay is the only stand a webapp can reach
 then.
 
+## Hotspot
+
+In hotspot mode (`docs/robot-environment.md` §6) the AP resolves every hostname
+to the robot, and the server sends any path that is not one of its files to the
+controller page. The DHCP lease advertises the controller URL (RFC 8910) and
+connectivity probes go unanswered, so a joining phone opens the controller as a
+captive portal. That popup is a sandboxed web view with no address bar;
+dismissing it drops the connection. "Open in browser", or `control.hexa`, moves
+the controller to the real browser. `control.hexa` exists only on the hotspot.
+
 ## HTTP endpoints
 
 Alongside `/ws`:
