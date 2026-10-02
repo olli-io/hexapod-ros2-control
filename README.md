@@ -2,7 +2,10 @@
 
 ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 
-Companion repo: [hexapod-servo2040-driver](https://github.com/olli-io/hexapod-servo2040-driver) — Pimoroni Servo 2040 firmware.
+## Companion repositories
+
+- [hexapod-build](https://github.com/olli-io/hexapod-build) — main repo.
+- [hexapod-servo2040-driver](https://github.com/olli-io/hexapod-servo2040-driver) — Pimoroni Servo 2040 firmware.
 
 ## Hardware
 
