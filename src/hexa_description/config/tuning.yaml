@@ -139,7 +139,7 @@ gait_node:
     # the body across into the next triangle, so it is worth far more of the top
     # speed. Applied on the leg set, not the gait name — every derived velocity
     # cap keys off it too.
-    quadruped_swing_phase_margin: 0.25
+    quadruped_swing_phase_margin: 0.30
 
     # Split of an over-limit command between turning and moving. 0.5 = equal.
     yaw_bias: 0.6
@@ -238,7 +238,7 @@ posture_node:
     #quad mode support centroid body movement tuning
     support_shift_gain: 0.45
     support_shift_lead: 0.28
-    support_shift_tau: 0.14
+    support_shift_tau: 0.18
 
     # Selectable in ANIMATION mode. Comma-separated entries combine several.
     animation_mode_animations:
