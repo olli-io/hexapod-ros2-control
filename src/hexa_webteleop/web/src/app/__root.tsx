@@ -9,6 +9,7 @@ import NavBar from "../components/NavBar";
 import BusyOverlay from "../components/BusyOverlay";
 import { controllerActive, useTeleop } from "../providers/TeleopProvider";
 import { VIEW_PATHS } from "../utils/views";
+import { useKeepAwake } from "../hooks/useKeepAwake";
 
 // The shell every route renders inside: the tab bar, which never leaves the
 // screen (so no view carries a back arrow), and the busy overlay, which is the
@@ -20,6 +21,10 @@ function RootLayout() {
   const { state, connected, linkDown } = useTeleop();
   const navigate = useNavigate();
   const router = useRouter();
+
+  // Every view is watched for minutes with no taps, which every phone reads
+  // as an idle screen.
+  useKeepAwake();
 
   // With the socket down the control area commands nothing and the preset rows
   // report a stale robot, so the bar keeps only the one tab that still works:

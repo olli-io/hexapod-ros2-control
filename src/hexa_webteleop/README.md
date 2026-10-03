@@ -378,9 +378,10 @@ pull-to-refresh mid-walk, and an ordinary page does not stop the phone dimming.
 - **`viewport-fit=cover` plus `env(safe-area-inset-*)`** in `styles.css`, so the
   tab bar does not sit under the notch or the home indicator. The insets are
   `0px` in an ordinary tab.
-- **`hooks/useKeepAwake.ts`**, called by the Control route and released with it.
-  Prefers `navigator.wakeLock`, falls back to a muted looping video inlined as a
-  data URI. Every failure path is a silent no-op.
+- **`hooks/useKeepAwake.ts`**, called by the root layout, so it holds on every
+  route. Prefers `navigator.wakeLock`, falls back to a muted looping video
+  inlined as a data URI and stretched to the viewport under the UI (Chrome
+  ignores a tiny or transparent one). Every failure path is a silent no-op.
 
 **There is no service worker, and one would not work.** Service workers register
 only in a secure context, and every address the robot answers on is plain HTTP.

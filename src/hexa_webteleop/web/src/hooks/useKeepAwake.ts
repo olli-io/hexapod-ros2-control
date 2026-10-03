@@ -22,9 +22,8 @@ import { useEffect } from "react";
 
 /** 1 s of flat --bg, H.264 baseline — the smallest clip both iOS and Chrome
  *  will decode. 2x2 rather than 1x1 because H.264's 4:2:0 chroma subsampling
- *  needs even dimensions and x264 refuses an odd one outright; the element is
- *  sized to a single CSS pixel below, so what reaches the screen is one pixel
- *  either way, painted the colour of the page behind it.
+ *  needs even dimensions and x264 refuses an odd one outright. The element is
+ *  stretched to the viewport below, painted the colour of the page.
  *
  *  Inline rather than a file so `dist/` stays flat and the bundle stays a
  *  single page; at ~2 kB it costs less than the request would. Regenerate with:
@@ -44,9 +43,8 @@ type WakeLockNavigator = {
 
 /** Hold the screen awake for as long as the calling component is mounted.
  *
- *  Mounted-scoped on purpose: the Control route already releases every held
- *  function on the way out, and the screen is one more thing that should not
- *  stay held once nothing is being driven.
+ *  Called from the root layout, so it holds on every route for the life of
+ *  the page.
  */
 export function useKeepAwake(): void {
   useEffect(() => {
@@ -88,11 +86,12 @@ export function useKeepAwake(): void {
       el.loop = true;
       el.playsInline = true;
       el.setAttribute("aria-hidden", "true");
-      // Present and playing, but out of the way of a layout built on flex
-      // boxes and a full-screen canvas. `display: none` would let the browser
-      // treat it as inert, which is the one thing that must not happen.
+      // Viewport-sized and opaque, under the whole UI: Chrome holds the
+      // screen only for a video it counts as visible and large enough, so a
+      // 1 px or transparent clip plays without effect. The clip is --bg, so
+      // nothing shows. `display: none` would make it inert.
       el.style.cssText =
-        "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none";
+        "position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;z-index:-1;pointer-events:none";
       document.body.appendChild(el);
       video = el;
       void el.play().catch(() => {});
