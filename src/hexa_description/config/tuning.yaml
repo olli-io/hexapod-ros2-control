@@ -67,13 +67,13 @@ gait_node:
           body_height: 0.055
           front:
             tip_reach: 0.138
-            coxa_deg: 10
+            coxa_deg: 15
           middle:
             tip_reach: 0.138
             coxa_deg: 0
           rear:
             tip_reach: 0.138
-            coxa_deg: 10
+            coxa_deg: 15
         stride_length: 0.11
         stride_length_radial: 0.085
         min_swing_time: 0.5
