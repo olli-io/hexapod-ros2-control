@@ -32,6 +32,10 @@ std::shared_ptr<const Animation> make_animation(std::string_view name,
   if (name == "support_shift") {
     return std::make_shared<SupportShift>(p.support_shift_gain);
   }
+  if (name == "swing_dip") {
+    return std::make_shared<SwingDip>(p.swing_dip_heave,
+                                      p.swing_dip_roll_deg * kDegToRad);
+  }
   if (name == "gait_bounce") {
     return std::make_shared<GaitBounce>(p.gait_bounce_arc_height,
                                         p.gait_bounce_step_height_ref);
@@ -159,6 +163,41 @@ std::optional<float> max_swing_lift_z(
   return lift > 0.0f ? lift : 0.0f;
 }
 
+std::optional<std::pair<float, float>> swing_dip_signal(
+    const std::map<std::string, gait::LegOutput>& legs, float swing_end,
+    float extension) {
+  if (swing_end <= 0.0f) {
+    return std::nullopt;
+  }
+  const float ext = std::max(0.0f, extension) * swing_end;
+  const float window = swing_end + 2.0f * ext;
+  float sum = 0.0f;
+  float lateral = 0.0f;
+  int n = 0;
+  for (const auto& [name, leg] : legs) {
+    if (leg.parked) {
+      continue;
+    }
+    ++n;
+    // Phase on a line through lift-off: the run-up before it reads negative.
+    float p = leg.phase;
+    if (leg.stance && p > swing_end + ext) {
+      p -= 1.0f;
+    }
+    const float u = (p + ext) / window;
+    if (u <= 0.0f || u >= 1.0f) {
+      continue;
+    }
+    const float bump = 0.5f * (1.0f - std::cos(2.0f * kPi * u));
+    sum += bump;
+    lateral += leg.foot_target.y >= 0.0f ? bump : -bump;
+  }
+  if (n == 0) {
+    return std::nullopt;
+  }
+  return std::make_pair(sum / (0.5f * static_cast<float>(n)), lateral);
+}
+
 std::optional<std::pair<float, float>> lpf_step_xy(
     std::optional<std::pair<float, float>> prev,
     std::optional<std::pair<float, float>> raw, float tau, float dt) {
@@ -276,7 +315,8 @@ PostureController::PostureController(const config::PostureConfig& p)
       centroid_tau_(p.support_centroid_tau),
       swing_lift_tau_(p.swing_lift_tau),
       support_shift_lead_(p.support_shift_lead),
-      support_shift_tau_(p.support_shift_tau) {
+      support_shift_tau_(p.support_shift_tau),
+      swing_dip_extension_(p.swing_dip_extension) {
   pose_smoother_ = PoseSmoother(PoseSmootherConfig{
       p.pose_filter_tau, p.pose_filter_damping_ratio,
       p.pose_filter_snap_tol_linear, p.pose_filter_snap_tol_angular});
@@ -331,7 +371,7 @@ BodyPose PostureController::update(
     const std::map<std::string, gait::LegOutput>& legs, float master_phase,
     bool walking, gait::EngineState state, std::string_view gait_name,
     gait::LegSet leg_set, float dt, float t,
-    std::optional<BodyPose> gesture_pose) {
+    std::optional<BodyPose> gesture_pose, float swing_end) {
   // Hold the previous raw through a degenerate frame.
   if (auto raw = stance_centroid_xy(legs)) {
     latest_raw_centroid_ = raw;
@@ -375,6 +415,8 @@ BodyPose PostureController::update(
   ctx.anticipated_support_xy = anticipated_support_xy_;
   ctx.swing_lift_z = swing_lift_z_;
   ctx.master_phase = gait::pymod(master_phase, 1.0f);
+  // Unfiltered: it is already a smooth function of the phases.
+  ctx.swing_dip = swing_dip_signal(legs, swing_end, swing_dip_extension_);
 
   // Selected on the LEG SET, not the gait name: what makes the support shift
   // mandatory is having four feet, and a string compare would put a safety

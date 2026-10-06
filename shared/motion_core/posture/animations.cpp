@@ -69,6 +69,19 @@ BodyPose GaitBounce::eval(const AnimationContext& ctx) const {
   return BodyPose{0.0f, 0.0f, arc_height_ * ratio};
 }
 
+BodyPose SwingDip::eval(const AnimationContext& ctx) const {
+  if (!ctx.walking || !ctx.swing_dip.has_value()) {
+    return IDENTITY;
+  }
+  const auto [heave, lateral] = *ctx.swing_dip;
+  BodyPose out;
+  out.z = -heave_ * heave;
+  // Weighted by the heave too, so a lone foot up (ripple) leans a third of a
+  // tripod. Negative roll lowers +y, the left.
+  out.roll = -roll_ * lateral * heave;
+  return out;
+}
+
 BodyPose VerticalBodyRoll::eval(const AnimationContext& ctx) const {
   if (!ctx.walking || !ctx.master_phase.has_value()) {
     return IDENTITY;

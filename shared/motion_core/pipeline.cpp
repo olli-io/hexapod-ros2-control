@@ -433,7 +433,8 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
       out, engine_->master_phase(), walking, st, engine_->strategy_name(),
       engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f,
       gesture.has_value() ? std::optional<hexa::posture::BodyPose>(gesture->body)
-                          : std::nullopt);
+                          : std::nullopt,
+      engine_->swing_end());
 
   r.unreachable = compose_gait(out, body_pose);
   // What compose_gait actually applied, for next tick's neutral-pose check.

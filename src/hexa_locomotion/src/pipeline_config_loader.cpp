@@ -556,6 +556,9 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.support_shift_gain = f(p["support_shift_gain"]);
   ps.support_shift_lead = f(p["support_shift_lead"]);
   ps.support_shift_tau = f(p["support_shift_tau"]);
+  ps.swing_dip_heave = f(p["swing_dip_heave"]);
+  ps.swing_dip_roll_deg = f(p["swing_dip_roll_deg"]);
+  ps.swing_dip_extension = f(p["swing_dip_extension"]);
   ps.gait_activation_slew_rate = f(p["gait_activation_slew_rate"]);
   ps.pose_filter_tau = f(p["pose_filter_tau"]);
   ps.pose_filter_damping_ratio = f(p["pose_filter_damping_ratio"]);

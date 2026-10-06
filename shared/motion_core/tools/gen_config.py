@@ -1324,6 +1324,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("support_shift_gain", pn["support_shift_gain"]),
         ("support_shift_lead", pn["support_shift_lead"]),
         ("support_shift_tau", pn["support_shift_tau"]),
+        # SwingDip: body drop and lean at a tripod's mid-swing, and how far
+        # past each end of the swing window the dip reaches.
+        ("swing_dip_heave", pn["swing_dip_heave"]),
+        ("swing_dip_roll_deg", pn["swing_dip_roll_deg"]),
+        ("swing_dip_extension", pn["swing_dip_extension"]),
         # Gait-animation crossfade (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
         # Spring/inertia smoother on the commanded body pose: tau = 1/omega_n,

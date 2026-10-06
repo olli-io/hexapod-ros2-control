@@ -33,7 +33,10 @@ hardware. The seams each caller supplies — input, config source, clock, output
   `quad_canter` — each a pure `(phase, stride, leg) → foot_target`.
 - **`posture/`** — `PostureController`: user body pose + animation stack →
   `BodyPose` offset. Animations are pure `AnimationContext → BodyPose`
-  (`breathing`, `gait_sway`, `support_shift`, `gait_bounce`, body rolls).
+  (`breathing`, `gait_sway`, `support_shift`, `swing_dip`, `gait_bounce`, body
+  rolls). `swing_dip` dips the body through each lift-off and raises it through
+  each touchdown, so the servo sag falls inside a deliberate motion; it scales
+  with the feet in the air, from `Engine::swing_end()`.
 - **`gesture/`** — keyframed leg + body motions played from a stand
   (`gestures.yaml`: `start`, `pose`, `hold` and `home` keyframes, a `pose`
   carrying the values). `keyframe` samples one track (`ease` smoothstep or a

@@ -251,6 +251,8 @@ class Engine {
 
   EngineState state() const { return state_; }
   float master_phase() const;
+  // Phase where the active strategy's swing ends: [0, swing_end) is swing.
+  float swing_end() const;
   // The leg set the robot is standing on. While FOLDED the strategy may already
   // name the set the next start_initialize() will stand up on.
   LegSet leg_set() const { return leg_set_; }

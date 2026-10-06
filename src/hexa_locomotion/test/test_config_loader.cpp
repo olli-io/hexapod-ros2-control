@@ -179,6 +179,9 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.support_shift_gain, bp.support_shift_gain, kTol);
   EXPECT_NEAR(lp.support_shift_lead, bp.support_shift_lead, kTol);
   EXPECT_NEAR(lp.support_shift_tau, bp.support_shift_tau, kTol);
+  EXPECT_NEAR(lp.swing_dip_heave, bp.swing_dip_heave, kTol);
+  EXPECT_NEAR(lp.swing_dip_roll_deg, bp.swing_dip_roll_deg, kTol);
+  EXPECT_NEAR(lp.swing_dip_extension, bp.swing_dip_extension, kTol);
   EXPECT_NEAR(lp.gait_activation_slew_rate, bp.gait_activation_slew_rate, kTol);
   EXPECT_NEAR(lp.pose_filter_tau, bp.pose_filter_tau, kTol);
   EXPECT_NEAR(lp.pose_filter_damping_ratio, bp.pose_filter_damping_ratio, kTol);

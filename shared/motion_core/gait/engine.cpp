@@ -343,6 +343,10 @@ float Engine::master_phase() const {
   return clock_->master();
 }
 
+float Engine::swing_end() const {
+  return swing_end_phase(strategy_->duty_factor(), swing_margin());
+}
+
 std::tuple<float, float, float> Engine::shape_reversal(
     float dt, std::pair<float, float> v_body_xy, float omega_z) {
   const float swing_end =

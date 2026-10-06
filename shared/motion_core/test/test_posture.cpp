@@ -56,7 +56,8 @@ BodyPose walk_until_settled(PostureController& posture) {
   float t = 0.0f;
   for (int i = 0; i < 400; ++i) {
     out = posture.update(legs, 0.25f, /*walking=*/true, EngineState::GAIT,
-                         "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t);
+                         "tripod", hexa::gait::LegSet::HEXAPOD, kDt, t,
+                         std::nullopt, /*swing_end=*/0.44f);
     t += kDt;
   }
   return out;
@@ -85,8 +86,7 @@ TEST(PostureGaitAnimationSwitch, DisabledHoldsBodyStillWhileWalking) {
 TEST(PostureGaitAnimationSwitch, EnabledMovesTheBodyWhileWalking) {
   PostureController posture{with_switch(true)};
   EXPECT_FALSE(is_identity(walk_until_settled(posture)))
-      << "the default stack (gait_sway + gait_bounce) must still animate when "
-         "the switch is on";
+      << "the default stack must still animate when the switch is on";
 }
 
 // The switch governs only the DEFAULT stack's implicit gait animations. An
@@ -967,3 +967,104 @@ TEST(PostureGesture, GesturePoseSumsWithTheUserPoseUnderTheClamp) {
       hexa::gait::LegSet::HEXAPOD, kDt, 0.0f, std::nullopt);
   EXPECT_NEAR(without.pitch, 0.0f, 1e-6f);
 }
+
+namespace {
+
+// ── SwingDip ──
+
+// Six feet on their sides of the body, all in stance at phase `phase` unless
+// `swinging` names them.
+std::map<std::string, LegOutput> dip_legs(float swing_end,
+                                          std::vector<std::string> swinging,
+                                          float swing_phase) {
+  std::map<std::string, LegOutput> legs;
+  for (const auto& name : hexa::gait::LEG_NAMES) {
+    LegOutput leg;
+    const bool left = name[0] == 'l';
+    leg.foot_target = hexa::Vec3{0.0f, left ? 0.12f : -0.12f, -0.06f};
+    const bool up = std::find(swinging.begin(), swinging.end(), name) !=
+                    swinging.end();
+    leg.stance = !up;
+    // Grounded legs sit mid-stance, outside every dip window.
+    leg.phase = up ? swing_phase : 0.5f * (swing_end + 1.0f);
+    legs[name] = leg;
+  }
+  return legs;
+}
+
+constexpr float kTripodSwingEnd = 0.5f * (1.0f - 0.12f);
+constexpr float kRippleSwingEnd = (1.0f / 6.0f) * (1.0f - 0.12f);
+
+TEST(SwingDip, TripodMidSwingIsTheFullDipLeaningLeft) {
+  const auto legs = dip_legs(kTripodSwingEnd, {"l_front", "r_middle", "l_rear"},
+                             0.5f * kTripodSwingEnd);
+  const auto sig =
+      hexa::posture::swing_dip_signal(legs, kTripodSwingEnd, 0.25f);
+  ASSERT_TRUE(sig.has_value());
+  EXPECT_NEAR(sig->first, 1.0f, 1e-5f);
+  EXPECT_NEAR(sig->second, 1.0f, 1e-5f);
+
+  hexa::posture::AnimationContext ctx;
+  ctx.walking = true;
+  ctx.swing_dip = sig;
+  const BodyPose out = hexa::posture::SwingDip(0.008f, 0.035f).eval(ctx);
+  EXPECT_NEAR(out.z, -0.008f, 1e-6f);
+  // Negative roll lowers the left (+y), the side with two feet up.
+  EXPECT_NEAR(out.roll, -0.035f, 1e-6f);
+}
+
+TEST(SwingDip, RippleDipsAThirdOfATripod) {
+  const auto legs =
+      dip_legs(kRippleSwingEnd, {"r_front"}, 0.5f * kRippleSwingEnd);
+  const auto sig =
+      hexa::posture::swing_dip_signal(legs, kRippleSwingEnd, 0.25f);
+  ASSERT_TRUE(sig.has_value());
+  EXPECT_NEAR(sig->first, 1.0f / 3.0f, 1e-5f);
+  EXPECT_NEAR(sig->second, -1.0f, 1e-5f);
+}
+
+TEST(SwingDip, AllFeetDownIsStill) {
+  const auto legs = dip_legs(kTripodSwingEnd, {}, 0.0f);
+  const auto sig =
+      hexa::posture::swing_dip_signal(legs, kTripodSwingEnd, 0.25f);
+  ASSERT_TRUE(sig.has_value());
+  EXPECT_NEAR(sig->first, 0.0f, 1e-6f);
+  EXPECT_NEAR(sig->second, 0.0f, 1e-6f);
+}
+
+// Lowering through lift-off, rising through touchdown, and no step anywhere in
+// a tripod cycle.
+TEST(SwingDip, DownThroughLiftOffUpThroughTouchdownAndContinuous) {
+  const auto heave_at = [](float master) {
+    auto legs = dip_legs(kTripodSwingEnd, {}, 0.0f);
+    for (auto& [name, leg] : legs) {
+      const bool a = name == "l_front" || name == "r_middle" || name == "l_rear";
+      leg.phase = hexa::gait::pymod(master + (a ? 0.0f : 0.5f), 1.0f);
+      leg.stance = leg.phase >= kTripodSwingEnd;
+    }
+    return hexa::posture::swing_dip_signal(legs, kTripodSwingEnd, 0.25f)
+        ->first;
+  };
+  constexpr float kStep = 1e-3f;
+  // Lift-off of set A at master 0, its touchdown at kTripodSwingEnd.
+  EXPECT_GT(heave_at(kStep), heave_at(-kStep));
+  EXPECT_LT(heave_at(kTripodSwingEnd + kStep), heave_at(kTripodSwingEnd - kStep));
+  float prev = heave_at(0.0f);
+  for (float m = kStep; m < 1.0f; m += kStep) {
+    const float h = heave_at(m);
+    EXPECT_LT(std::fabs(h - prev), 0.02f) << "master " << m;
+    prev = h;
+  }
+}
+
+TEST(SwingDip, ParkedLegsDoNotCount) {
+  auto legs = dip_legs(kTripodSwingEnd, {"l_front"}, 0.5f * kTripodSwingEnd);
+  legs["l_middle"].parked = true;
+  legs["r_middle"].parked = true;
+  // One foot of four up: heave 1 / (4 / 2).
+  EXPECT_NEAR(
+      hexa::posture::swing_dip_signal(legs, kTripodSwingEnd, 0.25f)->first,
+      0.5f, 1e-5f);
+}
+
+}  // namespace

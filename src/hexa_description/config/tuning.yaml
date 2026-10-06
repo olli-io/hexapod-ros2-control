@@ -105,7 +105,7 @@ gait_node:
         min_swing_time: 0.75
         max_swing_time: 1.00
         step_height: 0.065
-        swing_phase_margin: 0.12
+        swing_phase_margin: 0.08
 
       # The four corners only. The middle pair does not stand in this preset:
       # it is held at geometry.yaml's folded_pose, so there is no middle entry
@@ -222,12 +222,22 @@ posture_node:
   ros__parameters:
     # Master switch for the default stack's gait-active body movement; an
     # explicitly selected animation mode is exempt. Experimental.
-    gait_body_animations_enabled: false
+    gait_body_animations_enabled: true
 
+    # Also available: gait_sway, gait_bounce.
     enabled_animations:
       - still
-      - gait_sway
-      - gait_bounce
+      - swing_dip
+
+    # SwingDip: lowers the body through lift-off and raises it through
+    # touchdown, so the servo sag at both falls inside a larger, deliberate
+    # motion. Scales with the feet in the air: tripod moves most. heave and
+    # roll are at a tripod's mid-swing; roll leans down toward the side with
+    # more feet up. extension widens the dip past both ends of the swing, as a
+    # share of the swing window, so the body is already moving at lift-off.
+    swing_dip_heave: 0.008
+    swing_dip_roll_deg: 2.0
+    swing_dip_extension: 0.25
 
     # GaitSway: shifts the body sideways to stay over the feet. gain is the
     # physical strength (1.0 = balanced); strength is a [0, 1] dial on top.

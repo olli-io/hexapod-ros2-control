@@ -34,6 +34,9 @@ struct AnimationContext {
   // the stance feet weighted by how long each has left before lift-off. Always
   // strictly inside the current support polygon (see anticipated_support_xy).
   std::optional<std::pair<float, float>> anticipated_support_xy = std::nullopt;
+  // {heave, lateral} from swing_dip_signal: how many feet are up, and on which
+  // side.
+  std::optional<std::pair<float, float>> swing_dip = std::nullopt;
 };
 
 class Animation {
@@ -96,6 +99,23 @@ class GaitBounce : public Animation {
  private:
   float arc_height_;       // max body lift (m) at swing apex
   float step_height_ref_;  // reference foot swing apex (m) for normalisation
+};
+
+// Dips the body while feet are up and lifts it back as they land, so the
+// servos' sag at lift-off and its release at touchdown fall inside a larger
+// deliberate motion instead of showing as a drop and a bump. Lowers through
+// lift-off, rises through touchdown, and leans down toward the side with more
+// feet up. Scales with the feet in the air, so tripod moves most and ripple
+// least, with no gait-name test.
+class SwingDip : public Animation {
+ public:
+  explicit SwingDip(float heave = 0.008f, float roll = 0.035f)
+      : heave_(heave), roll_(roll) {}
+  BodyPose eval(const AnimationContext& ctx) const override;
+
+ private:
+  float heave_;  // m, body drop at a tripod's mid-swing
+  float roll_;   // rad, lean at a tripod's mid-swing
 };
 
 // Heave (z) + pitch, phase-locked, tripod-only.

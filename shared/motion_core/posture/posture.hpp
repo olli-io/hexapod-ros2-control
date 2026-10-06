@@ -47,6 +47,19 @@ std::optional<std::pair<float, float>> anticipated_support_xy(
 std::optional<float> max_swing_lift_z(
     const std::map<std::string, gait::LegOutput>& legs);
 
+// How far the walk has the body's feet in the air, for SwingDip. Each leg adds a
+// raised-cosine bump over its swing window, widened by `extension` (a share of
+// that window) at both ends so it starts before lift-off and ends after
+// touchdown. Returns {heave, lateral}:
+//
+//   heave   = sum(bump) / (legs / 2)       1 at a tripod's mid-swing
+//   lateral = sum(bump * sign(foot y))     +1 for one more left foot up
+//
+// Parked legs do not count. nullopt with no unparked leg or swing_end <= 0.
+std::optional<std::pair<float, float>> swing_dip_signal(
+    const std::map<std::string, gait::LegOutput>& legs, float swing_end,
+    float extension);
+
 // One first-order low-pass step, alpha = dt / (tau + dt). prev=nullopt seeds
 // from raw (no startup transient); raw=nullopt holds prev.
 std::optional<std::pair<float, float>> lpf_step_xy(
@@ -125,7 +138,8 @@ class PostureController {
                   float master_phase, bool walking, gait::EngineState state,
                   std::string_view gait_name, gait::LegSet leg_set, float dt,
                   float t,
-                  std::optional<BodyPose> gesture_pose = std::nullopt);
+                  std::optional<BodyPose> gesture_pose = std::nullopt,
+                  float swing_end = 0.0f);
 
   const PoseLimits& limits() const { return limits_; }
 
@@ -160,6 +174,7 @@ class PostureController {
   float swing_lift_tau_;
   float support_shift_lead_;
   float support_shift_tau_;
+  float swing_dip_extension_;
 };
 
 }  // namespace hexa::posture
