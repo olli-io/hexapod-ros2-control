@@ -96,17 +96,18 @@ drop the socket. Both sticks re-centre on the way in.
   the new preset walks it, and the new preset's `default_gait` where it does not.
 - **The lit preset tile comes from `/gait/preset` and nothing else** — never the
   tap, never the latched `/cmd_preset`, which keeps a refused id forever. Before
-  the first report no tile is lit. During the ~2 s change the current tile stays
-  filled, the target goes dashed, and every tile is inert.
+  the first report no tile is lit. During the ~2 s change the `STAND` overlay
+  covers the view with a *Switching preset* spinner and the target's label.
 - **On the belly a whole-view `STAND` overlay covers the Mode and Gesture
   views**, one button and nothing else, since neither view can do anything until
   the robot stands and the stand itself chooses the leg set. It asks for the
   same `init` function the Control view's stand does, then carries the
-  *Standing up* spinner in the button's place. It is drawn inside the view, not
+  *Standing up* spinner in the button's place. A preset change in flight takes
+  the view the same way, with a *Switching preset* spinner. It is drawn inside the view, not
   over the tab bar, so the other tabs stay reachable. The mode box's own button
   is therefore `FOLD` alone, seen only from a stand. Both are **red**, like the
   Control view's stand/fold corner. Shared component:
-  `web/src/components/StandOverlay.tsx`.
+  `web/src/components/StateOverlay.tsx`.
 - The gait grid shows **every declared gait**; the ones the preset in force does
   not walk are dimmed in place, so the row never changes shape. Names come from
   the presets' own `gait_cycle`s, shipped in the `init` message. Live on the

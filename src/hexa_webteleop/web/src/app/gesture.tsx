@@ -1,6 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import Spinner from "../components/Spinner";
-import StandOverlay from "../components/StandOverlay";
+import StateOverlay from "../components/StateOverlay";
 import { useModal } from "../providers/ModalProvider";
 import { useTeleop } from "../providers/TeleopProvider";
 import { buzz, presetLabel } from "../utils/labels";
@@ -67,10 +66,10 @@ function GestureRoute() {
         </div>
       </section>
 
-      {/* STAND across the view on the belly, and the stand ladder's spinner
-          while it runs — the same overlay the Mode view carries, so the fix
-          is here rather than a tab away. */}
-      <StandOverlay />
+      {/* STAND across the view on the belly, and the spinner while the stand
+          ladder or a preset change runs — the same overlay the Mode view
+          carries, so the fix is here rather than a tab away. */}
+      <StateOverlay />
 
       {/* Off the gesture preset the view cannot be used, so instead of a box of
           dimmed tiles the operator meets the fix: the switch to that preset,
@@ -78,8 +77,8 @@ function GestureRoute() {
           way out is the Mode view. The switch itself is the Mode view's own
           request, so it lands under the same rules: refused mid-walk, pending
           until /gait/preset reports it. Hidden on the belly, where the STAND
-          overlay has the view, and while the switch is in flight, where the
-          spinner below takes over. */}
+          overlay has the view, and while the switch is in flight, where its
+          spinner takes over. */}
       {!onGesturePreset && !folded && pending === null && (
         <Modal id="gesture-preset">
           <p>Gestures need the {gesturePresetLabel} preset</p>
@@ -106,15 +105,6 @@ function GestureRoute() {
               Mode view
             </button>
           </div>
-        </Modal>
-      )}
-
-      {/* The switch in flight, said the way the Mode view says it. */}
-      {pending !== null && (
-        <Modal id="preset-switching">
-          <Spinner />
-          <p>Switching preset</p>
-          <p className="dialog-sub">{presetLabel(state.presets, pending)}</p>
         </Modal>
       )}
 

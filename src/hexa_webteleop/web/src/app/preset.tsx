@@ -1,11 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { CornerRightDown } from "lucide-react";
 import { MODES, modeLocked } from "../components/ModeStack";
-import Spinner from "../components/Spinner";
-import StandOverlay from "../components/StandOverlay";
+import StateOverlay from "../components/StateOverlay";
 import StatusBar from "../components/StatusBar";
 import { useTap } from "../hooks/useTap";
-import { useModal } from "../providers/ModalProvider";
 import { animationAvailable, useTeleop } from "../providers/TeleopProvider";
 import { animationLabel, buzz, gaitLabel, presetLabel } from "../utils/labels";
 
@@ -13,7 +11,6 @@ export const Route = createFileRoute("/preset")({ component: PresetRoute });
 
 function PresetRoute() {
   const { state, send } = useTeleop();
-  const Modal = useModal();
   const tap = useTap(send);
 
   const folded = state.gaitState === "folded";
@@ -24,8 +21,6 @@ function PresetRoute() {
   // for a while or is refused outright.
   const standing = state.gaitState === "stand";
   const pending = state.pendingPreset;
-  // The label of the preset in flight, for the modal below.
-  const pendingLabel = presetLabel(state.presets, pending);
   const animationAllowed = animationAvailable(state);
   const animating = state.mode === "animation";
 
@@ -251,26 +246,9 @@ function PresetRoute() {
         </div>
       </div>
 
-      {/* Every tile on the view is already inert while a change is in flight,
-          so the modal takes nothing away — it says why, in one place, instead
-          of leaving the operator to find the word under one dashed tile. Up
-          only for the couple of seconds the move takes: the node clears the
-          pending preset on the engine's report, and expires it on its own
-          deadline if none arrives. Written here, where the state that raises it
-          lives, but rendered above every view — this box is a grid in
-          landscape, which sizes a fixed child to a grid area instead of the
-          screen. */}
-      {pending !== null && (
-        <Modal id="preset-switching">
-          <Spinner />
-          <p>Switching preset</p>
-          <p className="dialog-sub">{pendingLabel}</p>
-        </Modal>
-      )}
-
-      {/* STAND across the view on the belly, and the stand or fold ladder's
-          spinner while one runs. */}
-      <StandOverlay />
+      {/* STAND across the view on the belly, and the spinner while the stand
+          or fold ladder or a preset change runs. */}
+      <StateOverlay />
 
       {/* Empty until the node refuses something, so it reserves no space. */}
       <p id="preset-note" className={state.refusal ? "refused" : undefined}>
