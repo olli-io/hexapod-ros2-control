@@ -164,23 +164,21 @@ TEST(Pose, RestPosesArePerLegSymmetric) {
 TEST(VelocityCaps, DerivedFromEngineKnobs) {
   // linear_max is the stride covered in one stance, so it keys off the realized
   // split rather than the nominal duty: swing_phase_margin hands part of each
-  // swing window back to stance. Recomputing it here from kEngine pins the
-  // derivation that gen_config.py ports out of pipeline_config_loader.cpp,
-  // for every gait rather than just tripod.
-  for (const auto& g : cfg::kGaits) {
-    // The margin is per LEG SET, and the baked table carries no leg set, so the
-    // quadruped gaits are named here. A new one would have to be added — which
-    // is the point: its cap must not silently come out on the six-leg margin.
-    const bool quadruped =
-        gait_name(g) == "quad_walk" || gait_name(g) == "quad_canter";
-    const float margin = quadruped ? cfg::kEngine.quadruped_swing_phase_margin
-                                   : cfg::kEngine.swing_phase_margin;
-    const float swing_end = (1.0f - g.duty_factor) * (1.0f - margin);
-    const auto& preset = cfg::kPresets[cfg::kDefaultPreset];
-    const float want = preset.stride_length * swing_end /
-                       (preset.min_swing_time * (1.0f - swing_end));
-    EXPECT_NEAR(g.linear_max, want, 1e-6f) << gait_name(g);
-    EXPECT_GT(g.linear_max, 0.0f) << gait_name(g);
+  // swing window back to stance. Recomputing it here from each preset's bundle
+  // pins the derivation that gen_config.py ports out of
+  // pipeline_config_loader.cpp, for every preset and gait.
+  ASSERT_EQ(cfg::kGaitsByPreset.size(), cfg::kPresets.size());
+  for (std::size_t i = 0; i < cfg::kPresets.size(); ++i) {
+    const auto& preset = cfg::kPresets[i];
+    for (const auto& g : cfg::kGaitsByPreset[i]) {
+      const float swing_end =
+          (1.0f - g.duty_factor) * (1.0f - preset.swing_phase_margin);
+      const float want = preset.stride_length * swing_end /
+                         (preset.min_swing_time * (1.0f - swing_end));
+      EXPECT_NEAR(g.linear_max, want, 1e-6f)
+          << preset.id << " / " << gait_name(g);
+      EXPECT_GT(g.linear_max, 0.0f) << preset.id << " / " << gait_name(g);
+    }
   }
 
   // yaw_bias is the raw tuning.yaml knob re-keyed to each gait's nominal duty as
@@ -443,19 +441,12 @@ TEST(Presets, EveryOneIsWellFormed) {
   }
 }
 
-// Each preset gets its own row, and the caps track the stride and swing time
-// that produced them: a longer stride at a quicker cadence is a faster robot.
+// Each preset gets its own row; linear_max is pinned per preset in
+// VelocityCaps.DerivedFromEngineKnobs.
 TEST(Presets, CapsFollowTheBundle) {
   ASSERT_EQ(cfg::kGaitsByPreset.size(), cfg::kPresets.size());
   for (std::size_t i = 0; i < cfg::kPresets.size(); ++i) {
-    const auto& p = cfg::kPresets[i];
-    const float ratio = (p.stride_length / p.min_swing_time) /
-                        (cfg::kPresets[cfg::kDefaultPreset].stride_length /
-                         cfg::kPresets[cfg::kDefaultPreset].min_swing_time);
     for (std::size_t g = 0; g < cfg::kGaits.size(); ++g) {
-      EXPECT_NEAR(cfg::kGaitsByPreset[i][g].linear_max,
-                  cfg::kGaits[g].linear_max * ratio, 1e-6f)
-          << p.id << " / " << gait_name(cfg::kGaits[g]);
       // yaw_bias is a feel knob keyed to the gait's duty, not a timing budget,
       // so no preset moves it.
       EXPECT_NEAR(cfg::kGaitsByPreset[i][g].yaw_bias, cfg::kGaits[g].yaw_bias,

@@ -153,12 +153,26 @@ struct Result {
   int worst_margin_heading = -1;
 };
 
+hexa::gait::PresetSpec& quad_preset(pl::PipelineConfig& cfg) {
+  for (auto& p : cfg.presets) {
+    if (p.leg_set == hexa::gait::LegSet::QUADRUPED) return p;
+  }
+  return cfg.presets.front();
+}
+
+float quad_margin(const pl::PipelineConfig& cfg) {
+  for (const auto& p : cfg.presets) {
+    if (p.leg_set == hexa::gait::LegSet::QUADRUPED) return p.swing_phase_margin;
+  }
+  return 0.0f;
+}
+
 Result sweep(const pl::PipelineConfig& cfg, std::string_view gait) {
   Result out;
   out.margin_mm = 1000.0f;
   out.headroom_mm = 1000.0f;
-  const float swing_end = hexa::gait::swing_end_phase(
-      3.0f / 4.0f, cfg.engine.quadruped_swing_phase_margin);
+  const float swing_end =
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_margin(cfg));
   const float speed = cfg.engine.stride_length * swing_end /
                       (cfg.engine.min_swing_time * (1.0f - swing_end));
 
@@ -269,8 +283,8 @@ int grounded_corners(const std::array<hexa::Vec3, hexa::kNumLegs>& feet) {
 
 void ladders(const pl::PipelineConfig& cfg, std::string_view gait, bool verbose,
              int trace_heading = 0, float trace_below = 0.001f) {
-  const float swing_end = hexa::gait::swing_end_phase(
-      3.0f / 4.0f, cfg.engine.quadruped_swing_phase_margin);
+  const float swing_end =
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_margin(cfg));
   const float speed = cfg.engine.stride_length * swing_end /
                       (cfg.engine.min_swing_time * (1.0f - swing_end));
 
@@ -365,7 +379,7 @@ int main() {
               static_cast<double>(baked.posture.support_shift_gain),
               static_cast<double>(baked.posture.support_shift_lead),
               static_cast<double>(baked.posture.support_shift_tau),
-              static_cast<double>(baked.engine.quadruped_swing_phase_margin));
+              static_cast<double>(quad_margin(baked)));
   char label[128];
 
   // Every footfall order in the shipped rotation, at the shipped knobs: the
@@ -386,7 +400,7 @@ int main() {
   // The values this replaced, on the six-leg margin: the "before" row.
   {
     pl::PipelineConfig cfg = baked;
-    cfg.engine.quadruped_swing_phase_margin = 0.12f;
+    quad_preset(cfg).swing_phase_margin = 0.12f;
     cfg.posture.support_shift_gain = 0.60f;
     cfg.posture.support_shift_lead = 0.05f;
     cfg.posture.support_shift_tau = 0.04f;

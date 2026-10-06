@@ -291,7 +291,8 @@ def standing_pose(entry: dict, geometry: dict) -> dict:
 
 
 PRESET_KNOBS = ("stride_length", "stride_length_radial",
-                "min_swing_time", "max_swing_time", "step_height")
+                "min_swing_time", "max_swing_time", "step_height",
+                "swing_phase_margin")
 
 
 def presets(gait: dict, geometry: dict):
@@ -617,24 +618,21 @@ def unit_stance_xy(default_preset: dict, geometry: dict):
 def velocity_caps(gait: dict, preset: dict):
     """One preset's per-gait linear_max + yaw_bias — port of load_velocity_caps().
 
-    Per preset because three of the four inputs are: the stride it lays down and
-    the swing time it lays it down in ride the preset now, and so does the
-    standing pose the angular cap divides by.
+    Per preset because all inputs but yaw_bias are: the stride, the swing time
+    it is laid down in, the swing phase margin, and the standing pose the
+    angular cap divides by.
     """
     stride = preset["stride_length"]
     min_swing = preset["min_swing_time"]
+    margin = preset["swing_phase_margin"]
     yaw_bias = gait["yaw_bias"]
-    margins = {"hexapod": gait["swing_phase_margin"],
-               "quadruped": gait["quadruped_swing_phase_margin"]}
     caps = []
-    for name, duty, unstable, leg_set in GAITS:
+    for name, duty, unstable, _leg_set in GAITS:
         # stride_length covered in one stance, so it keys off the *realized*
-        # split (swing_end_phase), not the nominal duty factor — and off the
-        # margin the gait's own LEG SET walks on (swing_phase_margin_for). Keep
-        # identical to the other three copies — pipeline_config_loader.cpp,
+        # split (swing_end_phase), not the nominal duty factor. Keep identical
+        # to the other three copies — pipeline_config_loader.cpp,
         # hexa_common/limits.py, gen_joy_golden.py.
-        margin = margins[leg_set]
-        swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
+        swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.5))
         linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
         # yaw_bias stays keyed to the gait's nominal duty: it is a feel knob for
         # how a gait gives way under a saturating command, not a timing budget.
@@ -857,6 +855,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  float min_swing_time;")
     w("  float max_swing_time;")
     w("  float step_height;")
+    w("  float swing_phase_margin;")
     w("};")
     w("")
     w(f"inline constexpr std::array<PresetConfig, {len(preset_rows)}> kPresets "
@@ -920,15 +919,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # ── gait engine ──
     w("// ── Gait engine knobs (hexa_description/config/tuning.yaml) ──")
     w("struct EngineConfig {")
-    # stride_length, stride_length_radial, min_swing_time, max_swing_time and
-    # step_height are NOT here: they ride the preset (kPresets above).
+    # The PRESET_KNOBS are NOT here: they ride the preset (kPresets above).
     fields = [
         ("swing_width", gait["swing_width"]),
         ("touchdown_velocity", gait["touchdown_velocity"]),
         ("touchdown_probe_fraction", gait["touchdown_probe_fraction"]),
-        ("swing_phase_margin", gait["swing_phase_margin"]),
-        ("quadruped_swing_phase_margin",
-         gait["quadruped_swing_phase_margin"]),
         ("controller_dt", gait["controller_dt"]),
         ("cmd_zero_tol", gait["cmd_zero_tol"]),
         ("settle_debounce_delay", gait["settle"]["debounce_delay"]),

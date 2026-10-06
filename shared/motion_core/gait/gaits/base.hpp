@@ -159,17 +159,8 @@ float effective_stride_length(const std::map<std::string, LegContext>& legs,
 // is shortened by margin_fraction of its own length at the touchdown end, so
 // every handover has a stretch with all six feet planted. Taking the margin
 // entirely at that end keeps phase = 0 meaning lift-off, which the rest of the
-// stack relies on. margin_fraction is clamped to [0, 0.4].
+// stack relies on. margin_fraction is clamped to [0, 0.5].
 float swing_end_phase(float duty_factor, float margin_fraction);
-
-// Which of the two configured margins a leg set walks on. The single C++ source
-// of that selection: the engine reads it off the APPLIED leg set and every
-// derived velocity cap off the strategy's, so a cap can never be priced against
-// a swing window the engine will not run.
-inline float swing_phase_margin_for(LegSet set, float hexapod_margin,
-                                    float quadruped_margin) {
-  return set == LegSet::QUADRUPED ? quadruped_margin : hexapod_margin;
-}
 
 // Pick cycle_time so the fastest leg's stride equals stride_length, clamped to
 // [min_cycle_time, max_cycle_time]. stance_fraction is 1 - swing_end_phase(),

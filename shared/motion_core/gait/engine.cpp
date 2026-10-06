@@ -219,6 +219,7 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
     only.min_swing_time = config_.min_swing_time;
     only.max_swing_time = config_.max_swing_time;
     only.step_height = config_.step_height;
+    only.swing_phase_margin = config_.swing_phase_margin;
     presets_.push_back(std::move(only));
     default_preset = 0;
   }
@@ -304,6 +305,7 @@ void Engine::apply_preset_knobs() {
   config_.min_swing_time = p.min_swing_time;
   config_.max_swing_time = p.max_swing_time;
   config_.step_height = p.step_height;
+  config_.swing_phase_margin = p.swing_phase_margin;
 }
 
 std::map<std::string, Vec3> Engine::stance_for(std::size_t preset) const {
@@ -1436,7 +1438,7 @@ void Engine::capture_state(const std::map<std::string, LegOutput>& out) {
 EngineConfig engine_config_from_config() {
   const auto& c = ::hexa::config::kEngine;
   EngineConfig cfg;
-  // The five preset-owned knobs, seeded from the default preset. The engine
+  // The six preset-owned knobs, seeded from the default preset. The engine
   // rewrites them on every preset change.
   const auto& p = ::hexa::config::kPresets[::hexa::config::kDefaultPreset];
   cfg.stride_length = p.stride_length;
@@ -1444,11 +1446,10 @@ EngineConfig engine_config_from_config() {
   cfg.min_swing_time = p.min_swing_time;
   cfg.max_swing_time = p.max_swing_time;
   cfg.step_height = p.step_height;
+  cfg.swing_phase_margin = p.swing_phase_margin;
   cfg.swing_width = c.swing_width;
   cfg.touchdown_velocity = c.touchdown_velocity;
   cfg.touchdown_probe_fraction = c.touchdown_probe_fraction;
-  cfg.swing_phase_margin = c.swing_phase_margin;
-  cfg.quadruped_swing_phase_margin = c.quadruped_swing_phase_margin;
   cfg.quadruped_shift_time = c.quadruped_shift_time;
   cfg.support_shift_lead = ::hexa::config::kPosture.support_shift_lead;
   cfg.controller_dt = c.controller_dt;
@@ -1606,6 +1607,7 @@ PresetSetup solve_preset(
   out.min_swing_time = spec.min_swing_time;
   out.max_swing_time = spec.max_swing_time;
   out.step_height = spec.step_height;
+  out.swing_phase_margin = spec.swing_phase_margin;
   return out;
 }
 
@@ -1719,6 +1721,7 @@ std::vector<PresetSpec> preset_specs_from_config() {
     spec.min_swing_time = p.min_swing_time;
     spec.max_swing_time = p.max_swing_time;
     spec.step_height = p.step_height;
+    spec.swing_phase_margin = p.swing_phase_margin;
     out.push_back(std::move(spec));
   }
   return out;

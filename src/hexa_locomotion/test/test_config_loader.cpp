@@ -66,6 +66,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     EXPECT_NEAR(lp.min_swing_time, bp.min_swing_time, kTol) << lp.id;
     EXPECT_NEAR(lp.max_swing_time, bp.max_swing_time, kTol) << lp.id;
     EXPECT_NEAR(lp.step_height, bp.step_height, kTol) << lp.id;
+    EXPECT_NEAR(lp.swing_phase_margin, bp.swing_phase_margin, kTol) << lp.id;
     EXPECT_NEAR(lp.standing.body_height, bp.standing.body_height, kTol) << lp.id;
     // Includes the placeholder row a parked-pair preset carries.
     for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
@@ -90,8 +91,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.touchdown_velocity, be.touchdown_velocity, kTol);
   EXPECT_NEAR(le.touchdown_probe_fraction, be.touchdown_probe_fraction, kTol);
   EXPECT_NEAR(le.swing_phase_margin, be.swing_phase_margin, kTol);
-  EXPECT_NEAR(le.quadruped_swing_phase_margin, be.quadruped_swing_phase_margin,
-              kTol);
   EXPECT_NEAR(le.controller_dt, be.controller_dt, kTol);
   EXPECT_NEAR(le.cmd_zero_tol, be.cmd_zero_tol, kTol);
   EXPECT_NEAR(le.settle_debounce_delay, be.settle_debounce_delay, kTol);

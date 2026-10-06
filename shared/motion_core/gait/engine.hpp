@@ -46,7 +46,7 @@ enum class EngineState {
   FAULT,
 };
 
-// Engine-internal knobs, from tuning.yaml's gait_node block. The first five are
+// Engine-internal knobs, from tuning.yaml's gait_node block. The first six are
 // the ACTIVE PRESET's — rewritten on every preset change; the rest are global.
 struct EngineConfig {
   float stride_length = 0.0f;
@@ -56,16 +56,12 @@ struct EngineConfig {
   float min_swing_time = 0.0f;
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
+  // Share of the nominal swing window handed back to stance at the touchdown
+  // end, so every handover has a stretch with all feet planted.
+  float swing_phase_margin = 0.0f;
   float swing_width = 0.0f;
   float touchdown_velocity = 0.0f;
   float touchdown_probe_fraction = 0.0f;
-  // Share of the nominal swing window handed back to stance at the touchdown
-  // end, so every handover has a stretch with all six feet planted.
-  float swing_phase_margin = 0.0f;
-  // The same for the quadruped leg set, where the overlap is the window the
-  // support shift needs rather than mere insurance. Selected on the APPLIED leg
-  // set — see swing_phase_margin_for.
-  float quadruped_swing_phase_margin = 0.0f;
   // Quadruped only: how long a ladder holds all four feet planted before lifting
   // one, so the support shift can carry the body. A ladder has no phase circle
   // to buy that window from, so it waits instead.
@@ -214,6 +210,7 @@ struct PresetSpec {
   float min_swing_time = 0.0f;
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
+  float swing_phase_margin = 0.0f;
 };
 
 struct PresetSetup {
@@ -224,13 +221,14 @@ struct PresetSetup {
   // Solved from THIS preset's standing pose: two presets lean their tibias
   // differently, so a shared snapshot would re-solve onto the wrong footprint.
   ReseatGeometryByLeg reseat_geometry{};
-  // The active preset's copy of these five lands in EngineConfig on every
+  // The active preset's copy of these six lands in EngineConfig on every
   // apply_preset.
   float stride_length = 0.0f;
   float stride_length_radial = 0.0f;
   float min_swing_time = 0.0f;
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
+  float swing_phase_margin = 0.0f;
 };
 
 class Engine {
@@ -342,12 +340,9 @@ class Engine {
   bool is_parked(const std::string& name) const {
     return leg_is_parked(leg_set_, name);
   }
-  // Off the applied leg set: the swing window has to match the feet that are
-  // actually walking.
-  float swing_margin() const {
-    return swing_phase_margin_for(leg_set_, config_.swing_phase_margin,
-                                  config_.quadruped_swing_phase_margin);
-  }
+  // The applied preset's, which flips with leg_set_: the swing window has to
+  // match the feet that are actually walking.
+  float swing_margin() const { return config_.swing_phase_margin; }
   // What a ladder waits before lifting. Zero on six feet, where a mirrored pair
   // leaves the body inside what is left and there is nothing to wait for.
   float ladder_shift_time() const {

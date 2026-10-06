@@ -139,7 +139,7 @@ std::pair<float, float> ease_outward(float e_x, float e_y, float d_x, float d_y,
 
 float swing_end_phase(float duty_factor, float margin_fraction) {
   const float nominal = std::max(0.0f, 1.0f - duty_factor);
-  return nominal * (1.0f - std::clamp(margin_fraction, 0.0f, 0.4f));
+  return nominal * (1.0f - std::clamp(margin_fraction, 0.0f, 0.5f));
 }
 
 float derive_cycle_time(float max_leg_v, float stride_length,

@@ -78,8 +78,8 @@ PEP --[swing]--> AEP --[stance]--> PEP
   `swing_end = (1 - duty_factor) * (1 - swing_phase_margin)`.
 - **swing phase margin** — share of the nominal swing window given back to
   stance at the touchdown end. Gives every handover an all-down overlap. Costs
-  top speed. Set per leg set: `swing_phase_margin` 0.12 (jitter insurance),
-  `quadruped_swing_phase_margin` 0.25 (window for the support shift).
+  top speed. Set per preset as `swing_phase_margin`: 0.12 on six legs (jitter
+  insurance), 0.30 on the quadruped preset (window for the support shift).
 - **duty factor** (β) — fraction of the cycle in stance. Higher β is more stable
   but slower. Tripod 1/2 (3 down), crawl 2/3 (4 down), ripple 5/6 (5 down).
 - **phase offset** — a leg's cycle start relative to the reference leg. This is

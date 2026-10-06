@@ -38,7 +38,7 @@ def _standing_pose(tip_reach=0.135, body_height=0.04, coxa_deg=0) -> dict:
     )
 
 
-# The five knobs a PRESET owns; anything else in an override goes in the flat
+# The six knobs a PRESET owns; anything else in an override goes in the flat
 # gait_node block. `default_standing_pose` is accepted as an alias for the
 # preset's `standing_pose`, since that is what these cases are about.
 _PRESET_KEYS = (
@@ -47,6 +47,7 @@ _PRESET_KEYS = (
     "min_swing_time",
     "max_swing_time",
     "step_height",
+    "swing_phase_margin",
     "standing_pose",
 )
 
@@ -61,6 +62,10 @@ def _preset(pid="normal", leg_set="hexapod", **overrides) -> dict:
         min_swing_time=0.30,
         max_swing_time=1.0,
         step_height=0.035,
+        # No margin by default, so these cases pin the plain duty-factor
+        # arithmetic; test_linear_max_drops_with_swing_phase_margin covers the
+        # margined form.
+        swing_phase_margin=0.0,
     )
     entry.update(overrides)
     return entry
@@ -81,10 +86,6 @@ def _write_yaml(tmp_path: Path, presets=None, **overrides) -> Path:
         yaw_bias=0.75,
         default_preset="normal",
         presets=presets or [_preset(**preset_overrides)],
-        # No margin by default, so these cases pin the plain duty-factor
-        # arithmetic; test_linear_max_drops_with_swing_phase_margin covers the
-        # margined form.
-        swing_phase_margin=0.0,
     )
     base.update(overrides)
     path = tmp_path / "gait.yaml"

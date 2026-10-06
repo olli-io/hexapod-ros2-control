@@ -412,6 +412,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
       spec.min_swing_time = f(entry["min_swing_time"]);
       spec.max_swing_time = f(entry["max_swing_time"]);
       spec.step_height = f(entry["step_height"]);
+      spec.swing_phase_margin = f(entry["swing_phase_margin"]);
       if (spec.id == default_id) {
         cfg.default_preset = cfg.presets.size();
       }
@@ -468,12 +469,11 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     e.min_swing_time = d.min_swing_time;
     e.max_swing_time = d.max_swing_time;
     e.step_height = d.step_height;
+    e.swing_phase_margin = d.swing_phase_margin;
   }
   e.swing_width = f(g["swing_width"]);
   e.touchdown_velocity = f(g["touchdown_velocity"]);
   e.touchdown_probe_fraction = f(g["touchdown_probe_fraction"]);
-  e.swing_phase_margin = f(g["swing_phase_margin"]);
-  e.quadruped_swing_phase_margin = f(g["quadruped_swing_phase_margin"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
   e.settle_debounce_delay = f(g["settle"]["debounce_delay"]);
@@ -507,12 +507,10 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
       const auto strategy = factory();
       const float duty = strategy->duty_factor();
-      // Keys off the realized swing/stance split of the gait's own leg set, not
-      // the nominal duty factor. Must match gen_config.py velocity_caps().
-      const float swing_end = hexa::gait::swing_end_phase(
-          duty, hexa::gait::swing_phase_margin_for(
-                    strategy->leg_set(), e.swing_phase_margin,
-                    e.quadruped_swing_phase_margin));
+      // Keys off the realized swing/stance split, not the nominal duty factor.
+      // Must match gen_config.py velocity_caps().
+      const float swing_end =
+          hexa::gait::swing_end_phase(duty, setup.swing_phase_margin);
       const float linear_max = setup.stride_length * swing_end /
                                (setup.min_swing_time * (1.0f - swing_end));
       caps.linear_max_by_gait[gait_name] = linear_max;

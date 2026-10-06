@@ -332,13 +332,10 @@ def main() -> int:
     # with. map_joy never learns presets exist; the trace is the boot state.
     stride = float(default_preset["stride_length"])
     min_swing = float(default_preset["min_swing_time"])
-    # The hexapod margin unconditionally: the quadruped gaits are deliberately
-    # kept out of GAITS above, so the default gait is always a six-leg one and
-    # the quadruped margin can never be the one in play here.
-    margin = float(gait["swing_phase_margin"])
+    margin = float(default_preset["swing_phase_margin"])
     # Realized swing/stance split, not the nominal duty factor — same formula as
     # gen_config.py velocity_caps(), pipeline_config_loader.cpp and limits.py.
-    swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.4))
+    swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.5))
     gait_linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
     # The angular stick cap is the linear one over the yaw lever arm — the
     # outermost standing foot's planar radius. No YAML knob.

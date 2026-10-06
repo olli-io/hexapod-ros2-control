@@ -79,18 +79,3 @@ drive nodes in the container, or vice-versa.
 If you ever need to isolate two containers on the same host, give them different
 `ROS_DOMAIN_ID` values.
 
-## Cross-building for the robot
-
-`./hexa deploy build` builds the `linux/arm64` robot image under QEMU. The
-workstation needs an aarch64 binfmt_misc handler with a **static** interpreter;
-`scripts/deploy.sh` refuses to build without one. On Arch, set it up once:
-
-```
-sudo install -m 644 /usr/lib/binfmt.d/qemu-aarch64.conf /etc/binfmt.d/qemu-aarch64.conf
-sudo sed -i 's|/usr/bin/qemu-aarch64|/usr/bin/qemu-aarch64-static|' /etc/binfmt.d/qemu-aarch64.conf
-echo -1 | sudo tee /proc/sys/fs/binfmt_misc/qemu-aarch64
-sudo systemctl restart systemd-binfmt
-```
-
-The `interpreter` line in `/proc/sys/fs/binfmt_misc/qemu-aarch64` must end in
-`-static`. Other distros may register it automatically.

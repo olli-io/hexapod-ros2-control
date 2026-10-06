@@ -77,8 +77,6 @@ _TUNING = """
 gait_node:
   ros__parameters:
     yaw_bias: 0.6
-    swing_phase_margin: 0.12
-    quadruped_swing_phase_margin: 0.25
     default_preset: normal
     presets:
       - id: normal
@@ -93,6 +91,7 @@ gait_node:
         min_swing_time: 0.6
         max_swing_time: 0.8
         step_height: 0.04
+        swing_phase_margin: 0.12
       - id: fast
         leg_set: hexapod
         standing_pose:
@@ -105,6 +104,7 @@ gait_node:
         min_swing_time: 0.45
         max_swing_time: 0.60
         step_height: 0.035
+        swing_phase_margin: 0.12
       - id: quad
         leg_set: quadruped
         standing_pose:
@@ -116,6 +116,7 @@ gait_node:
         min_swing_time: 0.6
         max_swing_time: 0.8
         step_height: 0.04
+        swing_phase_margin: 0.25
 """
 
 _GEOMETRY = """

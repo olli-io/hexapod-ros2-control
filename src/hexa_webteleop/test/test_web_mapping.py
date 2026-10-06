@@ -112,6 +112,7 @@ gait_node:
         min_swing_time: 0.30
         max_swing_time: 0.4
         step_height: 0.04
+        swing_phase_margin: 0.0
       - id: fast
         leg_set: hexapod
         standing_pose:
@@ -124,6 +125,7 @@ gait_node:
         min_swing_time: 0.20
         max_swing_time: 0.3
         step_height: 0.035
+        swing_phase_margin: 0.0
       - id: quad
         leg_set: quadruped
         standing_pose:
@@ -135,6 +137,7 @@ gait_node:
         min_swing_time: 0.30
         max_swing_time: 0.4
         step_height: 0.04
+        swing_phase_margin: 0.0
 """
 
 # The angular stick cap is derived from the standing stance, so the caps loader

@@ -520,6 +520,14 @@ void enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us,
   FAIL() << "never reached a parked stand";
 }
 
+// The baked quadruped preset's swing phase margin.
+float quad_swing_phase_margin() {
+  for (const auto& p : hexa::config::kPresets) {
+    if (p.leg_set == hexa::gait::LegSet::QUADRUPED) return p.swing_phase_margin;
+  }
+  return 0.0f;
+}
+
 }  // namespace
 
 // The headline: with the middle pair parked, four feet down and one lifting at
@@ -529,8 +537,7 @@ void enter_quadruped(pl::Pipeline& p, std::uint64_t& now_us,
 TEST(Quadruped, CreepKeepsTheBodyInsideTheSupportTriangle) {
   const auto cfg = hexa::gait::engine_config_from_config();
   const float swing_end =
-      hexa::gait::swing_end_phase(3.0f / 4.0f,
-                                  cfg.quadruped_swing_phase_margin);
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
@@ -568,8 +575,7 @@ TEST(Quadruped, CreepKeepsTheBodyInsideTheSupportTriangle) {
 TEST(Quadruped, CreepNeverAsksForAnUnreachableFoot) {
   const auto cfg = hexa::gait::engine_config_from_config();
   const float swing_end =
-      hexa::gait::swing_end_phase(3.0f / 4.0f,
-                                  cfg.quadruped_swing_phase_margin);
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
@@ -599,8 +605,8 @@ TEST(Quadruped, CreepNeverAsksForAnUnreachableFoot) {
 // of the triangle the other three make. It has to be carried off it first.
 TEST(Quadruped, EngagementKeepsTheBodyInsideTheSupportTriangle) {
   const auto cfg = hexa::gait::engine_config_from_config();
-  const float swing_end = hexa::gait::swing_end_phase(
-      3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+  const float swing_end =
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
@@ -639,8 +645,8 @@ TEST(Quadruped, EngagementKeepsTheBodyInsideTheSupportTriangle) {
 // the knee under a support shift that is still steering off the same phases.
 TEST(Quadruped, ReversingMidEngagementDoesNotReseat) {
   const auto cfg = hexa::gait::engine_config_from_config();
-  const float swing_end = hexa::gait::swing_end_phase(
-      3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+  const float swing_end =
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
@@ -684,8 +690,8 @@ TEST(Quadruped, ReversingMidEngagementDoesNotReseat) {
 // half the robot's support, so it has to go one corner at a time.
 TEST(Quadruped, ReseatLiftsOneCornerAtATime) {
   const auto cfg = hexa::gait::engine_config_from_config();
-  const float swing_end = hexa::gait::swing_end_phase(
-      3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+  const float swing_end =
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 
@@ -736,8 +742,8 @@ TEST(Quadruped, ReseatLiftsOneCornerAtATime) {
 // legs still lift one at a time all the way to the stand.
 TEST(Quadruped, SettleKeepsTheBodyInsideTheSupportTriangle) {
   const auto cfg = hexa::gait::engine_config_from_config();
-  const float swing_end = hexa::gait::swing_end_phase(
-      3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+  const float swing_end =
+      hexa::gait::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   const float speed = cfg.stride_length * swing_end /
                       (cfg.min_swing_time * (1.0f - swing_end));
 

@@ -796,7 +796,7 @@ TEST(Registry, SwingWindowShrinksByMarginForEveryGait) {
     EXPECT_NEAR(g::swing_end_phase(beta, 0.0f), nominal, 1e-6f) << name;
     EXPECT_NEAR(g::swing_end_phase(beta, 0.12f), nominal * 0.88f, 1e-6f) << name;
     // Clamped, so a bad edit can never collapse the window or invert it.
-    EXPECT_NEAR(g::swing_end_phase(beta, 5.0f), nominal * 0.6f, 1e-6f) << name;
+    EXPECT_NEAR(g::swing_end_phase(beta, 5.0f), nominal * 0.5f, 1e-6f) << name;
     EXPECT_NEAR(g::swing_end_phase(beta, -1.0f), nominal, 1e-6f) << name;
   }
   // Tripod is the headline case: swing [0, 0.44), stance [0.44, 1).
@@ -2726,10 +2726,18 @@ bool run_to_parked_stand(g::Engine& e, int max_ticks = 4000) {
   return false;
 }
 
+// The baked quadruped preset's swing phase margin.
+float quad_swing_phase_margin() {
+  for (const auto& p : hexa::config::kPresets) {
+    if (p.leg_set == hexa::gait::LegSet::QUADRUPED) return p.swing_phase_margin;
+  }
+  return 0.0f;
+}
+
 // The gait's own saturating command, so the walk runs at the cap.
 float quad_saturating_speed(const g::EngineConfig& cfg) {
   const float swing_end =
-      g::swing_end_phase(3.0f / 4.0f, cfg.quadruped_swing_phase_margin);
+      g::swing_end_phase(3.0f / 4.0f, quad_swing_phase_margin());
   return cfg.stride_length * swing_end /
          (cfg.min_swing_time * (1.0f - swing_end));
 }

@@ -256,8 +256,7 @@ def load_velocity_caps(
     The caps are also **per preset**, which is what ``preset`` selects
     (default: the boot preset). Three of the four inputs ride the preset —
     the stride it lays down, the swing time it lays it down in, and the
-    stance the angular cap divides by. Only ``yaw_bias`` and the two phase
-    margins are global.
+    stance the angular cap divides by. Only ``yaw_bias`` is global.
 
     ``envelope_yaml`` is hexa_description's ``tuning.yaml`` (or any ros2
     params file carrying a ``gait_node`` block); the caps are read from
@@ -275,9 +274,7 @@ def load_velocity_caps(
     stride_length = float(entry["stride_length"])
     min_swing_time = float(entry["min_swing_time"])
     yaw_bias = float(raw["yaw_bias"])
-    margin = float(raw.get("swing_phase_margin", 0.0))
-    # Per leg set: the quadruped creep runs a longer overlap, and so a lower cap.
-    quad_margin = float(raw.get("quadruped_swing_phase_margin", margin))
+    margin = float(entry["swing_phase_margin"])
     r_outer = outer_stance_radius(geometry_yaml, envelope_yaml, pid)
 
     linear_max_by_gait: dict[str, float] = {}
@@ -288,13 +285,9 @@ def load_velocity_caps(
         # The cap is stride_length covered in one stance, so it keys off the
         # realized swing/stance split (swing_end_phase in gaits/base.cpp), not
         # the nominal duty factor: the swing phase margin lengthens stance and
-        # lowers top speed — and off the margin the gait's own LEG SET walks on
-        # (swing_phase_margin_for in gaits/base.hpp). Keep identical to
-        # gen_config.py's velocity_caps() and pipeline_config_loader.cpp.
-        gait_margin = (
-            quad_margin if descriptor.leg_set == "quadruped" else margin
-        )
-        swing_end = (1.0 - duty) * (1.0 - min(max(gait_margin, 0.0), 0.4))
+        # lowers top speed. Keep identical to gen_config.py's velocity_caps()
+        # and pipeline_config_loader.cpp.
+        swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.5))
         linear_max = (
             stride_length * swing_end / (min_swing_time * (1.0 - swing_end))
         )
