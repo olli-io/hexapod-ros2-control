@@ -118,12 +118,12 @@ gait_node:
             tip_reach: 0.109
             coxa_deg: 25
           rear:
-            tip_reach: 0.119
+            tip_reach: 0.109
             coxa_deg: 25
-        stride_length: 0.095
+        stride_length: 0.085
         stride_length_radial: 0.075
-        min_swing_time: 0.7
-        max_swing_time: 0.8
+        min_swing_time: 0.55
+        max_swing_time: 0.65
         step_height: 0.04
         # On four feet the overlap is the window the support shift has to
         # carry the body across into the next triangle, so it is worth far
@@ -244,10 +244,11 @@ posture_node:
     gait_sway_gain: 1.0
     gait_sway_strength: 0.4
 
-    #quad mode support centroid body movement tuning
+    # Quad support shift. tau is the mean lag of a critically damped spring,
+    # so the body starts each move from rest.
     support_shift_gain: 0.45
     support_shift_lead: 0.28
-    support_shift_tau: 0.18
+    support_shift_tau: 0.35
 
     # Selectable in ANIMATION mode. Comma-separated entries combine several.
     animation_mode_animations:

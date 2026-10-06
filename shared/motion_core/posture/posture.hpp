@@ -71,24 +71,21 @@ std::optional<float> lpf_step_scalar(std::optional<float> prev,
                                      std::optional<float> raw, float tau,
                                      float dt);
 
-// The same first-order step, taken in POLAR: the previous value and the raw
-// target are each resolved to a radius and an angle, both lagged, and the result
-// converted back to x-y. Same tau, same alpha, same hold/seed rules — only the
-// path between two points differs, and that is the whole point.
+// The support-shift filter: a critically damped spring on the pair in POLAR,
+// so the body leaves each target change from rest and arcs through a turn.
 //
-// Lagging x and y independently cuts the chord on a direction change: the two
-// axes cross their midpoints together, so the magnitude collapses toward 0.707
-// of the reach at the crossing and the path comes out as angled segments — the
-// corners. In polar the radius barely moves while the angle sweeps, so the
-// signal arcs through the turn at full reach and there is no corner to round
-// off. PoseSmoother eases the commanded body pose the same way and for the same
-// reason.
+// Second order because the target jumps — a corner's touchdown adds it to the
+// support at full weight — and a first-order lag answers a jump with a velocity
+// step. Polar because lagging x and y independently cuts the chord on a
+// direction change: the magnitude collapses toward 0.707 of the reach at the
+// crossing and the path comes out as angled segments. PoseSmoother eases the
+// commanded body pose the same way and for the same reason.
 //
-// No extra state: the angle is recovered from `prev` each tick, so this is a
-// drop-in for lpf_step_xy. At radius zero the direction is undefined and comes
-// back 0 — which costs nothing, the origin having no heading to preserve.
-std::optional<std::pair<float, float>> lpf_step_polar_xy(
-    std::optional<std::pair<float, float>> prev,
+// omega_n = 2/tau, which gives the same mean lag as a first-order filter of
+// tau. `state` carries the rates between ticks. prev=nullopt or tau <= 0 seeds
+// from raw; raw=nullopt holds prev.
+std::optional<std::pair<float, float>> spring_step_polar_xy(
+    PolarState& state, std::optional<std::pair<float, float>> prev,
     std::optional<std::pair<float, float>> raw, float tau, float dt);
 
 // True where the legs are at (or transitioning around) the nominal stance
@@ -166,6 +163,7 @@ class PostureController {
   std::optional<std::pair<float, float>> support_centroid_xy_;
   std::optional<std::pair<float, float>> latest_raw_centroid_;
   std::optional<std::pair<float, float>> anticipated_support_xy_;
+  PolarState anticipated_polar_{};
   std::optional<std::pair<float, float>> latest_raw_anticipated_;
   std::optional<float> swing_lift_z_;
   std::optional<float> latest_raw_swing_lift_;

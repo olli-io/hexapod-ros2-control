@@ -177,8 +177,11 @@ walking order.
   weighted by each leg's time to lift-off. Always strictly inside the support
   polygon.
 - `support_shift_gain` < 1 trades margin for less body motion.
-- The target is low-passed in polar, not per axis, so the body arcs through
-  handovers instead of cutting corners. `PoseSmoother` does the same.
+- The target is filtered by a critically damped spring in polar, not per
+  axis, so the body arcs through handovers instead of cutting corners, and
+  leaves each touchdown's target jump from rest. `PoseSmoother` does the same.
+  `support_shift_tau` keeps the mean lag of a first-order filter
+  (omega_n = 2/tau).
 - On four feet, teleop refuses the posture **record** (it would eat the x-y
   budget in gait-active). Live pose mode and body height are allowed.
 

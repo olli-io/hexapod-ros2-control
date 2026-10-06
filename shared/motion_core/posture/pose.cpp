@@ -125,6 +125,8 @@ void step_axis(float& pos, float& vel, float target, float lo, float hi, float w
   }
 }
 
+}  // namespace
+
 // Semi-implicit Euler diverges around w*dt > 2, so a mistyped tau caps at the
 // fastest well-behaved response. Inert at the shipped tau (w*dt ~ 0.037).
 float omega_for(float tau, float dt) {
@@ -225,7 +227,6 @@ void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
     out_b = tgt_b;
   }
 }
-}  // namespace
 
 BodyPose PoseSmoother::step(const BodyPose& target, const PoseLimits& envelope,
                             float dt) {

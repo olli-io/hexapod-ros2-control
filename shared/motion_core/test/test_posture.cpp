@@ -785,12 +785,14 @@ TEST(SupportShift, PolarLagArcsWhereThePerAxisLagCutsTheChord) {
   const std::pair<float, float> target{0.0f, kR};
 
   std::optional<std::pair<float, float>> cartesian = start;
-  std::optional<std::pair<float, float>> polar = start;
+  hexa::posture::PolarState state;
+  std::optional<std::pair<float, float>> polar =
+      hexa::posture::spring_step_polar_xy(state, std::nullopt, start, kTau, kDt);
   float worst_cartesian = kR;
   float worst_polar = kR;
   for (int i = 0; i < 400; ++i) {
     cartesian = hexa::posture::lpf_step_xy(cartesian, target, kTau, kDt);
-    polar = hexa::posture::lpf_step_polar_xy(polar, target, kTau, kDt);
+    polar = hexa::posture::spring_step_polar_xy(state, polar, target, kTau, kDt);
     worst_cartesian =
         std::min(worst_cartesian, std::hypot(cartesian->first, cartesian->second));
     worst_polar = std::min(worst_polar, std::hypot(polar->first, polar->second));
@@ -803,16 +805,45 @@ TEST(SupportShift, PolarLagArcsWhereThePerAxisLagCutsTheChord) {
   EXPECT_NEAR(polar->second, target.second, 1e-4f);
 }
 
+// A touchdown adds a corner to the support at full weight, so the target
+// jumps. The body has to leave that jump from rest: a first-order lag would
+// move dt / (tau + dt) of the jump on its first tick.
+TEST(SupportShift, SpringLeavesATargetJumpFromRest) {
+  constexpr float kTau = 0.45f;
+  constexpr float kDt = 0.005f;
+  const std::pair<float, float> start{0.02f, 0.0f};
+  const std::pair<float, float> target{0.02f, 0.02f};
+  hexa::posture::PolarState state;
+  auto v = hexa::posture::spring_step_polar_xy(state, std::nullopt, start, kTau,
+                                               kDt);
+  const auto first =
+      hexa::posture::spring_step_polar_xy(state, v, target, kTau, kDt);
+  const auto lagged = hexa::posture::lpf_step_xy(start, target, kTau, kDt);
+  const float spring_step =
+      std::hypot(first->first - start.first, first->second - start.second);
+  const float lag_step =
+      std::hypot(lagged->first - start.first, lagged->second - start.second);
+  EXPECT_LT(spring_step, 0.1f * lag_step);
+  v = first;
+  for (int i = 0; i < 2000; ++i) {
+    v = hexa::posture::spring_step_polar_xy(state, v, target, kTau, kDt);
+  }
+  EXPECT_NEAR(v->first, target.first, 1e-4f);
+  EXPECT_NEAR(v->second, target.second, 1e-4f);
+}
+
 // Round the back of the circle the short way, not the long one: the raw target
 // crosses +/-pi whenever the creep's handover passes straight behind the robot.
 TEST(SupportShift, PolarLagTakesTheShortWayAcrossTheWrap) {
   constexpr float kR = 0.04f;
   const float a0 = 3.0f;  // just short of +pi
-  std::optional<std::pair<float, float>> v =
-      std::make_pair(kR * std::cos(a0), kR * std::sin(a0));
+  hexa::posture::PolarState state;
+  std::optional<std::pair<float, float>> v = hexa::posture::spring_step_polar_xy(
+      state, std::nullopt, std::make_pair(kR * std::cos(a0), kR * std::sin(a0)),
+      0.14f, 0.005f);
   const std::pair<float, float> target{kR * std::cos(-a0), kR * std::sin(-a0)};
   for (int i = 0; i < 400; ++i) {
-    v = hexa::posture::lpf_step_polar_xy(v, target, 0.14f, 0.005f);
+    v = hexa::posture::spring_step_polar_xy(state, v, target, 0.14f, 0.005f);
     // The short way keeps y's sign or crosses through the far side; it never
     // sweeps back down through y = 0 on the +x half, which is the long way.
     EXPECT_LE(v->first, kR * std::cos(a0) + 1e-6f);

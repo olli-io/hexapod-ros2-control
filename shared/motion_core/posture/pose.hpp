@@ -71,6 +71,16 @@ struct PolarState {
 // no visible motion at radius 0.
 PolarState to_polar(float a, float b);
 
+// 1/tau, capped where semi-implicit Euler stays stable; tau <= 0 gives 0.
+float omega_for(float tau, float dt);
+
+// One damped-spring step of a polar pair toward (target_a, target_b), clamped
+// to the disc of r_max and written to (out_a, out_b). w <= 0 snaps; snap_tol 0
+// disables the settle deadband.
+void step_polar(PolarState& s, float& out_a, float& out_b, float target_a,
+                float target_b, float r_max, float w, float zeta,
+                float snap_tol, float dt);
+
 // Tuning for PoseSmoother: one spring for every axis group — both pair
 // magnitudes, both pair directions, and the lone z and yaw axes.
 //

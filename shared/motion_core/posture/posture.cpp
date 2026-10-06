@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -12,9 +13,6 @@ namespace hexa::posture {
 namespace {
 constexpr float kDegToRad = 0.017453292519943295f;
 constexpr float kPi = 3.141592653589793f;
-// Below this a pair has no meaningful direction — the same floor pose.cpp's
-// polar easing uses, and for the same reason.
-constexpr float kPolarEps = 1e-6f;
 
 // Unknown name -> nullptr, which the caller drops: the config is trusted, so an
 // unknown name is a codegen/typo bug rather than user input.
@@ -228,32 +226,22 @@ std::optional<float> lpf_step_scalar(std::optional<float> prev,
   return *prev + alpha * (*raw - *prev);
 }
 
-std::optional<std::pair<float, float>> lpf_step_polar_xy(
-    std::optional<std::pair<float, float>> prev,
+std::optional<std::pair<float, float>> spring_step_polar_xy(
+    PolarState& state, std::optional<std::pair<float, float>> prev,
     std::optional<std::pair<float, float>> raw, float tau, float dt) {
   if (!raw.has_value()) {
     return prev;
   }
-  if (!prev.has_value() || tau <= 0.0f) {
+  if (!prev.has_value() || tau <= 0.0f || dt <= 0.0f) {
+    state = to_polar(raw->first, raw->second);
     return raw;
   }
-  const float denom = tau + dt;
-  const float alpha = denom > 0.0f ? dt / denom : 1.0f;
-  const auto [px, py] = *prev;
-  const auto [rx, ry] = *raw;
-
-  const float prev_r = std::hypot(px, py);
-  const float raw_r = std::hypot(rx, ry);
-  const float prev_a = prev_r > kPolarEps ? std::atan2(py, px) : 0.0f;
-  // A raw target at the origin has no direction to sweep toward; hold the one
-  // the value already has and let the radius run down to meet it.
-  const float raw_a = raw_r > kPolarEps ? std::atan2(ry, rx) : prev_a;
-
-  const float r = prev_r + alpha * (raw_r - prev_r);
-  // Short way round, so a target crossing +/-pi does not sweep the long arc.
-  const float a =
-      prev_a + alpha * std::remainder(raw_a - prev_a, 2.0f * kPi);
-  return std::make_pair(r * std::cos(a), r * std::sin(a));
+  float x = 0.0f;
+  float y = 0.0f;
+  step_polar(state, x, y, raw->first, raw->second,
+             std::numeric_limits<float>::infinity(), omega_for(0.5f * tau, dt),
+             1.0f, 0.0f, dt);
+  return std::make_pair(x, y);
 }
 
 bool posture_active(gait::EngineState state) {
@@ -385,12 +373,12 @@ BodyPose PostureController::update(
 
   support_centroid_xy_ =
       lpf_step_xy(support_centroid_xy_, latest_raw_centroid_, centroid_tau_, dt);
-  // Its own filter, and a polar one: this signal walks a rough circle around the
+  // Its own filter, a polar spring: this signal walks a rough circle around the
   // body — each handover passes the target on to the next support triangle — and
-  // the body follows it directly. Lagged per-axis, every one of those turns comes
-  // out as a corner; lagged in polar the body arcs through them.
-  anticipated_support_xy_ = lpf_step_polar_xy(
-      anticipated_support_xy_, latest_raw_anticipated_, support_shift_tau_, dt);
+  // the body follows it directly. See spring_step_polar_xy.
+  anticipated_support_xy_ =
+      spring_step_polar_xy(anticipated_polar_, anticipated_support_xy_,
+                           latest_raw_anticipated_, support_shift_tau_, dt);
   swing_lift_z_ = lpf_step_scalar(swing_lift_z_, latest_raw_swing_lift_,
                                   swing_lift_tau_, dt);
 
