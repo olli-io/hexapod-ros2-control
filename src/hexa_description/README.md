@@ -13,8 +13,11 @@ values. Every consumer loads them at runtime, or generates code from them.
   Included only with `use_sim:=true`, so it never reaches the real robot.
 - `launch/description.launch.py` — runs `robot_state_publisher` and publishes
   the URDF on `/robot_description`. Arguments: `use_sim`, `use_sim_time`.
-- `config/geometry.yaml` — body, leg and mount dimensions, plus the `joints:`
-  travel window. Angles are in intuitive per-joint degrees. Conversion to
+- `config/geometry.yaml` — body and mount dimensions, plus a `legs:` block per
+  leg group (`front`, `middle`, `rear`) with segment lengths, radii, masses and
+  the `joints:` travel window. Left and right legs of a group share the block.
+  `folded_pose` and `initialized_pose` give one entry per left leg; the right
+  leg mirrors the coxa. Angles are in intuitive per-joint degrees. Conversion to
   IK-convention radians happens at load time.
 - `config/tuning.yaml` — gait, control, posture and teleop tuning, including
   the `presets` list and `default_standing_pose`. Shared by sim, web teleop and

@@ -1596,7 +1596,7 @@ JointAngles standing_leg_from(const kin::LegSpec& spec, Leg leg,
       spec);
 
   for (std::size_t j = 0; j < 3; ++j) {
-    const auto& lim = ::hexa::config::kJointLimits[j];
+    const auto& lim = spec.limits[j];
     if (out[j] < lim.lower || out[j] > lim.upper) {
       static constexpr std::array<const char*, 3> kJointNames = {
           "coxa", "femur", "tibia"};

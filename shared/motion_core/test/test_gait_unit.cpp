@@ -1923,7 +1923,7 @@ TEST(StandingPose, RejectsASplayOutsideTheCoxaLimit) {
   // naming a number, so widening the window in geometry.yaml can never turn
   // this into a silent no-op.
   const float coxa_limit_deg =
-      hexa::config::kJointLimits[0].upper * 180.0f / static_cast<float>(M_PI);
+      hexa::config::kLegSpecs[0].limits[0].upper * 180.0f / static_cast<float>(M_PI);
   EXPECT_THROW(g::standing_pose_from(hexa::config::kLegSpecs,
                                      hexa::config::kCoxaToBottom,
                                      hexa::config::kFootRadius,

@@ -622,7 +622,7 @@ TEST(Validate, AcceptsTheBakedTable) {
 
 TEST(Validate, RejectsAKnotPastAJointLimit) {
   hexa::JointAngles a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
-  a[1] = hexa::config::kJointLimits[1].lower - 0.01f;
+  a[1] = hexa::config::kLegSpecs[0].limits[1].lower - 0.01f;
   const auto spec = one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, a)});
   try {
     gs::validate_gestures({spec}, g::leg_specs_from_config(),

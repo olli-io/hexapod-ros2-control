@@ -173,12 +173,14 @@ def load_yaml(path: str):
         return yaml.safe_load(f)
 
 
+def group_of(leg: str) -> str:
+    """"l_front" -> "front"."""
+    return leg.split("_", 1)[1]
+
+
 def leg_specs(geometry: dict):
-    """Six LegSpecs by symmetry — port of load_leg_specs()."""
-    leg = geometry["leg"]
-    coxa_len = leg["coxa_length"]
-    femur_len = leg["femur_length"]
-    tibia_len = leg["tibia_length"]
+    """Six LegSpecs: segments and limits per group, mounts by symmetry."""
+    limits = joint_limits(geometry)
     front = geometry["mounts"]["l_front"]
     middle = geometry["mounts"]["l_middle"]
 
@@ -193,23 +195,28 @@ def leg_specs(geometry: dict):
             mx = x_fr
             my = -ref_y if side == "r" else ref_y
             myaw = -yaw_fr if side == "r" else yaw_fr
+            seg = geometry["legs"][name]
             out[f"{side}_{name}"] = dict(
                 mount_xyz=(mx, my, 0.0), mount_yaw=myaw,
-                coxa_len=coxa_len, femur_len=femur_len, tibia_len=tibia_len)
+                coxa_len=seg["coxa_length"], femur_len=seg["femur_length"],
+                tibia_len=seg["tibia_length"], limits=limits[name])
     return out
 
 
 def joint_limits(geometry: dict):
-    """Per-joint-type travel window in URDF rad — port of load_joint_limits()."""
-    joints = geometry["joints"]
+    """Travel windows in URDF rad, {group: {joint type: window}} — port of
+    load_joint_limits()."""
     out = {}
-    for jt in JOINT_TYPES:
-        cfg = joints[jt]
-        a = to_urdf_rad(jt, cfg["lower_limit_deg"])
-        b = to_urdf_rad(jt, cfg["upper_limit_deg"])
-        lower, upper = min(a, b), max(a, b)
-        out[jt] = dict(lower=lower, upper=upper,
-                       effort=cfg["effort"], velocity=cfg["velocity"])
+    for group in ("front", "middle", "rear"):
+        joints = geometry["legs"][group]["joints"]
+        out[group] = {}
+        for jt in JOINT_TYPES:
+            cfg = joints[jt]
+            a = to_urdf_rad(jt, cfg["lower_limit_deg"])
+            b = to_urdf_rad(jt, cfg["upper_limit_deg"])
+            lower, upper = min(a, b), max(a, b)
+            out[group][jt] = dict(lower=lower, upper=upper,
+                                  effort=cfg["effort"], velocity=cfg["velocity"])
     return out
 
 
@@ -256,9 +263,6 @@ def standing_pose(entry: dict, geometry: dict) -> dict:
     # Reachability guard so a bad edit fails at build time rather than throwing
     # UnreachableTarget on the robot. The angles themselves are checked against
     # the joint limits by standing_pose_from when the config loads.
-    leg = geometry["leg"]
-    coxa_len, femur_len, tibia_len = (
-        leg["coxa_length"], leg["femur_length"], leg["tibia_length"])
     # IK targets the foot sphere's centre, which sits one radius above the
     # ground contact — same subtraction as gait::standing_pose_from.
     depth = (geometry["body"]["coxa_to_bottom"] + body_height
@@ -267,6 +271,9 @@ def standing_pose(entry: dict, geometry: dict) -> dict:
     solved = {}
     for group in groups:
         cfg = sp[group]
+        seg = geometry["legs"][group]
+        coxa_len, femur_len, tibia_len = (
+            seg["coxa_length"], seg["femur_length"], seg["tibia_length"])
         tip_reach = cfg["tip_reach"]
         if tip_reach <= coxa_len:
             raise ValueError(
@@ -484,7 +491,7 @@ def gestures(doc, geometry: dict):
                         raise ValueError(
                             f"{where}.{leg}: needs exactly "
                             f"{sorted(LEG_ENTRY_KEYS)}")
-                    leg_entry_angles(v, limits, f"{where}.{leg}")
+                    leg_entry_angles(v, limits[group_of(leg)], f"{where}.{leg}")
                 else:
                     raise ValueError(
                         f"{where}.{leg}: a mapping, hold, home or start")
@@ -510,7 +517,7 @@ def gestures(doc, geometry: dict):
                            start=(v == "start"))
                 if v not in LEG_STAND_IN_WORDS:
                     row["coxa"], row["femur"], row["tibia"] = leg_entry_angles(
-                        v, limits, f"gestures.yaml {gid}.{leg}")
+                        v, limits[group_of(leg)], f"gestures.yaml {gid}.{leg}")
                 rows.append(row)
             check_track_shape(rows, f"gestures.yaml {gid}.{leg}")
             tracks.append((leg, rows))
@@ -565,19 +572,25 @@ def rest_pose(geometry: dict, key: str):
 
     `key` is "folded_pose" (power-up, and where quadruped mode parks the middle
     pair) or "initialized_pose" (unfold endpoint); the two share a schema so
-    this reads either.
+    this reads either. Each left leg is given; the right leg mirrors its coxa.
     """
     init = geometry[key]
-    femur = to_urdf_rad("femur", init["femur"]["above_horizontal_deg"])
-    tibia = to_urdf_rad("tibia", init["tibia"]["interior_deg"])
-    coxa_cfg = init["coxa"]
+    limits = joint_limits(geometry)
     out = {}
     for side in ("l", "r"):
         for name in ("front", "middle", "rear"):
-            ref_deg = coxa_cfg["l_middle_deg" if name == "middle" else "l_front_deg"]
-            after_fr = -ref_deg if name == "rear" else ref_deg
-            after_lr = -after_fr if side == "r" else after_fr
-            coxa = to_urdf_rad("coxa", after_lr)
+            ref = init[f"l_{name}"]
+            coxa_deg = -ref["coxa_deg"] if side == "r" else ref["coxa_deg"]
+            coxa = to_urdf_rad("coxa", coxa_deg)
+            femur = to_urdf_rad("femur", ref["femur_deg"])
+            tibia = to_urdf_rad("tibia", ref["tibia_deg"])
+            # Femur and tibia only: the coxa tuck may sit past its window.
+            for jt, rad in (("femur", femur), ("tibia", tibia)):
+                lim = limits[name][jt]
+                if not lim["lower"] <= rad <= lim["upper"]:
+                    raise ValueError(
+                        f"geometry.yaml {key}: {side}_{name} {jt} is outside "
+                        f"legs.{name}.joints.{jt}")
             out[f"{side}_{name}"] = (coxa, femur, tibia)
     return out
 
@@ -693,16 +706,18 @@ def hardware_joints(hw: dict, calibration: dict, limits: dict):
         return {"coxa": rad, "femur": -rad, "tibia": math.pi - rad}[pos]
 
     # A servo whose center sits outside the joint's travel window cannot reach
-    # half its range. deg_at_center is per-segment, so check the three once
-    # rather than per joint row. Both sides are URDF radians here.
-    for pos in JOINT_TYPES:
-        center = urdf_center(pos)
-        lower, upper = limits[pos]["lower"], limits[pos]["upper"]
-        if not (lower <= center <= upper):
-            raise ValueError(
-                f"hardware.yaml deg_at_center.{pos} = {deg_at_center[pos]} deg "
-                f"({center:.4f} rad) is outside the geometry.yaml limit window "
-                f"[{lower:.4f}, {upper:.4f}] rad")
+    # half its range. deg_at_center is per-segment, so check it against each
+    # group's window. Both sides are URDF radians here.
+    for group, group_limits in limits.items():
+        for pos in JOINT_TYPES:
+            center = urdf_center(pos)
+            lower, upper = group_limits[pos]["lower"], group_limits[pos]["upper"]
+            if not (lower <= center <= upper):
+                raise ValueError(
+                    f"hardware.yaml deg_at_center.{pos} = {deg_at_center[pos]} "
+                    f"deg ({center:.4f} rad) is outside the geometry.yaml "
+                    f"legs.{group}.joints.{pos} window "
+                    f"[{lower:.4f}, {upper:.4f}] rad")
 
     # Authoritative name→segment map for the fixed 6-leg set (mirrors
     # joint_calibration.cpp's kPositions). An unknown joint name is rejected.
@@ -788,12 +803,22 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
 
     # ── kinematics / geometry ──
     w("// ── Leg geometry (hexa_description/config/geometry.yaml) ──")
+    w("// Travel limits, IK-convention radians.")
+    w("struct JointLimits {")
+    w("  float lower;")
+    w("  float upper;")
+    w("  float effort;    // Nm")
+    w("  float velocity;  // rad/s")
+    w("};")
+    w("")
     w("struct LegSpec {")
     w("  Vec3 mount_xyz;    // coxa pivot in body frame (m)")
     w("  float mount_yaw;   // rotation about body +z (rad)")
     w("  float coxa_len;")
     w("  float femur_len;")
     w("  float tibia_len;")
+    w("  // Indexed 0=coxa, 1=femur, 2=tibia (same order as a JointAngles triple).")
+    w("  std::array<JointLimits, 3> limits;")
     w("};")
     w("")
     w("// One LegSpec per leg, indexed by Leg (leg_index.hpp order).")
@@ -801,9 +826,13 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     for leg in LEG_NAMES:
         s = specs[leg]
         mx, my, mz = s["mount_xyz"]
+        lims = ", ".join(
+            f"{{{fl(m['lower'])}, {fl(m['upper'])}, {fl(m['effort'])}, "
+            f"{fl(m['velocity'])}}}"
+            for m in (s["limits"][jt] for jt in JOINT_TYPES))
         w(f"    {{Vec3({fl(mx)}, {fl(my)}, {fl(mz)}), {fl(s['mount_yaw'])}, "
-          f"{fl(s['coxa_len'])}, {fl(s['femur_len'])}, {fl(s['tibia_len'])}}},"
-          f"  // {leg}")
+          f"{fl(s['coxa_len'])}, {fl(s['femur_len'])}, {fl(s['tibia_len'])}, "
+          f"{{{{{lims}}}}}}},  // {leg}")
     w("}};")
     w("")
     w(f"inline constexpr float kCoxaToBottom = {fl(geometry['body']['coxa_to_bottom'])};"
@@ -813,24 +842,6 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("// ground-contact height is this much below the target it is solved from.")
     w(f"inline constexpr float kFootRadius = {fl(geometry['foot']['radius'])};"
       "  // m")
-    w("")
-
-    # ── joint limits ──
-    w("// ── Per-joint-type travel limits, IK-convention radians ──")
-    w("struct JointLimits {")
-    w("  float lower;")
-    w("  float upper;")
-    w("  float effort;    // Nm")
-    w("  float velocity;  // rad/s")
-    w("};")
-    w("")
-    w("// Indexed 0=coxa, 1=femur, 2=tibia (same order as a JointAngles triple).")
-    w("inline constexpr std::array<JointLimits, 3> kJointLimits = {{")
-    for jt in JOINT_TYPES:
-        m = limits[jt]
-        w(f"    {{{fl(m['lower'])}, {fl(m['upper'])}, "
-          f"{fl(m['effort'])}, {fl(m['velocity'])}}},  // {jt}")
-    w("}};")
     w("")
 
     # ── standing / rest poses ──
@@ -1018,7 +1029,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("enum class GestureTransition : std::uint8_t { EASE, CONTINUOUS };")
     w("struct LegKeyframe {")
     w("  float t;      // s from gesture start")
-    w("  float coxa;   // rad, IK convention, inside kJointLimits")
+    w("  float coxa;   // rad, IK convention, inside its LegSpec limits")
     w("  float femur;")
     w("  float tibia;")
     w("  GestureTransition transition;  // how the track arrives here")

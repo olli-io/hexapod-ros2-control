@@ -38,7 +38,7 @@ void check_leg_keyframe(const std::string& id, const std::string& leg,
                                                               "tibia"};
   const JointAngles a = {k.coxa, k.femur, k.tibia};
   for (std::size_t j = 0; j < 3; ++j) {
-    const auto& lim = ::hexa::config::kJointLimits[j];
+    const auto& lim = spec.limits[j];
     if (a[j] < lim.lower || a[j] > lim.upper) {
       throw std::invalid_argument(
           "gesture '" + id + "': " + leg + " " + kJointNames[j] + " at t=" +

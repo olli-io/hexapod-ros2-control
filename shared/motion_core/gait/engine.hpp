@@ -545,7 +545,7 @@ std::unique_ptr<Engine> make_default_engine(
 
 // Per-leg standing joint angles from one body height plus a per-group tip reach
 // and splay. Throws hexa::UnreachableTarget on an impossible reach / height
-// pair, and std::invalid_argument outside config::kJointLimits; `pose_key` names
+// pair, and std::invalid_argument outside a LegSpec's limits; `pose_key` names
 // the config block in that message.
 std::array<JointAngles, kNumLegs> standing_pose_from(
     const std::array<kin::LegSpec, kNumLegs>& specs, float coxa_to_bottom,

@@ -35,59 +35,51 @@
   <xacro:property name="geom"
                   value="${xacro.load_yaml('$(find hexa_description)/config/geometry.yaml')}"/>
 
-  <!-- Shortcuts for the values used repeatedly inside the leg macro.
-       Sourced from geom so the YAML stays the single source of truth. -->
-  <xacro:property name="coxa_length"  value="${geom['leg']['coxa_length']}"/>
-  <xacro:property name="femur_length" value="${geom['leg']['femur_length']}"/>
-  <xacro:property name="tibia_length" value="${geom['leg']['tibia_length']}"/>
-  <xacro:property name="coxa_radius"  value="${geom['leg']['coxa_radius']}"/>
-  <xacro:property name="femur_radius" value="${geom['leg']['femur_radius']}"/>
-  <xacro:property name="tibia_radius" value="${geom['leg']['tibia_radius']}"/>
-  <xacro:property name="coxa_mass"    value="${geom['leg']['coxa_mass']}"/>
-  <xacro:property name="femur_mass"   value="${geom['leg']['femur_mass']}"/>
-  <xacro:property name="tibia_mass"   value="${geom['leg']['tibia_mass']}"/>
   <xacro:property name="foot_radius"  value="${geom['foot']['radius']}"/>
   <xacro:property name="foot_mass"    value="${geom['foot']['mass']}"/>
 
-  <!-- Per-joint <limit> windows, in URDF-convention radians. The YAML
-       carries absolute lower_limit_deg / upper_limit_deg in intuitive
-       per-joint degrees (coxa sweep, femur above horizontal, tibia
-       interior); the conversions here match to_urdf_rad() in
+  <!-- One leg group's segment shortcuts and <limit> windows, defined in the
+       calling macro's scope. Sourced from geom['legs'][group] so the YAML
+       stays the single source of truth.
+
+       Limits are in URDF-convention radians. The YAML carries absolute
+       lower_limit_deg / upper_limit_deg in intuitive per-joint degrees
+       (coxa sweep, femur above horizontal, tibia interior); the conversions
+       here match to_urdf_rad() in
        hexa_locomotion/src/pipeline_config_loader.cpp and
-       shared/motion_core/tools/gen_config.py exactly. The URDF
-       itself stays a pure mathematical presentation of the hexapod —
-       joint zero remains "legs splayed horizontally"; only the <limit>
-       window is shifted to express the servo's reachable range.
+       shared/motion_core/tools/gen_config.py exactly. The URDF itself stays
+       a pure mathematical presentation of the hexapod — joint zero remains
+       "legs splayed horizontally"; only the <limit> window is shifted to
+       express the servo's reachable range.
 
        Sign-aware swap: femur uses -radians(deg) and tibia uses
        pi - radians(deg), both monotonically decreasing — so intuitive
        upper_limit_deg maps to URDF lower_rad and vice versa. -->
-  <xacro:property name="coxa_lower_rad"
-                  value="${geom['joints']['coxa']['lower_limit_deg'] * pi / 180}"/>
-  <xacro:property name="coxa_upper_rad"
-                  value="${geom['joints']['coxa']['upper_limit_deg'] * pi / 180}"/>
-  <xacro:property name="femur_lower_rad"
-                  value="${-geom['joints']['femur']['upper_limit_deg'] * pi / 180}"/>
-  <xacro:property name="femur_upper_rad"
-                  value="${-geom['joints']['femur']['lower_limit_deg'] * pi / 180}"/>
-  <xacro:property name="tibia_lower_rad"
-                  value="${pi - geom['joints']['tibia']['upper_limit_deg'] * pi / 180}"/>
-  <xacro:property name="tibia_upper_rad"
-                  value="${pi - geom['joints']['tibia']['lower_limit_deg'] * pi / 180}"/>
+  <xacro:macro name="leg_group_props" params="group">
+    <xacro:property name="seg" value="${geom['legs'][group]}" scope="parent"/>
+    <xacro:property name="coxa_length"  value="${seg['coxa_length']}"  scope="parent"/>
+    <xacro:property name="femur_length" value="${seg['femur_length']}" scope="parent"/>
+    <xacro:property name="tibia_length" value="${seg['tibia_length']}" scope="parent"/>
+    <xacro:property name="coxa_radius"  value="${seg['coxa_radius']}"  scope="parent"/>
+    <xacro:property name="femur_radius" value="${seg['femur_radius']}" scope="parent"/>
+    <xacro:property name="tibia_radius" value="${seg['tibia_radius']}" scope="parent"/>
+    <xacro:property name="coxa_mass"    value="${seg['coxa_mass']}"    scope="parent"/>
+    <xacro:property name="femur_mass"   value="${seg['femur_mass']}"   scope="parent"/>
+    <xacro:property name="tibia_mass"   value="${seg['tibia_mass']}"   scope="parent"/>
+    <xacro:property name="coxa_lower_rad"
+                    value="${seg['joints']['coxa']['lower_limit_deg'] * pi / 180}" scope="parent"/>
+    <xacro:property name="coxa_upper_rad"
+                    value="${seg['joints']['coxa']['upper_limit_deg'] * pi / 180}" scope="parent"/>
+    <xacro:property name="femur_lower_rad"
+                    value="${-seg['joints']['femur']['upper_limit_deg'] * pi / 180}" scope="parent"/>
+    <xacro:property name="femur_upper_rad"
+                    value="${-seg['joints']['femur']['lower_limit_deg'] * pi / 180}" scope="parent"/>
+    <xacro:property name="tibia_lower_rad"
+                    value="${pi - seg['joints']['tibia']['upper_limit_deg'] * pi / 180}" scope="parent"/>
+    <xacro:property name="tibia_upper_rad"
+                    value="${pi - seg['joints']['tibia']['lower_limit_deg'] * pi / 180}" scope="parent"/>
+  </xacro:macro>
 
-  <!-- Folded pose, fed to ros2_control's <initial_value>: same deg→rad
-       conversion as the <limit> window above. This is the pose the robot
-       energizes into. In sim, gz_ros2_control applies it on spawn; on the
-       real robot, the hardware plugin uses it as the assumed pose for
-       servos that cannot report position. The initialized pose the unfold
-       ladder moves on to is a gait-engine matter and never reaches the
-       URDF. Femur and tibia are uniform across all six legs; the per-leg
-       coxa value lives inside the leg_joints_iface macro so it can apply
-       the same x/y mirror as mount_leg. -->
-  <xacro:property name="folded_femur_rad"
-                  value="${-geom['folded_pose']['femur']['above_horizontal_deg'] * pi / 180}"/>
-  <xacro:property name="folded_tibia_rad"
-                  value="${pi - geom['folded_pose']['tibia']['interior_deg'] * pi / 180}"/>
 
   <!-- Body length and width are derived from the front and middle mounts.
        Length extends 10% past the front hips; width is 80% of the middle
@@ -195,22 +187,23 @@
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </joint>
 
+  <xacro:property name="middle_bar_radius" value="${geom['legs']['middle']['coxa_radius']}"/>
   <link name="middle_bar">
     <visual>
       <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
       <geometry>
-        <cylinder radius="${coxa_radius}" length="${2 * middle_mount_y}"/>
+        <cylinder radius="${middle_bar_radius}" length="${2 * middle_mount_y}"/>
       </geometry>
       <material name="leg_blue"/>
     </visual>
     <visual>
       <origin xyz="0 ${middle_mount_y} 0" rpy="0 0 0"/>
-      <geometry><sphere radius="${coxa_radius}"/></geometry>
+      <geometry><sphere radius="${middle_bar_radius}"/></geometry>
       <material name="leg_blue"/>
     </visual>
     <visual>
       <origin xyz="0 ${-middle_mount_y} 0" rpy="0 0 0"/>
-      <geometry><sphere radius="${coxa_radius}"/></geometry>
+      <geometry><sphere radius="${middle_bar_radius}"/></geometry>
       <material name="leg_blue"/>
     </visual>
   </link>
@@ -228,6 +221,7 @@
                       A leg "pointing straight left" has mount_yaw = +pi/2.
        ===================================================================== -->
   <xacro:macro name="leg" params="side name mount_x mount_y mount_yaw">
+    <xacro:leg_group_props group="${name}"/>
 
     <!-- Front legs are red to mark orientation; others stay blue. -->
     <xacro:property name="leg_material" value="${'leg_red' if name == 'front' else 'leg_blue'}"/>
@@ -242,8 +236,8 @@
       <axis xyz="0 0 1"/>
       <limit lower="${coxa_lower_rad}"
              upper="${coxa_upper_rad}"
-             effort="${geom['joints']['coxa']['effort']}"
-             velocity="${geom['joints']['coxa']['velocity']}"/>
+             effort="${seg['joints']['coxa']['effort']}"
+             velocity="${seg['joints']['coxa']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_coxa">
@@ -287,8 +281,8 @@
       <axis xyz="0 1 0"/>
       <limit lower="${femur_lower_rad}"
              upper="${femur_upper_rad}"
-             effort="${geom['joints']['femur']['effort']}"
-             velocity="${geom['joints']['femur']['velocity']}"/>
+             effort="${seg['joints']['femur']['effort']}"
+             velocity="${seg['joints']['femur']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_femur">
@@ -328,8 +322,8 @@
       <axis xyz="0 1 0"/>
       <limit lower="${tibia_lower_rad}"
              upper="${tibia_upper_rad}"
-             effort="${geom['joints']['tibia']['effort']}"
-             velocity="${geom['joints']['tibia']['velocity']}"/>
+             effort="${seg['joints']['tibia']['effort']}"
+             velocity="${seg['joints']['tibia']['velocity']}"/>
     </joint>
 
     <link name="${side}_${name}_tibia">
@@ -432,18 +426,20 @@
        here is the contract that package will fulfil).
        ===================================================================== -->
   <xacro:macro name="leg_joints_iface" params="side name">
-    <!-- Per-leg coxa initial angle, derived from
-         folded_pose.coxa.l_{front,middle}_deg by the same x/y mirror as
-         mount_leg above:
-           - rear  : negate (front/rear mirror)
-           - r_*   : negate (left/right mirror)
-         Applying both leaves r_rear with the same sign as l_front. -->
-    <xacro:property name="ref_folded_coxa_deg"
-                    value="${geom['folded_pose']['coxa']['l_middle_deg' if name == 'middle' else 'l_front_deg']}"/>
-    <xacro:property name="folded_coxa_deg_after_fr"
-                    value="${-ref_folded_coxa_deg if name == 'rear' else ref_folded_coxa_deg}"/>
+    <xacro:leg_group_props group="${name}"/>
+    <!-- Folded pose, fed to ros2_control's <initial_value> with the same
+         deg→rad conversion as the <limit> window. This is the pose the robot
+         energizes into. In sim, gz_ros2_control applies it on spawn; on the
+         real robot, the hardware plugin uses it as the assumed pose for
+         servos that cannot report position. The initialized pose the unfold
+         ladder moves on to is a gait-engine matter and never reaches the
+         URDF. Read from folded_pose.l_<name>; the right leg negates the coxa
+         (left/right mirror, as in mount_leg). -->
+    <xacro:property name="folded" value="${geom['folded_pose']['l_' + name]}"/>
     <xacro:property name="folded_coxa_rad"
-                    value="${(-folded_coxa_deg_after_fr if side == 'r' else folded_coxa_deg_after_fr) * pi / 180}"/>
+                    value="${(-folded['coxa_deg'] if side == 'r' else folded['coxa_deg']) * pi / 180}"/>
+    <xacro:property name="folded_femur_rad" value="${-folded['femur_deg'] * pi / 180}"/>
+    <xacro:property name="folded_tibia_rad" value="${pi - folded['tibia_deg'] * pi / 180}"/>
 
     <joint name="${side}_${name}_coxa_joint">
       <command_interface name="position">

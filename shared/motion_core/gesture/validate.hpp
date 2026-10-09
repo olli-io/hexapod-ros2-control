@@ -28,7 +28,7 @@ void check_track_shape(const std::vector<LegKeyframe>& keys,
                        const std::string& where);
 
 // Throws std::invalid_argument naming the gesture, leg, joint and time on a
-// leg knot outside kJointLimits, naming the gesture, leg and time on a knot
+// leg knot outside its LegSpec limits, naming the gesture, leg and time on a knot
 // whose foot sits below the default preset's ground plane (`nominal_stance`,
 // body frame), on a body keyframe outside `limits` — the pose clamp would
 // otherwise bend the track silently — on a leg track that breaks

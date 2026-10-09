@@ -95,27 +95,38 @@ TEST(LegSpecs, SymmetryExpansion) {
   }
 }
 
-TEST(LegSpecs, SegmentsAreUniform) {
-  // All six legs are built from the same three segment lengths, so the
-  // generator broadcasting one YAML triple across the array is the invariant —
-  // the lengths themselves are geometry.
-  const auto& ref = spec(Leg::L_FRONT);
-  EXPECT_GT(ref.coxa_len, 0.0f);
-  EXPECT_GT(ref.femur_len, 0.0f);
-  EXPECT_GT(ref.tibia_len, 0.0f);
-  for (std::size_t i = 0; i < cfg::kLegSpecs.size(); ++i) {
-    const auto& s = cfg::kLegSpecs[i];
-    EXPECT_NEAR(s.coxa_len, ref.coxa_len, kTol) << hexa::LEG_NAMES[i];
-    EXPECT_NEAR(s.femur_len, ref.femur_len, kTol) << hexa::LEG_NAMES[i];
-    EXPECT_NEAR(s.tibia_len, ref.tibia_len, kTol) << hexa::LEG_NAMES[i];
+TEST(LegSpecs, SegmentsFollowGroup) {
+  // geometry.yaml gives segments and limits per leg group, so the left and
+  // right legs of a group must match — the values themselves are geometry.
+  for (const auto& [l, r] : {std::pair{Leg::L_FRONT, Leg::R_FRONT},
+                             std::pair{Leg::L_MIDDLE, Leg::R_MIDDLE},
+                             std::pair{Leg::L_REAR, Leg::R_REAR}}) {
+    const auto& a = spec(l);
+    const auto& b = spec(r);
+    const auto name = hexa::LEG_NAMES[static_cast<std::size_t>(l)];
+    EXPECT_GT(a.coxa_len, 0.0f) << name;
+    EXPECT_GT(a.femur_len, 0.0f) << name;
+    EXPECT_GT(a.tibia_len, 0.0f) << name;
+    EXPECT_NEAR(a.coxa_len, b.coxa_len, kTol) << name;
+    EXPECT_NEAR(a.femur_len, b.femur_len, kTol) << name;
+    EXPECT_NEAR(a.tibia_len, b.tibia_len, kTol) << name;
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_NEAR(a.limits[j].lower, b.limits[j].lower, kTol) << name;
+      EXPECT_NEAR(a.limits[j].upper, b.limits[j].upper, kTol) << name;
+      EXPECT_NEAR(a.limits[j].effort, b.limits[j].effort, kTol) << name;
+      EXPECT_NEAR(a.limits[j].velocity, b.limits[j].velocity, kTol) << name;
+    }
   }
   EXPECT_GT(cfg::kCoxaToBottom, 0.0f);
 }
 
 TEST(JointLimits, BracketBothRestPoses) {
-  for (std::size_t j = 0; j < cfg::kJointLimits.size(); ++j) {
-    EXPECT_LT(cfg::kJointLimits[j].lower, cfg::kJointLimits[j].upper)
-        << "joint " << j;
+  for (std::size_t i = 0; i < cfg::kLegSpecs.size(); ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_LT(cfg::kLegSpecs[i].limits[j].lower,
+                cfg::kLegSpecs[i].limits[j].upper)
+          << hexa::LEG_NAMES[i] << " joint " << j;
+    }
   }
 
   // Each joint applies its own deg->rad convention (coxa plain, femur negated,
@@ -128,35 +139,31 @@ TEST(JointLimits, BracketBothRestPoses) {
     for (std::size_t i = 0; i < pose->size(); ++i) {
       for (std::size_t j = 1; j < 3; ++j) {
         const float angle = (*pose)[i][j];
-        EXPECT_GE(angle, cfg::kJointLimits[j].lower - kTol)
+        EXPECT_GE(angle, cfg::kLegSpecs[i].limits[j].lower - kTol)
             << name << " " << hexa::LEG_NAMES[i] << " joint " << j;
-        EXPECT_LE(angle, cfg::kJointLimits[j].upper + kTol)
+        EXPECT_LE(angle, cfg::kLegSpecs[i].limits[j].upper + kTol)
             << name << " " << hexa::LEG_NAMES[i] << " joint " << j;
       }
     }
   }
 }
 
-TEST(Pose, RestPosesArePerLegSymmetric) {
-  // geometry.yaml gives the coxa tuck for l_front and l_middle only; the rest
-  // are mirrored. femur/tibia are uniform across the hexapod.
+TEST(Pose, RestPosesMirrorLeftToRight) {
+  // geometry.yaml gives each left leg; the right leg of a group negates the
+  // coxa and keeps femur/tibia.
   for (const auto& [name, pose] : kRestPoses) {
     const auto angle = [&](Leg leg, std::size_t joint) {
       return (*pose)[static_cast<std::size_t>(leg)][joint];
     };
-    const float front = angle(Leg::L_FRONT, 0);
-    EXPECT_NE(front, 0.0f) << name << ": a zero front tuck makes the mirrors "
-                                      "vacuous";
-    EXPECT_NEAR(angle(Leg::L_REAR, 0), -front, kTol) << name;
-    EXPECT_NEAR(angle(Leg::R_FRONT, 0), -front, kTol) << name;
-    EXPECT_NEAR(angle(Leg::R_REAR, 0), front, kTol) << name;
-    EXPECT_NEAR(angle(Leg::L_MIDDLE, 0), angle(Leg::R_MIDDLE, 0), kTol) << name;
-
-    for (std::size_t i = 0; i < pose->size(); ++i) {
-      EXPECT_NEAR((*pose)[i][1], (*pose)[0][1], kTol)
-          << name << " " << hexa::LEG_NAMES[i] << " femur differs from leg 0";
-      EXPECT_NEAR((*pose)[i][2], (*pose)[0][2], kTol)
-          << name << " " << hexa::LEG_NAMES[i] << " tibia differs from leg 0";
+    EXPECT_NE(angle(Leg::L_FRONT, 0), 0.0f)
+        << name << ": a zero front tuck makes the mirror vacuous";
+    for (const auto& [l, r] : {std::pair{Leg::L_FRONT, Leg::R_FRONT},
+                               std::pair{Leg::L_MIDDLE, Leg::R_MIDDLE},
+                               std::pair{Leg::L_REAR, Leg::R_REAR}}) {
+      const auto leg = hexa::LEG_NAMES[static_cast<std::size_t>(l)];
+      EXPECT_NEAR(angle(r, 0), -angle(l, 0), kTol) << name << " " << leg;
+      EXPECT_NEAR(angle(r, 1), angle(l, 1), kTol) << name << " " << leg;
+      EXPECT_NEAR(angle(r, 2), angle(l, 2), kTol) << name << " " << leg;
     }
   }
 }
@@ -506,8 +513,9 @@ TEST(GeneratedConfig, GestureRangesCoverTheTablesAndTimesAreOrdered) {
       if (!key.hold && !key.home && !key.start) {
         const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
         for (std::size_t j = 0; j < 3; ++j) {
-          EXPECT_GE(a[j], cfg::kJointLimits[j].lower) << "joint " << j;
-          EXPECT_LE(a[j], cfg::kJointLimits[j].upper) << "joint " << j;
+          const auto& lim = cfg::kLegSpecs[static_cast<std::size_t>(t.leg)].limits[j];
+          EXPECT_GE(a[j], lim.lower) << "joint " << j;
+          EXPECT_LE(a[j], lim.upper) << "joint " << j;
         }
       }
       if (k > 0) {

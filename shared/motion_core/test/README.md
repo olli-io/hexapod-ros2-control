@@ -12,7 +12,7 @@ parts 05–08 and formalized as Tier 1 of part 10.
   add/sub/negate, scalar mul/div, `norm` (hypotf), `normalized`, `Zero`,
   indexed access, and `constexpr` usability, against hand-computed values.
 - **`test_config`** — spot-checks of `src/config_generated.hpp` (emitted by
-  `tools/gen_config.py`): the six-leg mount **symmetry expansion** (incl.
+  `tools/gen_config.py`): per-group segments and limits, the six-leg mount **symmetry expansion** (incl.
   `r_rear = (-0.083, -0.0575, -150°)`), deg→rad joint conventions, standing /
   rest poses, gait engine knobs, the **derived** per-gait velocity caps
   (`tripod linear_max = 1/3 m/s`, stability flags), teleop hardware identity,

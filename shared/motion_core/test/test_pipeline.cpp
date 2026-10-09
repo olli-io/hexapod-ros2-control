@@ -1037,11 +1037,11 @@ TEST(LegSetChange, NoJointCommandOutrunsItsServo) {
       for (std::size_t j = 0; j < servo_out::kNumJoints; ++j) {
         const float step = std::fabs(steps[i].theta[j] - steps[i - 1].theta[j]);
         const float budget =
-            hexa::config::kJointLimits[j % 3].velocity * pl::kDt;
+            hexa::config::kLegSpecs[j / 3].limits[j % 3].velocity * pl::kDt;
         ASSERT_LT(step, budget)
             << "joint " << j << " was commanded " << step / pl::kDt
             << " rad/s on tick " << i << ", past its rated "
-            << hexa::config::kJointLimits[j % 3].velocity << " ("
+            << hexa::config::kLegSpecs[j / 3].limits[j % 3].velocity << " ("
             << (to_quad ? "hex -> quad" : "quad -> hex") << ")";
       }
     }
@@ -1297,11 +1297,11 @@ TEST(Gesture, NoJointCommandOutrunsItsServo) {
       for (std::size_t j = 0; j < servo_out::kNumJoints; ++j) {
         const float step = std::fabs(steps[i].theta[j] - steps[i - 1].theta[j]);
         const float budget =
-            hexa::config::kJointLimits[j % 3].velocity * pl::kDt;
+            hexa::config::kLegSpecs[j / 3].limits[j % 3].velocity * pl::kDt;
         ASSERT_LT(step, budget)
             << g.id << ": joint " << j << " was commanded " << step / pl::kDt
             << " rad/s on tick " << i << ", past its rated "
-            << hexa::config::kJointLimits[j % 3].velocity;
+            << hexa::config::kLegSpecs[j / 3].limits[j % 3].velocity;
       }
     }
   }
@@ -1374,8 +1374,8 @@ TEST(Gesture, TrackedLegStaysInsideItsKnotsAndEveryJointInsideItsLimits) {
     }
     for (const auto& r : steps) {
       for (std::size_t j = 0; j < servo_out::kNumJoints; ++j) {
-        EXPECT_GE(r.theta[j], hexa::config::kJointLimits[j % 3].lower) << g.id;
-        EXPECT_LE(r.theta[j], hexa::config::kJointLimits[j % 3].upper) << g.id;
+        EXPECT_GE(r.theta[j], hexa::config::kLegSpecs[j / 3].limits[j % 3].lower) << g.id;
+        EXPECT_LE(r.theta[j], hexa::config::kLegSpecs[j / 3].limits[j % 3].upper) << g.id;
       }
     }
   }

@@ -2,9 +2,12 @@
 // field by field over the same source YAMLs gen_config.py bakes from
 // (GEOMETRY_YAML / TUNING_YAML / GESTURES_YAML, injected by CMake).
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include "leg_index.hpp"
 #include "pipeline_config.hpp"
@@ -42,6 +45,15 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
         << leg << ".femur_len";
     EXPECT_NEAR(loaded.leg_specs[i].tibia_len, baked.leg_specs[i].tibia_len, kTol)
         << leg << ".tibia_len";
+    for (int j = 0; j < 3; ++j) {
+      const auto& ll = loaded.leg_specs[i].limits[j];
+      const auto& bl = baked.leg_specs[i].limits[j];
+      const std::string lim = leg + ".limits[" + std::to_string(j) + "]";
+      EXPECT_NEAR(ll.lower, bl.lower, kTol) << lim << ".lower";
+      EXPECT_NEAR(ll.upper, bl.upper, kTol) << lim << ".upper";
+      EXPECT_NEAR(ll.effort, bl.effort, kTol) << lim << ".effort";
+      EXPECT_NEAR(ll.velocity, bl.velocity, kTol) << lim << ".velocity";
+    }
     for (int j = 0; j < 3; ++j) {
       EXPECT_NEAR(loaded.folded_pose[i][j], baked.folded_pose[i][j], kTol)
           << leg << ".folded_pose[" << j << "]";
@@ -243,6 +255,40 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
       EXPECT_EQ(lg.body[ki].transition, bg.body[ki].transition) << key;
       EXPECT_EQ(lg.body[ki].hold, bg.body[ki].hold) << key;
       EXPECT_EQ(lg.body[ki].home, bg.body[ki].home) << key;
+    }
+  }
+}
+
+TEST(ConfigLoader, ReadsSegmentsAndLimitsPerGroup) {
+  YAML::Node geo = YAML::LoadFile(GEOMETRY_YAML);
+  const float rear_tibia = geo["legs"]["rear"]["tibia_length"].as<float>() + 0.01f;
+  geo["legs"]["rear"]["tibia_length"] = rear_tibia;
+  geo["legs"]["front"]["joints"]["coxa"]["upper_limit_deg"] = 64.5;
+  const auto path = std::filesystem::temp_directory_path() /
+                    "hexa_geometry_per_group.yaml";
+  {
+    std::ofstream out(path);
+    out << geo;
+  }
+  const PipelineConfig cfg =
+      load_pipeline_config_from_yaml(path.string(), TUNING_YAML, GESTURES_YAML);
+  std::filesystem::remove(path);
+  const PipelineConfig baked = PipelineConfig::baked();
+
+  for (std::size_t i = 0; i < hexa::kNumLegs; ++i) {
+    const auto group = hexa::leg_group(static_cast<hexa::Leg>(i));
+    const auto& spec = cfg.leg_specs[i];
+    const auto& ref = baked.leg_specs[i];
+    const std::string leg(hexa::LEG_NAMES[i]);
+    if (group == hexa::LegGroup::REAR) {
+      EXPECT_NEAR(spec.tibia_len, rear_tibia, kTol) << leg;
+    } else {
+      EXPECT_NEAR(spec.tibia_len, ref.tibia_len, kTol) << leg;
+    }
+    if (group == hexa::LegGroup::FRONT) {
+      EXPECT_NEAR(spec.limits[0].upper, 64.5f * M_PI / 180.0f, kTol) << leg;
+    } else {
+      EXPECT_NEAR(spec.limits[0].upper, ref.limits[0].upper, kTol) << leg;
     }
   }
 }

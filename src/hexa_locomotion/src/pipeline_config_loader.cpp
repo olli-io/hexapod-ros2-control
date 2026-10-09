@@ -43,14 +43,14 @@ double to_urdf_rad(const std::string& joint_type, double deg) {
   throw std::runtime_error("unknown joint type: " + joint_type);
 }
 
-// Mirrors gen_config.py joint_limits(): geometry.yaml joints.<type> windows in
-// URDF rad, ordered coxa, femur, tibia like a JointAngles triple.
-std::array<hexa::config::JointLimits, 3> load_joint_limits(const YAML::Node& geo) {
+// Mirrors gen_config.py joint_limits(): one group's legs.<group>.joints windows
+// in URDF rad, ordered coxa, femur, tibia like a JointAngles triple.
+std::array<hexa::config::JointLimits, 3> load_joint_limits(const YAML::Node& seg) {
   static constexpr std::array<const char*, 3> kJointTypes = {"coxa", "femur",
                                                               "tibia"};
   std::array<hexa::config::JointLimits, 3> out{};
   for (std::size_t j = 0; j < 3; ++j) {
-    const YAML::Node cfg = geo["joints"][kJointTypes[j]];
+    const YAML::Node cfg = seg["joints"][kJointTypes[j]];
     const double a = to_urdf_rad(kJointTypes[j], cfg["lower_limit_deg"].as<double>());
     const double b = to_urdf_rad(kJointTypes[j], cfg["upper_limit_deg"].as<double>());
     out[j].lower = static_cast<float>(std::min(a, b));
@@ -169,7 +169,7 @@ hexa::JointAngles leg_entry_angles(
 
 std::vector<hexa::gesture::GestureSpec> load_gestures(
     const std::string& path,
-    const std::array<hexa::config::JointLimits, 3>& limits) {
+    const std::map<std::string, hexa::config::LegSpec>& specs) {
   static const std::set<std::string> kLegPoseKeys = {
       "t", "transition", "l_front", "l_middle", "l_rear", "r_front", "r_middle",
       "r_rear"};
@@ -244,7 +244,7 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
             throw std::runtime_error(
                 where + "." + leg + ": needs coxa_deg, femur_deg and tibia_deg");
           }
-          leg_entry_angles(v, limits, where + "." + leg);
+          leg_entry_angles(v, specs.at(leg).limits, where + "." + leg);
         } else {
           throw std::runtime_error(where + "." + leg +
                                    ": a mapping, hold, home or start");
@@ -281,7 +281,7 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
         row.start = stand_in == "start";
         if (stand_in.empty()) {
           const hexa::JointAngles a =
-              leg_entry_angles(v, limits, gwhere + "." + leg);
+              leg_entry_angles(v, specs.at(leg).limits, gwhere + "." + leg);
           row.coxa = a[0];
           row.femur = a[1];
           row.tibia = a[2];
@@ -348,11 +348,8 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
 
   hexa::pipeline::PipelineConfig cfg;
 
-  // Six LegSpecs by symmetry: rear x -> -x, yaw -> pi - yaw; right y -> -y, yaw -> -yaw.
-  const YAML::Node leg = geo["leg"];
-  const float coxa_len = f(leg["coxa_length"]);
-  const float femur_len = f(leg["femur_length"]);
-  const float tibia_len = f(leg["tibia_length"]);
+  // Six LegSpecs: segments and limits from legs.<group>; mounts by symmetry,
+  // rear x -> -x, yaw -> pi - yaw; right y -> -y, yaw -> -yaw.
   const YAML::Node mounts = geo["mounts"];
   const YAML::Node front = mounts["l_front"];
   const YAML::Node middle = mounts["l_middle"];
@@ -375,9 +372,11 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
       spec.mount_xyz = hexa::Vec3(static_cast<float>(mx),
                                   static_cast<float>(my), 0.0f);
       spec.mount_yaw = static_cast<float>(myaw);
-      spec.coxa_len = coxa_len;
-      spec.femur_len = femur_len;
-      spec.tibia_len = tibia_len;
+      const YAML::Node seg = geo["legs"][name];
+      spec.coxa_len = f(seg["coxa_length"]);
+      spec.femur_len = f(seg["femur_length"]);
+      spec.tibia_len = f(seg["tibia_length"]);
+      spec.limits = load_joint_limits(seg);
       specs[side + "_" + name] = spec;
     }
   }
@@ -436,24 +435,21 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     }
   }
 
-  // femur/tibia uniform; coxa by symmetry in degrees (rear negates, then right
-  // negates) before the deg->rad conversion.
+  // One entry per left leg; the right leg negates the coxa in degrees before
+  // the deg->rad conversion.
   const auto rest_pose = [&](const char* key) {
     const YAML::Node p = geo[key];
-    const float femur = static_cast<float>(
-        to_urdf_rad("femur", p["femur"]["above_horizontal_deg"].as<double>()));
-    const float tibia = static_cast<float>(
-        to_urdf_rad("tibia", p["tibia"]["interior_deg"].as<double>()));
-    const YAML::Node coxa_cfg = p["coxa"];
     std::map<std::string, hexa::JointAngles> out;
     for (const std::string side : {"l", "r"}) {
       for (const std::string name : {"front", "middle", "rear"}) {
-        const double ref_deg =
-            coxa_cfg[(name == "middle") ? "l_middle_deg" : "l_front_deg"]
-                .as<double>();
-        const double after_fr = (name == "rear") ? -ref_deg : ref_deg;
-        const double after_lr = (side == "r") ? -after_fr : after_fr;
-        const float coxa = static_cast<float>(to_urdf_rad("coxa", after_lr));
+        const YAML::Node ref = p["l_" + name];
+        const double coxa_deg = ref["coxa_deg"].as<double>();
+        const float coxa = static_cast<float>(
+            to_urdf_rad("coxa", (side == "r") ? -coxa_deg : coxa_deg));
+        const float femur = static_cast<float>(
+            to_urdf_rad("femur", ref["femur_deg"].as<double>()));
+        const float tibia = static_cast<float>(
+            to_urdf_rad("tibia", ref["tibia_deg"].as<double>()));
         out[side + "_" + name] = {coxa, femur, tibia};
       }
     }
@@ -597,7 +593,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     }
   }
 
-  cfg.gestures = load_gestures(gestures_path, load_joint_limits(geo));
+  cfg.gestures = load_gestures(gestures_path, specs);
 
   return cfg;
 }
