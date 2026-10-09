@@ -40,14 +40,14 @@ gait_node:
           body_height: 0.07
           front:
             tip_reach: 0.135
-            coxa_deg: 20
+            coxa_deg: 18
           middle:
             tip_reach: 0.135
             coxa_deg: 0
           rear:
             tip_reach: 0.135
-            coxa_deg: 20
-        stride_length: 0.105
+            coxa_deg: 18
+        stride_length: 0.10
         # Most a leg's own coxa-to-foot reach may close over one half stride.
         # Every direction is priced against the worst-placed leg. Set equal to
         # stride_length to disable (isotropic stride).
@@ -70,14 +70,14 @@ gait_node:
           body_height: 0.065
           front:
             tip_reach: 0.14
-            coxa_deg: 20
+            coxa_deg: 18
           middle:
             tip_reach: 0.135
             coxa_deg: 0
           rear:
             tip_reach: 0.14
-            coxa_deg: 20
-        stride_length: 0.11
+            coxa_deg: 18
+        stride_length: 0.10
         stride_length_radial: 0.085
         min_swing_time: 0.5
         max_swing_time: 0.6
