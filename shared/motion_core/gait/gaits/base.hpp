@@ -38,14 +38,13 @@ RadialAxis radial_axis(const LegContext& leg);
 // How far past its design band (half a stride) a stance anchor may drift before
 // the integrator stops it, as a fraction of the band. Also the distance the foot
 // brakes over: 0.25 gives up 8 mm of a lateral reversal's 14 mm unbounded
-// overshoot for a braking step of ~8% of stance speed per tick. The swing's
-// touchdown ride meters against the same number (SwingProfile::ride_headroom),
-// so a parked foot stays inside the ceiling a stance anchor may drift to.
+// overshoot for a braking step of ~8% of stance speed per tick.
 constexpr float kStanceExcursionGrace = 0.25f;
 
-// Largest share of the swing the constant-velocity probe may take; the climb and
-// the brake split the rest evenly, so neither can collapse.
-constexpr float kMaxProbeFraction = 0.4f;
+// Swing progress from which the touchdown target stops following the live AEP.
+// Near the ground the arc is the touchdown ground line, so any target motion
+// there drags the foot one for one across the floor.
+constexpr float kTouchdownLatchPhase = 0.7f;
 
 // Shape of one swing, independent of where the foot is travelling. Bundled so
 // the engine, the engagement controller and the strategies agree on the defaults.
@@ -54,37 +53,20 @@ struct SwingProfile {
   float clearance = 0.0f;
   // Sideways shift of the arc; 0 = straight fore/aft.
   float width = 0.0f;
-  // Vertical speed the foot carries as it meets the ground, and the speed of the
-  // probe below. Shapes the descent's approach only; the track never moves.
-  float touchdown_velocity = 0.0f;
-  // Share of the swing spent in a straight probe at exactly touchdown_velocity.
-  // Its height — the band a foot may meet the ground anywhere inside and still
-  // land at the intended speed — is touchdown_velocity * fraction * swing_time,
-  // taken off the tail of the swing. Clamped to kMaxProbeFraction; 0 restores a
-  // zero-speed landing.
-  float touchdown_probe_fraction = 0.0f;
-  // How far beyond the touchdown target the arc may park the foot to ride the
-  // touchdown ground line. Riding it holds the foot world-frame stationary over
-  // its landing point while the probe descends, so an early contact lands
-  // without horizontal slip; the price is parking past the target by ground
-  // speed times time ridden, which this meters. The grant also tapers with
-  // ground speed (granted_ride_time). 0 disables the ride.
-  float ride_headroom = 0.0f;
-
-  float probe_fraction() const {
-    return touchdown_probe_fraction < kMaxProbeFraction
-               ? touchdown_probe_fraction
-               : kMaxProbeFraction;
-  }
-
-  float probe_band(float swing_time) const {
-    return touchdown_velocity * probe_fraction() * swing_time;
-  }
-
-  // Swing progress at which the probe begins — from here the foot may meet the
-  // ground at any moment.
-  float probe_start() const { return 1.0f - probe_fraction(); }
+  // Share of the swing spent climbing, in (0, 0.5]. The rest is the descent, so
+  // a lower value gives a slower approach to the ground and a faster lift-off.
+  float apex_time = 0.5f;
+  // Height the foot climbs straight up from its lift-off point, ground frame,
+  // before any horizontal travel. Capped at kMaxStraightShare of the clearance.
+  float lift_height = 0.0f;
+  // Height from which the foot descends straight down onto its touchdown
+  // ground line, ground frame, after all horizontal travel. Same cap.
+  float land_height = 0.0f;
 };
+
+// Largest share of the clearance each straight segment may take, so the climb
+// and the descent keep room to carry the travel over the apex.
+constexpr float kMaxStraightShare = 0.5f;
 
 // Per-tick stride for one leg; stride_vector is the body-frame displacement the
 // foot covers over one stance (AEP -> PEP).
@@ -214,15 +196,17 @@ float ease7(float u);
 // where a foot planted at lift-off would have got to, and where the landing foot
 // would have come from — so it leaves and meets the ground at exactly the ground
 // velocity and only pulls away as O(t^4), and never scrubs while it may still be
-// touching. Where profile.ride_headroom affords it the travel completes at the
-// probe's start and the remainder rides the moving ground line, so an early
-// contact anywhere in the band lands without slip.
+// touching.
 //
-// The vertical is eased independently with its apex over the spatial midpoint of
-// the travel (the blend's clock is warped to cross half-travel there), so no knob
-// can displace the apex along the track. Its time is derived: the probe takes
-// touchdown_probe_fraction off the tail and climb and braked descent split the
-// rest, and the lift-off speed is 2 * clearance / climb_time.
+// The horizontal blend is held at zero until the climb reaches
+// profile.lift_height and at one once the descent passes profile.land_height,
+// so the foot rises straight up off its lift-off point and sets straight down
+// onto its touchdown point, both in the ground frame. The blend runs between.
+//
+// The vertical is eased independently with its apex at profile.apex_time and
+// over the spatial midpoint of the travel (the blend's clock is warped to cross
+// half-travel there). The lift-off speed is 2 * clearance / climb_time, and the
+// foot meets the ground at zero vertical speed.
 //
 // origin/target_ground_velocity are the horizontal stance velocities at the two
 // ends; nullopt defaults to -stride / swing_time, and Vec3::Zero() gives a
@@ -232,5 +216,12 @@ Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
                const SwingProfile& profile,
                std::optional<Vec3> origin_ground_velocity = std::nullopt,
                std::optional<Vec3> target_ground_velocity = std::nullopt);
+
+// Swing progress from which swing_arc's horizontal is the touchdown ground line
+// alone (1 without a straight landing). From there a caller that knows the live
+// body velocity may carry the foot itself, which stays ground-fixed when the
+// command changes under the landing; the arc's line only does for a constant one.
+float swing_land_start(const Vec3& swing_origin, const Vec3& target,
+                       const SwingProfile& profile);
 
 }  // namespace hexa::gait

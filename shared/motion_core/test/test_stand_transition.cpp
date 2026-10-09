@@ -54,9 +54,7 @@ g::InitializeController make_initialize(const Ladder& l,
       set, l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
       hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
       l.cfg.init_lift_body_time, l.cfg.init_unfold_time,
-      l.cfg.init_place_clearance, l.cfg.init_swing_clearance, l.cfg.swing_width,
-      l.cfg.touchdown_velocity, l.cfg.touchdown_probe_fraction,
-      l.cfg.controller_dt);
+      l.cfg.init_place_clearance, l.cfg.init_profile(), l.cfg.controller_dt);
 }
 
 g::FoldController make_fold(const Ladder& l,
@@ -65,8 +63,7 @@ g::FoldController make_fold(const Ladder& l,
       set, l.folded, l.initialized, l.nominal, hexa::config::kCoxaToBottom,
       hexa::config::kFootRadius, l.cfg.init_pair_swing_time,
       l.cfg.init_lift_body_time, l.cfg.init_unfold_time,
-      l.cfg.init_swing_clearance, l.cfg.swing_width, l.cfg.touchdown_velocity,
-      l.cfg.touchdown_probe_fraction, l.cfg.controller_dt);
+      l.cfg.init_profile(), l.cfg.controller_dt);
 }
 
 void expect_near(const g::Vec3& got, const g::Vec3& want,
@@ -710,7 +707,6 @@ g::PairFoldController make_pair_fold(const Ladder& l, g::PairFoldDirection dir) 
   return g::PairFoldController(dir, l.nominal, l.folded, l.nominal,
                                l.cfg.pair_fold_swing_time,
                                l.cfg.pair_fold_dwell_time,
-                               l.cfg.pair_fold_probe_band(),
                                l.cfg.pair_fold_profile(), l.cfg.controller_dt);
 }
 
@@ -803,29 +799,26 @@ TEST(PairFold, UnfoldNeverDipsBelowItsTargetAndLandsOnIt) {
   }
 }
 
-TEST(PairFold, TheUnfoldsLastStretchDescendsAtTouchdownVelocity) {
-  // Zero clearance also zeroes the swing profile's granted probe time, so the
-  // braked descent is a segment of its own. Its speed is the same
-  // touchdown_velocity every other landing in the stack arrives at.
+TEST(PairFold, TheUnfoldLandsStationary) {
+  // The eased chord is the whole move, so the pair meets the ground at zero
+  // speed like every other touchdown in the stack.
   const Ladder l = baked();
   auto unfold = make_pair_fold(l, g::PairFoldDirection::UNFOLD);
 
-  std::vector<float> set_down_z;
+  std::vector<float> z;
   const int limit = pair_fold_max_ticks(l);
   for (int i = 0; i < limit && !unfold.done(); ++i) {
     const auto out = unfold.update(kDt);
-    if (unfold.state() == g::PairFoldState::SET_DOWN || unfold.done()) {
-      set_down_z.push_back(out.at(kProbeLeg).foot_target[2]);
-    }
+    if (unfold.state() == g::PairFoldState::DWELL) continue;
+    z.push_back(out.at(kProbeLeg).foot_target[2]);
   }
-  ASSERT_GE(set_down_z.size(), 3u) << "no braked descent ran";
+  ASSERT_GE(z.size(), 3u);
 
-  // Mean speed over the stretch, excluding the final clamped sample.
-  const float travelled = set_down_z.front() - set_down_z[set_down_z.size() - 2];
-  const float elapsed = kDt * static_cast<float>(set_down_z.size() - 2);
-  ASSERT_GT(elapsed, 0.0f);
-  EXPECT_NEAR(travelled / elapsed, l.cfg.touchdown_velocity,
-              0.1f * l.cfg.touchdown_velocity);
+  const float peak = peak_step(z);
+  ASSERT_GT(peak, 0.0f);
+  const float last = std::fabs(z[z.size() - 1] - z[z.size() - 2]);
+  EXPECT_LT(last, 0.05f * peak)
+      << "the pair lands at " << 100.0f * last / peak << "% of its peak speed";
 }
 
 TEST(PairFold, HoldsEveryFootStillThroughTheDwell) {
@@ -885,8 +878,7 @@ TEST(PairFold, RefusesAClearance) {
   EXPECT_THROW(
       g::PairFoldController(g::PairFoldDirection::FOLD, l.nominal, l.folded,
                             l.nominal, l.cfg.pair_fold_swing_time,
-                            l.cfg.pair_fold_dwell_time,
-                            l.cfg.pair_fold_probe_band(), bad,
+                            l.cfg.pair_fold_dwell_time, bad,
                             l.cfg.controller_dt),
       std::invalid_argument);
 }

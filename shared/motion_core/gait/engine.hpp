@@ -60,8 +60,12 @@ struct EngineConfig {
   // end, so every handover has a stretch with all feet planted.
   float swing_phase_margin = 0.0f;
   float swing_width = 0.0f;
-  float touchdown_velocity = 0.0f;
-  float touchdown_probe_fraction = 0.0f;
+  // Share of every swing spent climbing, in (0, 0.5].
+  float swing_apex_time = 0.0f;
+  // Straight climb off the lift-off point before any horizontal travel.
+  float swing_lift_height = 0.0f;
+  // Straight descent onto the touchdown point after all horizontal travel.
+  float swing_land_height = 0.0f;
   // Quadruped only: how long a ladder holds all four feet planted before lifting
   // one, so the support shift can carry the body. A ladder has no phase circle
   // to buy that window from, so it waits instead.
@@ -90,48 +94,38 @@ struct EngineConfig {
   float pair_fold_dwell_time = 0.0f;
 
   // Shared with the engagement controller so a swing looks the same however the
-  // leg got airborne. effective_stride is what this tick actually lays down —
-  // the radial budget may have cut it.
-  SwingProfile swing_profile(float effective_stride) const {
-    SwingProfile p;
-    p.clearance = step_height;
-    p.width = swing_width;
-    p.touchdown_velocity = touchdown_velocity;
-    p.touchdown_probe_fraction = touchdown_probe_fraction;
-    // Derived, not configured: a foot may park exactly as far past its AEP as a
-    // stance anchor may drift past the band.
-    p.ride_headroom = kStanceExcursionGrace * 0.5f * effective_stride;
-    return p;
+  // leg got airborne.
+  SwingProfile swing_profile() const {
+    return SwingProfile{.clearance = step_height,
+                        .width = swing_width,
+                        .apex_time = swing_apex_time,
+                        .lift_height = swing_lift_height,
+                        .land_height = swing_land_height};
   }
 
-  SwingProfile swing_profile() const { return swing_profile(stride_length); }
-
-  // Its own clearance (a re-plant lifts far less than a step), the gait's own
-  // touchdown probe. No ride_headroom: a reseat lands on still ground.
+  // Its own clearance: a re-plant lifts far less than a step.
   SwingProfile reseat_profile() const {
-    SwingProfile p;
-    p.clearance = reseat_swing_clearance;
-    p.touchdown_velocity = touchdown_velocity;
-    p.touchdown_probe_fraction = touchdown_probe_fraction;
-    return p;
+    return SwingProfile{.clearance = reseat_swing_clearance,
+                        .apex_time = swing_apex_time,
+                        .lift_height = swing_lift_height,
+                        .land_height = swing_land_height};
+  }
+
+  // The cold start's and the fold's pair swings.
+  SwingProfile init_profile() const {
+    return SwingProfile{.clearance = init_swing_clearance,
+                        .width = swing_width,
+                        .apex_time = swing_apex_time,
+                        .lift_height = swing_lift_height,
+                        .land_height = swing_land_height};
   }
 
   // Zero clearance deliberately: swing_arc measures clearance from the higher
   // end, here always the folded one, whose femur sits ON its lower joint limit,
   // so any climb over it is unreachable. The arc degenerates to an eased chord,
-  // and the zeroed probe time makes the unfold's landing a segment of its own.
+  // still warped so the unfold slows into the ground.
   SwingProfile pair_fold_profile() const {
-    SwingProfile p;
-    p.clearance = 0.0f;
-    p.touchdown_velocity = touchdown_velocity;
-    p.touchdown_probe_fraction = touchdown_probe_fraction;
-    return p;
-  }
-
-  // How far above its target the unfold hands over to the braked descent — the
-  // gait's own probe-band expression, so the pair lands at the same speed.
-  float pair_fold_probe_band() const {
-    return touchdown_velocity * touchdown_probe_fraction * pair_fold_swing_time;
+    return SwingProfile{.apex_time = swing_apex_time};
   }
 };
 
@@ -167,21 +161,26 @@ class SwingPlanner {
                std::pair<float, float> v_leg, float swing_time,
                int identity_y_sign_val);
   // Re-aim the touchdown end at the live AEP / stance velocity and refresh the
-  // swing duration. No-op outside a swing.
-  //
-  // Rate-bounded from the probe on, where the arc has become the touchdown ground
-  // line and the target's own motion *is* slip. The budget is the foot's descent
-  // speed, so the drag can never exceed the height it may land within. v_target_
-  // stays unbounded: its slip contribution vanishes at touchdown.
+  // swing duration. No-op outside a swing. The target position latches from
+  // kTouchdownLatchPhase on; v_target_ does not, as its slip contribution
+  // vanishes at touchdown.
   void retarget(const std::string& name, const Vec3& target,
                 std::pair<float, float> v_leg, float swing_time,
-                float phase_in_swing, float dt, const SwingProfile& profile);
+                float phase_in_swing);
   void touchdown(const std::string& name);
-  Vec3 evaluate(const std::string& name, float phase_in_swing,
-                const SwingProfile& profile) const;
+  // The arc, until its straight landing starts; from there the foot is carried
+  // at the live -v_leg against the stance wall, so it stays ground-fixed when
+  // the command changes under it. The arc's touchdown line is ground-fixed only
+  // for a constant command.
+  Vec3 step(const std::string& name, float phase_in_swing,
+            const SwingProfile& profile, std::pair<float, float> v_leg,
+            float dt, const StanceBand& bound);
   void reset();
   bool is_swing(const std::string& name) const { return is_swing_.at(name); }
-  const Vec3& target(const std::string& name) const { return target_.at(name); }
+  // Where the foot sets down this tick: the latched target, or one more carried
+  // step at the target height once the landing is carried.
+  Vec3 touchdown_point(const std::string& name, std::pair<float, float> v_leg,
+                       float dt, const StanceBand& bound) const;
 
  private:
   std::map<std::string, Vec3> origin_;
@@ -192,6 +191,8 @@ class SwingPlanner {
   std::map<std::string, float> swing_time_;
   std::map<std::string, int> identity_y_sign_;
   std::map<std::string, bool> is_swing_;
+  std::map<std::string, bool> landing_;
+  std::map<std::string, Vec3> landing_point_;
 };
 
 // One preset as CONFIGURED: leg set, standing pose, and the stride/swing bundle

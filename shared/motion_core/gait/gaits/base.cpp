@@ -196,94 +196,85 @@ float apex_warp(float t, float apex_time) {
 
 // Quintic-Hermite basis for a prescribed derivative at the *end* of the
 // interval. It is <= 0 across [0, 1], so a negative end slope only lifts the
-// curve: the descent cannot dip below the touchdown level and needs no clamp.
+// curve: the climb cannot dip below the lift-off level and needs no clamp.
 float hermite_end_slope(float u) {
   return u * u * u * (-4.0f + u * (7.0f - 3.0f * u));
 }
 
-// Largest share of the apex height the probe may stand at, so the brake never
-// has to shed the whole step height at once. The share-of-swing cap is
-// kMaxProbeFraction (base.hpp).
-constexpr float kMaxProbeHeightFraction = 0.5f;
-
-// The probe's duration in seconds, after both caps.
-float granted_probe_time(float clearance, float swing_time,
-                         float touchdown_velocity, float probe_fraction) {
-  if (touchdown_velocity <= 0.0f || probe_fraction <= 0.0f ||
-      clearance <= 0.0f) {
-    return 0.0f;
-  }
-  return std::min(std::min(probe_fraction, kMaxProbeFraction) * swing_time,
-                  kMaxProbeHeightFraction * clearance / touchdown_velocity);
-}
-
-// How long before touchdown the horizontal travel may finish, leaving the foot
-// riding the touchdown ground line. The grant is the lesser of two meters, whose
-// product is probe_time^2, so it can never exceed the probe:
-//
-//  - headroom / speed — the parked foot overshoots the target by
-//    ground_speed x ride_time, and ride_headroom is all the envelope affords.
-//  - speed x probe_time^2 / headroom — granted in proportion to the slip it
-//    prevents, so slow and rest-to-rest swings keep the un-ridden arc exactly
-//    instead of compressing their travel into a mid-swing peak.
-//
-// Both read the *faster* seam speed: the origin speed is latched for the swing,
-// so a settle easing to zero underneath cannot shift the travel clock, and the
-// live end still bounds the overshoot. Gated on the probe.
-float granted_ride_time(float ride_headroom, float origin_speed,
-                        float target_speed, float probe_time) {
-  if (ride_headroom <= 0.0f || probe_time <= 0.0f) {
-    return 0.0f;
-  }
-  const float speed = std::max(origin_speed, target_speed);
-  if (speed <= 0.0f) {
-    return 0.0f;
-  }
-  return std::min(speed * probe_time * probe_time / ride_headroom,
-                  ride_headroom / speed);
-}
-
-// How high the foot rides above the blended base. No timing knob: the probe
-// takes its share off the tail and climb and brake split the rest evenly
-// (apex_time = (1 - probe_share) / 2), so a taller probe moves the bell earlier
-// rather than squeezing the brake.
+// How high the foot rides above the blended base. The climb takes apex_time of
+// the swing and the descent the rest.
 //
 // Climb is the quintic lift plus a mirrored Hermite term giving a definite
 // lift-off speed (zero would creep the loaded foot off the ground inside one
 // servo step); 2 * clearance / climb_time is the largest monotone climb.
-// Descent brakes quinticly to the probe — matching position and velocity at the
-// seam — then runs straight at touchdown_velocity, so a foot meeting the ground
-// anywhere inside the band lands at the same speed. A merely asymptotic
-// approach only reaches that speed at ground level.
+// Descent is a plain quintic, so the foot meets the ground at zero speed.
 //
 // Heights are measured from the blended base, which is the touchdown level for
-// every walking swing. A swing between two heights (a reseat changing body
-// height) is still settling under the probe, so its tail is not held to the
-// probe speed.
-float swing_height(float t, float apex_time, float clearance, float swing_time,
-                   float touchdown_velocity, float probe_time) {
-  const float climb_time = apex_time * swing_time;
+// every walking swing.
+float swing_height(float t, float clearance, float apex_time) {
   if (t < apex_time) {
-    const float liftoff_velocity = 2.0f * clearance / climb_time;
     const float u = t / apex_time;
-    return clearance * ease5(u) -
-           liftoff_velocity * climb_time * hermite_end_slope(1.0f - u);
+    return clearance * (ease5(u) - 2.0f * hermite_end_slope(1.0f - u));
   }
+  return clearance * (1.0f - ease5((t - apex_time) / (1.0f - apex_time)));
+}
 
-  // From the time actually granted, so whichever cap bit, the brake hands over
-  // at exactly the probe's speed.
-  const float probe_z = touchdown_velocity * probe_time;
-  const float descent_time = (1.0f - apex_time) * swing_time;
-  const float elapsed = (t - apex_time) * swing_time;
-  const float brake_time = descent_time - probe_time;
-  if (elapsed >= brake_time) {
-    return touchdown_velocity * (descent_time - elapsed);
+// Swing progress at which the foot is `height` (< clearance) above the base, on
+// the climb or on the descent. Each side is monotone, so bisection; 24 halvings
+// put it below float resolution.
+float height_crossing(float height, float clearance, float apex_time,
+                      bool climb) {
+  float lo = climb ? 0.0f : apex_time;
+  float hi = climb ? apex_time : 1.0f;
+  for (int i = 0; i < 24; ++i) {
+    const float mid = 0.5f * (lo + hi);
+    ((swing_height(mid, clearance, apex_time) < height) == climb ? lo : hi) =
+        mid;
   }
-  const float w = brake_time > 0.0f ? elapsed / brake_time : 1.0f;
-  return probe_z + (clearance - probe_z) * (1.0f - ease5(w)) -
-         touchdown_velocity * brake_time * hermite_end_slope(w);
+  return climb ? hi : lo;
+}
+
+// Measured from the higher of the two ends, so swing_clearance keeps meaning
+// "how high the foot lifts" on a swing between two heights. A profile asking
+// for no lift gets no shaping either — half a height gap would swing the
+// reseat landing up off a start it was told to descend from.
+float arc_clearance(const Vec3& swing_origin, const Vec3& target,
+                    const SwingProfile& profile) {
+  if (profile.clearance <= 0.0f) {
+    return 0.0f;
+  }
+  const float ground_z = std::max(swing_origin[2], target[2]);
+  return std::max(0.0f, ground_z + profile.clearance -
+                            0.5f * (swing_origin[2] + target[2]));
+}
+
+// Swing progress at which the straight lift ends and the straight landing
+// starts; {0, 1} when the profile asks for neither.
+std::pair<float, float> straight_segments(float clearance,
+                                          const SwingProfile& profile) {
+  float lift_end = 0.0f;
+  float land_start = 1.0f;
+  if (clearance > 0.0f) {
+    const float cap = kMaxStraightShare * clearance;
+    if (profile.lift_height > 0.0f) {
+      lift_end = height_crossing(std::min(profile.lift_height, cap), clearance,
+                                 profile.apex_time, true);
+    }
+    if (profile.land_height > 0.0f) {
+      land_start = height_crossing(std::min(profile.land_height, cap),
+                                   clearance, profile.apex_time, false);
+    }
+  }
+  return {lift_end, land_start};
 }
 }  // namespace
+
+float swing_land_start(const Vec3& swing_origin, const Vec3& target,
+                       const SwingProfile& profile) {
+  return straight_segments(arc_clearance(swing_origin, target, profile),
+                           profile)
+      .second;
+}
 
 // Evaluate from the nearer end: near u = 1 the order-100 terms cancel down to
 // ~1 and the float noise jitters the foot at the touchdown seam.
@@ -304,41 +295,27 @@ Vec3 swing_arc(float phase_in_swing, const Vec3& swing_origin,
 
   const float t = std::clamp(phase_in_swing, 0.0f, 1.0f);
 
-  // Measured from the higher of the two ends, so swing_clearance keeps meaning
-  // "how high the foot lifts" on a swing between two heights. A profile asking
-  // for no lift gets no shaping either — half a height gap would swing the
-  // reseat landing up off a start it was told to descend from.
-  float clearance = 0.0f;
-  if (profile.clearance > 0.0f) {
-    const float ground_z = std::max(swing_origin[2], target[2]);
-    clearance = std::max(0.0f, ground_z + profile.clearance -
-                                   0.5f * (swing_origin[2] + target[2]));
-  }
-  const float probe_time =
-      granted_probe_time(clearance, swing_time, profile.touchdown_velocity,
-                         profile.touchdown_probe_fraction);
-  const float apex_time = 0.5f * (1.0f - probe_time / swing_time);
-  // The travel clock: the blend's span, ending where the ride begins. A zero
-  // ride makes u == t — the un-ridden arc, bit for bit.
-  const float ride_time =
-      granted_ride_time(profile.ride_headroom, v_ground_in.norm(),
-                        v_ground_out.norm(), probe_time);
-  const float travel_end = 1.0f - ride_time / swing_time;
-  const float u = std::min(t / travel_end, 1.0f);
-  const float tau = apex_warp(u, apex_time / travel_end);
-  const float blend = ease7(tau);
+  const float clearance = arc_clearance(swing_origin, target, profile);
+  const float apex_time = profile.apex_time;
+
+  // The blend runs between the straight lift and the straight landing, and
+  // still crosses one half at apex_time so the apex stays over the spatial
+  // midpoint.
+  const auto [lift_end, land_start] = straight_segments(clearance, profile);
+  const float span = land_start - lift_end;
+  const float s = std::clamp((t - lift_end) / span, 0.0f, 1.0f);
+  const float blend = ease7(apex_warp(s, (apex_time - lift_end) / span));
 
   // The two ground lines: where a foot planted at lift-off would have got to,
   // and where the landing foot would have come from. ease7 pins the swing to the
-  // first at t = 0 and the second from travel_end on in position, velocity *and*
+  // first at t = 0 and the second at t = 1 in position, velocity *and*
   // acceleration — the continuity stance needs at both seams.
   const Vec3 from_liftoff = swing_origin + v_ground_in * (swing_time * t);
   const Vec3 to_touchdown = target - v_ground_out * (swing_time * (1.0f - t));
   Vec3 point = (1.0f - blend) * from_liftoff + blend * to_touchdown;
 
   if (clearance > 0.0f) {
-    point[2] += swing_height(t, apex_time, clearance, swing_time,
-                             profile.touchdown_velocity, probe_time);
+    point[2] += swing_height(t, clearance, apex_time);
   }
 
   // Lateral bulge, on the lift's spatial symmetry rather than its height, so it

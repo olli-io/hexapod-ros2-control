@@ -472,8 +472,9 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     e.swing_phase_margin = d.swing_phase_margin;
   }
   e.swing_width = f(g["swing_width"]);
-  e.touchdown_velocity = f(g["touchdown_velocity"]);
-  e.touchdown_probe_fraction = f(g["touchdown_probe_fraction"]);
+  e.swing_apex_time = f(g["swing_apex_time"]);
+  e.swing_lift_height = f(g["swing_lift_height"]);
+  e.swing_land_height = f(g["swing_land_height"]);
   e.controller_dt = f(g["controller_dt"]);
   e.cmd_zero_tol = f(g["cmd_zero_tol"]);
   e.settle_debounce_delay = f(g["settle"]["debounce_delay"]);

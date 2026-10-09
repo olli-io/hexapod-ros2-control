@@ -105,8 +105,7 @@ ReseatController::ReseatController(std::map<std::string, Vec3> current_stance,
   // the gait's, so a foot re-plants as gently as it lands mid-walk.
   swing_.width = 0.0f;
   // Zero clearance drops the vertical shaping, so the landing rides the plain
-  // eased blend down onto its target and never climbs over its own start. It
-  // forgoes the probe with it: endpoint-soft rather than probe-gentle.
+  // eased blend down onto its target and never climbs over its own start.
   landing_swing_ = swing_;
   landing_swing_.clearance = 0.0f;
   for (const auto& pair : pair_order_) {
@@ -254,19 +253,12 @@ std::map<std::string, LegOutput> ReseatController::tick_landing(float dt) {
   return out;
 }
 
-// How far above its target a foot may sit and still be carrying weight. The
-// touchdown probe is that height by definition, and is already tuned to clear
-// servo resolution and inter-leg height error.
-float ReseatController::contact_band() const {
-  return std::max(swing_.probe_band(pair_swing_time_), kInPlaceEpsilon);
-}
-
 LegOutput ReseatController::held(const std::string& name) const {
   const Vec3& p = positions_.at(name);
   const bool restoring =
       std::find(restoring_.begin(), restoring_.end(), name) != restoring_.end();
   return LegOutput{p, restoring ? restoring_phase_ : 0.0f,
-                   p[2] <= target_.at(name)[2] + contact_band()};
+                   p[2] <= target_.at(name)[2] + kInPlaceEpsilon};
 }
 
 void ReseatController::begin_restore(const Rung& landed) {
@@ -289,7 +281,7 @@ std::map<std::string, LegOutput> ReseatController::emit_held() const {
 
 void ReseatController::seed_landing() {
   for (const auto& name : legs_) {
-    if (positions_[name][2] > target_[name][2] + contact_band()) {
+    if (positions_[name][2] > target_[name][2] + kInPlaceEpsilon) {
       landing_origin_[name] = positions_[name];
     }
   }

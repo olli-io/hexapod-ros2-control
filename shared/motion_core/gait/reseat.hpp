@@ -86,7 +86,6 @@ class ReseatController {
   // Latch the origins of every foot seeded above its target. Height is the only
   // contact signal the ladder has, and every target is on the same ground plane.
   void seed_landing();
-  float contact_band() const;
   std::map<std::string, LegOutput> tick_landing(float dt);
   LegOutput held(const std::string& name) const;
   std::map<std::string, LegOutput> emit_held() const;

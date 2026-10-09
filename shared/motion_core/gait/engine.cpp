@@ -62,6 +62,18 @@ std::pair<float, float> cycle_time_bounds(const EngineConfig& cfg,
 
 }  // namespace
 
+namespace {
+// One tick of a planted foot's motion, against the stance wall.
+Vec3 carry(const Vec3& p, std::pair<float, float> v_leg, float dt,
+           const StanceBand& bound) {
+  const auto [d_x, d_y] =
+      ease_outward(p[0] - bound.nominal[0], p[1] - bound.nominal[1],
+                   -v_leg.first * dt, -v_leg.second * dt, bound.band,
+                   bound.ceiling);
+  return Vec3(p[0] + d_x, p[1] + d_y, p[2]);
+}
+}  // namespace
+
 StanceIntegrator::StanceIntegrator() {
   for (const auto& n : LEG_NAMES) {
     anchor_[n] = Vec3::Zero();
@@ -93,13 +105,8 @@ std::optional<Vec3> StanceIntegrator::step(const std::string& name,
     is_stance_[name] = true;
     return anchor_[name];
   }
-  Vec3& a = anchor_[name];
-  const auto [d_x, d_y] =
-      ease_outward(a[0] - bound.nominal[0], a[1] - bound.nominal[1],
-                   -v_leg.first * dt, -v_leg.second * dt, bound.band,
-                   bound.ceiling);
-  a = Vec3(a[0] + d_x, a[1] + d_y, a[2]);
-  return a;
+  anchor_[name] = carry(anchor_[name], v_leg, dt, bound);
+  return anchor_[name];
 }
 
 void StanceIntegrator::reset() {
@@ -117,6 +124,8 @@ SwingPlanner::SwingPlanner() {
     swing_time_[n] = 0.0f;
     identity_y_sign_[n] = 1;
     is_swing_[n] = false;
+    landing_[n] = false;
+    landing_point_[n] = Vec3::Zero();
   }
 }
 
@@ -130,35 +139,30 @@ void SwingPlanner::liftoff(const std::string& name, const Vec3& origin,
   swing_time_[name] = swing_time;
   identity_y_sign_[name] = identity_y_sign_val;
   is_swing_[name] = true;
+  landing_[name] = false;
 }
 
 void SwingPlanner::retarget(const std::string& name, const Vec3& target,
                             std::pair<float, float> v_leg, float swing_time,
-                            float phase_in_swing, float dt,
-                            const SwingProfile& profile) {
+                            float phase_in_swing) {
   if (!is_swing_.at(name)) {
     return;
   }
   v_target_[name] = v_leg;
   swing_time_[name] = swing_time;
-
-  Vec3& aimed = target_[name];
-  if (phase_in_swing < profile.probe_start()) {
-    aimed = target;
-    return;
+  if (phase_in_swing < kTouchdownLatchPhase) {
+    target_[name] = target;
   }
-  const Vec3 move = target - aimed;
-  const float distance = std::hypot(move[0], move[1]);
-  const float budget = profile.touchdown_velocity * dt;
-  aimed = distance <= budget ? target : aimed + (budget / distance) * move;
 }
 
 void SwingPlanner::touchdown(const std::string& name) {
   is_swing_[name] = false;
 }
 
-Vec3 SwingPlanner::evaluate(const std::string& name, float phase_in_swing,
-                            const SwingProfile& profile) const {
+Vec3 SwingPlanner::step(const std::string& name, float phase_in_swing,
+                        const SwingProfile& profile,
+                        std::pair<float, float> v_leg, float dt,
+                        const StanceBand& bound) {
   // A planted foot's body-frame velocity is -v_leg, so handing that to both ends
   // makes the foot lift straight up in the world frame and set straight down
   // again, with no horizontal slip either way.
@@ -166,9 +170,36 @@ Vec3 SwingPlanner::evaluate(const std::string& name, float phase_in_swing,
   const auto& v_out = v_target_.at(name);
   const Vec3 velocity_in(-v_in.first, -v_in.second, 0.0f);
   const Vec3 velocity_out(-v_out.first, -v_out.second, 0.0f);
-  return swing_arc(phase_in_swing, origin_.at(name), target_.at(name),
-                   identity_y_sign_.at(name), swing_time_.at(name), profile,
-                   velocity_in, velocity_out);
+  const Vec3 arc =
+      swing_arc(phase_in_swing, origin_.at(name), target_.at(name),
+                identity_y_sign_.at(name), swing_time_.at(name), profile,
+                velocity_in, velocity_out);
+  if (phase_in_swing < swing_land_start(origin_.at(name), target_.at(name),
+                                        profile)) {
+    return arc;
+  }
+  // The first landing tick takes the arc, which is on its touchdown line there,
+  // so the hand-over is seamless in position and velocity.
+  Vec3& p = landing_point_[name];
+  if (!landing_[name]) {
+    landing_[name] = true;
+    p = arc;
+  } else {
+    p = carry(p, v_leg, dt, bound);
+    p[2] = arc[2];
+  }
+  return p;
+}
+
+Vec3 SwingPlanner::touchdown_point(const std::string& name,
+                                   std::pair<float, float> v_leg, float dt,
+                                   const StanceBand& bound) const {
+  if (!landing_.at(name)) {
+    return target_.at(name);
+  }
+  Vec3 p = carry(landing_point_.at(name), v_leg, dt, bound);
+  p[2] = target_.at(name)[2];
+  return p;
 }
 
 void SwingPlanner::reset() {
@@ -202,6 +233,15 @@ Engine::Engine(EngineConfig config, std::unique_ptr<Strategy> strategy,
   require_all_legs(folded_stance, "folded_stance");
   require_all_legs(initialized_stance, "initialized_stance");
   require_all_legs(legs_, "leg_contexts");
+  if (!(config_.swing_apex_time > 0.0f && config_.swing_apex_time <= 0.5f)) {
+    throw std::invalid_argument("swing_apex_time must be in (0, 0.5]");
+  }
+  if (!(config_.swing_lift_height >= 0.0f)) {
+    throw std::invalid_argument("swing_lift_height must be >= 0");
+  }
+  if (!(config_.swing_land_height >= 0.0f)) {
+    throw std::invalid_argument("swing_land_height must be >= 0");
+  }
   if (leg_specs_.has_value() != reseat_geometry_.has_value()) {
     throw std::invalid_argument(
         "leg_specs and reseat_geometry must be supplied together");
@@ -678,9 +718,7 @@ std::unique_ptr<InitializeController> Engine::build_initialize() {
       leg_set_, folded_, initialized_, nominal_, coxa_to_bottom_, foot_radius_,
       config_.init_pair_swing_time, config_.init_lift_body_time,
       config_.init_unfold_time, config_.init_place_clearance,
-      config_.init_swing_clearance, config_.swing_width,
-      config_.touchdown_velocity, config_.touchdown_probe_fraction,
-      config_.controller_dt);
+      config_.init_profile(), config_.controller_dt);
 }
 
 std::unique_ptr<FoldController> Engine::build_fold() {
@@ -688,9 +726,8 @@ std::unique_ptr<FoldController> Engine::build_fold() {
   return std::make_unique<FoldController>(
       leg_set_, folded_, initialized_, nominal_, coxa_to_bottom_, foot_radius_,
       config_.init_pair_swing_time, config_.init_lift_body_time,
-      config_.init_unfold_time, config_.init_swing_clearance,
-      config_.swing_width, config_.touchdown_velocity,
-      config_.touchdown_probe_fraction, config_.controller_dt);
+      config_.init_unfold_time, config_.init_profile(),
+      config_.controller_dt);
 }
 
 std::unique_ptr<EngagementController> Engine::build_engagement() {
@@ -761,7 +798,7 @@ std::unique_ptr<PairFoldController> Engine::build_pair_fold(
   return std::make_unique<PairFoldController>(
       direction, last_targets_, folded_, nominal_,
       config_.pair_fold_swing_time, config_.pair_fold_dwell_time,
-      config_.pair_fold_probe_band(), config_.pair_fold_profile(),
+      config_.pair_fold_profile(),
       config_.controller_dt);
 }
 
@@ -1061,7 +1098,7 @@ std::map<std::string, LegOutput> Engine::tick_gait(
       effective_stride_length(active_legs_, leg_velocities,
                               config_.stride_length,
                               config_.stride_length_radial);
-  const SwingProfile swing_profile = config_.swing_profile(stride_length);
+  const SwingProfile swing_profile = config_.swing_profile();
 
   const auto [min_cycle_time, max_cycle_time] =
       cycle_time_bounds(config_, swing_end);
@@ -1140,9 +1177,9 @@ std::map<std::string, LegOutput> Engine::tick_gait(
     if (stance) {
       Vec3 touchdown_anchor;
       if (swing_.is_swing(name)) {
-        // Touchdown edge: the latched swing target becomes the anchor. At a zero
+        // Touchdown edge: where the swing sets down becomes the anchor. At a zero
         // stride it is nominal, which is how a settle re-plants with no extra pass.
-        touchdown_anchor = swing_.target(name);
+        touchdown_anchor = swing_.touchdown_point(name, {v_x, v_y}, dt, bound);
         swing_.touchdown(name);
         // Landed on the live AEP with the integrator anchored there: whatever
         // the engagement left this leg owing, it is square with its phase now.
@@ -1162,11 +1199,10 @@ std::map<std::string, LegOutput> Engine::tick_gait(
       }
       const float phase_in_swing =
           swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
-      // Re-aimed every tick and bounded from the probe on; see
-      // SwingPlanner::retarget.
       swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f),
-                      phase_in_swing, dt, swing_profile);
-      target = swing_.evaluate(name, phase_in_swing, swing_profile);
+                      phase_in_swing);
+      target = swing_.step(name, phase_in_swing, swing_profile, {v_x, v_y}, dt,
+                           bound);
       stance_.step(name, false, target, {v_x, v_y}, dt, bound);  // keeps its flag in sync
     }
 
@@ -1452,8 +1488,9 @@ EngineConfig engine_config_from_config() {
   cfg.step_height = p.step_height;
   cfg.swing_phase_margin = p.swing_phase_margin;
   cfg.swing_width = c.swing_width;
-  cfg.touchdown_velocity = c.touchdown_velocity;
-  cfg.touchdown_probe_fraction = c.touchdown_probe_fraction;
+  cfg.swing_apex_time = c.swing_apex_time;
+  cfg.swing_lift_height = c.swing_lift_height;
+  cfg.swing_land_height = c.swing_land_height;
   cfg.quadruped_shift_time = c.quadruped_shift_time;
   cfg.support_shift_lead = ::hexa::config::kPosture.support_shift_lead;
   cfg.controller_dt = c.controller_dt;

@@ -152,10 +152,7 @@ class RestPoseMove {
 // (the far half of a hexapod -> quadruped change); UNFOLD brings it back down.
 enum class PairFoldDirection { FOLD, UNFOLD };
 
-// UNFOLD alone has a SET_DOWN: the move runs at zero clearance, which forgoes
-// the swing profile's own probe, so the last few millimetres are their own
-// segment rather than the arc's tail.
-enum class PairFoldState { DWELL, MOVE, SET_DOWN, DONE };
+enum class PairFoldState { DWELL, MOVE, DONE };
 
 // The middle pair between the folded pose and the ground, moved while the body
 // stands on the four corners. The other half of a leg-set change; the reseat
@@ -189,13 +186,11 @@ class PairFoldController {
   //
   // `swing` must have zero clearance; see EngineConfig::pair_fold_profile for
   // why that is a fact about the folded pose and not a tuning choice.
-  // `probe_band` is how far above its target the unfold hands over to the braked
-  // descent, which runs at the profile's own touchdown_velocity.
   PairFoldController(PairFoldDirection direction,
                      std::map<std::string, Vec3> held_stance,
                      std::map<std::string, Vec3> folded_stance,
                      std::map<std::string, Vec3> nominal_stance,
-                     float swing_time, float dwell_time, float probe_band,
+                     float swing_time, float dwell_time,
                      const SwingProfile& swing, float controller_dt);
 
   PairFoldDirection direction() const { return direction_; }
@@ -210,15 +205,10 @@ class PairFoldController {
 
   PairFoldDirection direction_;
   std::map<std::string, Vec3> held_;
-  // The pair's three waypoints: where it starts, where the chord ends, and where
-  // it finishes. The middle two differ only on an UNFOLD, by probe_band.
   std::map<std::string, Vec3> origin_;
-  std::map<std::string, Vec3> chord_end_;
   std::map<std::string, Vec3> final_;
   float swing_time_;
   float dwell_time_;
-  // probe_band / touchdown_velocity, or 0 when there is no SET_DOWN to run.
-  float set_down_time_ = 0.0f;
   SwingProfile swing_;
   float controller_dt_;
 
@@ -238,9 +228,7 @@ class InitializeController {
                        float coxa_to_bottom, float foot_radius,
                        float pair_swing_time, float lift_body_time,
                        float unfold_time, float place_clearance,
-                       float swing_clearance, float swing_width,
-                       float touchdown_velocity,
-                       float touchdown_probe_fraction, float controller_dt);
+                       const SwingProfile& swing, float controller_dt);
 
   InitializeState state() const { return state_; }
   bool done() const { return state_ == InitializeState::DONE; }
@@ -283,9 +271,7 @@ class FoldController {
                  std::map<std::string, Vec3> nominal_stance,
                  float coxa_to_bottom, float foot_radius,
                  float pair_swing_time, float lift_body_time, float tuck_time,
-                 float swing_clearance, float swing_width,
-                 float touchdown_velocity, float touchdown_probe_fraction,
-                 float controller_dt);
+                 const SwingProfile& swing, float controller_dt);
 
   FoldState state() const { return state_; }
   bool done() const { return state_ == FoldState::DONE; }

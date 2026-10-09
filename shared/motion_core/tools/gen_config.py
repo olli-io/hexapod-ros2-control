@@ -922,8 +922,9 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     # The PRESET_KNOBS are NOT here: they ride the preset (kPresets above).
     fields = [
         ("swing_width", gait["swing_width"]),
-        ("touchdown_velocity", gait["touchdown_velocity"]),
-        ("touchdown_probe_fraction", gait["touchdown_probe_fraction"]),
+        ("swing_apex_time", gait["swing_apex_time"]),
+        ("swing_lift_height", gait["swing_lift_height"]),
+        ("swing_land_height", gait["swing_land_height"]),
         ("controller_dt", gait["controller_dt"]),
         ("cmd_zero_tol", gait["cmd_zero_tol"]),
         ("settle_debounce_delay", gait["settle"]["debounce_delay"]),

@@ -71,7 +71,7 @@ PairFoldController::PairFoldController(
     PairFoldDirection direction, std::map<std::string, Vec3> held_stance,
     std::map<std::string, Vec3> folded_stance,
     std::map<std::string, Vec3> nominal_stance, float swing_time,
-    float dwell_time, float probe_band, const SwingProfile& swing,
+    float dwell_time, const SwingProfile& swing,
     float controller_dt)
     : direction_(direction),
       swing_time_(swing_time),
@@ -100,24 +100,13 @@ PairFoldController::PairFoldController(
     if (direction_ == PairFoldDirection::FOLD) {
       // Planted, so the caller's stance is honest for this end.
       origin_[name] = held_stance.at(name);
-      chord_end_[name] = folded_stance.at(name);
       final_[name] = folded_stance.at(name);
     } else {
       // NOT held_stance: see the header.
       origin_[name] = folded_stance.at(name);
       final_[name] = nominal_stance.at(name);
-      chord_end_[name] = final_.at(name);
     }
     pair_pos_[name] = origin_.at(name);
-  }
-  // The braked descent, on the way down only: hand the chord over probe_band
-  // above the target and cover the rest at the gait's own touchdown speed.
-  if (direction_ == PairFoldDirection::UNFOLD && probe_band > 0.0f &&
-      swing.touchdown_velocity > 0.0f) {
-    set_down_time_ = probe_band / swing.touchdown_velocity;
-    for (const auto& name : PARKED_LEGS) {
-      chord_end_[name] = final_.at(name) + Vec3{0.0f, 0.0f, probe_band};
-    }
   }
 }
 
@@ -156,17 +145,15 @@ std::map<std::string, LegOutput> PairFoldController::update(float dt) {
       const float phase = t_ / swing_time_;
       if (phase >= 1.0f) {
         for (const auto& name : PARKED_LEGS) {
-          pair_pos_[name] = chord_end_.at(name);
+          pair_pos_[name] = final_.at(name);
         }
         t_ = 0.0f;
-        state_ = set_down_time_ > 0.0f ? PairFoldState::SET_DOWN
-                                       : PairFoldState::DONE;
-        return emit(1.0f, state_ == PairFoldState::DONE &&
-                              direction_ == PairFoldDirection::UNFOLD);
+        state_ = PairFoldState::DONE;
+        return emit(1.0f, direction_ == PairFoldDirection::UNFOLD);
       }
       for (const auto& name : PARKED_LEGS) {
         const Vec3& origin = origin_.at(name);
-        const Vec3& target = chord_end_.at(name);
+        const Vec3& target = final_.at(name);
         // Rest to rest, zero clearance and zero width: swing_arc degenerates to
         // the eased chord between the two ends, which is the whole move.
         pair_pos_[name] =
@@ -174,23 +161,6 @@ std::map<std::string, LegOutput> PairFoldController::update(float dt) {
                       swing_time_, swing_, Vec3::Zero(), Vec3::Zero());
       }
       return emit(phase, false);
-    }
-
-    case PairFoldState::SET_DOWN: {
-      t_ += dt;
-      const float s = std::min(t_ / set_down_time_, 1.0f);
-      for (const auto& name : PARKED_LEGS) {
-        const Vec3& from = chord_end_.at(name);
-        const Vec3& to = final_.at(name);
-        // Linear, so the contact speed is exactly touchdown_velocity rather
-        // than the peak of some ramp.
-        pair_pos_[name] = from + (to - from) * s;
-      }
-      if (s >= 1.0f) {
-        state_ = PairFoldState::DONE;
-        return emit(1.0f, true);
-      }
-      return emit(1.0f, false);
     }
 
     case PairFoldState::DONE:
@@ -204,17 +174,13 @@ InitializeController::InitializeController(
     std::map<std::string, Vec3> initialized_stance,
     std::map<std::string, Vec3> nominal_stance, float coxa_to_bottom,
     float foot_radius, float pair_swing_time, float lift_body_time,
-    float unfold_time, float place_clearance, float swing_clearance,
-    float swing_width, float touchdown_velocity,
-    float touchdown_probe_fraction, float controller_dt)
+    float unfold_time, float place_clearance, const SwingProfile& swing,
+    float controller_dt)
     : leg_set_(leg_set),
       rungs_(pair_list(leg_set)),
       pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
-      swing_{.clearance = swing_clearance,
-             .width = swing_width,
-             .touchdown_velocity = touchdown_velocity,
-             .touchdown_probe_fraction = touchdown_probe_fraction},
+      swing_(swing),
       controller_dt_(controller_dt),
       unfold_(folded_stance, initialized_stance, unfold_time) {
   require_all_legs(initialized_stance, "initialized_stance");
@@ -303,9 +269,8 @@ std::map<std::string, LegOutput> InitializeController::tick_place_feet(
     return out;
   }
 
-  // Mid-pair: a rest-to-rest swing arc down to the ground target at the gait's
-  // touchdown speed. The probe still earns its keep with the target held clear:
-  // place_clearance is the slack an early contact has to be absorbed into.
+  // Mid-pair: a rest-to-rest swing arc down to the ground target, held
+  // place_clearance clear so an early contact has slack to be absorbed into.
   for (const auto& name : LEG_NAMES) {
     if (name == active[0] || name == active[1]) {
       const Vec3 origin = initialized_[name];
@@ -373,19 +338,14 @@ FoldController::FoldController(LegSet leg_set,
                                std::map<std::string, Vec3> nominal_stance,
                                float coxa_to_bottom, float foot_radius,
                                float pair_swing_time, float lift_body_time,
-                               float tuck_time, float swing_clearance,
-                               float swing_width, float touchdown_velocity,
-                               float touchdown_probe_fraction,
+                               float tuck_time, const SwingProfile& swing,
                                float controller_dt)
     : leg_set_(leg_set),
       rungs_(rungs_reversed(leg_set)),
       pair_swing_time_(pair_swing_time),
       lift_body_time_(lift_body_time),
       tuck_time_(tuck_time),
-      swing_{.clearance = swing_clearance,
-             .width = swing_width,
-             .touchdown_velocity = touchdown_velocity,
-             .touchdown_probe_fraction = touchdown_probe_fraction},
+      swing_(swing),
       controller_dt_(controller_dt) {
   require_all_legs(folded_stance, "folded_stance");
   require_all_legs(initialized_stance, "initialized_stance");

@@ -192,8 +192,6 @@ std::map<std::string, LegOutput> EngagementController::update(
   // full stride would hand the gait feet already outside its band.
   const float stride_length = effective_stride_length(
       leg_contexts_, cmd_leg_v, stride_length_, stride_length_radial_);
-  SwingProfile swing = swing_;
-  swing.ride_headroom = kStanceExcursionGrace * 0.5f * stride_length;
   const float cycle_time =
       derive_cycle_time(max_cmd_leg_v, stride_length, stance_fraction,
                         min_cycle_time_, max_cycle_time_);
@@ -268,7 +266,7 @@ std::map<std::string, LegOutput> EngagementController::update(
         stride.cycle_time = cycle_time;
         stride.swing_end = swing_end_;
         stride.controller_dt = controller_dt_;
-        stride.swing = swing;
+        stride.swing = swing_;
         foot = strategy_->foot_target(phase, stride, leg_contexts_.at(name));
         foot_position_[name] = foot;
       }
@@ -299,7 +297,7 @@ std::map<std::string, LegOutput> EngagementController::update(
       const auto& vb = body_leg_v.at(name);
       const Vec3 foot = swing_arc(phase_in_swing, lift_off_position_[name], aep,
                                   identity_y_sign(nominal), leg_swing_time,
-                                  swing, Vec3::Zero(),
+                                  swing_, Vec3::Zero(),
                                   Vec3(-vb.first, -vb.second, 0.0f));
       foot_position_[name] = foot;
       out[name] = LegOutput{foot, phase, false};

@@ -1,10 +1,10 @@
 // What the legs do when the command turns under them. Two independent defects,
 // measured separately:
 //
-// **Swing skid.** Through the probe the arc *is* the touchdown ground line, so
-// the foot's ground velocity equals the target's own motion one for one, and a
+// **Swing skid.** Near touchdown the arc *is* the touchdown ground line, so the
+// foot's ground velocity equals the target's own motion one for one, and a
 // command ramping through low speed slides the live AEP faster than the robot
-// walks. SwingPlanner::retarget bounds it; these measure what is left.
+// walks. SwingPlanner::retarget latches the target; these measure what is left.
 //
 // **Stance runway.** A leg that just landed on the old AEP has no excursion left
 // in the new direction and pins against the stance ceiling. The reversal ladder
@@ -47,18 +47,20 @@ float slew_toward(float v, float target, float accel, float dt) {
   return std::fabs(delta) <= step ? target : v + std::copysign(step, delta);
 }
 
-// Share of the swing counted as the landing. The ride parks the foot over its
-// landing point for the last `ride_time`, and where the grant tapers to nothing
-// the blend's own tail arrives with three vanishing derivatives instead — so on
-// a steady command the foot is world-frame stationary through here either way,
-// whatever the speed. Anything it does move is slip.
+// Share of the swing counted as the landing. The blend's tail arrives with three
+// vanishing derivatives, so on a steady command the foot is world-frame
+// stationary through here whatever the speed. Anything it does move is slip.
 constexpr float kLandingShare = 0.1f;
+
+// How far above the ground a foot may still be touching it: servo resolution
+// plus leg-to-leg height error.
+constexpr float kContactBand = 0.002f;
 
 struct SkidStats {
   // Worst single landing, in world-frame metres travelled over the ground.
   float peak_landing_slip = 0.0f;
-  // Same, over the whole probe band rather than just the landing.
-  float peak_probe_slip = 0.0f;
+  // Same, over the whole contact band rather than just the landing.
+  float peak_band_slip = 0.0f;
   // Worst single stance, likewise. A planted foot that is tracking the ground is
   // world-frame still; one whose anchor has pinned against the stance ceiling
   // travels at the full ground speed, and this is how far it drags.
@@ -159,7 +161,6 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
   const float accel =
       instant ? std::numeric_limits<float>::max()
               : speed / hexa::config::kControl.vmax_ramp_time_linear;
-  const float probe_band = cfg.swing_profile().probe_band(cfg.max_swing_time);
 
   for (int i = 0; i < 6000 && e->state() != g::EngineState::STAND; ++i) {
     e->update(kDt, {0.0f, 0.0f}, 0.0f);
@@ -222,7 +223,7 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
     bool have = false;
     bool swing = false;
     float landing_slip = 0.0f;
-    float probe_slip = 0.0f;
+    float band_slip = 0.0f;
     float stance_drag = 0.0f;
   };
   std::map<std::string, LegTrace> trace;
@@ -324,8 +325,8 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
         const float step = std::hypot(world.x - t.world.x, world.y - t.world.y);
         const float phase_in_swing =
             swing_end > 0.0f ? leg.phase / swing_end : 0.0f;
-        if (leg.foot_target.z - nominal.at(name).z <= probe_band) {
-          t.probe_slip += step;
+        if (leg.foot_target.z - nominal.at(name).z <= kContactBand) {
+          t.band_slip += step;
           if (phase_in_swing >= 1.0f - kLandingShare) t.landing_slip += step;
         }
       }
@@ -344,7 +345,7 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
         ++s.landings;
         if (mirror_tick >= 0) {
           // Excursion along the travel being turned to, which is where the
-          // AEP sits: a full landing is at +band (plus the ride's headroom).
+          // AEP sits: a full landing is at +band.
           const hexa::Vec3 e_foot = leg.foot_target - nominal.at(name);
           const float along = (axis == 0 ? e_foot.x : e_foot.y) *
                               (turned < 0.0f ? -1.0f : 1.0f);
@@ -355,9 +356,9 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
           s.peak_landing_slip = t.landing_slip;
           s.worst_leg = name;
         }
-        s.peak_probe_slip = std::max(s.peak_probe_slip, t.probe_slip);
+        s.peak_band_slip = std::max(s.peak_band_slip, t.band_slip);
         t.landing_slip = 0.0f;
-        t.probe_slip = 0.0f;
+        t.band_slip = 0.0f;
       }
       t.world = world;
       t.swing = swing;
@@ -369,20 +370,17 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
 
 }  // namespace
 
-// The headline regression for the touchdown-target rate bound: sweeping the turn
-// across the cycle catches a foot at every swing phase, the probe included, where
-// an unbounded retarget drags it the whole way the live AEP moves.
+// Sweeping the turn across the cycle catches a foot at every swing phase, the
+// landing included, where a retarget drags it the whole way the live AEP moves.
 //
-// The landing bound is the probe band's own height. The probe bound is coarse by
-// comparison — most of what is left there is the ground line's own collapse under
-// deceleration, not the target — so it is pinned only well clear of a stride,
-// which is where the unbounded version lands.
+// The landing bound is the contact band's own height. The band bound is coarse
+// by comparison — most of what is left there is the ground line's own collapse
+// under deceleration, not the target — so it is pinned only well clear of a
+// stride.
 TEST(Reversal, LandingDoesNotDragAcrossTheGround) {
   const auto cfg = g::engine_config_from_config();
   const float cycle =
       cfg.max_swing_time / g::swing_end_phase(0.5f, cfg.swing_phase_margin);
-  const float band = cfg.swing_profile().probe_band(cfg.max_swing_time);
-
   for (int axis = 0; axis < 2; ++axis) {
     for (int i = 0; i < 12; ++i) {
       const float offset = cycle * static_cast<float>(i) / 12.0f;
@@ -395,12 +393,12 @@ TEST(Reversal, LandingDoesNotDragAcrossTheGround) {
               std::to_string(offset) +
               (turn == Turn::kReverse ? " reverse" : " stop") +
               (instant ? " instant: " : " slewed: ") + s.worst_leg;
-          EXPECT_LT(s.peak_landing_slip, band)
+          EXPECT_LT(s.peak_landing_slip, kContactBand)
               << where << " dragged " << s.peak_landing_slip * 1000.0f
               << " mm on landing";
-          EXPECT_LT(s.peak_probe_slip, 0.5f * cfg.stride_length)
-              << where << " dragged " << s.peak_probe_slip * 1000.0f
-              << " mm through the probe";
+          EXPECT_LT(s.peak_band_slip, 0.5f * cfg.stride_length)
+              << where << " dragged " << s.peak_band_slip * 1000.0f
+              << " mm through the contact band";
         }
       }
     }
@@ -792,14 +790,13 @@ TEST(Reversal, MirrorReversesTheMetachronalWave) {
   EXPECT_GE(differing, 4) << "crawl's wave did not turn around";
 }
 
-// A steady command holds its AEP still, so the bound has nothing to bound and
-// the ride does what it was built for: the foot is parked over its landing spot,
-// world-frame stationary, for the whole approach.
+// A steady command holds its AEP still, so all that is left is the blend's own
+// tail closing onto the ground line: well under a millimetre.
 TEST(Reversal, SteadyWalkLandsWithoutSlip) {
   for (int axis = 0; axis < 2; ++axis) {
     const SkidStats steady = drive_skid("tripod", 0.0f, Turn::kHold, axis);
     ASSERT_GE(steady.landings, 6);
-    EXPECT_LT(steady.peak_landing_slip, 1.0e-4f)
+    EXPECT_LT(steady.peak_landing_slip, 1.0e-3f)
         << steady.worst_leg << " slips on a steady walk";
   }
 }

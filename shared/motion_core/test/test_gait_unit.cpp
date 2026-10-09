@@ -80,17 +80,9 @@ struct SwingTrace {
   float min_height = 0.0f;       // m above touchdown level
   float max_velocity_jump = 0.0f;  // m/s between adjacent samples
   // Worst downward speed over the part of the descent that is already within
-  // `scrub_band` of the ground. This — not the speed at the touchdown point
-  // itself — is what the foot actually lands at whenever the terrain or the
-  // servo tracking is off by a millimetre or two, so it is the number that
-  // decides whether a landing is soft.
+  // `scrub_band` of the ground: what the foot lands at whenever the terrain or
+  // the servo tracking is off by a millimetre or two.
   float near_ground_descent = 0.0f;
-  // The highest point on the descent from which the foot is already coming down
-  // no faster than `gentle_rate`, with nothing faster below it. The number the
-  // whole shape exists to make large: the servos resolve height to a couple of
-  // tenths of a millimetre, so unless the soft band is taller than that error,
-  // the softness is never what actually happens.
-  float gentle_band = 0.0f;
   // Height (m) the foot still has left when it has covered 90% of its forward
   // travel. A swing is meant to put the foot down onto its touchdown point
   // from above; if this collapses, the foot instead reaches its final height
@@ -110,31 +102,21 @@ struct SwingTrace {
   float max_ground_offset = 0.0f;
 };
 
-g::SwingProfile make_profile(float touchdown_velocity, float width = 0.0f,
-                             float probe_fraction = 0.0f,
-                             float ride_headroom = 0.0f) {
-  g::SwingProfile profile;
-  profile.clearance = kStepHeight;
-  profile.width = width;
-  profile.touchdown_velocity = touchdown_velocity;
-  profile.touchdown_probe_fraction = probe_fraction;
-  profile.ride_headroom = ride_headroom;
-  return profile;
+g::SwingProfile make_profile(float width = 0.0f, float apex_time = 0.5f) {
+  return g::SwingProfile{
+      .clearance = kStepHeight, .width = width, .apex_time = apex_time};
 }
+
+// The apex times every shape test runs at: symmetric, and two early apexes.
+constexpr std::array<float, 3> kApexTimes = {0.5f, 0.35f, 0.3f};
 
 // Walk the whole swing at a fine, uniform phase step and reduce it to the
 // quantities touchdown depends on. Velocities are finite differences in real
 // time, so a genuine C1 break shows up as one large max_velocity_jump. The
 // descent is classified from the trace itself: everything after the peak.
-SwingTrace profile_swing(float touchdown_velocity, float width = 0.0f,
-                         float scrub_band = 0.002f, float probe_fraction = 0.0f,
-                         float ride_headroom = 0.0f) {
-  const g::SwingProfile profile =
-      make_profile(touchdown_velocity, width, probe_fraction, ride_headroom);
-  // What counts as landing at the intended speed rather than merely heading
-  // towards it. Half as much again as asked for is generous; the point of the
-  // measurement is the *height* over which it holds.
-  const float gentle_rate = 1.5f * touchdown_velocity;
+SwingTrace profile_swing(float width = 0.0f, float scrub_band = 0.002f,
+                         float apex_time = 0.5f) {
+  const g::SwingProfile profile = make_profile(width, apex_time);
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
   const auto pts = sample_arc(profile, kSwingTime, v_ground);
 
@@ -165,12 +147,6 @@ SwingTrace profile_swing(float touchdown_velocity, float width = 0.0f,
     p.max_lateral = std::max(p.max_lateral, std::abs(point.y - kAep.y));
     if (descending && height <= scrub_band) {
       p.near_ground_descent = std::max(p.near_ground_descent, -velocity.z);
-    }
-    // Height decreases monotonically down the descent, so the last sample that
-    // is still coming down too fast is the floor of the gentle band: everything
-    // below it lands at the intended speed.
-    if (descending && -velocity.z > gentle_rate) {
-      p.gentle_band = height;
     }
     if (descending) {
       p.descent_rise = std::max(p.descent_rise, point.z - pts[i - 1].z);
@@ -273,34 +249,80 @@ TEST(Trajectory, SwingArcReturnsToGroundAtTouchdown) {
   EXPECT_GT(apex.z, pep.z + 0.05f);
 }
 
-// The descent meets the ground at exactly the configured speed, and a zero
-// knob restores the soft zero-speed landing.
-TEST(Trajectory, SwingArcHonoursTouchdownVelocity) {
-  for (const float v_td : {0.02f, 0.05f}) {
-    const SwingTrace p = profile_swing(v_td, 0.0f, 0.002f, 0.15f);
-    EXPECT_NEAR(p.touchdown_velocity.x, -kLegSpeed, 5e-3f) << v_td;
-    EXPECT_NEAR(p.touchdown_velocity.z, -v_td, 5e-3f) << v_td;
+
+// The descent eases out to a zero-speed landing.
+TEST(Trajectory, SwingArcLandsAtZeroVerticalSpeed) {
+  for (const float apex : kApexTimes) {
+    const SwingTrace p = profile_swing(0.0f, 0.002f, apex);
+    EXPECT_NEAR(p.touchdown_velocity.x, -kLegSpeed, 5e-3f) << apex;
+    EXPECT_NEAR(p.touchdown_velocity.z, 0.0f, 5e-3f) << apex;
   }
-  const SwingTrace soft = profile_swing(0.0f);
-  EXPECT_NEAR(soft.touchdown_velocity.z, 0.0f, 5e-3f);
 }
 
 TEST(Trajectory, SwingArcNeverDipsBelowTouchdownLevel) {
-  for (const float v_td : {0.0f, 0.05f}) {
-    for (const float probe : {0.0f, 0.0025f}) {
-      const SwingTrace p = profile_swing(v_td, 0.0f, 0.002f, probe);
-      EXPECT_GT(p.min_height, -1.0e-5f) << v_td << " / " << probe;
-    }
+  for (const float apex : kApexTimes) {
+    EXPECT_GT(profile_swing(0.0f, 0.002f, apex).min_height, -1.0e-5f) << apex;
   }
 }
 
-// The apex is pinned to the geometric midpoint of the shaped travel — there is
-// no knob left to move it — for every swing time and clearance.
+// An early apex buys the descent a longer, slower approach: at every height
+// near the ground the foot comes down slower than on the symmetric swing.
+TEST(Trajectory, EarlyApexLandsSlowerNearTheGround) {
+  const SwingTrace even = profile_swing(0.0f, 0.002f, 0.5f);
+  const SwingTrace early = profile_swing(0.0f, 0.002f, 0.35f);
+  EXPECT_LT(early.near_ground_descent, 0.8f * even.near_ground_descent);
+}
+
+// Up to lift_height the foot rises straight off its lift-off point, and below
+// land_height it sets straight down onto its touchdown point, both in the
+// ground frame; the apex stays centred in time and space.
+TEST(Trajectory, LiftOffAndTouchdownAreStraight) {
+  constexpr float kLift = 0.01f;
+  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
+  for (const float apex : kApexTimes) {
+    g::SwingProfile profile = make_profile(0.02f, apex);
+    profile.lift_height = kLift;
+    profile.land_height = kLift;
+    const auto pts = sample_arc(profile, kSwingTime, v_ground);
+    std::size_t apex_i = 0;
+    bool lifting = true;
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+      const float phase = static_cast<float>(i) / static_cast<float>(kSteps);
+      lifting = lifting && pts[i].z - pts.front().z < kLift;
+      if (lifting) {
+        EXPECT_NEAR(shaped_progress(pts[i], phase, kSwingTime, v_ground), 0.0f,
+                    1e-6f) << apex << " @ " << phase;
+        EXPECT_NEAR(pts[i].y, pts.front().y, 1e-6f) << apex << " @ " << phase;
+      }
+      if (pts[i].z > pts[apex_i].z) {
+        apex_i = i;
+      }
+    }
+    for (std::size_t i = pts.size(); i-- > 0;) {
+      if (pts[i].z - pts.back().z >= kLift) {
+        break;
+      }
+      const float phase = static_cast<float>(i) / static_cast<float>(kSteps);
+      EXPECT_NEAR(shaped_progress(pts[i], phase, kSwingTime, v_ground), 1.0f,
+                  1e-6f) << apex << " @ " << phase;
+      EXPECT_NEAR(pts[i].y, pts.back().y, 1e-6f) << apex << " @ " << phase;
+    }
+    const float apex_phase =
+        static_cast<float>(apex_i) / static_cast<float>(kSteps);
+    EXPECT_NEAR(apex_phase, apex, 0.03f);
+    EXPECT_NEAR(shaped_progress(pts[apex_i], apex_phase, kSwingTime, v_ground),
+                0.5f, 0.02f) << apex;
+  }
+}
+
+// The apex sits at apex_time in time and over the geometric midpoint of the
+// shaped travel in space, for every swing time and clearance.
 TEST(Trajectory, ApexIsCentred) {
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
+  for (const float apex : kApexTimes) {
   for (const float swing_time : {0.2f, 0.35f, 0.6f}) {
     for (const float clearance : {0.02f, 0.08f}) {
-      g::SwingProfile profile = make_profile(0.05f, 0.0f, 0.0025f);
+      g::SwingProfile profile = make_profile(0.0f, apex);
       profile.clearance = clearance;
       const auto pts = sample_arc(profile, swing_time, v_ground);
       std::size_t apex_i = 0;
@@ -311,11 +333,14 @@ TEST(Trajectory, ApexIsCentred) {
       }
       const float phase =
           static_cast<float>(apex_i) / static_cast<float>(kSteps);
+      // The top is flat to third order, so the argmax localises loosely.
+      EXPECT_NEAR(phase, apex, 0.03f) << swing_time << " / " << clearance;
       const float progress =
           shaped_progress(pts[apex_i], phase, swing_time, v_ground);
-      EXPECT_NEAR(progress, 0.5f, 0.01f)
-          << swing_time << " / " << clearance;
+      EXPECT_NEAR(progress, 0.5f, 0.02f)
+          << apex << " / " << swing_time << " / " << clearance;
     }
+  }
   }
 }
 
@@ -326,17 +351,14 @@ TEST(Trajectory, ApexIsCentred) {
 TEST(Trajectory, SwingStaysInsideTheStrideEnvelope) {
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
   // The identity blend stays inside a quarter of the ground travel; the apex
-  // warp at the probe cap crosses half-travel at t = 0.3, which buys the
-  // blend a slightly earlier finish and with it about another 2% of stride.
+  // warp at 0.3 crosses half-travel earlier, which buys the blend a slightly
+  // earlier finish and with it about another 2% of stride.
   const float bound = 0.27f * kLegSpeed * kSwingTime;
-  for (const auto& [v_td, probe] :
-       std::vector<std::pair<float, float>>{
-           {0.0f, 0.0f}, {0.01f, 0.15f}, {0.05f, 0.25f}, {0.05f, 0.4f}}) {
-    const auto pts =
-        sample_arc(make_profile(v_td, 0.0f, probe), kSwingTime, v_ground);
-    for (const auto& p : pts) {
-      EXPECT_LT(p.x, kAep.x + bound) << "v_td=" << v_td << " probe=" << probe;
-      EXPECT_GT(p.x, kPep.x - bound) << "v_td=" << v_td << " probe=" << probe;
+  for (const float apex : kApexTimes) {
+    for (const auto& p :
+         sample_arc(make_profile(0.0f, apex), kSwingTime, v_ground)) {
+      EXPECT_LT(p.x, kAep.x + bound) << apex;
+      EXPECT_GT(p.x, kPep.x - bound) << apex;
     }
   }
 }
@@ -346,8 +368,7 @@ TEST(Trajectory, SwingStaysInsideTheStrideEnvelope) {
 TEST(Trajectory, LateralBulgeIsSymmetric) {
   constexpr float kWidth = 0.02f;
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
-  const auto pts =
-      sample_arc(make_profile(0.05f, kWidth, 0.15f), kSwingTime, v_ground);
+  const auto pts = sample_arc(make_profile(kWidth), kSwingTime, v_ground);
   std::size_t bulge_i = 0;
   for (std::size_t i = 1; i < pts.size(); ++i) {
     if (pts[i].y > pts[bulge_i].y) {
@@ -361,74 +382,41 @@ TEST(Trajectory, LateralBulgeIsSymmetric) {
   EXPECT_NEAR(pts[bulge_i].y - kPep.y, kWidth, 1e-4f);
 }
 
-// The probe buys its time from the whole bell of the arc, not the brake
-// alone: the climb and the brake split the rest evenly, so the apex lands at
-// (1 - probe) / 2 in time — while the warped blend keeps it over the middle
-// of the travel, whatever the schedule.
-TEST(Trajectory, ProbeShiftsTheApexEarlierInTimeButNotAlongTheTrack) {
-  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
-  for (const float frac : {0.0f, 0.15f, 0.4f}) {
-    const auto pts =
-        sample_arc(make_profile(0.05f, 0.0f, frac), kSwingTime, v_ground);
-    std::size_t apex_i = 0;
-    for (std::size_t i = 1; i < pts.size(); ++i) {
-      if (pts[i].z > pts[apex_i].z) {
-        apex_i = i;
-      }
-    }
-    const float phase =
-        static_cast<float>(apex_i) / static_cast<float>(kSteps);
-    // The top is flat to third order, so the argmax localises loosely; the
-    // shift under test (0.5 -> 0.3 at the cap) is an order bigger.
-    EXPECT_NEAR(phase, 0.5f * (1.0f - frac), 0.03f) << "frac=" << frac;
-    EXPECT_NEAR(shaped_progress(pts[apex_i], phase, kSwingTime, v_ground),
-                0.5f, 0.02f)
-        << "frac=" << frac;
-  }
-}
-
 // The lift-off speed is derived, not configured: 2 * clearance / climb_time,
 // the parabola's end slope through the same apex and the largest value for
-// which the climb stays monotone. With no probe the climb gets half the swing
-// (4 * clearance / swing_time); a probe shortens the climb's share to
-// (1 - probe) / 2, which raises the lift-off speed by exactly 1 / (1 - probe).
+// which the climb stays monotone. The climb takes apex_time of the swing, so the
+// symmetric swing lifts at 4 * clearance / swing_time and an early apex faster
+// by 0.5 / apex_time.
 TEST(Trajectory, DerivedLiftoffScalesAsClearanceOverSwingTime) {
   const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
-  const auto liftoff_vz = [&](float clearance, float swing_time, float v_td,
-                              float probe) {
-    g::SwingProfile profile = make_profile(v_td, 0.0f, probe);
+  const auto liftoff_vz = [&](float clearance, float swing_time,
+                              float apex = 0.5f) {
+    g::SwingProfile profile = make_profile(0.0f, apex);
     profile.clearance = clearance;
     const auto pts = sample_arc(profile, swing_time, v_ground);
     return (pts[1].z - pts[0].z) * static_cast<float>(kSteps) / swing_time;
   };
 
-  const float base = liftoff_vz(0.08f, 0.35f, 0.0f, 0.0f);
+  const float base = liftoff_vz(0.08f, 0.35f);
   EXPECT_NEAR(base, 4.0f * 0.08f / 0.35f, 0.02f);
-  EXPECT_NEAR(liftoff_vz(0.08f, 0.7f, 0.0f, 0.0f), 0.5f * base, 0.02f);
-  EXPECT_NEAR(liftoff_vz(0.04f, 0.35f, 0.0f, 0.0f), 0.5f * base, 0.02f);
-  EXPECT_NEAR(liftoff_vz(0.08f, 0.35f, 0.05f, 0.15f), base / 0.85f, 0.02f);
+  EXPECT_NEAR(liftoff_vz(0.08f, 0.7f), 0.5f * base, 0.02f);
+  EXPECT_NEAR(liftoff_vz(0.04f, 0.35f), 0.5f * base, 0.02f);
+  EXPECT_NEAR(liftoff_vz(0.08f, 0.35f, 0.35f), base * 0.5f / 0.35f, 0.02f);
 }
 
-// Horizontal progress never reverses across the whole realistic parameter box,
-// including every degenerate corner: zero clearance (the plain eased blend),
-// zero touchdown knobs (soft landing), and knobs large enough that both probe
-// clamps bite.
+// Horizontal progress never reverses, including the zero-clearance corner (the
+// plain eased blend).
 TEST(Trajectory, SwingProgressIsMonotone) {
   for (const float swing_time : {0.2f, 0.5f}) {
     for (const float clearance : {0.0f, 0.005f, 0.04f, 0.08f}) {
-      for (const float v_td : {0.0f, 0.01f, 0.2f}) {
-        for (const float probe : {0.0f, 0.15f, 1.0f}) {
-          g::SwingProfile profile;
-          profile.clearance = clearance;
-          profile.touchdown_velocity = v_td;
-          profile.touchdown_probe_fraction = probe;
-          const auto pts =
-              sample_arc(profile, swing_time, g::Vec3::Zero());
-          for (std::size_t i = 1; i < pts.size(); ++i) {
-            ASSERT_GE(pts[i].x - pts[i - 1].x, -1e-6f)
-                << "T=" << swing_time << " c=" << clearance << " v=" << v_td
-                << " p=" << probe << " i=" << i;
-          }
+      for (const float apex : kApexTimes) {
+        const g::SwingProfile profile{.clearance = clearance,
+                                      .apex_time = apex};
+        const auto pts = sample_arc(profile, swing_time, g::Vec3::Zero());
+        for (std::size_t i = 1; i < pts.size(); ++i) {
+          ASSERT_GE(pts[i].x - pts[i - 1].x, -1e-6f)
+              << "T=" << swing_time << " c=" << clearance << " a=" << apex
+              << " i=" << i;
         }
       }
     }
@@ -442,7 +430,7 @@ TEST(Trajectory, SwingProgressIsMonotone) {
 // fourth power of the elapsed swing. That is the scrub seen on the rear feet.
 TEST(Trajectory, SwingLeavesAndMeetsTheGroundAlongTheGroundTrack) {
   constexpr float kBand = 0.002f;
-  const SwingTrace p = profile_swing(0.01f, 0.0f, kBand);
+  const SwingTrace p = profile_swing(0.0f, kBand);
 
   // Exact at the seams: no horizontal step into or out of stance.
   EXPECT_NEAR(p.liftoff_velocity.x, -kLegSpeed, 1e-3f);
@@ -455,73 +443,23 @@ TEST(Trajectory, SwingLeavesAndMeetsTheGroundAlongTheGroundTrack) {
   EXPECT_LT(p.max_ground_offset, 1e-3f);
 }
 
-// step_height means "how high the foot lifts off the ground", and both ends of
-// the curve land exactly where they were asked to.
-TEST(Trajectory, SwingPreservesEndpointsApexAndGroundLevel) {
-  const SwingTrace p = profile_swing(0.01f);
-  EXPECT_NEAR(p.start.x, kPep.x, 1e-4f);
-  EXPECT_NEAR(p.start.z, kPep.z, 1e-4f);
-  EXPECT_NEAR(p.end.x, kAep.x, 1e-4f);
-  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
-  EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f);
-  // The foot never digs below the ground it is stepping onto.
-  EXPECT_GT(p.min_height, -1e-5f);
-}
-
-// ── The probed touchdown ──
-
-namespace {
-constexpr float kProbeFraction = 0.15f;  // touchdown_probe_fraction
-constexpr float kTouchdownV = 0.05f;     // touchdown_velocity
-// The probe band the fraction works out to at this file's swing time.
-constexpr float kProbeBand = kTouchdownV * kProbeFraction * kSwingTime;
-// About what one servo step works out to at the foot on this machine. Not a
-// tolerance — the quantity the probe band has to beat.
-constexpr float kServoQuantum = 3.0e-4f;
-}  // namespace
-
-// Why the probe exists: without one the descent eases out to a zero-speed
-// landing, soft in the limit, but the gentle stretch is only as tall as the
-// curve's own tail while contact happens wherever quantisation and leg-to-leg
-// height error put it. Holding touchdown_velocity across the band makes that
-// stretch a height we choose.
-TEST(Trajectory, ProbeMakesTheGentleLandingTallerThanTheServoResolution) {
-  const SwingTrace probed =
-      profile_swing(kTouchdownV, 0.0f, 0.002f, kProbeFraction);
-  EXPECT_GT(probed.gentle_band, 0.9f * kProbeBand);
-  EXPECT_GT(probed.gentle_band, 3.0f * kServoQuantum);
-
-  // And the approach above the band is already slow: nothing near the ground
-  // is faster than the probe by more than the ease can explain.
-  const SwingTrace bare = profile_swing(0.01f, 0.0f, 0.002f);
-  EXPECT_LT(bare.near_ground_descent, 0.25f);
-}
-
-// Inside the probe the foot comes down at touchdown_velocity and nothing
-// faster, so it lands at the same speed wherever in the band contact happens.
-// That is the whole difference between a probe and an asymptote.
-TEST(Trajectory, ProbeHoldsTouchdownVelocityAllTheWayDown) {
-  const SwingTrace p =
-      profile_swing(kTouchdownV, 0.0f, 0.9f * kProbeBand, kProbeFraction);
-  EXPECT_NEAR(p.near_ground_descent, kTouchdownV, 2.0e-3f);
-  EXPECT_NEAR(p.touchdown_velocity.z, -kTouchdownV, 2.0e-3f);
-}
-
-// Everything the plain arc guarantees still holds under the schedule: the
-// endpoints are exact, step_height still means how high the foot lifts, the
-// foot never digs below the ground it is landing on, and there is no C1 break
-// anywhere — including the main-region -> probe seam.
-TEST(Trajectory, ShapedEndsPreserveTheArcInvariants) {
-  for (const float probe : {0.0f, kProbeFraction, g::kMaxProbeFraction}) {
-    const SwingTrace p = profile_swing(kTouchdownV, 0.02f, 0.002f, probe);
-    const std::string at = "probe=" + std::to_string(probe);
+// step_height means "how high the foot lifts off the ground", both ends of the
+// curve land exactly where they were asked to, the foot never digs below the
+// ground, and there is no C1 break anywhere.
+TEST(Trajectory, SwingPreservesTheArcInvariants) {
+  for (const float apex : kApexTimes) {
+  for (const float width : {0.0f, 0.02f}) {
+    const SwingTrace p = profile_swing(width, 0.002f, apex);
+    const std::string at =
+        "width=" + std::to_string(width) + " apex=" + std::to_string(apex);
     EXPECT_NEAR(p.start.x, kPep.x, 1e-4f) << at;
     EXPECT_NEAR(p.start.z, kPep.z, 1e-4f) << at;
     EXPECT_NEAR(p.end.x, kAep.x, 1e-4f) << at;
     EXPECT_NEAR(p.end.z, kAep.z, 1e-4f) << at;
-    EXPECT_NEAR(p.apex_height, kStepHeight, 3e-3f) << at;
+    EXPECT_NEAR(p.apex_height, kStepHeight, 2e-3f) << at;
     EXPECT_GT(p.min_height, -1e-5f) << at;
     EXPECT_LT(p.max_velocity_jump, 0.05f) << at;
+  }
   }
 }
 
@@ -529,157 +467,19 @@ TEST(Trajectory, ShapedEndsPreserveTheArcInvariants) {
 // sweeping in at ankle level is a foot dragged to its target rather than placed
 // on it, and it catches on everything the step height was chosen to clear.
 TEST(Trajectory, SwingComesDownOntoItsTouchdownPointFromAbove) {
-  const SwingTrace p = profile_swing(kTouchdownV, 0.0f, 0.002f, kProbeFraction);
-  EXPECT_GT(p.height_at_90pct_forward, 0.2f * kStepHeight);
+  for (const float apex : kApexTimes) {
+    EXPECT_GT(profile_swing(0.0f, 0.002f, apex).height_at_90pct_forward,
+              0.2f * kStepHeight)
+        << apex;
+  }
 }
 
 // Nothing after the apex goes back up: a foot that lifts again on its way down
 // has a bump in the descent, which reads on the robot as a hitch just before
 // touchdown.
 TEST(Trajectory, DescentNeverRises) {
-  for (const float probe : {0.0f, kProbeFraction, g::kMaxProbeFraction}) {
-    const SwingTrace p = profile_swing(kTouchdownV, 0.02f, 0.002f, probe);
-    EXPECT_LT(p.descent_rise, 1e-6f) << "probe=" << probe;
-  }
-}
-
-// A probe asked for more of the swing than the cap allows stays bounded: the
-// main region keeps enough of the swing to shed the step height, and the arc
-// still lands where it was asked to.
-TEST(Trajectory, OversizedProbeIsClampedRatherThanCollapsingTheBrake) {
-  const SwingTrace p = profile_swing(kTouchdownV, 0.0f, 0.002f, 2.0f);
-  EXPECT_NEAR(p.end.z, kAep.z, 1e-4f);
-  EXPECT_NEAR(p.apex_height, kStepHeight, 3e-3f);
-  EXPECT_GT(p.min_height, -1e-5f);
-  EXPECT_LT(p.max_velocity_jump, 0.05f);
-}
-
-// ── The touchdown ride ──
-
-namespace {
-constexpr float kRideProbeFraction = 0.4f;
-// The probe's span at this file's swing time; the fraction cap binds, not the
-// height cap.
-constexpr float kRideProbeTime = kRideProbeFraction * kSwingTime;
-// The grant is the lesser of the overshoot meter (headroom / speed) and the
-// slip-need taper (speed x probe^2 / headroom), so the whole probe is ridden
-// exactly where they cross: headroom = ground speed x probe time. The tight
-// headroom caps the ride at 5 mm of overshoot instead.
-constexpr float kMatchedHeadroom = kLegSpeed * kRideProbeTime;
-constexpr float kTightHeadroom = 0.005f;
-}  // namespace
-
-// At the matched headroom the travel finishes at the probe's start and the foot
-// rides the touchdown ground line, world-frame stationary over its landing point
-// through the whole band. Without the ride, a contact at the top of the band
-// catches the foot at several times the ground speed and scrubs it millimetres
-// along the floor: this is the horizontal half of the probe's promise.
-TEST(Trajectory, RideHoldsTheGroundTrackThroughTheWholeProbeBand) {
-  const float band = kTouchdownV * kRideProbeFraction * kSwingTime;
-  const SwingTrace ridden = profile_swing(kTouchdownV, 0.0f, 0.9f * band,
-                                          kRideProbeFraction, kMatchedHeadroom);
-  EXPECT_LT(ridden.max_ground_offset, 1e-4f);
-  // The landing itself is unchanged: probe speed, ground velocity.
-  EXPECT_NEAR(ridden.touchdown_velocity.x, -kLegSpeed, 1e-3f);
-  EXPECT_NEAR(ridden.touchdown_velocity.z, -kTouchdownV, 2e-3f);
-
-  // The un-ridden arc is still finishing its travel through the band.
-  const SwingTrace bare =
-      profile_swing(kTouchdownV, 0.0f, 0.9f * band, kRideProbeFraction);
-  EXPECT_GT(bare.max_ground_offset, 1.5e-3f);
-}
-
-// The ride's two meters, pinned where each binds: at the matched headroom the
-// whole probe is ridden; a tight headroom stops the ride at exactly its own
-// overshoot; a headroom larger than matched buys *less* ride, not more — the
-// slip-need taper takes over, because a slow foot has little slip to prevent.
-TEST(Trajectory, RideParksWhereItsMetersAllow) {
-  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
-
-  const auto parked_x = [&](float headroom, float ride_time) {
-    const auto pts = sample_arc(
-        make_profile(kTouchdownV, 0.0f, kRideProbeFraction, headroom),
-        kSwingTime, v_ground);
-    const float travel_end = 1.0f - ride_time / kSwingTime;
-    const std::size_t i =
-        static_cast<std::size_t>(travel_end * static_cast<float>(kSteps));
-    return pts[i].x;
-  };
-
-  // Matched: the whole probe is ridden, parked ground speed x probe time out.
-  EXPECT_NEAR(parked_x(kMatchedHeadroom, kRideProbeTime),
-              kAep.x + kLegSpeed * kRideProbeTime, 3e-4f);
-
-  // Tight: the overshoot meter binds.
-  const float tight_granted = kTightHeadroom / kLegSpeed;
-  ASSERT_LT(tight_granted, kRideProbeTime);
-  EXPECT_NEAR(parked_x(kTightHeadroom, tight_granted),
-              kAep.x + kTightHeadroom, 3e-4f);
-
-  // Oversized: the taper binds — the grant shrinks below the full probe.
-  const float big = 2.0f * kMatchedHeadroom;
-  const float taper_granted = kLegSpeed * kRideProbeTime * kRideProbeTime / big;
-  ASSERT_LT(taper_granted, kRideProbeTime);
-  EXPECT_NEAR(parked_x(big, taper_granted),
-              kAep.x + kLegSpeed * taper_granted, 3e-4f);
-}
-
-// The warp keeps the apex over the spatial midpoint of the travel even when a
-// partial ride compresses the travel clock off the probe boundary.
-TEST(Trajectory, RideKeepsTheApexOverTheTravelMidpoint) {
-  const g::Vec3 v_ground(-kLegSpeed, 0.0f, 0.0f);
-  for (const float headroom : {kTightHeadroom, kMatchedHeadroom}) {
-    const auto pts = sample_arc(
-        make_profile(kTouchdownV, 0.0f, kRideProbeFraction, headroom),
-        kSwingTime, v_ground);
-    std::size_t apex_i = 0;
-    for (std::size_t i = 1; i < pts.size(); ++i) {
-      if (pts[i].z > pts[apex_i].z) {
-        apex_i = i;
-      }
-    }
-    const float phase = static_cast<float>(apex_i) / static_cast<float>(kSteps);
-    EXPECT_NEAR(shaped_progress(pts[apex_i], phase, kSwingTime, v_ground),
-                0.5f, 0.02f)
-        << "headroom=" << headroom;
-  }
-}
-
-// Everything the arc guarantees survives the ride, at every headroom: exact
-// endpoints, the configured apex height, no dig below ground, no C1 break —
-// including the new travel -> ride seam.
-TEST(Trajectory, RidePreservesTheArcInvariants) {
-  for (const float headroom :
-       {0.0f, kTightHeadroom, kMatchedHeadroom, 2.0f * kMatchedHeadroom}) {
-    const SwingTrace p =
-        profile_swing(kTouchdownV, 0.02f, 0.002f, kRideProbeFraction, headroom);
-    const std::string at = "headroom=" + std::to_string(headroom);
-    EXPECT_NEAR(p.start.x, kPep.x, 1e-4f) << at;
-    EXPECT_NEAR(p.start.z, kPep.z, 1e-4f) << at;
-    EXPECT_NEAR(p.end.x, kAep.x, 1e-4f) << at;
-    EXPECT_NEAR(p.end.z, kAep.z, 1e-4f) << at;
-    EXPECT_NEAR(p.apex_height, kStepHeight, 3e-3f) << at;
-    EXPECT_GT(p.min_height, -1e-5f) << at;
-    EXPECT_LT(p.max_velocity_jump, 0.05f) << at;
-  }
-}
-
-// A rest-to-rest swing gets no ride: with no ground motion there is no slip
-// to prevent, and the grant tapers to zero with the speed. So the pause and
-// reseat shapes are untouched by the headroom, and zero speed is the smooth
-// limit of a slowing command rather than a special case.
-TEST(Trajectory, RideVanishesAtZeroGroundVelocity) {
-  const g::SwingProfile ridden =
-      make_profile(kTouchdownV, 0.0f, kRideProbeFraction, kMatchedHeadroom);
-  const g::SwingProfile bare =
-      make_profile(kTouchdownV, 0.0f, kRideProbeFraction);
-  for (const float phase : {0.25f, 0.5f, 0.75f, 0.9f}) {
-    const g::Vec3 a = g::swing_arc(phase, kPep, kAep, 1, kSwingTime, ridden,
-                                   g::Vec3::Zero(), g::Vec3::Zero());
-    const g::Vec3 b = g::swing_arc(phase, kPep, kAep, 1, kSwingTime, bare,
-                                   g::Vec3::Zero(), g::Vec3::Zero());
-    EXPECT_NEAR(a.x, b.x, 1e-7f) << phase;
-    EXPECT_NEAR(a.z, b.z, 1e-7f) << phase;
+  for (const float apex : kApexTimes) {
+    EXPECT_LT(profile_swing(0.02f, 0.002f, apex).descent_rise, 1e-6f) << apex;
   }
 }
 
@@ -687,7 +487,7 @@ TEST(Trajectory, RideVanishesAtZeroGroundVelocity) {
 // PEP -> AEP line at both ends, so it cannot push the seam with stance sideways.
 TEST(Trajectory, SwingWidthArchesAndCloses) {
   constexpr float kWidth = 0.02f;
-  const SwingTrace p = profile_swing(0.01f, kWidth);
+  const SwingTrace p = profile_swing(kWidth);
   EXPECT_NEAR(p.max_lateral, kWidth, 1e-4f);
   EXPECT_NEAR(p.start.y, kPep.y, 1e-5f);
   EXPECT_NEAR(p.end.y, kAep.y, 1e-5f);
@@ -706,6 +506,7 @@ TEST(Trajectory, SwingWidthSurvivesZeroClearance) {
   EXPECT_NEAR(apex.y - kAep.y, 0.02f, 1e-5f);
   EXPECT_NEAR(apex.z, kAep.z, 1e-5f);
 }
+
 
 // The foot has to complete its step in the time it has, so anything that steals
 // swing time or ground from the arc shows up as a whip at mid-swing — on the
@@ -1057,8 +858,7 @@ TEST(Engine, TouchdownStaysVelocityContinuousWhileCommandRamps) {
       }
       // Second stance tick: the first straddles the seam and carries the
       // sub-millimetre snap onto the AEP, a sampling artefact rather than a
-      // velocity mismatch. Z is excluded because stance holds z fixed, so
-      // touchdown_velocity is a deliberate vertical step.
+      // velocity mismatch. Z is excluded: stance holds z fixed.
       if (leg.stance && t.stance_streak == 2 && t.have_swing_velocity) {
         const g::Vec3 jump = velocity - t.last_swing_velocity;
         const float magnitude = std::sqrt(jump.x * jump.x + jump.y * jump.y);
@@ -1657,13 +1457,8 @@ TEST(Engine, AStopNeverDropsBelowThreeLoadedFeet) {
         int loaded = 0;
         for (const auto& [name, leg] : out) {
           // A foot only carries weight if it is both claimed as stance and
-          // actually on the ground; the two used to disagree. "On the ground"
-          // means inside the probe band of the slowest swing a stop can take.
-          const float slowest_swing =
-              std::max({cfg.max_swing_time, cfg.settle_swing_time,
-                        cfg.reseat_pair_swing_time});
-          const float band = nominal.at(name)[2] +
-                             cfg.swing_profile().probe_band(slowest_swing);
+          // actually on the ground; the two used to disagree.
+          const float band = nominal.at(name)[2] + 1e-5f;
           if (leg.stance && leg.foot_target[2] <= band) {
             ++loaded;
           }
@@ -2305,10 +2100,7 @@ TEST(Reseat, LandsAirborneFeetBeforeLiftingAnyThatAreDown) {
     bool grounded_lifted = false;
     bool all_landed = true;
     for (const auto& [name, leg] : out) {
-      const bool down =
-          leg.foot_target[2] <=
-          nominal.at(name)[2] +
-              cfg.reseat_profile().probe_band(cfg.reseat_pair_swing_time);
+      const bool down = leg.foot_target[2] <= nominal.at(name)[2] + 1e-5f;
       if (leg.stance) {
         EXPECT_TRUE(down) << name << " reported stance while off the ground";
         ++loaded;
@@ -2605,10 +2397,10 @@ TEST(RadialStride, PureYawIsUnconstrained) {
 }
 
 // The invariant the budget exists to enforce, stated directly: over the whole
-// circle, no leg's foot — at its touchdown, nor at the furthest the swing's
-// touchdown ride may park it past that — closes its own reach by more than the
-// budget allows. The ride's overshoot is grace x half-stride, so the worst point
-// is 0.5 x (1 + grace) of the stride out along the travel.
+// circle, no leg's foot — at its touchdown, nor at the furthest a stance anchor
+// may drift past that — closes its own reach by more than the budget allows.
+// The drift is grace x half-stride, so the worst point is 0.5 x (1 + grace) of
+// the stride out along the travel.
 TEST(RadialStride, NoLegClosesItsReachPastTheBudget) {
   const auto legs = g::build_leg_contexts_from_config();
   const float stride = g::engine_config_from_config().stride_length;

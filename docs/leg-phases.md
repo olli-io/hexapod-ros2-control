@@ -108,21 +108,20 @@ All in `shared/motion_core/gait/`.
   - Vertical: lifts `max(origin_z, target_z)` plus clearance, body-frame
     vertical (flat ground, no walk plane). Lift-off velocity is derived:
     `2 x clearance / climb_time`, the largest monotone climb.
-  - Apex: over the spatial midpoint of the travel via a time warp (`apex_warp`).
-    Apex time follows from the probe share, not config.
+  - Lift and landing: the blend holds at zero until the climb reaches
+    `swing_lift_height`, and at one once the descent passes
+    `swing_land_height` (each capped at half the clearance). The foot rises
+    straight up off its lift-off point and sets straight down onto its
+    touchdown point, both in the ground frame; it travels only between.
+  - Apex: at `swing_apex_time` of the swing, over the spatial midpoint of the
+    travel via a time warp (`apex_warp`). Below 0.5 the descent is longer than
+    the climb, so the foot approaches the ground slower.
+  - Descent: quintic ease to a zero-speed touchdown. Open loop, no contact
+    sensing.
   - Lateral: `bump()` on the blend (not the clock), signed by body side.
   - Target changes mid-swing re-aim the touchdown end every tick
-    (`SwingPlanner::retarget`).
-- **Touchdown probe** — open loop, no contact sensing. The descent ends in a
-  straight constant-velocity probe at `touchdown_velocity`, over
-  `touchdown_probe_fraction` of the swing. Early contact within
-  `touchdown_velocity x fraction x swing_time` lands at the intended speed.
-- **Touchdown ride** — horizontal travel can finish early so the foot rides the
-  touchdown ground line through the probe: world-stationary over its landing
-  point, so early contact also lands without slip. `granted_ride_time` meters it
-  by overshoot past AEP (`ride_headroom`, the stance grace band) and by the slip
-  it prevents (scales with ground speed; slow swings keep the un-ridden
-  schedule).
+    (`SwingPlanner::retarget`) until `kTouchdownLatchPhase`. After it the
+    target holds still: near the ground, target motion is slip.
 - **Stance** — an anchor integrated at the live per-leg velocity each tick
   (`StanceIntegrator::step`), seeded from the swing's latched AEP. Follows a
   turning command mid-stance. `ease_outward` brakes only the outward radial
@@ -201,8 +200,8 @@ walking order.
   reseat mirrored pairs, no shift hold, and keeps the folded middle out of the
   landing stage.
 - The pair moves on one eased chord (111 mm, near-vertical, inside limits). No
-  clearance arc: the folded femur sits on its lower limit. The unfold ends with
-  the braked descent at `touchdown_velocity`.
+  clearance arc: the folded femur sits on its lower limit. The chord lands at
+  zero speed.
 - Operator posture reverts to neutral first. Planted feet solve through the body
   pose, parked feet do not, so a non-neutral pose would mismatch the two ends.
 
