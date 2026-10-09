@@ -1307,6 +1307,19 @@ TEST(Gesture, NoJointCommandOutrunsItsServo) {
   }
 }
 
+TEST(Gesture, NoFootGoesUnreachable) {
+  for (const auto& g : hexa::config::kGestures) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    ASSERT_NO_FATAL_FAILURE(stand_settled(p, now_us));
+    int max_unreachable = 0;
+    for (const auto& r : run_gesture(p, now_us, g.id)) {
+      max_unreachable = std::max(max_unreachable, r.unreachable);
+    }
+    EXPECT_EQ(max_unreachable, 0) << g.id;
+  }
+}
+
 // A tracked leg is commanded in joint space: each of its joints stays inside
 // the range its own knots and its stand (on the ground and raised by the stand
 // step) under that tick's body pose span, so
