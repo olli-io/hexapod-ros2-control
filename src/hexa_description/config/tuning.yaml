@@ -168,7 +168,6 @@ gait_node:
       # as it swings. The fold has no counterpart: its feet leave from where
       # they were actually standing.
       place_clearance: 0.002
-      swing_clearance: 0.04
 
     quadruped:
       # What the engagement and reseat ladders wait before lifting a corner, on

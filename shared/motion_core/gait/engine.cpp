@@ -1501,7 +1501,6 @@ EngineConfig engine_config_from_config() {
   cfg.init_pair_swing_time = c.init_pair_swing_time;
   cfg.init_lift_body_time = c.init_lift_body_time;
   cfg.init_place_clearance = c.init_place_clearance;
-  cfg.init_swing_clearance = c.init_swing_clearance;
   cfg.reseat_pose_settle_delay = c.reseat_pose_settle_delay;
   cfg.reseat_height_change_threshold = c.reseat_height_change_threshold;
   cfg.reseat_pair_swing_time = c.reseat_pair_swing_time;

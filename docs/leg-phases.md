@@ -217,8 +217,9 @@ walking order.
 - **initialize** (state) — folded to standing, in three rungs:
   - **unfold** — folded → initialized, one eased chord, all six together
     (`initialize.unfold_time`).
-  - **place feet** — pair-wise to the standing footprint, parked
-    `initialize.place_clearance` above the floor. No pair takes load early.
+  - **place feet** — pair-wise to the standing footprint, one eased chord per
+    pair (no clearance arc), parked `initialize.place_clearance` above the
+    floor. No pair takes load early.
   - **lift body** — septic ramp from place-feet z to standing z. The feet meet
     the floor during the first `place_clearance` of travel.
 - **folding** (state) — standing to folded:

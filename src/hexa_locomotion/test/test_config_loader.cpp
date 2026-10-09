@@ -100,7 +100,6 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.init_pair_swing_time, be.init_pair_swing_time, kTol);
   EXPECT_NEAR(le.init_lift_body_time, be.init_lift_body_time, kTol);
   EXPECT_NEAR(le.init_place_clearance, be.init_place_clearance, kTol);
-  EXPECT_NEAR(le.init_swing_clearance, be.init_swing_clearance, kTol);
   EXPECT_NEAR(le.reseat_pose_settle_delay, be.reseat_pose_settle_delay, kTol);
   EXPECT_NEAR(le.reseat_height_change_threshold,
               be.reseat_height_change_threshold, kTol);

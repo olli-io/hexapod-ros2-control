@@ -81,7 +81,6 @@ struct EngineConfig {
   float init_lift_body_time = 0.0f;
   float init_pair_swing_time = 0.0f;
   float init_place_clearance = 0.0f;
-  float init_swing_clearance = 0.0f;
   float reseat_pose_settle_delay = 0.0f;
   float reseat_height_change_threshold = 0.0f;
   float reseat_pair_swing_time = 0.0f;
@@ -111,13 +110,11 @@ struct EngineConfig {
                         .land_height = swing_land_height};
   }
 
-  // The cold start's and the fold's pair swings.
+  // The cold start's and the fold's pair swings: an eased chord between the
+  // initialized pose and the floor. Any clearance climbs over the initialized
+  // end, which is the higher one, and swings the knee into the chassis.
   SwingProfile init_profile() const {
-    return SwingProfile{.clearance = init_swing_clearance,
-                        .width = swing_width,
-                        .apex_time = swing_apex_time,
-                        .lift_height = swing_lift_height,
-                        .land_height = swing_land_height};
+    return SwingProfile{.apex_time = swing_apex_time};
   }
 
   // Zero clearance deliberately: swing_arc measures clearance from the higher

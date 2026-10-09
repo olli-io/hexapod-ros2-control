@@ -495,7 +495,6 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.init_pair_swing_time = f(g["initialize"]["pair_swing_time"]);
   e.init_lift_body_time = f(g["initialize"]["lift_body_time"]);
   e.init_place_clearance = f(g["initialize"]["place_clearance"]);
-  e.init_swing_clearance = f(g["initialize"]["swing_clearance"]);
   e.reseat_pose_settle_delay = f(g["reseat"]["pose_settle_delay"]);
   e.reseat_height_change_threshold = f(g["reseat"]["height_change_threshold"]);
   e.reseat_pair_swing_time = f(g["reseat"]["pair_swing_time"]);
