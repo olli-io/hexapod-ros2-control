@@ -242,7 +242,7 @@ posture_node:
     # GaitSway: shifts the body sideways to stay over the feet. gain is the
     # physical strength (1.0 = balanced); strength is a [0, 1] dial on top.
     gait_sway_gain: 1.0
-    gait_sway_strength: 0.4
+    gait_sway_strength: 0.3
 
     # Quad support shift. tau is the mean lag of a critically damped spring,
     # so the body starts each move from rest.
