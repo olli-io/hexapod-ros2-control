@@ -944,6 +944,42 @@ TEST(LegSetChange, CmdGaitCarriesTheRobotBetweenTheStands) {
               p.engine().state() == EngineState::GAIT);
 }
 
+TEST(LegSetChange, TheShaperFollowsTheGaitTheChangeCommits) {
+  // A held pose defers the pair, and the engine applies the gait at the commit.
+  // The shaper has to follow the engine: left on quad_walk, it caps the walk on
+  // six legs at the quadruped's speed and the stride stays short.
+  pl::Pipeline p;
+  std::uint64_t now_us = 0;
+  stand_up(p, now_us);
+
+  const auto change = [&](std::string_view gait) {
+    pl::CommandIntent posed;
+    posed.pose_y = 0.03f;
+    pl::CommandIntent ask = posed;
+    ask.has_preset_select = true;
+    ask.preset_select = preset_of(gait);
+    ask.has_gait_select = true;
+    ask.gait_select = gait;
+    tick_cmd(p, ask, now_us);
+    for (int i = 0; i < 6000; ++i) {
+      tick_cmd(p, pl::CommandIntent{}, now_us);
+      if (p.engine().state() == EngineState::STAND &&
+          p.engine().strategy_name() == gait) {
+        break;
+      }
+    }
+    tick_cmd(p, pl::CommandIntent{}, now_us);
+  };
+
+  change("quad_walk");
+  ASSERT_EQ(p.engine().strategy_name(), "quad_walk");
+  EXPECT_EQ(p.control().active_gait(), "quad_walk");
+
+  change("tripod");
+  ASSERT_EQ(p.engine().strategy_name(), "tripod");
+  EXPECT_EQ(p.control().active_gait(), "tripod");
+}
+
 TEST(LegSetChange, TheBodyStaysInsideTheSupportPolygonThroughout) {
   for (bool to_quad : {true, false}) {
     pl::Pipeline p;

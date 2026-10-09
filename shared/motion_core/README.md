@@ -76,7 +76,9 @@ overload runs `map_joy` first, then the same core.
    default preset with nothing armed; the engine starts it on its next tick.
 3. **Follow the applied preset** — when the engine reports a new preset, copy
    its velocity caps, nominal stance and stride into `Control` and the joy
-   scaling. The engine's report, not the request, drives this.
+   scaling. The engine's report, not the request, drives this. `Control`
+   also takes the engine's applied leg set and gait every tick, so a gait
+   held behind a preset change reaches the shaper at the commit.
 4. **Init edge** — `start_initialize()` from FOLDED / FAULT, else
    `request_fold()`. A latched `hardware_fault` then wins over a same-tick
    start.

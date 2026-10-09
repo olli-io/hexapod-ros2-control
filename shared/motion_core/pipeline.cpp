@@ -296,7 +296,6 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
       r.gait_accepted = true;
     } else if (gait_switch_allowed(engine_->state()) &&
                engine_->set_strategy(name)) {
-      control_.set_gait(name);
       joycfg_.gait_linear_max = caps_.linear_max(name);
       joycfg_.gait_angular_z_max = caps_.angular_max(name);
       r.gait_accepted = true;
@@ -402,9 +401,11 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   std::tie(cmd_x, cmd_y, cmd_z) =
       engine_->shape_reversal(in.dt, {cmd_x, cmd_y}, cmd_z);
 
-  // The engine's applied leg set, so the envelope stops pricing the middles'
-  // lever arms the moment the stand ladder commits one — and not before.
+  // The engine's applied leg set and gait, so the envelope stops pricing the
+  // middles' lever arms the moment the stand ladder commits one — and not
+  // before. A gait held behind a preset change lands at the commit, not here.
   control_.set_leg_set(engine_->leg_set());
+  control_.set_gait(engine_->strategy_name());
   const auto [vx, vy, wz] = control_.shape(cmd_x, cmd_y, cmd_z, st, in.dt);
   const std::map<std::string, hexa::gait::LegOutput> out =
       engine_->update(in.dt, {vx, vy}, wz);

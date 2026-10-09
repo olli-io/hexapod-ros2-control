@@ -148,6 +148,7 @@ class Pipeline {
   hexa::gait::Engine& engine() { return *engine_; }
   const hexa::supervisor::Supervisor& supervisor() const { return supervisor_; }
   const hexa::posture::PostureController& posture() const { return posture_; }
+  const hexa::control::Control& control() const { return control_; }
   // Solved from the standing-pose scalars; seeds the caller's pre-first-tick
   // joint dump.
   const std::array<hexa::JointAngles, hexa::kNumLegs>& standing_pose() const {
