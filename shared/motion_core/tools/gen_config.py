@@ -547,6 +547,19 @@ def gestures(doc, geometry: dict):
     return out
 
 
+def stand_step(doc) -> dict:
+    """gestures.yaml stand_step: the foot's vertical step out of and into a
+    leg's stand. Mirrored by pipeline_config_loader.cpp."""
+    step = (doc or {}).get("stand_step")
+    if not isinstance(step, dict) or set(step) != {"height", "time"}:
+        raise ValueError("gestures.yaml stand_step: needs exactly height, time")
+    out = {k: float(step[k]) for k in ("height", "time")}
+    if out["height"] < 0.0 or out["time"] < 0.0:
+        raise ValueError("gestures.yaml stand_step: height and time must not "
+                         "be negative")
+    return out
+
+
 def rest_pose(geometry: dict, key: str):
     """Per-leg (coxa, femur, tibia) angles for one of the two belly-rest poses.
 
@@ -1070,6 +1083,12 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     for gid, leg, first, count in leg_tracks:
         w(f"    {{hexa::Leg::{leg.upper()}, {first}, {count}}},  // {gid}")
     w("}};")
+    step = stand_step(gestures_doc)
+    w("// The vertical foot step out of a leg's stand and back into it.")
+    w(f"inline constexpr float kGestureStandStepHeight = {fl(step['height'])};"
+      "  // m")
+    w(f"inline constexpr float kGestureStandStepTime = {fl(step['time'])};"
+      "  // s")
     w(f"inline constexpr std::array<GestureConfig, {len(gesture_rows)}> "
       "kGestures = {{")
     for gst, ft, tc, fb, bc in gesture_rows:

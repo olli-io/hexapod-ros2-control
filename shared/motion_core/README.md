@@ -50,9 +50,13 @@ hardware. The seams each caller supplies — input, config source, clock, output
   out of or into a live knot it is `direct` at the ease weight, and the
   pipeline blends the fixed knot's angles with the live IK, so the leg keeps
   following the body and lands home on the ground plane at its own time; on a
-  live stretch it is a plain stance leg. `validate_gestures` checks every leg
-  knot against the joint limits and the ground plane at construction, and the
-  track shape (`check_track_shape`, shared with the YAML loaders).
+  live stretch it is a plain stance leg. Each such ease starts (or ends) with
+  the **stand step** (`gestures.yaml` `stand_step`): the foot goes straight up
+  from its stance (or straight down to it) as a live target, and the joint
+  blend runs from that raised stance, so the foot never drags. `validate_gestures` checks every leg
+  knot against the joint limits and the ground plane at construction, the
+  track shape (`check_track_shape`, shared with the YAML loaders), and that
+  every ease next to a live knot outlasts the stand step.
   Its leg track is neither gait nor animation; its body track is a posture
   term, not an animation layer.
 - **`kinematics/`** — `apply_body_pose`, `body_to_leg`, `inverse_kinematics`

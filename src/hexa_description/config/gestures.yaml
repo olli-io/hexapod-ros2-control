@@ -50,52 +50,62 @@
 # Gestures run only on the default preset (tuning.yaml default_preset); the
 # standing leg there is roughly coxa as tuning.yaml splays it, femur 37,
 # tibia 66.
+#
+# stand_step — every ease out of a leg's start lifts the foot straight up by
+# `height` over the first `time` s of the segment, and every ease into a home
+# ends with the foot lowered straight down over its last `time` s, so the
+# joint-space ease never drags the foot along the ground. The step rides the
+# body like the stand it leaves. Every segment next to a start or home must be
+# longer than `time`.
+stand_step:
+  height: 0.01
+  time: 0.15
 gestures:
   - id: wave
     legs:
       - pose:
-          t: 0.5
+          t: 0.65
           transition: ease
           l_front: { coxa_deg: -30, femur_deg: 100, tibia_deg: 150 }
       - pose:
-          t: 0.8
+          t: 0.95
           transition: continuous
           l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
       - pose:
-          t: 1.1
+          t: 1.25
           transition: continuous
           l_front: { coxa_deg: -30, femur_deg: 105, tibia_deg: 150 }
       - pose:
-          t: 1.4
+          t: 1.55
           transition: continuous
           l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
       - pose:
-          t: 1.7
+          t: 1.85
           transition: continuous
           l_front: { coxa_deg: -30, femur_deg: 105, tibia_deg: 150 }
       - pose:
-          t: 2.0
+          t: 2.15
           transition: continuous
           l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
       - pose:
-          t: 2.3
+          t: 2.45
           transition: continuous
           l_front: { coxa_deg: -30, femur_deg: 105, tibia_deg: 150 }
       - pose:
-          t: 2.6
+          t: 2.75
           transition: continuous
           l_front: { coxa_deg: -5, femur_deg: 105, tibia_deg: 150 }
-      - home: { t: 3.5 }
+      - home: { t: 3.65 }
     body:
-      - pose: { t: 0.5, y: -0.015, transition: ease }
-      - pose: { t: 0.8, y: -0.015, roll_deg: -6, transition: continuous }
-      - pose: { t: 1.1, y: -0.015, roll_deg: 6, transition: continuous }
-      - pose: { t: 1.4, y: -0.015, roll_deg: -6, transition: continuous }
-      - pose: { t: 1.7, y: -0.015, roll_deg: 6, transition: continuous }
-      - pose: { t: 2.0, y: -0.015, roll_deg: -6, transition: continuous }
-      - pose: { t: 2.3, y: -0.015, roll_deg: 6, transition: continuous }
-      - pose: { t: 2.6, y: -0.015, roll_deg: -6, transition: continuous }
-      - home: { t: 3.5 }
+      - pose: { t: 0.65, y: -0.015, transition: ease }
+      - pose: { t: 0.95, y: -0.015, roll_deg: -6, transition: continuous }
+      - pose: { t: 1.25, y: -0.015, roll_deg: 6, transition: continuous }
+      - pose: { t: 1.55, y: -0.015, roll_deg: -6, transition: continuous }
+      - pose: { t: 1.85, y: -0.015, roll_deg: 6, transition: continuous }
+      - pose: { t: 2.15, y: -0.015, roll_deg: -6, transition: continuous }
+      - pose: { t: 2.45, y: -0.015, roll_deg: 6, transition: continuous }
+      - pose: { t: 2.75, y: -0.015, roll_deg: -6, transition: continuous }
+      - home: { t: 3.65 }
   # Chitter: the body shifts back onto the rear pairs first, then both front
   # legs fold up close together in front and alternate: one lifts, sweeps in
   # and folds the knee while the other drops, sweeps out and extends, like a

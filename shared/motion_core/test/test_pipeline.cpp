@@ -1308,7 +1308,8 @@ TEST(Gesture, NoJointCommandOutrunsItsServo) {
 }
 
 // A tracked leg is commanded in joint space: each of its joints stays inside
-// the range its own knots and its stand under that tick's body pose span, so
+// the range its own knots and its stand (on the ground and raised by the stand
+// step) under that tick's body pose span, so
 // the body track moves the leg only through the live start and home knots,
 // and no joint of any leg leaves its limits.
 TEST(Gesture, TrackedLegStaysInsideItsKnotsAndEveryJointInsideItsLimits) {
@@ -1337,13 +1338,23 @@ TEST(Gesture, TrackedLegStaysInsideItsKnotsAndEveryJointInsideItsLimits) {
       }
       for (const auto& r : steps) {
         if (r.engine_state != EngineState::GESTURE) continue;
-        const hexa::JointAngles live = hexa::inverse_kinematics(
-            hexa::body_to_leg(hexa::apply_body_pose(home[li], r.body_pose), spec),
-            spec);
+        const auto stand = [&](float raise) {
+          return hexa::inverse_kinematics(
+              hexa::body_to_leg(
+                  hexa::apply_body_pose(home[li] + hexa::Vec3(0.0f, 0.0f, raise),
+                                        r.body_pose),
+                  spec),
+              spec);
+        };
+        const hexa::JointAngles live = stand(0.0f);
+        const hexa::JointAngles stepped =
+            stand(hexa::config::kGestureStandStepHeight);
         for (std::size_t j = 0; j < 3; ++j) {
-          EXPECT_GE(r.theta[li * 3 + j], std::min(lo[j], live[j]) - 1e-4f)
+          EXPECT_GE(r.theta[li * 3 + j],
+                    std::min({lo[j], live[j], stepped[j]}) - 1e-4f)
               << g.id << " " << hexa::gait::LEG_NAMES[li] << " joint " << j;
-          EXPECT_LE(r.theta[li * 3 + j], std::max(hi[j], live[j]) + 1e-4f)
+          EXPECT_LE(r.theta[li * 3 + j],
+                    std::max({hi[j], live[j], stepped[j]}) + 1e-4f)
               << g.id << " " << hexa::gait::LEG_NAMES[li] << " joint " << j;
         }
       }

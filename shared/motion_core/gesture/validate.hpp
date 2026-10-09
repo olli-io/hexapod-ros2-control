@@ -32,8 +32,10 @@ void check_track_shape(const std::vector<LegKeyframe>& keys,
 // whose foot sits below the default preset's ground plane (`nominal_stance`,
 // body frame), on a body keyframe outside `limits` — the pose clamp would
 // otherwise bend the track silently — on a leg track that breaks
-// check_track_shape, and on a body track that does not end with a home knot,
-// since the engine hands back a stand when the gesture is done.
+// check_track_shape, on a body track that does not end with a home knot,
+// since the engine hands back a stand when the gesture is done, on a negative
+// stand step, and on an ease between a live knot and a fixed one no longer
+// than the stand step.
 void validate_gestures(
     const std::vector<GestureSpec>& specs,
     const std::map<std::string, gait::kin::LegSpec>& leg_specs,

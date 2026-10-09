@@ -56,6 +56,27 @@ void check_leg_keyframe(const std::string& id, const std::string& leg,
   }
 }
 
+// Every ease between a live knot (the implicit start at t = 0, a start, a
+// home, or a hold of one) and a fixed one must outlast the stand step.
+void check_step_fits(const std::string& id, const std::string& leg,
+                     const std::vector<LegKeyframe>& keys,
+                     const StandStep& step) {
+  bool prev_live = true;
+  float prev_t = 0.0f;
+  for (const LegKeyframe& k : keys) {
+    const bool live = k.start || k.home || (k.hold && prev_live);
+    if (live != prev_live && k.t - prev_t <= step.time) {
+      throw std::invalid_argument(
+          "gesture '" + id + "': " + leg + " eases between its stand and a "
+          "pose in " + std::to_string(k.t - prev_t) + " s at t=" +
+          std::to_string(k.t) + " s, not longer than the stand step's " +
+          std::to_string(step.time) + " s");
+    }
+    prev_live = live;
+    prev_t = k.t;
+  }
+}
+
 }  // namespace
 
 void check_track_shape(const std::vector<LegKeyframe>& keys,
@@ -93,6 +114,11 @@ void validate_gestures(
     const std::map<std::string, Vec3>& nominal_stance,
     const posture::PoseLimits& limits) {
   for (const GestureSpec& spec : specs) {
+    if (spec.stand_step.height < 0.0f || spec.stand_step.time < 0.0f) {
+      throw std::invalid_argument("gesture '" + spec.id +
+                                  "': stand_step height and time must not be "
+                                  "negative");
+    }
     for (const BodyKeyframe& k : spec.body) {
       check_body_keyframe(spec.id, k, limits);
     }
@@ -109,6 +135,7 @@ void validate_gestures(
       for (const LegKeyframe& k : track.keys) {
         check_leg_keyframe(spec.id, leg, k, ls, ground_z);
       }
+      check_step_fits(spec.id, leg, track.keys, spec.stand_step);
     }
   }
 }

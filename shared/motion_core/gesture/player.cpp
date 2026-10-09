@@ -74,7 +74,7 @@ void resolve_stand_ins(std::vector<BodyKeyframe>& keys) {
 GesturePlayer::GesturePlayer(
     const GestureSpec& spec, const std::map<std::string, Vec3>& nominal,
     const std::map<std::string, gait::kin::LegSpec>& leg_specs)
-    : id_(spec.id), nominal_(nominal) {
+    : id_(spec.id), nominal_(nominal), step_(spec.stand_step) {
   gait::require_all_legs(nominal, "gesture nominal");
   gait::require_all_legs(leg_specs, "gesture leg_specs");
 
@@ -85,10 +85,12 @@ GesturePlayer::GesturePlayer(
     Track t;
     t.name = std::string(leg_name(track.leg));
     t.spec = leg_specs.at(t.name);
-    const Vec3 nominal_leg = body_to_leg(nominal.at(t.name), t.spec);
-    t.ground_z = nominal_leg.z;
+    t.ground_z = body_to_leg(nominal.at(t.name), t.spec).z;
     // On the default preset, inside the reach annulus by construction.
-    t.home = gait::kin::inverse_kinematics(nominal_leg, t.spec);
+    t.stepped = gait::kin::inverse_kinematics(
+        body_to_leg(nominal.at(t.name) + Vec3(0.0f, 0.0f, step_.height),
+                    t.spec),
+        t.spec);
     t.keys.reserve(track.keys.size() + 1);
     t.keys.push_back(live_knot(0.0f));
     t.keys.insert(t.keys.end(), track.keys.begin(), track.keys.end());
@@ -118,32 +120,40 @@ std::map<std::string, gait::LegOutput> GesturePlayer::update(float dt) {
   for (const Track& track : tracks_) {
     gait::LegOutput& leg = out[track.name];
     leg.phase = progress;
-    const Sample s = sample(track, elapsed_);
+    const Sample s = sample(track, elapsed_, step_.time);
+    const float raise = s.step * step_.height;
     if (s.weight <= 0.0f) {
-      continue;  // live: the stance under the body, like an untracked leg
+      // Live: the stance under the body, like an untracked leg, raised by the
+      // step.
+      leg.foot_target.z += raise;
+      leg.stance = raise <= kPlantedHeight;
+      continue;
     }
     leg.direct = true;
     leg.direct_weight = s.weight;
     leg.joints = s.joints;
     // Fully direct, the foot is the joints' FK. Blending, the live end is
-    // unknown here: foot_target is the stance the pipeline solves it from,
-    // and the planted flag reads the blend against the unposed stance.
+    // unknown here: foot_target is the stepped stance the pipeline solves it
+    // from, and the planted flag reads the blend against the unposed one.
     JointAngles probe = s.joints;
     if (s.weight < 1.0f) {
       for (std::size_t j = 0; j < 3; ++j) {
-        probe[j] = track.home[j] + (s.joints[j] - track.home[j]) * s.weight;
+        probe[j] = track.stepped[j] + (s.joints[j] - track.stepped[j]) * s.weight;
       }
     }
     const Vec3 in_leg = gait::kin::forward_kinematics(probe, track.spec);
     if (s.weight >= 1.0f) {
       leg.foot_target = leg_to_body(in_leg, track.spec);
+    } else {
+      leg.foot_target.z += raise;
     }
     leg.stance = in_leg.z - track.ground_z <= kPlantedHeight;
   }
   return out;
 }
 
-GesturePlayer::Sample GesturePlayer::sample(const Track& track, float t) {
+GesturePlayer::Sample GesturePlayer::sample(const Track& track, float t,
+                                            float step_time) {
   const LegKeyframe* keys = track.keys.data();
   const std::size_t n = track.keys.size();
   Sample s;
@@ -174,15 +184,24 @@ GesturePlayer::Sample GesturePlayer::sample(const Track& track, float t) {
         track_value(keys, n, t, [](const LegKeyframe& k) { return k.tibia; })};
     return s;
   }
-  // One live end: the ease between the two, weighted onto the fixed end.
-  const float h = keys[i].t - keys[i - 1].t;
-  const float u = h > 0.0f ? (t - keys[i - 1].t) / h : 1.0f;
-  const float e = ease5(u);
+  // One live end: the step at the live end, then the ease between the
+  // stepped stance and the fixed end, weighted onto the fixed end.
+  // validate_gestures keeps the segment longer than the step.
+  const float h = keys[i].t - keys[i - 1].t - step_time;
+  const float from_live = a_live ? t - keys[i - 1].t : keys[i].t - t;
+  if (from_live < step_time) {
+    s.step = ease5(from_live / step_time);
+    return s;
+  }
+  s.step = 1.0f;
   if (a_live) {
-    s.weight = e;
+    const float u = h > 0.0f ? (from_live - step_time) / h : 1.0f;
+    s.weight = ease5(u);
     s.joints = angles_of(keys[i]);
   } else {
-    s.weight = 1.0f - e;
+    // Measured from the fixed end, so the weight reaches exactly 0.
+    const float u = h > 0.0f ? std::min((t - keys[i - 1].t) / h, 1.0f) : 1.0f;
+    s.weight = 1.0f - ease5(u);
     s.joints = angles_of(keys[i - 1]);
   }
   return s;
@@ -214,6 +233,7 @@ std::vector<GestureSpec> gesture_specs_from_config() {
   for (const auto& g : cfg::kGestures) {
     GestureSpec spec;
     spec.id = std::string(g.id);
+    spec.stand_step = {cfg::kGestureStandStepHeight, cfg::kGestureStandStepTime};
     for (std::size_t ti = 0; ti < g.leg_track_count; ++ti) {
       const auto& row = cfg::kGestureLegTracks[g.first_leg_track + ti];
       LegTrack track;

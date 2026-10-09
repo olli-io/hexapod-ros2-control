@@ -202,7 +202,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
               loaded.presets[loaded.default_preset].standing.body_height, kTol);
   EXPECT_EQ(lp.gait_body_animations_enabled, bp.gait_body_animations_enabled);
 
-  // Gestures, position by position: the id, the return time, every per-leg
+  // Gestures, position by position: the id, the stand step, every per-leg
   // track and every keyframe field. Both sides flatten the multi-leg authoring
   // format, so this is also the check that the two flattenings agree.
   ASSERT_EQ(loaded.gestures.size(), baked.gestures.size());
@@ -210,6 +210,8 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     const auto& lg = loaded.gestures[gi];
     const auto& bg = baked.gestures[gi];
     ASSERT_EQ(lg.id, bg.id) << "gesture " << gi << " is out of order";
+    EXPECT_NEAR(lg.stand_step.height, bg.stand_step.height, kTol) << lg.id;
+    EXPECT_NEAR(lg.stand_step.time, bg.stand_step.time, kTol) << lg.id;
     ASSERT_EQ(lg.legs.size(), bg.legs.size()) << lg.id;
     for (std::size_t ti = 0; ti < bg.legs.size(); ++ti) {
       const auto& lt = lg.legs[ti];

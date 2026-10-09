@@ -407,6 +407,44 @@ TEST(Player, LiftedLegReportsSwingWhileOffTheGround) {
   EXPECT_TRUE(out.at("l_front").stance) << "planted at the end";
 }
 
+TEST(Player, StandStepLiftsStraightUpAndLandsStraightDown) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
+  const auto k = joints_at("l_front", 0.3f, 0.0f, 0.05f);
+  auto spec = one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, k)}, 0.5f);
+  spec.stand_step = {0.01f, 0.1f};
+  gs::GesturePlayer player(spec, nominal, specs);
+  const hexa::Vec3 up(0.0f, 0.0f, 1.0f);
+
+  auto l = player.update(0.05f).at("l_front");  // halfway up the step
+  EXPECT_FALSE(l.direct);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front") + up * (0.01f * gs::ease5(0.5f))));
+  EXPECT_FALSE(l.stance);
+  l = player.update(0.05f).at("l_front");  // t = 0.1, the step done
+  EXPECT_FALSE(l.direct);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front") + up * 0.01f));
+  l = player.update(0.2f).at("l_front");  // t = 0.3, halfway through the ease
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, gs::ease5(0.5f), 1e-5f);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front") + up * 0.01f));
+  for (std::size_t j = 0; j < 3; ++j) EXPECT_FLOAT_EQ(l.joints[j], k[j]);
+
+  l = player.update(0.4f).at("l_front");  // t = 0.7, halfway home
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, 1.0f - gs::ease5(0.5f), 1e-5f);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front") + up * 0.01f));
+  l = player.update(0.2f).at("l_front");  // t = 0.9, over the stand
+  EXPECT_FALSE(l.direct);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front") + up * 0.01f));
+  l = player.update(0.05f).at("l_front");  // halfway down
+  EXPECT_FALSE(l.direct);
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front") + up * (0.01f * gs::ease5(0.5f))));
+  l = player.update(0.05f).at("l_front");  // t = 1.0, home
+  EXPECT_TRUE(player.done());
+  EXPECT_TRUE(near(l.foot_target, nominal.at("l_front"), 1e-7f));
+  EXPECT_TRUE(l.stance);
+}
+
 TEST(Player, BodyTrackReturnsToIdentity) {
   const auto nominal = g::nominal_stance_from_config();
   const auto specs = g::leg_specs_from_config();
@@ -616,6 +654,27 @@ TEST(Validate, StandInKnotsAreNotChecked) {
   EXPECT_NO_THROW(gs::validate_gestures(
       {spec}, g::leg_specs_from_config(), g::nominal_stance_from_config(),
       hexa::posture::PoseLimits{}));
+}
+
+TEST(Validate, RejectsAnEaseNoLongerThanTheStandStep) {
+  const auto a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  const auto validate = [](gs::GestureSpec spec) {
+    spec.stand_step = {0.01f, 0.1f};
+    gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                          g::nominal_stance_from_config(),
+                          hexa::posture::PoseLimits{});
+  };
+  // Out of the implicit start, out of a start, and back into home.
+  EXPECT_THROW(validate(one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.1f, a)})),
+               std::invalid_argument);
+  EXPECT_THROW(validate(one_leg_spec(hexa::Leg::L_FRONT,
+                                     {start_key(0.4f), joint_key(0.5f, a)})),
+               std::invalid_argument);
+  EXPECT_THROW(
+      validate(one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, a)}, 0.05f)),
+      std::invalid_argument);
+  EXPECT_NO_THROW(
+      validate(one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.2f, a)}, 0.2f)));
 }
 
 TEST(Validate, RejectsAStartAfterAJointKeyframe) {

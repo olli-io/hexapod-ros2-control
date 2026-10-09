@@ -179,6 +179,17 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
       "t", "transition", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"};
   static const std::set<std::string> kGestureKeys = {"id", "legs", "body"};
   const YAML::Node doc = YAML::LoadFile(path);
+  const YAML::Node step_node = doc["stand_step"];
+  if (!step_node || !step_node.IsMap() || step_node.size() != 2 ||
+      !step_node["height"] || !step_node["time"]) {
+    throw std::runtime_error("gestures.yaml stand_step: needs exactly height, time");
+  }
+  const hexa::gesture::StandStep step{f(step_node["height"]),
+                                      f(step_node["time"])};
+  if (step.height < 0.0f || step.time < 0.0f) {
+    throw std::runtime_error(
+        "gestures.yaml stand_step: height and time must not be negative");
+  }
   const YAML::Node list = doc["gestures"];
   std::vector<hexa::gesture::GestureSpec> out;
   if (!list || list.IsNull()) {
@@ -188,6 +199,7 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
   for (const auto& entry : list) {
     hexa::gesture::GestureSpec spec;
     spec.id = entry["id"].as<std::string>();
+    spec.stand_step = step;
     const std::string gwhere = "gestures.yaml " + spec.id;
     if (!seen.insert(spec.id).second) {
       throw std::runtime_error("gestures.yaml: duplicate id " + spec.id);
