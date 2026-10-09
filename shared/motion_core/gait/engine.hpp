@@ -174,6 +174,9 @@ class SwingPlanner {
             float dt, const StanceBand& bound);
   void reset();
   bool is_swing(const std::string& name) const { return is_swing_.at(name); }
+  // In its straight set-down now, or from the next tick on.
+  bool sets_down(const std::string& name, float phase_in_swing, float dt,
+                 const SwingProfile& profile) const;
   // Where the foot sets down this tick: the latched target, or one more carried
   // step at the target height once the landing is carried.
   Vec3 touchdown_point(const std::string& name, std::pair<float, float> v_leg,
@@ -262,6 +265,9 @@ class Engine {
     return pending_strategy_name_;
   }
   float applied_height() const { return applied_height_; }
+  // The travel the walk carried last tick, after the set-down hold: what the
+  // body moved at, where update()'s argument is what was asked of it.
+  std::pair<float, float> carried_xy() const { return carried_xy_; }
 
   // Accepted from FOLDED / FAULT, and from a stand or a walk as long as the gait
   // walks the leg set in force — or the one an armed preset change is heading
@@ -377,6 +383,8 @@ class Engine {
   // Whether letting the gait finish the settle beats the reseat ladder. Tripod
   // wins; the longer duty factors do not.
   bool settle_beats_reseat() const;
+  // Any swing in its straight set-down now or from the next tick on.
+  bool any_sets_down(float dt) const;
   void reset_swing_state();
   // Stand if the feet are home, hand over to the reseat ladder if the gait would
   // be slower at it, else keep settling.
@@ -485,6 +493,10 @@ class Engine {
   // what is asked of it, which is the reversal ladder's reference.
   std::pair<float, float> applied_xy_{0.0f, 0.0f};
   float applied_omega_ = 0.0f;
+  // The travel tick_gait last walked, after the set-down hold. The hold's
+  // reference, not the ladder's: the ladder reads the command, this the feet.
+  std::pair<float, float> carried_xy_{0.0f, 0.0f};
+  float carried_omega_ = 0.0f;
 
   float applied_height_ = 0.0f;
   float target_height_ = 0.0f;

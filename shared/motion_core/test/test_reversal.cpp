@@ -194,9 +194,11 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
     const std::pair<float, float> cmd =
         axis == 0 ? std::pair<float, float>{v, 0.0f}
                   : std::pair<float, float>{0.0f, v};
-    body_w.x += cmd.first * kDt;
-    body_w.y += cmd.second * kDt;
     auto out = e->update(kDt, cmd, 0.0f);
+    // What the body walked, which a step reversal under a set-down can hold on
+    // the old travel for a few ticks.
+    body_w.x += e->carried_xy().first * kDt;
+    body_w.y += e->carried_xy().second * kDt;
     for (const auto& [name, leg] : out) last_targets[name] = leg.foot_target;
     return out;
   };

@@ -69,6 +69,11 @@ PEP --[swing]--> AEP --[stance]--> PEP
   mirror waits one swing under the walk, because engagement touchdowns
   under-travel their phase. Declined reversals are absorbed by the engagement,
   whose feet ride the same stance bound.
+- **Set-down hold** — a foot in its straight set-down is carried ground-fixed,
+  and it starts past its AEP. A command that reverses the travel there would
+  push it into the stance wall and drag it on landing. So `tick_gait` keeps the
+  carried travel until no foot is in its set-down (at most ~0.15 s). Only a step
+  command trips it; the limiter's slewed reversal does not.
 
 ## 4. Cycle parameters
 

@@ -155,6 +155,16 @@ void SwingPlanner::retarget(const std::string& name, const Vec3& target,
   }
 }
 
+bool SwingPlanner::sets_down(const std::string& name, float phase_in_swing,
+                             float dt, const SwingProfile& profile) const {
+  if (!is_swing_.at(name)) {
+    return false;
+  }
+  return landing_.at(name) ||
+         phase_in_swing + dt / swing_time_.at(name) >=
+             swing_land_start(origin_.at(name), target_.at(name), profile);
+}
+
 void SwingPlanner::touchdown(const std::string& name) {
   is_swing_[name] = false;
 }
@@ -1025,6 +1035,8 @@ std::map<std::string, LegOutput> Engine::update(
       for (const auto& n : LEG_NAMES) {
         on_schedule_[n] = engagement_->foot_on_schedule(n);
       }
+      carried_xy_ = v_body_xy;
+      carried_omega_ = omega_z;
       state_ = EngineState::GAIT;
     }
     return out;
@@ -1072,7 +1084,22 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   if (settling) {
     v_body_xy = {0.0f, 0.0f};
     omega_z = 0.0f;
+    carried_xy_ = v_body_xy;
+    carried_omega_ = omega_z;
   } else {
+    // A foot in its set-down is carried ground-fixed onto its touchdown, so a
+    // command that turns the travel around there carries it outward into the
+    // stance wall and drags it across the ground. The carried travel runs on
+    // until no foot is setting down; the limiter's slewed reversal never trips
+    // this, a step command does.
+    if (travel_reverses(active_legs_, v_body_xy, omega_z, carried_xy_,
+                        carried_omega_, config_.cmd_zero_tol) &&
+        any_sets_down(dt)) {
+      v_body_xy = carried_xy_;
+      omega_z = carried_omega_;
+    }
+    carried_xy_ = v_body_xy;
+    carried_omega_ = omega_z;
     v_body_xy = {v_body_xy.first * cmd_gain_, v_body_xy.second * cmd_gain_};
     omega_z *= cmd_gain_;
   }
@@ -1279,6 +1306,21 @@ bool Engine::settle_beats_reseat() const {
                                 ladder_shift_time()) +
                        (rungs - 1.0f) * config_.reseat_pair_dwell_time;
   return natural <= ladder;
+}
+
+bool Engine::any_sets_down(float dt) const {
+  const float swing_end =
+      swing_end_phase(strategy_->duty_factor(), swing_margin());
+  if (swing_end <= 0.0f) {
+    return false;
+  }
+  const SwingProfile profile = config_.swing_profile();
+  for (const auto& [name, phase] : clock_->phases()) {
+    if (swing_.sets_down(name, phase / swing_end, dt, profile)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void Engine::reset_swing_state() {
