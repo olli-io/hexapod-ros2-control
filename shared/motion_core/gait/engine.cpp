@@ -143,14 +143,13 @@ void SwingPlanner::liftoff(const std::string& name, const Vec3& origin,
 }
 
 void SwingPlanner::retarget(const std::string& name, const Vec3& target,
-                            std::pair<float, float> v_leg, float swing_time,
-                            float phase_in_swing) {
+                            std::pair<float, float> v_leg, float swing_time) {
   if (!is_swing_.at(name)) {
     return;
   }
   v_target_[name] = v_leg;
   swing_time_[name] = swing_time;
-  if (phase_in_swing < kTouchdownLatchPhase) {
+  if (!landing_.at(name)) {
     target_[name] = target;
   }
 }
@@ -1215,8 +1214,7 @@ std::map<std::string, LegOutput> Engine::tick_gait(
       }
       const float phase_in_swing =
           swing_end > 0.0f ? phases.at(name) / swing_end : 0.0f;
-      swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f),
-                      phase_in_swing);
+      swing_.retarget(name, aep, {v_x, v_y}, std::max(swing_time, 1.0e-9f));
       target = swing_.step(name, phase_in_swing, swing_profile, {v_x, v_y}, dt,
                            bound);
       stance_.step(name, false, target, {v_x, v_y}, dt, bound);  // keeps its flag in sync

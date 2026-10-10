@@ -136,7 +136,7 @@ All in `shared/motion_core/gait/`.
     sensing.
   - Lateral: `bump()` on the blend (not the clock), signed by body side.
   - Target changes mid-swing re-aim the touchdown end every tick
-    (`SwingPlanner::retarget`) until `kTouchdownLatchPhase`. After it the
+    (`SwingPlanner::retarget`) until the straight landing starts. After it the
     target holds still: near the ground, target motion is slip.
 - **Stance** — an anchor integrated at the live per-leg velocity each tick
   (`StanceIntegrator::step`), seeded from the swing's latched AEP. Follows a

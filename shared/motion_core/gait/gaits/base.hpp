@@ -41,11 +41,6 @@ RadialAxis radial_axis(const LegContext& leg);
 // overshoot for a braking step of ~8% of stance speed per tick.
 constexpr float kStanceExcursionGrace = 0.25f;
 
-// Swing progress from which the touchdown target stops following the live AEP.
-// Near the ground the arc is the touchdown ground line, so any target motion
-// there drags the foot one for one across the floor.
-constexpr float kTouchdownLatchPhase = 0.7f;
-
 // Shape of one swing, independent of where the foot is travelling. Bundled so
 // the engine, the engagement controller and the strategies agree on the defaults.
 struct SwingProfile {

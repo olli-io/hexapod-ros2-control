@@ -158,12 +158,10 @@ class SwingPlanner {
                std::pair<float, float> v_leg, float swing_time,
                int identity_y_sign_val);
   // Re-aim the touchdown end at the live AEP / stance velocity and refresh the
-  // swing duration. No-op outside a swing. The target position latches from
-  // kTouchdownLatchPhase on; v_target_ does not, as its slip contribution
-  // vanishes at touchdown.
+  // swing duration. No-op outside a swing. The target position latches when
+  // the straight landing starts; from there step() carries the foot instead.
   void retarget(const std::string& name, const Vec3& target,
-                std::pair<float, float> v_leg, float swing_time,
-                float phase_in_swing);
+                std::pair<float, float> v_leg, float swing_time);
   void touchdown(const std::string& name);
   // The arc, until its straight landing starts; from there the foot is carried
   // at the live -v_leg against the stance wall, so it stays ground-fixed when
