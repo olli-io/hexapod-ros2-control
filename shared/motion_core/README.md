@@ -23,7 +23,9 @@ hardware. The seams each caller supplies — input, config source, clock, output
   tick-jitter stats.
 - **`control.*`** — velocity shaping: cut `(vx, vy, wz)` to the active gait's
   foot-speed envelope, price the heading against the radial stride budget,
-  then rate-cap toward it (`BodyVelocityLimiter`).
+  then rate-cap toward it (`BodyVelocityLimiter`). The planar pair slews in
+  polar (speed, heading), so a turn holds its speed; past 90° it passes
+  through zero.
 - **`gait/`** — the only stateful part of the gait chain. `Engine` holds the
   state machine, `GaitClock` (master phase, per-leg offsets, mirror),
   `StanceIntegrator`, `SwingPlanner`, and the ladders: `stand_transition`

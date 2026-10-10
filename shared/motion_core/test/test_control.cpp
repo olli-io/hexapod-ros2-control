@@ -1,6 +1,7 @@
 // The BodyVelocityLimiter's constant-max-accel slew, and the Control stage's
 // scale-to-envelope + limiter-reset-on-leaving-walking wiring.
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <string>
@@ -95,6 +96,45 @@ TEST(BodyVelocityLimiter, FlipThroughZeroTraversesAtOneBoundedRate) {
   }
   EXPECT_TRUE(crossed_zero);
   EXPECT_NEAR(prev, -1.0f, 1e-6f);
+}
+
+TEST(BodyVelocityLimiter, HeadingChangeHoldsTheSpeed) {
+  ctl::BodyVelocityLimiter lim(2.0f, 10.0f);
+  lim.reset(1.0f, 0.0f, 0.0f);
+  const float dt = 0.005f;
+  float vx = 1.0f, vy = 0.0f;
+  for (int i = 0; i < 400; ++i) {
+    std::tie(vx, vy, std::ignore) = lim.step(0.0f, 1.0f, 0.0f, dt);
+    // The Cartesian chord would dip to 0.707 at the halfway point.
+    EXPECT_NEAR(std::hypot(vx, vy), 1.0f, 1e-5f);
+  }
+  EXPECT_NEAR(vx, 0.0f, 1e-6f);
+  EXPECT_NEAR(vy, 1.0f, 1e-6f);
+}
+
+TEST(BodyVelocityLimiter, ObtuseTurnPassesThroughZero) {
+  ctl::BodyVelocityLimiter lim(2.0f, 10.0f);
+  lim.reset(1.0f, 0.0f, 0.0f);
+  const float dt = 0.005f;
+  const float tx = -std::sqrt(0.5f), ty = std::sqrt(0.5f);  // 135 degrees
+  float vx = 1.0f, vy = 0.0f, min_speed = 1.0f;
+  for (int i = 0; i < 400; ++i) {
+    std::tie(vx, vy, std::ignore) = lim.step(tx, ty, 0.0f, dt);
+    min_speed = std::min(min_speed, std::hypot(vx, vy));
+  }
+  EXPECT_LT(min_speed, 0.02f);
+  EXPECT_NEAR(vx, tx, 1e-6f);
+  EXPECT_NEAR(vy, ty, 1e-6f);
+}
+
+TEST(BodyVelocityLimiter, StopRetractsAlongItsLine) {
+  ctl::BodyVelocityLimiter lim(2.0f, 10.0f);
+  lim.reset(0.6f, 0.8f, 0.0f);
+  for (int i = 0; i < 50; ++i) {
+    auto [vx, vy, w] = lim.step(0.0f, 0.0f, 0.0f, 0.005f);
+    (void)w;
+    EXPECT_NEAR(vx * 0.8f - vy * 0.6f, 0.0f, 1e-6f);
+  }
 }
 
 TEST(BodyVelocityLimiter, SnapsSubToleranceToZero) {

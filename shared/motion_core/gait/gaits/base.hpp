@@ -151,6 +151,11 @@ float derive_cycle_time(float max_leg_v, float stride_length,
                         float stance_fraction, float min_cycle_time,
                         float max_cycle_time);
 
+// The knee: the leg speed where derive_cycle_time reaches max_cycle_time. Above
+// it the stride is pinned at stride_length; below it the stride shortens.
+float knee_speed(float stride_length, float stance_fraction,
+                 float max_cycle_time);
+
 Vec3 live_aep(const Vec3& nominal, const Vec3& stride_vec);
 
 // How far a planted foot may drift from its leg's nominal stance. `band` is the

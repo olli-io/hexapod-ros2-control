@@ -67,7 +67,8 @@ Landed:
   STAND/ENGAGING/GAIT/SETTLING window is diffed tightly.
 - **`test_control` (part 07)** — float-only unit tests of the
   `BodyVelocityLimiter` (constant-max-accel linear/vectorial/angular slew,
-  flip-through-zero at one bounded rate, snap-to-zero, positive-accel guard) and
+  flip-through-zero at one bounded rate, polar heading change holds the speed,
+  obtuse turn passes through zero, stop retracts along its line, snap-to-zero, positive-accel guard) and
   the `Control` stage (settles at the gait linear cap, resets the limiter on
   leaving the walking set, recomputes the accel cap on a gait switch).
 - **`test_joy_mapping` (part 07)** — golden-trace **parity** of the float

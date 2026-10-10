@@ -17,6 +17,12 @@ float validate_positive(const char* name, float value) {
   return value;
 }
 
+constexpr float kPi = 3.141592653589793f;
+constexpr float kTwoPi = 6.283185307179586f;
+constexpr float kPolarEps = 1.0e-6f;
+
+float wrap_pi(float a) { return std::remainder(a, kTwoPi); }
+
 bool is_walking(hexa::gait::EngineState s) {
   return s == hexa::gait::EngineState::ENGAGING ||
          s == hexa::gait::EngineState::GAIT;
@@ -47,6 +53,8 @@ void BodyVelocityLimiter::set_accel_angular(float value) {
 void BodyVelocityLimiter::reset(float v_x, float v_y, float omega) {
   v_x_ = v_x;
   v_y_ = v_y;
+  speed_ = std::hypot(v_x, v_y);
+  heading_ = speed_ > kPolarEps ? std::atan2(v_y, v_x) : heading_;
   omega_ = omega;
 }
 
@@ -58,21 +66,48 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
     return state();
   }
 
-  const float dx = tgt_vx - v_x_;
-  const float dy = tgt_vy - v_y_;
-  const float distance = std::hypot(dx, dy);
+  const float tgt_speed = std::hypot(tgt_vx, tgt_vy);
+  // Neither end of a zero speed has a heading: from rest adopt the target's,
+  // toward rest keep our own, so a stop retracts along its line.
+  if (speed_ <= kPolarEps && tgt_speed > kPolarEps) {
+    heading_ = std::atan2(tgt_vy, tgt_vx);
+  }
+  const float tgt_heading =
+      tgt_speed > kPolarEps ? std::atan2(tgt_vy, tgt_vx) : heading_;
+  float signed_tgt = tgt_speed;
+  float err = wrap_pi(tgt_heading - heading_);
+  // Past 90 degrees, pass through zero rather than swing round at speed.
+  if (std::fabs(err) > 0.5f * kPi) {
+    signed_tgt = -tgt_speed;
+    err = wrap_pi(err - kPi);
+  }
+
+  // Radial and arc-length components of the step, capped as one vector.
+  const float d_speed = signed_tgt - speed_;
+  const float d_arc = speed_ * err;
+  const float distance = std::hypot(d_speed, d_arc);
   const float max_step_lin = accel_linear_ * dt;
   if (distance <= max_step_lin) {
     v_x_ = tgt_vx;
     v_y_ = tgt_vy;
+    speed_ = tgt_speed;
+    heading_ = tgt_heading;
   } else {
     const float scale = max_step_lin / distance;
-    v_x_ += scale * dx;
-    v_y_ += scale * dy;
+    speed_ += scale * d_speed;
+    heading_ = wrap_pi(heading_ + scale * err);
+    v_x_ = speed_ * std::cos(heading_);
+    v_y_ = speed_ * std::sin(heading_);
+    // Past zero: fold the sign into the heading. Same point, canonical state.
+    if (speed_ < 0.0f) {
+      speed_ = -speed_;
+      heading_ = wrap_pi(heading_ + kPi);
+    }
   }
-  if (std::hypot(v_x_, v_y_) < snap_tol_linear_) {
+  if (speed_ < snap_tol_linear_) {
     v_x_ = 0.0f;
     v_y_ = 0.0f;
+    speed_ = 0.0f;
   }
 
   const float d_omega = tgt_omega - omega_;

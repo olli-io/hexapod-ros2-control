@@ -73,94 +73,75 @@ bool travel_reverses(const std::map<std::string, LegContext>& legs,
 ReversalGate::Output ReversalGate::step(
     const std::map<std::string, LegContext>& legs, const Input& in) {
   const Output pass{in.request_xy, in.request_omega, false};
+  timer_ += in.dt;
 
-  if (armed_) {
-    // Not while engaging: the timeout is the backstop for a gait that never
-    // offers an all-down window, and an engagement offers none by construction.
-    // Counting it here would spend the whole budget before the walk it hands
-    // over to gets its first one.
-    if (!in.engaging) {
-      held_for_ += in.dt;
-    }
-    // Out of the walk, no longer opposed, or no longer able to reflect: let go.
-    // The timeout is the backstop — an unreflected reversal is the old
-    // behaviour, not a broken one.
-    const bool still_reversing =
-        in.walking && in.can_mirror && held_for_ < in.timeout &&
-        travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
-                        hold_omega_, in.zero_tol);
-    if (!still_reversing) {
-      armed_ = false;
-      handled_ = false;
-      return pass;
-    }
-  } else if (handled_) {
-    handled_ = in.walking &&
-               travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
-                               hold_omega_, in.zero_tol);
-    if (crossing_) {
-      // Over once the shaped command opposes the hold and carries the knee
-      // again. Capped at the request, so a reversal into a creep slower than
-      // the knee ends the crossing when the shaper has converged, not never.
-      const float carrying =
-          max_leg_speed(legs, in.applied_xy, in.applied_omega);
-      const bool crossed =
-          dot(in.applied_xy, hold_xy_) + in.applied_omega * hold_omega_ <= 0.0f;
-      const float target =
-          kCrossingArrival *
-          std::min(in.knee_speed,
-                   max_leg_speed(legs, in.request_xy, in.request_omega));
-      held_for_ += in.dt;
-      crossing_ = handled_ && !(crossed && carrying >= target) &&
-                  held_for_ < in.timeout;
-    }
-    return pass;
-  } else {
+  if (stage_ == Stage::IDLE) {
     if (!in.walking ||
         !travel_reverses(legs, in.request_xy, in.request_omega, in.applied_xy,
                          in.applied_omega, in.zero_tol)) {
       return pass;
     }
-    // Latched before the hold is decided, because a reversal this ladder cannot
-    // help is still a reversal: it is what reversing() reports and what the
-    // clear test below measures the request against.
     hold_xy_ = in.applied_xy;
     hold_omega_ = in.applied_omega;
-    const float carrying =
-        max_leg_speed(legs, in.applied_xy, in.applied_omega);
-    // Below the knee the walk is already on a shorter stride than the one asked
-    // for next, so the reflection would over-credit every leg. Recognised, not
-    // held: the command goes through as it always did.
-    if (!in.can_mirror || carrying < in.knee_speed) {
-      handled_ = true;
+    const float carrying = max_leg_speed(legs, hold_xy_, hold_omega_);
+    // Below the knee the stride is already shorter than the one asked for
+    // next, so the mirror would over-credit every leg.
+    if (!in.can_hold || carrying < in.knee_speed) {
+      enter(Stage::RECOGNISED);
       return pass;
     }
-    armed_ = true;
-    held_for_ = 0.0f;
+    enter(Stage::HOLDING);
     hold_scale_ = in.knee_speed / carrying;
+  } else if (!in.walking ||
+             !travel_reverses(legs, in.request_xy, in.request_omega, hold_xy_,
+                              hold_omega_, in.zero_tol)) {
+    enter(Stage::IDLE);
+    return pass;
   }
 
-  // At the hold speed with every foot planted and the schedule true of the feet,
-  // reflect one onto the other and hand the command back. Both of the first two
-  // are stated: `engaging` because the clock this reflects is not the one the
-  // engagement runs, `feet_on_schedule` because the engagement hands the walk legs
-  // it has not yet squared up. One implies the other today; they are two different
-  // reasons and neither is the other's shorthand.
-  const float carrying = max_leg_speed(legs, in.applied_xy, in.applied_omega);
-  if (!in.engaging && in.feet_on_schedule && in.all_planted &&
-      carrying <= in.knee_speed * kHoldTolerance) {
-    armed_ = false;
-    handled_ = true;
-    crossing_ = true;
-    held_for_ = 0.0f;
-    return {in.request_xy, in.request_omega, true};
+  switch (stage_) {
+    case Stage::HOLDING: {
+      if (in.engaging) {
+        timer_ = 0.0f;
+      }
+      // The timeout is the backstop: an unmirrored reversal is the old
+      // behaviour, not a broken one.
+      if (!in.can_hold || timer_ >= in.timeout) {
+        enter(Stage::RECOGNISED);
+        return pass;
+      }
+      const float carrying =
+          max_leg_speed(legs, in.applied_xy, in.applied_omega);
+      if (in.ready && carrying <= in.knee_speed * kHoldTolerance) {
+        enter(Stage::CROSSING);
+        return {in.request_xy, in.request_omega, true};
+      }
+      // Slowed to the knee, not stopped: the mirror is only exact against a
+      // stride the legs are walking.
+      return {{hold_xy_.first * hold_scale_, hold_xy_.second * hold_scale_},
+              hold_omega_ * hold_scale_,
+              false};
+    }
+    case Stage::CROSSING: {
+      // Over once the shaped command opposes the hold and carries the knee
+      // again. Capped at the request, so a reversal into a creep slower than
+      // the knee ends when the shaper has converged.
+      const bool crossed =
+          dot(in.applied_xy, hold_xy_) + in.applied_omega * hold_omega_ <= 0.0f;
+      const float carrying =
+          max_leg_speed(legs, in.applied_xy, in.applied_omega);
+      const float target =
+          kCrossingArrival *
+          std::min(in.knee_speed,
+                   max_leg_speed(legs, in.request_xy, in.request_omega));
+      if ((crossed && carrying >= target) || timer_ >= in.timeout) {
+        enter(Stage::RECOGNISED);
+      }
+      return pass;
+    }
+    default:
+      return pass;
   }
-
-  // Otherwise hold the carried travel, slowed to the knee. Not stopped: the
-  // reflection is only exact against a stride the legs are actually walking.
-  return {{hold_xy_.first * hold_scale_, hold_xy_.second * hold_scale_},
-          hold_omega_ * hold_scale_,
-          false};
 }
 
 }  // namespace hexa::gait

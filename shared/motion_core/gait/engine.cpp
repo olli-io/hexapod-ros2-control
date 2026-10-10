@@ -403,45 +403,34 @@ std::tuple<float, float, float> Engine::shape_reversal(
       swing_end_phase(strategy_->duty_factor(), swing_margin());
   const float stance_fraction = 1.0f - swing_end;
 
+  const bool gait = state_ == EngineState::GAIT;
   ReversalGate::Input in;
   in.applied_xy = applied_xy_;
   in.applied_omega = applied_omega_;
   in.request_xy = v_body_xy;
   in.request_omega = omega_z;
-  // The engagement is a walk too: it re-plans off the live command every tick, so
-  // the ladder can hold it at the knee. What it cannot do there is reflect.
-  in.walking =
-      state_ == EngineState::GAIT || state_ == EngineState::ENGAGING;
+  // The engagement re-plans off the live command every tick, so the ladder can
+  // hold it at the knee. It cannot mirror there: the handoff reseeds the clock.
   in.engaging = state_ == EngineState::ENGAGING;
-  // Left honest: quadruped SHIFTING stands on all four with nothing moved yet,
-  // and it is `engaging` that must stop the gate firing there.
-  in.all_planted = all_planted();
-  // GAIT only: inside the engagement the answer is the engagement's to give, and
-  // it gives it once, at the handoff.
-  in.feet_on_schedule = state_ == EngineState::GAIT && feet_on_schedule();
-  in.can_mirror = clock_.has_value() &&
-                  has_all_down_window(clock_->offsets(), swing_end, leg_set_);
-  // The knee, read off the stride the *held* travel lays down: on a direction the
-  // radial budget has cut, the isotropic knee sits above that direction's own
-  // velocity cap and every reversal would read as already below it.
-  const float knee_stride = effective_stride_length(
-      active_legs_, applied_xy_, applied_omega_, config_.stride_length,
-      config_.stride_length_radial);
-  in.knee_speed = stance_fraction > 0.0f && config_.max_swing_time > 0.0f
-                      ? knee_stride * swing_end /
-                            (config_.max_swing_time * stance_fraction)
-                      : 0.0f;
-  // Two cycles at the slowest the gait runs: a window cannot be missed, and a
-  // gait that never offers one does not sit on the stick.
-  in.timeout = swing_end > 0.0f ? 2.0f * config_.max_swing_time / swing_end
-                                : 0.0f;
+  in.walking = gait || in.engaging;
+  in.can_hold = in.walking && clock_.has_value() &&
+                has_all_down_window(clock_->offsets(), swing_end, leg_set_);
+  in.ready = gait && feet_on_schedule() && all_planted();
+  const float max_cycle_time = cycle_time_bounds(config_, swing_end).second;
+  // Read off the stride the *held* travel lays down: on a direction the radial
+  // budget has cut, the isotropic knee sits above that direction's velocity cap.
+  in.knee_speed = knee_speed(
+      effective_stride_length(active_legs_, applied_xy_, applied_omega_,
+                              config_.stride_length,
+                              config_.stride_length_radial),
+      stance_fraction, max_cycle_time);
+  // Two cycles at the slowest the gait runs: a window cannot be missed.
+  in.timeout = 2.0f * max_cycle_time;
   in.zero_tol = config_.cmd_zero_tol;
   in.dt = dt;
 
   const ReversalGate::Output out = reversal_.step(active_legs_, in);
-  // GAIT rather than in.walking, which now spans the engagement: this reflects
-  // clock_, which the engagement does not run.
-  if (out.mirror && state_ == EngineState::GAIT && in.all_planted) {
+  if (out.mirror) {
     clock_->mirror(swing_end);
   }
   return {out.v_xy.first, out.v_xy.second, out.omega};
@@ -870,9 +859,9 @@ std::map<std::string, LegOutput> Engine::update(
   // opposite: the engine asking to keep walking. Reading that hold as a release
   // would decay cmd_gain_ and speed the clock, which the reflection forbids.
   //
-  // reversing(), not armed(): the limiter slews the planar command through the
-  // origin, so every sign flip spends a tenth of a second inside the tolerance —
-  // and ENGAGING re-plants on the first such tick.
+  // reversing(), not just the hold: the limiter slews the planar command through
+  // the origin, so every sign flip spends a tenth of a second inside the
+  // tolerance — and ENGAGING re-plants on the first such tick.
   const bool cmd_zero =
       cmd_is_zero(v_body_xy, omega_z) && !reversal_.reversing();
   if (cmd_zero) {

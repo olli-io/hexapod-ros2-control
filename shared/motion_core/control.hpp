@@ -16,9 +16,16 @@
 
 namespace hexa::control {
 
-// Vectorial rate-cap slew: each step() advances (v_x, v_y, omega_z) toward the
-// target by at most accel_linear*dt on the planar vector and accel_angular*dt on
-// the yaw scalar, snapping sub-tolerance dribble to zero.
+// Rate-cap slew: each step() advances (v_x, v_y, omega_z) toward the target by
+// at most accel_linear*dt on the planar vector and accel_angular*dt on the yaw
+// scalar, snapping sub-tolerance dribble to zero.
+//
+// The planar pair slews in POLAR (speed, heading), as PoseSmoother eases its
+// pairs: the step is measured along the arc, not the chord, so a heading change
+// holds the speed instead of dipping to 0.707 of it at 90 degrees. A target more
+// than 90 degrees off the heading is taken as a signed speed through zero along
+// the current line, so a reversal still passes through zero (the crossing).
+// Along one line the result is identical to the Cartesian slew.
 class BodyVelocityLimiter {
  public:
   BodyVelocityLimiter(float accel_linear, float accel_angular,
@@ -45,6 +52,8 @@ class BodyVelocityLimiter {
   float snap_tol_angular_;
   float v_x_ = 0.0f;
   float v_y_ = 0.0f;
+  float speed_ = 0.0f;    // m/s, canonical (>= 0) between steps
+  float heading_ = 0.0f;  // rad, [-pi, pi]; held through zero speed
   float omega_ = 0.0f;
 };
 

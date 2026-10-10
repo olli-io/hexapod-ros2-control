@@ -728,6 +728,97 @@ TEST(Reversal, AnEngagementThatAbsorbsATurnStaysReachable) {
 
 // ── The reflection itself ──
 
+// The knee is where derive_cycle_time leaves its max_cycle_time clamp.
+TEST(Reversal, KneeIsWhereTheCycleStopsStretching) {
+  const float stride = 0.1f, stance_fraction = 0.6f, max_cycle = 1.5f;
+  const float knee = g::knee_speed(stride, stance_fraction, max_cycle);
+  EXPECT_NEAR(g::derive_cycle_time(knee, stride, stance_fraction, 0.5f, max_cycle),
+              max_cycle, 1e-5f);
+  EXPECT_LT(g::derive_cycle_time(knee * 1.1f, stride, stance_fraction, 0.5f,
+                                 max_cycle),
+            max_cycle);
+  EXPECT_EQ(g::knee_speed(stride, 0.0f, max_cycle), 0.0f);
+}
+
+namespace {
+
+g::ReversalGate::Input gate_input(float applied_x, float request_x) {
+  g::ReversalGate::Input in;
+  in.applied_xy = {applied_x, 0.0f};
+  in.request_xy = {request_x, 0.0f};
+  in.walking = true;
+  in.can_hold = true;
+  in.knee_speed = 0.1f;
+  in.timeout = 1.0f;
+  in.zero_tol = 0.02f;
+  in.dt = kDt;
+  return in;
+}
+
+}  // namespace
+
+TEST(ReversalGate, WalksTheLadderStageByStage) {
+  using Stage = g::ReversalGate::Stage;
+  const auto legs = g::build_leg_contexts_from_config();
+  g::ReversalGate gate;
+
+  auto out = gate.step(legs, gate_input(0.15f, -0.15f));
+  EXPECT_EQ(gate.stage(), Stage::HOLDING);
+  EXPECT_NEAR(out.v_xy.first, 0.1f, 1e-5f) << "held at the knee";
+  EXPECT_FALSE(out.mirror);
+
+  auto in = gate_input(0.1f, -0.15f);
+  in.ready = true;
+  out = gate.step(legs, in);
+  EXPECT_TRUE(out.mirror);
+  EXPECT_EQ(gate.stage(), Stage::CROSSING);
+  EXPECT_FLOAT_EQ(out.v_xy.first, -0.15f);
+
+  gate.step(legs, gate_input(-0.05f, -0.15f));
+  EXPECT_EQ(gate.stage(), Stage::CROSSING) << "not yet at the knee";
+  gate.step(legs, gate_input(-0.1f, -0.15f));
+  EXPECT_EQ(gate.stage(), Stage::RECOGNISED);
+  EXPECT_TRUE(gate.reversing());
+
+  gate.step(legs, gate_input(-0.15f, 0.0f));
+  EXPECT_EQ(gate.stage(), Stage::IDLE);
+}
+
+TEST(ReversalGate, BelowTheKneeIsRecognisedNotHeld) {
+  const auto legs = g::build_leg_contexts_from_config();
+  g::ReversalGate gate;
+  const auto out = gate.step(legs, gate_input(0.05f, -0.15f));
+  EXPECT_EQ(gate.stage(), g::ReversalGate::Stage::RECOGNISED);
+  EXPECT_FLOAT_EQ(out.v_xy.first, -0.15f);
+}
+
+TEST(ReversalGate, ATimedOutHoldDoesNotRearm) {
+  using Stage = g::ReversalGate::Stage;
+  const auto legs = g::build_leg_contexts_from_config();
+  g::ReversalGate gate;
+  auto in = gate_input(0.15f, -0.15f);
+  in.timeout = 3.0f * kDt;
+  for (int i = 0; i < 5; ++i) {
+    gate.step(legs, in);
+  }
+  EXPECT_EQ(gate.stage(), Stage::RECOGNISED);
+  const auto out = gate.step(legs, in);
+  EXPECT_EQ(gate.stage(), Stage::RECOGNISED);
+  EXPECT_FLOAT_EQ(out.v_xy.first, -0.15f);
+}
+
+TEST(ReversalGate, TheEngagementDoesNotSpendTheTimeout) {
+  const auto legs = g::build_leg_contexts_from_config();
+  g::ReversalGate gate;
+  auto in = gate_input(0.15f, -0.15f);
+  in.timeout = 3.0f * kDt;
+  in.engaging = true;
+  for (int i = 0; i < 10; ++i) {
+    gate.step(legs, in);
+  }
+  EXPECT_EQ(gate.stage(), g::ReversalGate::Stage::HOLDING);
+}
+
 TEST(Reversal, MirrorInvertsEveryStanceLegsProgress) {
   const auto cfg = g::engine_config_from_config();
   for (const auto& [gait, make] : g::strategies()) {

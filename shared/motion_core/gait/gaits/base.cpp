@@ -158,6 +158,14 @@ float derive_cycle_time(float max_leg_v, float stride_length,
   return raw;
 }
 
+float knee_speed(float stride_length, float stance_fraction,
+                 float max_cycle_time) {
+  if (stance_fraction <= 0.0f || max_cycle_time <= 0.0f) {
+    return 0.0f;
+  }
+  return stride_length / (max_cycle_time * stance_fraction);
+}
+
 Vec3 live_aep(const Vec3& nominal, const Vec3& stride_vec) {
   return nominal + 0.5f * stride_vec;
 }

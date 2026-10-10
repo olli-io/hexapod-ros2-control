@@ -58,6 +58,17 @@ PEP --[swing]--> AEP --[stance]--> PEP
   nominal and the mirror over-credits runway.
 - **Sequence** — hold the command at the knee, wait for the next all-down
   window, mirror, release.
+- **Stages** — `ReversalGate::Stage`:
+  - **IDLE** — no reversal.
+  - **HOLDING** — the carried travel walks on at the knee until every foot is
+    planted and on schedule.
+  - **CROSSING** — mirrored; the gait clock waits while the shaped command
+    passes through zero.
+  - **RECOGNISED** — a reversal not held (or no longer held). Latched until the
+    request stops opposing the travel. A timed-out hold ends here, so it does
+    not re-arm.
+- **Timeout** — two cycles at `max_cycle_time`, per stage. It does not run
+  during the engagement.
 - **crossing** — the shaped command's pass through zero after the mirror (about
   0.5 s). The gait clock waits it out, so the set mapped to lift-off leaves only
   once the body moves the new way.
