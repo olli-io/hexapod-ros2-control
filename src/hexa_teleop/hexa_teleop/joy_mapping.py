@@ -316,9 +316,10 @@ def fit_drive_to_envelope(
     So shape it here instead. The commanded direction is held fixed and the
     deflection along it is mapped linearly onto ``0 -> envelope boundary``:
 
-    * ``M`` — deflection, as the inf-norm of the triple. The inf-norm (not
-      the 2-norm) is what makes the *corners* of the physical stick gate
-      reachable, so no travel is wasted.
+    * ``M`` — deflection: the planar pair's 2-norm, clipped to 1, against
+      ``|yaw|``. A round gate's rim is then full speed in every heading; an
+      inf-norm dipped to 0.71 of it on the diagonal. A square gate's corners
+      still reach the boundary, only earlier along the ray.
     * ``peak`` — the fastest foot the triple implies, in units of the linear
       cap. Same per-leg planar speed the engine bounds,
       ``|(v_x - w*r_y, v_y + w*r_x)|``, but unitless: dividing the stance by
@@ -336,7 +337,7 @@ def fit_drive_to_envelope(
     saves the caller from having to prove ``peak >= M`` for an arbitrary
     stance.
     """
-    deflection = max(abs(drive_x), abs(drive_y), abs(drive_yaw))
+    deflection = max(min(1.0, math.hypot(drive_x, drive_y)), abs(drive_yaw))
     if deflection <= 0.0:
         return 0.0, 0.0, 0.0
 

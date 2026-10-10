@@ -487,6 +487,22 @@ def test_envelope_fit_preserves_the_commanded_direction():
         assert math.isclose(got, want * ratio)
 
 
+def test_envelope_fit_holds_the_speed_round_a_round_gate():
+    # A stick swept along its rim must not slow the robot at the diagonal.
+    for deg in range(0, 361, 15):
+        a = math.radians(deg)
+        x, y, _ = fit_drive_to_envelope(
+            math.cos(a), math.sin(a), 0.0, _DEFAULT_STANCE_UNIT
+        )
+        assert math.isclose(math.hypot(x, y), 1.0, rel_tol=1e-9)
+
+
+def test_envelope_fit_clips_a_square_gate_corner_to_the_cap():
+    x, y, _ = fit_drive_to_envelope(1.0, 1.0, 0.0, _DEFAULT_STANCE_UNIT)
+    assert math.isclose(math.hypot(x, y), 1.0)
+    assert math.isclose(x, y)
+
+
 def test_envelope_fit_is_linear_along_a_stick_ray():
     # Half the deflection means half the velocity in the same direction, so
     # the stick stays a proportional control all the way to the boundary.

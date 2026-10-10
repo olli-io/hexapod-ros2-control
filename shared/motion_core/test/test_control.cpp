@@ -112,6 +112,23 @@ TEST(BodyVelocityLimiter, HeadingChangeHoldsTheSpeed) {
   EXPECT_NEAR(vy, 1.0f, 1e-6f);
 }
 
+// A quick 90-degree stick move overshoots a little. That is a turn, not a
+// reversal: below the reversal threshold the speed holds.
+TEST(BodyVelocityLimiter, SlightlyObtuseTurnHoldsTheSpeed) {
+  ctl::BodyVelocityLimiter lim(2.0f, 10.0f);
+  lim.reset(0.0f, 1.0f, 0.0f);
+  const float dt = 0.005f;
+  const float a = -0.1f;  // about 96 degrees off the heading
+  const float tx = std::cos(a), ty = std::sin(a);
+  float vx = 0.0f, vy = 1.0f;
+  for (int i = 0; i < 400; ++i) {
+    std::tie(vx, vy, std::ignore) = lim.step(tx, ty, 0.0f, dt);
+    EXPECT_NEAR(std::hypot(vx, vy), 1.0f, 1e-5f);
+  }
+  EXPECT_NEAR(vx, tx, 1e-6f);
+  EXPECT_NEAR(vy, ty, 1e-6f);
+}
+
 TEST(BodyVelocityLimiter, ObtuseTurnPassesThroughZero) {
   ctl::BodyVelocityLimiter lim(2.0f, 10.0f);
   lim.reset(1.0f, 0.0f, 0.0f);

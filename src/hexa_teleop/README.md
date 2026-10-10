@@ -64,9 +64,9 @@ The summed triple is then fitted to the reachable velocity envelope
 whatever direction the sticks point:
 
 - **no dead travel** — full deflection lands exactly on the boundary in every
-  direction, corners of the stick gate included. A full translation diagonal
-  comes out at the linear cap's *magnitude*, not 1.41× it; full forward plus
-  full yaw comes out at roughly half of each.
+  direction. Translation deflection is the stick's radius, so a round gate's
+  rim is the linear cap in every heading; a square gate's corners clip to it.
+  Full forward plus full yaw comes out at roughly half of each.
 - **the commanded direction is exact** — one scale factor for all three axes, so
   the robot goes where the sticks pointed, only slower. The engine's own clamp
   (`hexa_common.scale_to_envelope`) then finds nothing left to cut, and its

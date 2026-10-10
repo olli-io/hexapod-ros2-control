@@ -271,3 +271,16 @@ add_executable(probe_reversal probe_reversal.cpp ${FW_GAIT_SOURCES})
 add_dependencies(probe_reversal gen_config)
 target_include_directories(probe_reversal PRIVATE ${FW_SRC})
 target_compile_options(probe_reversal PRIVATE -Wall -Wextra -fexceptions)
+
+# 90-degree turn discontinuity probe (not a test).
+add_executable(probe_turn probe_turn.cpp
+  ${FW_SRC}/pipeline.cpp
+  ${FW_SRC}/pipeline_config.cpp
+  ${FW_SRC}/control.cpp
+  ${FW_SRC}/joy_mapping.cpp
+  ${FW_SRC}/supervisor.cpp
+  ${FW_POSTURE_SOURCES}
+  ${FW_GAIT_SOURCES})
+add_dependencies(probe_turn gen_config)
+target_include_directories(probe_turn PRIVATE ${FW_SRC})
+target_compile_options(probe_turn PRIVATE -Wall -Wextra -fexceptions)

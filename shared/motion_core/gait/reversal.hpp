@@ -16,6 +16,13 @@
 
 namespace hexa::gait {
 
+// How far apart two travel directions must be to count as a reversal rather than
+// a turn. The reflection is exactly right for a leg that reverses and
+// progressively wrong as the turn shortens; at 120 degrees the reversing
+// component is still the larger half of the change. The velocity limiter turns
+// below it and passes through zero above it, so the two agree.
+inline constexpr float kReversalCos = -0.5f;
+
 float max_leg_speed(const std::map<std::string, LegContext>& legs,
                     std::pair<float, float> v_xy, float omega);
 

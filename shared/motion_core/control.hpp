@@ -23,8 +23,9 @@ namespace hexa::control {
 // The planar pair slews in POLAR (speed, heading), as PoseSmoother eases its
 // pairs: the step is measured along the arc, not the chord, so a heading change
 // holds the speed instead of dipping to 0.707 of it at 90 degrees. A target more
-// than 90 degrees off the heading is taken as a signed speed through zero along
-// the current line, so a reversal still passes through zero (the crossing).
+// than 120 degrees off the heading (gait::kReversalCos) is taken as a signed
+// speed through zero along the current line, so a reversal still passes through
+// zero (the crossing).
 // Along one line the result is identical to the Cartesian slew.
 class BodyVelocityLimiter {
  public:

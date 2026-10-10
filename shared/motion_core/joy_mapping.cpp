@@ -118,8 +118,8 @@ float apply_deadband(float value, float deadband) {
 
 std::array<float, 3> fit_drive_to_envelope(float drive_x, float drive_y,
                                            float drive_yaw) {
-  const float deflection = std::max({std::fabs(drive_x), std::fabs(drive_y),
-                                     std::fabs(drive_yaw)});
+  const float deflection = std::max(
+      std::min(1.0f, std::hypot(drive_x, drive_y)), std::fabs(drive_yaw));
   if (deflection <= 0.0f) {
     return {0.0f, 0.0f, 0.0f};
   }

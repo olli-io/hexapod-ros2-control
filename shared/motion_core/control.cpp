@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "config_generated.hpp"
+#include "gait/reversal.hpp"
 #include "gait/types.hpp"
 
 namespace hexa::control {
@@ -76,8 +77,9 @@ std::tuple<float, float, float> BodyVelocityLimiter::step(float tgt_vx,
       tgt_speed > kPolarEps ? std::atan2(tgt_vy, tgt_vx) : heading_;
   float signed_tgt = tgt_speed;
   float err = wrap_pi(tgt_heading - heading_);
-  // Past 90 degrees, pass through zero rather than swing round at speed.
-  if (std::fabs(err) > 0.5f * kPi) {
+  // A reversal passes through zero rather than swing round at speed. Anything
+  // short of one turns: at 90 degrees stick noise would pick a stop or a turn.
+  if (std::cos(err) < hexa::gait::kReversalCos) {
     signed_tgt = -tgt_speed;
     err = wrap_pi(err - kPi);
   }

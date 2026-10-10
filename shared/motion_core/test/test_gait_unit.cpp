@@ -1072,8 +1072,7 @@ TEST(Engine, StanceAnchorNeverPassesItsCeiling) {
   const float stride = axis_stride(cfg, {0.0f, 1.0f});
   const float speed = saturating_speed(cfg) * (stride / cfg.stride_length);
   const float band = 0.5f * stride;
-  // Mirrors kStanceExcursionGrace, which is engine-internal.
-  const float ceiling = band * 1.25f;
+  const float ceiling = band * (1.0f + g::kStanceExcursionGrace);
   const float cycle = cfg.max_swing_time /
                       g::swing_end_phase(0.5f, cfg.swing_phase_margin);
 

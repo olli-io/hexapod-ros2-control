@@ -37,9 +37,10 @@ RadialAxis radial_axis(const LegContext& leg);
 
 // How far past its design band (half a stride) a stance anchor may drift before
 // the integrator stops it, as a fraction of the band. Also the distance the foot
-// brakes over: 0.25 gives up 8 mm of a lateral reversal's 14 mm unbounded
-// overshoot for a braking step of ~8% of stance speed per tick.
-constexpr float kStanceExcursionGrace = 0.25f;
+// brakes over. A tripod planted across a fast 90-degree turn leaves the band at
+// once; at 0.25 the brake held it to a quarter of the commanded speed for half a
+// second. 2.0 halves that dip and keeps ~19 mm of reach (probe_turn.cpp).
+constexpr float kStanceExcursionGrace = 2.0f;
 
 // Shape of one swing, independent of where the foot is travelling. Bundled so
 // the engine, the engagement controller and the strategies agree on the defaults.

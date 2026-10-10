@@ -5,7 +5,8 @@
 //   crossing   ticks after the mirror with |v| below the knee, and how far the
 //              master advanced across them while the body netted no travel
 //   overshoot  per leg, worst |excursion_x| - band after the mirror; positive
-//              is into the grace zone, beyond 0.25 * band the anchor is pinned
+//              is into the grace zone, beyond kStanceExcursionGrace * band the anchor
+//              is pinned
 //   drag       per leg, world-frame metres a planted foot travelled from the
 //              mirror to its next lift-off
 //   landing    excursion_x at touchdown for legs landing after the mirror
@@ -102,7 +103,7 @@ void run(const std::string& preset_id, std::size_t preset_idx) {
 
   std::printf("# preset=%s stride=%.4f band=%.4f grace=%.4f knee=%.4f speed=%.4f "
               "accel=%.3f max_cycle=%.3f predicted_overshoot=%.4f\n",
-              preset_id.c_str(), stride, band, 0.25f * band, knee, speed, accel,
+              preset_id.c_str(), stride, band, g::kStanceExcursionGrace * band, knee, speed, accel,
               max_cycle, knee * knee / (2.0f * accel));
   std::printf("preset,i,state,v,master,mirror,hold");
   for (const auto& sv : hexa::LEG_NAMES) {
@@ -189,7 +190,7 @@ void run(const std::string& preset_id, std::size_t preset_idx) {
     std::printf("# leg=%s overshoot=%.4f (%.0f%% of grace) drag_first_stance=%.4f "
                 "landing_ex=%.4f\n",
                 n.c_str(), a.worst_overshoot,
-                100.0f * a.worst_overshoot / (0.25f * band),
+                100.0f * a.worst_overshoot / (g::kStanceExcursionGrace * band),
                 a.drag_banked > 0.0f ? a.drag_banked : a.drag, a.landing_ex);
   }
 }

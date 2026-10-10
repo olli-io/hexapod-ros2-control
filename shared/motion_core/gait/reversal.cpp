@@ -7,12 +7,6 @@ namespace hexa::gait {
 
 namespace {
 
-// How far apart two travel directions must be to count as a reversal rather than
-// a turn. The reflection is exactly right for a leg that reverses and
-// progressively wrong as the turn shortens; at 120 degrees the reversing
-// component is still the larger half of the change.
-constexpr float kReversalCos = -0.5f;
-
 // Slack on the hold speed before the reflection may fire. The stride is flat
 // across the band above the knee, so arriving a little fast costs nothing.
 constexpr float kHoldTolerance = 1.05f;

@@ -536,7 +536,7 @@ TEST(Reversal, TheClockWaitsOutTheCrossing) {
       EXPECT_LT(s.post_mirror_landing_short, 0.005f)
           << where << " landed " << s.post_mirror_landing_short * 1000.0f
           << " mm short of its AEP after the mirror";
-      // Inside the grace zone (10.6 mm lateral, 13.4 mm fore/aft): 1-2 mm on
+      // Inside the grace zone: 1-2 mm on
       // most offsets, a few at 5-9 mm, against 28 mm before the clock waited.
       EXPECT_LT(s.peak_stance_drag, 0.010f)
           << where << ": " << s.worst_stance_leg << " dragged "

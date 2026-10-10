@@ -142,8 +142,8 @@ gait_node:
     # finally descends straight down onto its touchdown point, in the ground
     # frame. The foot travels only between the two. Each capped at half the
     # swing's clearance.
-    swing_lift_height: 0.01 # m
-    swing_land_height: 0.01 # m
+    swing_lift_height: 0.005 # m
+    swing_land_height: 0.007 # m
 
     # Split of an over-limit command between turning and moving. 0.5 = equal.
     yaw_bias: 0.6

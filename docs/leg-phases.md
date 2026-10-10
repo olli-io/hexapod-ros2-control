@@ -29,8 +29,8 @@ PEP --[swing]--> AEP --[stance]--> PEP
   the offset (`kin::ik_z_for_contact`): nominal stance and the fold / unfold
   ramp endpoints. All else is relative to nominal stance and inherits it.
 - **stance bound** — AEP..PEP also bounds a planted foot. When the command turns
-  under it, the foot eases to a halt a short grace band past PEP and slides
-  there. Reversing faster than one stride costs a few millimetres of slip.
+  under it, the foot eases to a halt within a grace band past PEP
+  (`kStanceExcursionGrace` times the band) and slides there. Reversing faster than one stride costs a few millimetres of slip.
 
 ## 2. Settle
 
