@@ -73,7 +73,8 @@ Drive with an Xbox-style controller, or open `{host-ip}:8079` for web teleop.
 
 **Clone or Fork the repo and run these on a linux workstation:**
 - `./hexa deploy build` — cross-build the arm64 image.
-- `./hexa deploy push <user@host>` — copy the image to the robot. It does not start it.
+- `./hexa deploy push <user@host>` — copy the image to the robot. It restarts a running
+  container on the new image; it does not start a stopped one.
 - `./hexa robot -H <user@host> install-service` — once: start the robot on each
   power-on.
 

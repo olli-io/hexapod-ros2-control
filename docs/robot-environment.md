@@ -152,8 +152,8 @@ webapp asks to claim control from the gamepad; see
 
 - **Path A** — run `install.sh` again. It keeps the values in `.env`, adds new
   keys, keeps `servo_calibration.yaml`, and installs the host services again.
-- **Path B** — `./hexa deploy build` and `./hexa deploy push pi@<host>`. A
-  running container uses the old image until `hexa robot restart`.
+- **Path B** — `./hexa deploy build` and `./hexa deploy push pi@<host>`. It
+  restarts a running container on the new image.
 - **Config only** — `./hexa deploy sync-config pi@<host>`. It adds missing
   `.env` keys (old file to `.env.bak`), replaces `tuning.yaml`, and sends the
   `systemd/` scripts and unit templates again. `--force` replaces `.env` with

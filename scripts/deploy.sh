@@ -7,7 +7,8 @@
 #
 # Workstation-only commands (Pi target):
 #   build [--fresh]    cross-build ARM64 image, save to .deploy/<sha>.tar.gz
-#   push <host>        scp image + compose + launcher, ssh-load; starts nothing
+#   push <host>        scp image + compose + launcher, ssh-load; restarts a running
+#                      container on the new image, starts nothing otherwise
 #   sync-config <host> refresh the Pi's config from repo defaults — no image, no restart
 #
 # Pico target:
@@ -38,8 +39,9 @@ Raspberry Pi robot (ARM64 image):
   build [--fresh]             Cross-build the ARM64 image and save to ${DEPLOY_DIR}/.
                               Incremental (ccache + colcon build/ are cached across
                               builds); --fresh drops those caches and recompiles all.
-  push <host>                 scp + ssh-load the latest tarball to <host>. Starts nothing:
-                              configure the robot, then 'hexa robot up'.
+  push <host>                 scp + ssh-load the latest tarball to <host>. A running
+                              container is restarted on the new image; a stopped one
+                              stays stopped ('hexa robot up' to start).
   sync-config <host> [--force]
                               Refresh config from repo defaults — no image, no restart.
                               Merges new keys into .env (existing values kept), overwrites
@@ -227,7 +229,7 @@ cmd_push() {
     scp "src/hexa_description/config/servo_calibration.yaml" \
         "${host}:~/hexa-robot/servo_calibration.yaml.default"
 
-    echo ">> Loading image on ${host} (nothing is started)"
+    echo ">> Loading image on ${host}"
     # shellcheck disable=SC2087
     ssh "${host}" bash -s <<EOF
 set -euo pipefail
@@ -255,14 +257,17 @@ fi
 chmod +x systemd/network-mode.sh
 # Superseded by hexa_buzzer — see the same line in sync-config.
 rm -f systemd/buzzer.sh systemd/hexa-tune-spool.path systemd/hexa-tune-spool.service
-# Starting energizes the servos, so it stays the operator's call. A container
-# already running keeps the old image until it is recreated.
+# A running container is recreated on the new image (safe-stop, then up). A
+# stopped one stays stopped: starting energizes the servos, the operator's call.
 if [ "\$(docker inspect -f '{{.State.Running}}' hexa-robot 2>/dev/null || true)" = "true" ]; then
-    echo ">> hexa-robot is still running the previous image — 'hexa robot restart' to switch"
+    echo ">> hexa-robot is running — restarting it on the new image"
+    ./hexa robot restart
+else
+    echo ">> hexa-robot is not running — nothing started"
 fi
 EOF
 
-    echo ">> Deployed. Nothing was started."
+    echo ">> Deployed."
     echo "   Configure:      ~/hexa-robot/servo_calibration.yaml and tuning.yaml on ${host}"
     echo "   Start:          hexa robot -H ${host} up   (energizes the servos)"
     echo "   Status:         hexa robot -H ${host} status"
