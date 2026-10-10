@@ -98,6 +98,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # python3-gpiozero + python3-lgpio drive hexa_buttons' two front-panel GPIO
 # buttons. lgpio is the chardev-based backend; gpiozero >= 2.0 is what carries
 # Pi 5 board data (noble ships 2.0.1). Both live in universe.
+# ros2controlcli is the `ros2 control` verb that `hexa robot` up/down call.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libyaml-cpp0.8 \
         libusb-1.0-0 \
@@ -116,6 +117,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-rclcpp \
         ros-jazzy-rclcpp-lifecycle \
         ros-jazzy-robot-state-publisher \
+        ros-jazzy-ros2controlcli \
         ros-jazzy-rosidl-default-runtime \
         ros-jazzy-sensor-msgs \
         ros-jazzy-xacro \
