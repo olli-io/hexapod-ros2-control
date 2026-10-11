@@ -183,6 +183,17 @@
   </link>
 
   <!-- =====================================================================
+       IMU frame. Axes aligned with base_link; the driver rotates the
+       sensor's own axes into it.
+       ===================================================================== -->
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="imu_link"/>
+    <origin xyz="${geom['imu']['x']} ${geom['imu']['y']} ${geom['imu']['z']}" rpy="0 0 0"/>
+  </joint>
+  <link name="imu_link"/>
+
+  <!-- =====================================================================
        Middle bar — decorative blue cylinder spanning the middle coxa
        bases, with endcap spheres on each mount point. Lives in its own
        link so the Gazebo material reference can paint it independently

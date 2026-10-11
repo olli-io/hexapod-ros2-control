@@ -45,6 +45,12 @@ Subscribed:
   [`hexa_hardware`](../hexa_hardware/README.md).
 - **`battery_topic`** (`sensor_msgs/BatteryState`) — pack voltage for the
   undervoltage ladder. Absent in sim.
+- **`/imu/data`** (`sensor_msgs/Imu`, sensor QoS) — body attitude for body
+  stabilization; roll and pitch only. Stamped on arrival with the tick clock; a
+  sample older than `stabilization.imu_timeout` counts as stale. From
+  [`hexa_imu`](../hexa_imu/README.md) on the robot, a Gazebo sensor in sim.
+- **`/cmd_stabilize`** (`std_msgs/Bool`, latched) — body stabilization on/off.
+  Until the first message, `stabilization.enabled` in `tuning.yaml` decides.
 
 Published, all latched and on change only:
 
@@ -57,6 +63,7 @@ Published, all latched and on change only:
   a refused request stays on them.
 - **`/gait/gesture`** (`String`) — the running gesture's id, `""` between
   gestures.
+- **`/gait/stabilize`** (`Bool`) — body stabilization switch as applied.
 - **`/hardware/relay_cmd`** (`Bool`) — servo-rail arm intent for `hexa_hardware`.
 - **`/hardware/undervoltage`** (`UInt8`) — undervoltage rung 0–3, escalate-only.
 

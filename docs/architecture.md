@@ -22,6 +22,7 @@ Colcon workspace; all packages live under `src/`. Build type in parentheses.
 - `hexa_display` (ament_cmake) — face: maps robot state through an expression/gaze policy and rasterizes the eyes on a Pi-attached SH1122 OLED (headless in sim), in one process. Pure sink; nothing imports it. Owns the Linux SH1122 panel/SPI/GPIO driver + the rclcpp nodes; the shared policy + eye core live in `shared/display_core`.
 - `hexa_buttons` (ament_python) — front-panel GPIO buttons: battery/address and Bluetooth screens on the face's panel, and the pairing-scan request behind them. Event-driven via gpiozero on a pinned lgpio pin factory (no polling). Reaches the face over `/display/text` and `/bluetooth/scanning` rather than importing it. Real-robot only.
 - `hexa_buzzer` (ament_python) — passive buzzer on the Pi's hardware PWM, the robot's only audible channel. Plays the tune an event named on `/buzzer/play` maps to (`config/buzzer.yaml`'s `events:` into `config/tunes.yaml`) straight onto the sysfs PWM channel bind-mounted at `/pwm`. Pure sink; nothing imports it. Its `tunes`/`catalog`/`pwm`/`player` modules are stdlib-only so the host's boot and shutdown systemd units run the same player without a ROS environment. Real-robot only.
+- `hexa_imu` (ament_cmake) — MPU6500 on the Pi's I²C1 (raw `i2c-dev`) → complementary attitude filter → `/imu/data`. The sim publishes the same topic from a Gazebo IMU sensor. Real-robot only.
 - `hexa_simulation` (ament_cmake) — Gazebo launch files, worlds, sim-only ros2_control config.
 - `hexa_bringup` (ament_cmake) — top-level launch files: `robot.launch.py`, `sim.launch.py`.
 
@@ -31,7 +32,8 @@ Each arrow is "depends on" — the higher-level package imports the lower one (o
 
 - Locomotion: `hexa_teleop` → `cmd_vel` (+ command topics) → `hexa_locomotion` → `/joint_group_position_controller/commands` → `hexa_hardware` → Servo 2040 / Gazebo. `hexa_locomotion` runs the whole velocity → gait → posture → compose/IK pipeline in-process (compiling `shared/motion_core`), so there is no separate gait/posture/kinematics node chain.
 - Web teleop: `hexa_webteleop` → `hexa_teleop` (shared mapping) → `cmd_vel` / `/body/pose`
-- `hexa_bringup` → `hexa_locomotion`, `hexa_display`, `hexa_buttons`, `hexa_buzzer` (composes the launch)
+- `hexa_bringup` → `hexa_locomotion`, `hexa_display`, `hexa_buttons`, `hexa_buzzer`, `hexa_imu` (composes the launch)
+- Body stabilization: `hexa_imu` (or the Gazebo IMU) → `/imu/data` → `hexa_locomotion`, which levels the body to gravity inside the posture step (`shared/motion_core/posture/leveling`). Both teleops switch it on `/cmd_stabilize` and read the applied state back on `/gait/stabilize`. The Pico has no IMU and feeds none.
 - Face: `hexa_display` subscribes to `hexa_locomotion`'s `/gait/state` (+ hardware topics) and rasterizes the eyes on the SH1122 OLED in one process. Nothing else depends on it.
 - Leg set: `hexa_locomotion` also publishes `/gait/leg_set` (`std_msgs/String`, latched, `hexapod` | `quadruped`) — the set the engine has **applied**. Report only; the leg set is still commanded by naming a gait on `/cmd_gait`. It exists because that command topic is latched, so a request the engine refuses stays on it and a UI reading it would show a leg set the robot never took. Both teleops read it; the face does not.
 - Buttons: `hexa_buttons` → `/display/text` + `/bluetooth/scanning` → `hexa_display`. One-way and topic-only, so the face stays a pure sink; a future Bluetooth scanning utility plugs in at `/bluetooth/status`.

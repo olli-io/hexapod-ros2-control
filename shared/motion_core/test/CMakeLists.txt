@@ -160,6 +160,7 @@ target_compile_options(test_reversal PRIVATE -fexceptions)
 # Gestures: keyframe sampling, the player's implicit start / return knots and
 # preserve resolution, and the engine's GESTURE state and its guards.
 hexa_host_test(test_gesture test_gesture.cpp ${FW_GAIT_SOURCES}
+  ${FW_SRC}/posture/leveling.cpp
   ${FW_SRC}/posture/pose.cpp
   ${FW_SRC}/posture/animations.cpp
   ${FW_SRC}/posture/posture.cpp)
@@ -210,6 +211,7 @@ target_include_directories(test_joy_mapping PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 # stays — test_pipeline drives the same posture stack in-loop.
 set(POSTURE_SRC ${FW_SRC}/posture)
 set(FW_POSTURE_SOURCES
+  ${POSTURE_SRC}/leveling.cpp
   ${POSTURE_SRC}/pose.cpp
   ${POSTURE_SRC}/animations.cpp
   ${POSTURE_SRC}/posture.cpp)
@@ -264,6 +266,18 @@ hexa_host_test(test_pipeline test_pipeline.cpp
   ${FW_POSTURE_SOURCES}
   ${FW_GAIT_SOURCES})
 target_compile_options(test_pipeline PRIVATE -fexceptions)
+
+# Body stabilization: the Leveler against a rigid slope, and its gate in the
+# pipeline (switch, preset, IMU freshness, a waiting preset change).
+hexa_host_test(test_leveling test_leveling.cpp
+  ${FW_SRC}/pipeline.cpp
+  ${FW_SRC}/pipeline_config.cpp
+  ${FW_SRC}/control.cpp
+  ${FW_SRC}/joy_mapping.cpp
+  ${FW_SRC}/supervisor.cpp
+  ${FW_POSTURE_SOURCES}
+  ${FW_GAIT_SOURCES})
+target_compile_options(test_leveling PRIVATE -fexceptions)
 
 # Reversal-ladder probe (not a test): what the planted feet do after the mirror
 # fires. Engine only, like probe_lateral without posture.

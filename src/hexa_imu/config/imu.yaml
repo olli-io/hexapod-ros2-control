@@ -1,0 +1,31 @@
+imu_node:
+  ros__parameters:
+    # false skips the IMU node in the robot launch file.
+    enabled: true
+
+    # MPU6500 on I2C1 (GPIO2 SDA, GPIO3 SCL). AD0 low = 0x68, high = 0x69.
+    bus: /dev/i2c-1
+    address: 0x68
+    accel_range_g: 4 # 2, 4, 8, 16
+    gyro_range_dps: 500 # 250, 500, 1000, 2000
+    dlpf_hz: 41 # 184, 92, 41, 20, 10, 5
+    sample_rate_hz: 200 # chip-internal; divides 1 kHz
+    rate_hz: 200.0 # publish rate
+
+    # Sensor axes to imu_link (aligned with base_link), intrinsic roll-pitch-yaw,
+    # rad. Also the place to trim a mount that is not level.
+    mount_rpy: [0.0, 0.0, 0.0]
+    frame_id: imu_link
+
+    # Complementary filter: accel trims the gyro below 1/filter_tau; the trim
+    # is skipped while |accel| is off g by more than accel_reject (share of g).
+    filter_tau: 0.5 # s
+    accel_reject: 0.15
+
+    # Gyro bias is averaged over this long at start (robot still, on its belly).
+    bias_duration_s: 2.0
+
+    # Reported in the message covariances.
+    orientation_stddev: 0.01 # rad
+    gyro_stddev: 0.002 # rad/s
+    accel_stddev: 0.05 # m/s^2

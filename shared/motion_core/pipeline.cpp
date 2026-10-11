@@ -97,7 +97,10 @@ Pipeline::Pipeline(const PipelineConfig& cfg)
                                                    standing_pose_),
                cfg.engine.stride_length, cfg.engine.stride_length_radial,
                cfg.default_gait),
-      posture_(cfg.posture),
+      posture_(cfg.posture, cfg.stabilization),
+      stabilization_presets_(cfg.stabilization_presets),
+      imu_timeout_us_(
+          static_cast<std::uint64_t>(cfg.stabilization.imu_timeout * 1e6f)),
       // Baked: both are outside the geometry+tuning scope.
       supervisor_(hexa::supervisor::Config{
           hexa::config::kInputTimeoutS,
@@ -430,6 +433,17 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
                        st != hexa::gait::EngineState::GESTURE;
   const std::optional<hexa::gesture::GestureProgress> gesture =
       engine_->gesture();
+  const bool imu_fresh = in.imu_valid && in.now_us >= in.imu_stamp_us &&
+                         in.now_us - in.imu_stamp_us <= imu_timeout_us_;
+  const bool preset_listed =
+      std::find(stabilization_presets_.begin(), stabilization_presets_.end(),
+                engine_->preset_id()) != stabilization_presets_.end();
+  const hexa::posture::LevelingGate gate = hexa::posture::leveling_gate(
+      jo.stabilize, preset_listed, imu_fresh, pending_preset_.has_value(), st);
+  posture_.set_leveling(
+      gate, imu_fresh ? std::optional<hexa::posture::TiltSample>(
+                            {in.imu_roll, in.imu_pitch})
+                      : std::nullopt);
   const hexa::posture::BodyPose body_pose = posture_.update(
       out, engine_->master_phase(), walking, st, engine_->strategy_name(),
       engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f,
@@ -441,6 +455,11 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   // What compose_gait actually applied, for next tick's neutral-pose check.
   last_body_pose_ = body_pose;
   r.body_pose = body_pose;
+  r.stabilize = jo.stabilize;
+  r.stabilizing = gate == hexa::posture::LevelingGate::kIntegrate &&
+                  hexa::posture::posture_active(st);
+  r.level_roll = posture_.leveling_roll();
+  r.level_pitch = posture_.leveling_pitch();
   std::copy(std::begin(theta_), std::end(theta_), std::begin(r.theta));
 
   r.engine_state = st;

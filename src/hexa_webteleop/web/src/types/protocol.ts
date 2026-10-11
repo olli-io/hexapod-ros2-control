@@ -63,6 +63,9 @@ export interface InitMessage {
   gestures?: string[];
   gesture?: string;
   preset_gesture?: string | null;
+  // Body stabilization as the engine reports it, and the presets it runs on.
+  stabilize?: boolean;
+  stabilize_presets?: string[];
   battery_poll_s?: number;
 }
 
@@ -116,6 +119,12 @@ export interface GestureMessage {
   gesture: string;
 }
 
+// The engine's report of the body stabilization switch.
+export interface StabilizeMessage {
+  type: "stabilize";
+  on: boolean;
+}
+
 // Either field is null when the node has no fresh reading to give.
 export interface BatteryMessage {
   type: "battery";
@@ -134,6 +143,7 @@ export type ServerMessage =
   | GaitStateMessage
   | PresetMessage
   | GestureMessage
+  | StabilizeMessage
   | BatteryMessage;
 
 export type StickSide = "left" | "right";
@@ -152,6 +162,9 @@ export type ClientMessage =
   // A gesture by id. One event on /cmd_gesture, which the node pre-gates on a
   // stand on the gesture preset; the refusal comes back on the preset message.
   | { type: "select_gesture"; gesture: string }
+  // Body stabilization on or off. Latched on /cmd_stabilize; the engine's
+  // report comes back as a stabilize message.
+  | { type: "set_stabilize"; on: boolean }
   | { type: "request_control" }
   | { type: "release_control" };
 

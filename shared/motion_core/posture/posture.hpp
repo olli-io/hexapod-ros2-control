@@ -15,6 +15,7 @@
 #include "gait/engine.hpp"
 #include "gait/types.hpp"
 #include "posture/animations.hpp"
+#include "posture/leveling.hpp"
 #include "posture/pose.hpp"
 
 namespace hexa::posture {
@@ -110,7 +111,10 @@ class PostureController {
 
   // Explicit posture tuning (hexa_locomotion's runtime-YAML path). The
   // enabled-animation SET stays baked — structural, not a tuning knob.
-  explicit PostureController(const ::hexa::config::PostureConfig& posture);
+  explicit PostureController(
+      const ::hexa::config::PostureConfig& posture,
+      const ::hexa::config::StabilizationConfig& stabilization =
+          ::hexa::config::kStabilization);
 
   // Persistent until the next teleop update. The smoother's TARGET, not the pose
   // that reaches IK.
@@ -131,12 +135,26 @@ class PostureController {
   // `gesture_pose` is a running gesture's body track. Added after the smoother
   // so its keyframe timing is exact, and under the same clamp as everything
   // else. Not an animation: it is not routed through the stack.
+  //
+  // The leveling correction (see set_leveling) is added last, under the clamp.
   BodyPose update(const std::map<std::string, gait::LegOutput>& legs,
                   float master_phase, bool walking, gait::EngineState state,
                   std::string_view gait_name, gait::LegSet leg_set, float dt,
                   float t,
                   std::optional<BodyPose> gesture_pose = std::nullopt,
                   float swing_end = 0.0f);
+
+  // Body stabilization for the next update(): the gate and this tick's IMU
+  // tilt, nullopt when stale. Defaults to kDecay with no sample, which leaves
+  // the pose untouched.
+  void set_leveling(LevelingGate gate, std::optional<TiltSample> sample) {
+    leveling_gate_ = gate;
+    leveling_sample_ = sample;
+  }
+
+  // The leveling correction inside the last update()'s pose.
+  float leveling_roll() const { return leveler_.roll(); }
+  float leveling_pitch() const { return leveler_.pitch(); }
 
   const PoseLimits& limits() const { return limits_; }
 
@@ -150,6 +168,10 @@ class PostureController {
   BodyPose user_pose_ = IDENTITY;
   PoseLimits limits_;
   PoseSmoother pose_smoother_;
+
+  Leveler leveler_;
+  LevelingGate leveling_gate_ = LevelingGate::kDecay;
+  std::optional<TiltSample> leveling_sample_;
 
   // Slews 0<->1 toward the walking flag so the gait animations ramp instead of
   // stepping. Reset to 0 while the posture stack is inactive.

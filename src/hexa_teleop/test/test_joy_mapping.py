@@ -2116,3 +2116,31 @@ def test_the_shipped_cycles_walk_the_legs_their_preset_stands_on():
 
     # One of each set, because the init buttons stand up on one of each.
     assert seen_sets == {"hexapod", "quadruped"}
+
+
+# ─── Body stabilization toggle ─────────────────────────────────────
+
+
+def _press_x() -> tuple[int, ...]:
+    pressed = list(_buttons())
+    pressed[2] = 1
+    return tuple(pressed)
+
+
+def test_stabilize_toggle_fires_once_per_press():
+    cfg = _cfg(base_bindings={"x": "stabilize_toggle"})
+    state = JoyState(mode=GAIT)
+    first = map_joy(_axes(), _press_x(), cfg, state, DT)
+    held = map_joy(_axes(), _press_x(), cfg, state, DT)
+    released = map_joy(_axes(), _buttons(), cfg, state, DT)
+    again = map_joy(_axes(), _press_x(), cfg, state, DT)
+    assert first.stabilize_toggle
+    assert not held.stabilize_toggle
+    assert not released.stabilize_toggle
+    assert again.stabilize_toggle
+
+
+def test_stabilize_toggle_works_in_posture_mode():
+    cfg = _cfg(base_bindings={"x": "stabilize_toggle"})
+    out = map_joy(_axes(), _press_x(), cfg, JoyState(mode=POSTURE), DT)
+    assert out.stabilize_toggle

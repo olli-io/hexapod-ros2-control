@@ -197,6 +197,17 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.body_height_max, bp.body_height_max, kTol);
   EXPECT_NEAR(lp.body_height_min, bp.body_height_min, kTol);
   EXPECT_NEAR(lp.nominal_body_height, bp.nominal_body_height, kTol);
+
+  const auto& ls = loaded.stabilization;
+  const auto& bs = baked.stabilization;
+  EXPECT_NEAR(ls.ki_stand, bs.ki_stand, kTol);
+  EXPECT_NEAR(ls.ki_gait, bs.ki_gait, kTol);
+  EXPECT_NEAR(ls.max_correction, bs.max_correction, kTol);
+  EXPECT_NEAR(ls.measurement_tau, bs.measurement_tau, kTol);
+  EXPECT_NEAR(ls.decay_tau, bs.decay_tau, kTol);
+  EXPECT_NEAR(ls.imu_timeout, bs.imu_timeout, kTol);
+  EXPECT_EQ(ls.enabled, bs.enabled);
+  EXPECT_EQ(loaded.stabilization_presets, baked.stabilization_presets);
   EXPECT_NEAR(lp.nominal_body_height,
               loaded.presets[loaded.default_preset].standing.body_height, kTol);
   EXPECT_EQ(lp.gait_body_animations_enabled, bp.gait_body_animations_enabled);

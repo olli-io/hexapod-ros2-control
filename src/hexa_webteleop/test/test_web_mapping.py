@@ -13,6 +13,7 @@ from hexa_webteleop import (
     input_is_stale,
     load_animation_preset,
     load_gesture_ids,
+    load_stabilize_presets,
     load_web_config,
     map_web,
     neutral_inputs,
@@ -909,3 +910,12 @@ def test_gesture_refused_while_a_preset_change_is_in_flight():
 
 def test_unknown_gesture_is_refused():
     assert _refusal(gesture="moonwalk") == "no such gesture"
+
+
+def test_load_stabilize_presets(tmp_path):
+    path = tmp_path / "tuning.yaml"
+    path.write_text(
+        "posture_node:\n  ros__parameters:\n    stabilization:\n"
+        "      presets: [normal, offroad]\n"
+    )
+    assert load_stabilize_presets(path) == ("normal", "offroad")

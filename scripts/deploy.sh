@@ -342,7 +342,7 @@ elif [ "${force}" = "1" ]; then
     cp .env .env.bak
     cp .env.robot.sample .env
     echo "   overwritten from .env.robot.sample (previous saved as .env.bak)"
-    echo "   host-specific values (INPUT_GID, SPI_GID, GPIO_GID, SERVO_DEVICE) are back"
+    echo "   host-specific values (INPUT_GID, SPI_GID, GPIO_GID, I2C_GID, SERVO_DEVICE) are back"
     echo "   at the sample's guesses — check them against this Pi before restarting."
 else
     # Pass 1: keys .env already sets. Pass 2: emit the ones it missed, each

@@ -38,7 +38,14 @@ hardware. The seams each caller supplies — input, config source, clock, output
   (`breathing`, `gait_sway`, `support_shift`, `swing_dip`, `gait_bounce`, body
   rolls). `swing_dip` dips the body through each lift-off and raises it through
   each touchdown, so the servo sag falls inside a deliberate motion; it scales
-  with the feet in the air, from `Engine::swing_end()`.
+  with the feet in the air, from `Engine::swing_end()`. `leveling` is body
+  stabilization: a slow integral loop on IMU roll/pitch that cancels the
+  ground slope, `c += ki·dt·(commanded − measured)`, so commanded tilt reads
+  relative to gravity. Its gate (`leveling_gate`) integrates in `STAND`,
+  `ENGAGING`, `GAIT` and `SETTLING`, holds in the other posture-active states,
+  and decays the correction out when switched off, on a preset not in
+  `stabilization.presets`, on a stale sample, or while a preset change waits
+  for a neutral pose.
 - **`gesture/`** — keyframed leg + body motions played from a stand
   (`gestures.yaml`: `start`, `pose`, `hold` and `home` keyframes, a `pose`
   carrying the values). `keyframe` samples one track (`ease` smoothstep or a
@@ -100,7 +107,10 @@ overload runs `map_joy` first, then the same core.
    player's legs come out here and the command is ignored.
 10. **Posture** — user pose (pinned to identity while the middle pair is in
     flight) + animation stack, gated on `walking` and engine state, plus a
-    running gesture's body term, all under one clamp → `BodyPose`.
+    running gesture's body term, all under one clamp, then the leveling
+    correction under the same clamp (back-calculated, so the clamp does not
+    wind it up) → `BodyPose`. The IMU sample arrives on `TickInput.imu_*`,
+    the switch on `CommandIntent.stabilize`; the Pico supplies neither.
 11. **Compose / IK** — per leg: `apply_body_pose` → `body_to_leg` →
     `inverse_kinematics`. An unreachable target holds that leg's last-good
     angles. A parked leg writes the folded pose directly; a direct leg (a

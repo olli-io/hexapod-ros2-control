@@ -12,6 +12,7 @@ Brings up, in order:
      been spawned (and gz_ros2_control has therefore started its
      controller_manager).
 """
+import os
 from pathlib import Path
 
 import yaml
@@ -47,8 +48,10 @@ def generate_launch_description():
     _geom = yaml.safe_load(_geom_path.read_text())
     default_spawn_z = str(_geom["body"]["coxa_to_bottom"])
 
+    # HEXA_SIM_WORLD picks a world in this package by stem (empty, slope).
     default_world = PathJoinSubstitution(
-        [pkg_hexa_simulation, "worlds", "empty.sdf"]
+        [pkg_hexa_simulation, "worlds",
+         os.environ.get("HEXA_SIM_WORLD", "empty") + ".sdf"]
     )
     world = LaunchConfiguration("world")
     spawn_z = LaunchConfiguration("spawn_z")
@@ -85,6 +88,15 @@ def generate_launch_description():
         package="ros_gz_bridge",
         executable="parameter_bridge",
         arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+        output="screen",
+    )
+
+    # Bridge the base IMU -> /imu/data, the topic hexa_imu publishes on the robot.
+    imu_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=["imu@sensor_msgs/msg/Imu[gz.msgs.IMU",
+                   "--ros-args", "-r", "imu:=/imu/data"],
         output="screen",
     )
 
@@ -139,6 +151,7 @@ def generate_launch_description():
         gz_sim,
         description,
         clock_bridge,
+        imu_bridge,
         spawn_entity,
         RegisterEventHandler(
             OnProcessExit(

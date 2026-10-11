@@ -62,6 +62,16 @@ def _buzzer_params() -> tuple[dict, bool]:
     return params, bool(params.pop("enabled", True))
 
 
+def _imu_params() -> tuple[dict, bool]:
+    """hexa_imu's params and the `enabled` gate."""
+    path = os.path.join(
+        get_package_share_directory("hexa_imu"), "config", "imu.yaml"
+    )
+    with open(path) as f:
+        params = yaml.safe_load(f)["imu_node"]["ros__parameters"]
+    return params, bool(params.pop("enabled", True))
+
+
 def _button_params() -> tuple[dict, bool]:
     """hexa_buttons' params and the `enabled` gate.
 
@@ -171,6 +181,17 @@ def _bringup(context, *args, **kwargs):
             executable="spawner",
             arguments=[controller, "--controller-manager", "/controller_manager"],
             output="screen",
+        ))
+
+    # IMU: MPU6500 on I2C1 -> /imu/data, which hexa_locomotion levels the body
+    # from. The sim publishes the same topic from a Gazebo sensor.
+    imu_params, imu_enabled = _imu_params()
+    if imu_enabled:
+        actions.append(Node(
+            package="hexa_imu",
+            executable="imu_node",
+            output="screen",
+            parameters=[imu_params],
         ))
 
     # Face: one node maps robot state to an expression/gaze policy and

@@ -2,7 +2,9 @@
 
 Gamepad teleop. Publishes the high-level command topics the rest of the stack
 consumes: `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/animation/mode`,
-`/gait/initialize`. Shares its mode with `hexa_webteleop` on the latched
+`/gait/initialize`, `/cmd_stabilize`. The `stabilize_toggle` binding (`x` by
+default, every mode) flips body stabilization: it publishes the opposite of
+what `/gait/stabilize` reports, ungated by ownership, like the mode. Shares its mode with `hexa_webteleop` on the latched
 `/teleop/mode`: it publishes its own mode changes, ungated by ownership, and
 adopts the web app's. Deliberately thin — the swappable producer of high-level
 commands; an autonomy node would publish the same topics and replace it

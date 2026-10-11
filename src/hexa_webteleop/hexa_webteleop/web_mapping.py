@@ -421,6 +421,18 @@ def load_gesture_ids(gestures_yaml: str | Path) -> tuple[str, ...]:
     return ids
 
 
+def load_stabilize_presets(tuning_yaml: str | Path) -> tuple[str, ...]:
+    """The presets body stabilization runs on, from ``tuning.yaml``.
+
+    The Mode view dims its LEVEL toggle's hint off these; the engine applies
+    the same list.
+    """
+    with Path(tuning_yaml).open() as f:
+        raw = yaml.safe_load(f) or {}
+    stab = raw["posture_node"]["ros__parameters"]["stabilization"]
+    return tuple(str(p) for p in stab["presets"])
+
+
 def gesture_refusal(
     gesture: str,
     gestures: tuple[str, ...],

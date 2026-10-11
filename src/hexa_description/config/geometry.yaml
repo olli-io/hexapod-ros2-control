@@ -27,6 +27,13 @@ foot:
   radius: 0.0048 # ground-contact sphere
   mass: 0.01
 
+imu:
+  # MPU6500 position on the body; its axes are aligned to base_link by the
+  # driver (hexa_imu mount_rpy).
+  x: 0.0
+  y: 0.0
+  z: 0.0
+
 mounts:
   # Hip mounts for the left-front and left-middle legs; symmetry fills in the
   # rest. x, y from body centre; yaw_deg counter-clockwise from forward.

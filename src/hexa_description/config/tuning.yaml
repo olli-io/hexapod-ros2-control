@@ -314,6 +314,18 @@ posture_node:
     pose_limit_pitch: 0.35
     pose_limit_yaw: 0.35
 
+    # Body stabilization: levels the body to gravity from /imu/data with a slow
+    # integral loop on roll and pitch. The correction spends the same envelope.
+    stabilization:
+      enabled: false # initial state of /cmd_stabilize
+      presets: [normal]
+      ki_stand: 2.0 # 1/s, in pose mode
+      ki_gait: 0.5 # 1/s, lower so the loop does not chase the step
+      max_correction: 0.2 # rad, roll-pitch disc
+      measurement_tau: 0.1 # s, IMU low-pass
+      decay_tau: 0.2 # s, ease-out when off, stale or off-preset
+      imu_timeout: 0.1 # s, sample age before it counts as stale
+
 # How far a stick may pose the body in posture mode.
 teleop_node:
   ros__parameters:

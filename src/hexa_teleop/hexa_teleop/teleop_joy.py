@@ -4,8 +4,8 @@ Reads ``sensor_msgs/Joy`` from ``/joy``, maps it via the pure
 ``joy_mapping`` library, and publishes ``/cmd_vel`` (body velocity for
 the gait chain) and ``/body/pose`` (body-pose offset for the posture
 chain) on a fixed timer. Also publishes ``/cmd_gait``,
-``/animation/mode``, and ``/gait/initialize`` on the appropriate user
-inputs. The inactive channel of cmd_vel / body/pose is zero-filled so
+``/animation/mode``, ``/gait/initialize`` and ``/cmd_stabilize`` on the
+appropriate user inputs. The inactive channel of cmd_vel / body/pose is zero-filled so
 consumers always see a coherent command.
 """
 
@@ -22,7 +22,7 @@ from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import Joy
-from std_msgs.msg import Empty, String
+from std_msgs.msg import Bool, Empty, String
 
 from hexa_common import (
     VelocityCaps,
@@ -366,11 +366,24 @@ class TeleopJoyNode(Node):
             String, "/teleop/mode", self._on_teleop_mode, gait_qos
         )
 
+        # Body stabilization: the toggle flips the state the engine reports.
+        # Supervisory like the mode, so never gated on ownership.
+        self._stabilize = False
+        self._pub_cmd_stabilize = self.create_publisher(
+            Bool, "/cmd_stabilize", gait_qos
+        )
+        self._sub_gait_stabilize = self.create_subscription(
+            Bool, "/gait/stabilize", self._on_gait_stabilize, state_qos
+        )
+
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
 
     def _on_joy(self, msg: Joy) -> None:
         self._latest_axes = tuple(msg.axes)
         self._latest_buttons = tuple(msg.buttons)
+
+    def _on_gait_stabilize(self, msg: Bool) -> None:
+        self._stabilize = msg.data
 
     def _on_gait_state(self, msg: String) -> None:
         self._latest_gait_state = msg.data
@@ -524,6 +537,12 @@ class TeleopJoyNode(Node):
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
             self._pub_mode.publish(String(data=self._state.mode))
+        if out.stabilize_toggle:
+            want = not self._stabilize
+            self.get_logger().info(
+                f"publishing /cmd_stabilize={'on' if want else 'off'}"
+            )
+            self._pub_cmd_stabilize.publish(Bool(data=want))
         # Arbitration: map_joy always runs (keeps prev_* edge trackers
         # fresh so no spurious edges on resume), but all publishes are
         # gated on ownership. When web owns, gamepad goes dormant — except

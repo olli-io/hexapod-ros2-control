@@ -104,6 +104,9 @@ struct JoyOutput {
   std::string_view gesture_select = "";
   bool has_animation_name = false;
   std::string_view animation_name = "";
+  // Body stabilization on. map_joy NEVER sets this: the Pico has no IMU. The
+  // ROS node fills it from the latched /cmd_stabilize.
+  bool stabilize = false;
 };
 
 // |v| < deadband collapses to 0; what survives is rescaled onto [0, 1] so the

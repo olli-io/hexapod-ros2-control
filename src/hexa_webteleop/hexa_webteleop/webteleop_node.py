@@ -3,7 +3,7 @@
 Hosts a lightweight HTTP + WebSocket server (``aiohttp``) that serves
 the static webapp and relays input events to the same ROS topics the
 gamepad teleop publishes: ``/cmd_vel``, ``/body/pose``, ``/cmd_gait``,
-``/animation/mode``, ``/gait/initialize``. The webapp is pure HTML +
+``/animation/mode``, ``/gait/initialize``, ``/cmd_stabilize``. The webapp is pure HTML +
 JavaScript (no build step); the server serves the static files plus a
 ``/ws`` WebSocket and the ``/logs`` and ``/control/release`` endpoints.
 The webapp also polls pack telemetry (``sensor_msgs/BatteryState``) over
@@ -56,7 +56,7 @@ from hexa_interfaces.msg import BodyPose as BodyPoseMsg
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
-from std_msgs.msg import Empty, String
+from std_msgs.msg import Bool, Empty, String
 
 from hexa_common import default_preset_id, gait_params
 from hexa_teleop.joy_mapping import (
@@ -92,6 +92,7 @@ from .web_mapping import (
     gesture_refusal,
     input_is_stale,
     load_gesture_ids,
+    load_stabilize_presets,
     load_web_config,
     map_web,
     neutral_inputs,
@@ -185,6 +186,9 @@ class WebTeleopNode(Node):
         self._gesture_preset = default_preset_id(gait_params(tuning_yaml_path))
         # The running gesture's id from /gait/gesture, "" between gestures.
         self._latest_gesture: str = ""
+        # Body stabilization as /gait/stabilize reports it; False until heard.
+        self._stabilize_presets = load_stabilize_presets(tuning_yaml_path)
+        self._latest_stabilize: bool = False
 
         # Server config
         with cfg_path.open() as f:
@@ -282,6 +286,13 @@ class WebTeleopNode(Node):
         # subscriber replaying one would move the legs.
         self._pub_cmd_gesture = self.create_publisher(String, "/cmd_gesture", 10)
         self._pub_owner = self.create_publisher(String, "/teleop/owner", latched_qos)
+        # Supervisory like /teleop/mode, so never gated on ownership.
+        self._pub_cmd_stabilize = self.create_publisher(
+            Bool, "/cmd_stabilize", latched_qos
+        )
+        self._sub_gait_stabilize = self.create_subscription(
+            Bool, "/gait/stabilize", self._on_gait_stabilize, latched_qos
+        )
         # The mode both teleops are in. Supervisory, so never gated on
         # ownership: the Mode view changes it while a controller drives, and a
         # pad press changes what the view shows.
@@ -531,6 +542,12 @@ class WebTeleopNode(Node):
             "type": "animation",
             "animation": msg.data,
         })
+
+    def _on_gait_stabilize(self, msg: Bool) -> None:
+        if msg.data == self._latest_stabilize:
+            return
+        self._latest_stabilize = msg.data
+        self._broadcast_to_clients({"type": "stabilize", "on": msg.data})
 
     def _on_gait_gesture(self, msg: String) -> None:
         if msg.data == self._latest_gesture:
@@ -844,6 +861,9 @@ class WebTeleopNode(Node):
             "gestures": list(self._gestures),
             "gesture": self._latest_gesture,
             "preset_gesture": self._gesture_preset,
+            # The Mode view's LEVEL toggle, and the presets it acts on.
+            "stabilize": self._latest_stabilize,
+            "stabilize_presets": list(self._stabilize_presets),
             **{
                 f"preset_{k}": v
                 for k, v in preset_payload(
@@ -962,6 +982,12 @@ class WebTeleopNode(Node):
             self._select_animation(str(data.get("animation", "")))
         elif msg_type == "select_gesture":
             self._select_gesture(str(data.get("gesture", "")))
+        elif msg_type == "set_stabilize":
+            on = bool(data.get("on", False))
+            self.get_logger().info(
+                f"publishing /cmd_stabilize={'on' if on else 'off'}"
+            )
+            self._pub_cmd_stabilize.publish(Bool(data=on))
         elif msg_type == "request_control":
             self._claim_control()
         elif msg_type == "release_control":

@@ -16,6 +16,10 @@ an image tarball to `~/hexa-robot/` and runs as a long-lived container.
 - Optional: 256×64 SH1122 OLED face on SPI0.
 - Optional: two momentary push buttons. 
 - Optional: passive buzzer, + to GPIO12, − to GND. 
+- Optional: MPU6500 IMU on I²C1 for body stabilization: VCC to 3V3, GND to
+  GND, SDA to GPIO2 (pin 3), SCL to GPIO3 (pin 5), AD0 to GND (address 0x68).
+  Mount it level, with its axes along the body if you can; set `mount_rpy` in
+  `hexa_imu`'s `config/imu.yaml` if not.
 
 GPIO allocation. All numbers are **BCM GPIO**, not header pin positions:
 
@@ -28,7 +32,7 @@ GPIO allocation. All numbers are **BCM GPIO**, not header pin positions:
   for hotspot mode.
 - **GPIO6** (pin 31) — Bluetooth button: controller status; hold 3 s for a
   pairing scan.
-- **GPIO2, GPIO3** — I²C1, kept free for an MPU6500 IMU.
+- **GPIO2, GPIO3** — I²C1, the MPU6500 IMU.
 
 ## 1. Prepare the Pi
 
@@ -50,6 +54,8 @@ Enable the interfaces. Leave out the lines for hardware that is not fitted:
 # /boot/firmware/config.txt
 dtparam=uart0=on                                    # servo UART, Pi 5 only
 dtparam=spi=on                                      # display
+dtparam=i2c_arm=on                                  # IMU
+dtparam=i2c_arm_baudrate=400000                     # IMU, 400 kHz
 dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4   # buzzer
 ```
 
@@ -66,6 +72,8 @@ Reboot, then verify:
 ls -l /dev/ttyAMA0                    # servo UART, Pi 5 (Pi 4: /dev/ttyS0)
 pinctrl get 14,15                     # a1 / uart, not "none"
 ls -l /dev/spidev0.0 /dev/gpiochip0   # display, buttons
+ls -l /dev/i2c-1                      # IMU
+sudo apt install -y i2c-tools && i2cdetect -y 1   # IMU answers at 68
 pinctrl get 12                        # a0 / PWM0_CHAN0, buzzer
 ```
 
@@ -108,6 +116,7 @@ of them again.
   - **`INPUT_GID`** — `getent group input | cut -d: -f3`.
   - **`SPI_GID`**, **`GPIO_GID`** — the same for the `spi` and `gpio` groups.
     Display and buttons only.
+  - **`I2C_GID`** — the same for the `i2c` group. IMU only.
   - **`BUZZER_PWM`** — Pi 4 only:
     `ls -d /sys/bus/platform/devices/*.pwm/pwm`.
   - **`ROS_DOMAIN_ID`** — DDS domain, default `42`.
@@ -123,6 +132,10 @@ For hardware that is not fitted:
   If you do not, `hexa_display` aborts at startup.
 - **Buttons** — `enabled: false` in `hexa_buttons`'s `config/buttons.yaml` is
   optional. Without it, the node stays inert.
+- **IMU** — `enabled: false` in `hexa_imu`'s `config/imu.yaml` is optional.
+  Without it, the node retries the bus every few seconds and body
+  stabilization stays inactive. `/dev/i2c-1` must exist either way, because
+  the container maps it.
 - **Buzzer** — no change is necessary. Without the overlay, `up` does not mount
   the PWM block and the buzzer stays silent.
 

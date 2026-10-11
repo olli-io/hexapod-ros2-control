@@ -108,6 +108,7 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/gesture/keyframe.cpp   # keyframed gestures from a stand
     ${HEXA_SHARED}/gesture/player.cpp
     ${HEXA_SHARED}/gesture/validate.cpp
+    ${HEXA_SHARED}/posture/leveling.cpp    # body stabilization (IMU leveling)
     ${HEXA_SHARED}/posture/pose.cpp        # body-pose algebra, float fork (part 08)
     ${HEXA_SHARED}/posture/animations.cpp  # animation stack (part 08)
     ${HEXA_SHARED}/posture/posture.cpp     # posture controller / signal derivation (part 08)

@@ -46,6 +46,9 @@ export interface TeleopState {
   gestures: string[];
   gesture: string;
   gesturePreset: string | null;
+  // Body stabilization as /gait/stabilize reports it, and the presets it acts on.
+  stabilize: boolean;
+  stabilizePresets: string[];
   // The nonce re-arms the four-second clear when the node refuses the same thing
   // twice — the text alone would not change, so the effect would not re-run.
   refusal: { text: string; nonce: number } | null;
@@ -76,6 +79,8 @@ const INITIAL: TeleopState = {
   gestures: [],
   gesture: "",
   gesturePreset: null,
+  stabilize: false,
+  stabilizePresets: [],
   refusal: null,
   packVoltage: null,
   packCurrent: null,
@@ -124,6 +129,8 @@ function reduce(state: TeleopState, action: Action): TeleopState {
         gestures: msg.gestures ?? [],
         gesture: msg.gesture ?? "",
         gesturePreset: msg.preset_gesture ?? null,
+        stabilize: msg.stabilize ?? false,
+        stabilizePresets: msg.stabilize_presets ?? [],
         batteryPollS: msg.battery_poll_s ?? 1,
       };
     case "busy":
@@ -154,6 +161,8 @@ function reduce(state: TeleopState, action: Action): TeleopState {
       };
     case "gesture":
       return { ...state, gesture: msg.gesture };
+    case "stabilize":
+      return { ...state, stabilize: msg.on };
     case "battery":
       return {
         ...state,

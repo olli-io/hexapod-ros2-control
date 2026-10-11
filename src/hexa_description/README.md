@@ -8,8 +8,10 @@ values. Every consumer loads them at runtime, or generates code from them.
 
 - `urdf/hexapod.urdf.xacro` — the robot model. Reads all dimensions and joint
   limits from `config/geometry.yaml` via `xacro.load_yaml`. No mesh files; links
-  are primitives.
-- `urdf/hexapod.gazebo.xacro` — Gazebo overlay (materials, foot friction).
+  are primitives. `imu_link` is fixed to `base_link` at `geometry.yaml`'s `imu:`
+  position, axes aligned.
+- `urdf/hexapod.gazebo.xacro` — Gazebo overlay (materials, foot friction, the
+  IMU sensor on `imu_link`).
   Included only with `use_sim:=true`, so it never reaches the real robot.
 - `launch/description.launch.py` — runs `robot_state_publisher` and publishes
   the URDF on `/robot_description`. Arguments: `use_sim`, `use_sim_time`.
@@ -17,7 +19,8 @@ values. Every consumer loads them at runtime, or generates code from them.
   travel window. Angles are in intuitive per-joint degrees. Conversion to
   IK-convention radians happens at load time.
 - `config/tuning.yaml` — gait, control, posture and teleop tuning, including
-  the `presets` list and `default_standing_pose`. Shared by sim, web teleop and
+  the `presets` list, `default_standing_pose` and body stabilization
+  (`posture_node.stabilization`). Shared by sim, web teleop and
   the Pico firmware.
 - `config/gestures.yaml` — gestures: keyframed leg + body motions played from
   a stand. Leg keyframes as joint angles in geometry.yaml's joint sense, body

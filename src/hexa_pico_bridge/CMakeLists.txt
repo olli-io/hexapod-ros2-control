@@ -79,6 +79,7 @@ set(FW_PIPELINE_SOURCES
   ${FW_SRC}/gesture/keyframe.cpp
   ${FW_SRC}/gesture/player.cpp
   ${FW_SRC}/gesture/validate.cpp
+  ${FW_SRC}/posture/leveling.cpp
   ${FW_SRC}/posture/pose.cpp
   ${FW_SRC}/posture/animations.cpp
   ${FW_SRC}/posture/posture.cpp)

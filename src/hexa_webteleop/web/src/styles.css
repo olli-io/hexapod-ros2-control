@@ -426,7 +426,8 @@ html, body {
 /* The presets as tiles, not rows, on a 2x2: a phone is narrow, and four abreast
    would leave four slivers too thin for a label. The box around them is what
    caps and centres the grid. */
-#preset-list {
+#preset-list,
+#level-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--tile-gap);

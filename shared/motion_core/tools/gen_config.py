@@ -1382,6 +1382,38 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("};")
     w("")
 
+    # ── body stabilization (IMU leveling) ──
+    st = pn["stabilization"]
+    preset_ids = [row["id"] for row in preset_rows]
+    for pid in st["presets"]:
+        if pid not in preset_ids:
+            raise ValueError(
+                f"tuning.yaml posture_node stabilization.presets: unknown "
+                f"preset {pid!r} (have {preset_ids})")
+    w("// ── Body stabilization (tuning.yaml posture_node.stabilization) ──")
+    w("struct StabilizationConfig {")
+    stab_fields = [
+        ("ki_stand", st["ki_stand"]),
+        ("ki_gait", st["ki_gait"]),
+        ("max_correction", st["max_correction"]),
+        ("measurement_tau", st["measurement_tau"]),
+        ("decay_tau", st["decay_tau"]),
+        ("imu_timeout", st["imu_timeout"]),
+    ]
+    for fname, _ in stab_fields:
+        w(f"  float {fname};")
+    w("  bool enabled;")
+    w("};")
+    w("inline constexpr StabilizationConfig kStabilization = {")
+    for fname, val in stab_fields:
+        w(f"    {fl(val)},  // {fname}")
+    w(f"    {bo(st['enabled'])},  // enabled")
+    w("};")
+    w(f"inline constexpr std::array<std::string_view, {len(st['presets'])}> "
+      "kStabilizationPresets = {"
+      + ", ".join(cstr(x) for x in st["presets"]) + "};")
+    w("")
+
     # ── control velocity shaping ──
     w("// ── Control velocity shaping (hexa_description/config/tuning.yaml) ──")
     w("struct ControlConfig {")

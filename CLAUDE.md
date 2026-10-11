@@ -93,6 +93,7 @@ change.
 - `src/hexa_description/README.md`
 - `src/hexa_display/README.md`
 - `src/hexa_hardware/README.md`
+- `src/hexa_imu/README.md`
 - `src/hexa_interfaces/README.md`
 - `src/hexa_locomotion/README.md`
 - `src/hexa_pico_bridge/README.md`

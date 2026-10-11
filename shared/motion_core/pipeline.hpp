@@ -53,6 +53,10 @@ struct TickInput {
   float battery_v = 0.0f;                // decoded pack voltage (iff valid)
   bool hardware_fault = false;           // over-current trip latched: the engine
                                          //   latches FAULT, the rail disarms
+  bool imu_valid = false;                // an IMU sample has arrived
+  float imu_roll = 0.0f;                 // body tilt to gravity, rad (iff valid)
+  float imu_pitch = 0.0f;
+  std::uint64_t imu_stamp_us = 0;        // arrival, on the now_us clock
   float dt = kDt;                        // tick period, seconds
 };
 
@@ -80,6 +84,12 @@ struct TickResult {
   float master_phase = 0.0f;
   bool walking = false;                  // shaped-command non-zero (posture gate)
   hexa::posture::BodyPose body_pose{};   // the composed pose compose_gait applied
+
+  // Body stabilization: the operator's switch as applied, whether the loop is
+  // closed this tick, and the correction inside body_pose.
+  bool stabilize = false;
+  bool stabilizing = false;
+  float level_roll = 0.0f, level_pitch = 0.0f;
 
   // Raw teleop intent for an on-board face policy: pre-shaping, so gaze tracks
   // the stick rather than the slew. The pose-mode expressions need the body shift
@@ -207,6 +217,8 @@ class Pipeline {
   // distinction worth making.
   hexa::posture::BodyPose last_body_pose_{};
   hexa::posture::PostureController posture_;
+  std::vector<std::string> stabilization_presets_;
+  std::uint64_t imu_timeout_us_;
   hexa::supervisor::Supervisor supervisor_;
 
   // Leg geometry for compose_gait's IK, held so a runtime PipelineConfig's

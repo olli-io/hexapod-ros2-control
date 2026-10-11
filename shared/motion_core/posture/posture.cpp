@@ -296,8 +296,10 @@ PoseLimits pose_limits_from(const config::PostureConfig& p) {
 PostureController::PostureController()
     : PostureController(config::kPosture) {}
 
-PostureController::PostureController(const config::PostureConfig& p)
+PostureController::PostureController(const config::PostureConfig& p,
+                                     const config::StabilizationConfig& s)
     : limits_(pose_limits_from(p)),
+      leveler_(s),
       gait_body_animations_enabled_(p.gait_body_animations_enabled),
       activation_slew_rate_(p.gait_activation_slew_rate),
       centroid_tau_(p.support_centroid_tau),
@@ -390,6 +392,7 @@ BodyPose PostureController::update(
     // The filter state has to agree with the emitted IDENTITY, or the body
     // springs from a stale offset on the way back.
     pose_smoother_.reset();
+    leveler_.reset();
     return IDENTITY;
   }
 
@@ -443,8 +446,19 @@ BodyPose PostureController::update(
 
   // One shared envelope: the user pose, the animation and a gesture's body track
   // all spend it, and the sum is clamped to it.
-  return clamp(add(add(user_smoothed, animated), gesture_pose.value_or(IDENTITY)),
-               limits_);
+  const BodyPose target = clamp(
+      add(add(user_smoothed, animated), gesture_pose.value_or(IDENTITY)),
+      limits_);
+  // The leveling correction rides on top, under the same clamp; what the clamp
+  // took back is taken off the integrator too.
+  leveler_.step(leveling_gate_, walking, target.roll, target.pitch,
+                leveling_sample_, dt);
+  BodyPose leveled = target;
+  leveled.roll += leveler_.roll();
+  leveled.pitch += leveler_.pitch();
+  leveled = clamp(leveled, limits_);
+  leveler_.limit_to(leveled.roll - target.roll, leveled.pitch - target.pitch);
+  return leveled;
 }
 
 }  // namespace hexa::posture

@@ -93,11 +93,12 @@ base:
     dpad_x: 1.0
     dpad_y: 1.0
 
-  # Mode-agnostic: gait_mode | posture_mode | animation_mode | init | record
+  # Mode-agnostic: gait_mode | posture_mode | animation_mode | init | record |
+  # stabilize_toggle
   bindings:
     a: gait_mode
     b: animation_mode
-    x: ""
+    x: stabilize_toggle
     y: posture_mode
     start: init
     select: record

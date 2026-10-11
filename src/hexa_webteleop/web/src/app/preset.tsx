@@ -169,6 +169,42 @@ function PresetRoute() {
               ))}
             </div>
           </section>
+
+          {/* Body stabilization: levels the body to gravity from the IMU. A
+              setting, not a move, so it is live in every state; on a preset
+              it does not run on, the hint says so and the engine eases the
+              correction out. */}
+          <section className="preset-section" data-section="level">
+            <h2 className="preset-section-title">
+              LEVEL
+              {state.stabilize &&
+                state.activePreset !== null &&
+                !state.stabilizePresets.includes(state.activePreset) && (
+                  <span className="preset-hint">
+                    {state.stabilizePresets
+                      .map((id) => presetLabel(state.presets, id))
+                      .join(", ")}{" "}
+                    only
+                  </span>
+                )}
+            </h2>
+            <div id="level-row">
+              <button
+                className={["preset-item", state.stabilize && "active"]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={state.stabilize}
+                onClick={() => {
+                  buzz(15);
+                  send({ type: "set_stabilize", on: !state.stabilize });
+                }}
+              >
+                <span className="preset-label">
+                  {state.stabilize ? "ON" : "OFF"}
+                </span>
+              </button>
+            </div>
+          </section>
         </div>
 
         <div className="preset-column">

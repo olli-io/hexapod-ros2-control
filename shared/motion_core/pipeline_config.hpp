@@ -52,6 +52,9 @@ struct PipelineConfig {
   std::string default_gait;
   hexa::config::ControlConfig control{};  // vmax_ramp_time_* + snap_tol_*
   hexa::config::PostureConfig posture{};  // animation amplitudes, taus, limits, slew
+  hexa::config::StabilizationConfig stabilization{};  // IMU leveling loop
+  // Preset ids leveling runs on; elsewhere the correction decays out.
+  std::vector<std::string> stabilization_presets;
 
   // gestures.yaml, flattened to per-leg tracks. In declaration order; may be
   // empty. Validated against the default preset's stance when the Pipeline is

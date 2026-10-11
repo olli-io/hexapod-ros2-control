@@ -19,6 +19,8 @@ x-hexa-base: &hexa_base
     XDG_RUNTIME_DIR: "/tmp/runtime-dev"
     # The custom hostname does not resolve under host networking.
     GZ_IP: "127.0.0.1"
+    # World file stem under hexa_simulation/worlds, e.g. HEXA_SIM_WORLD=slope.
+    HEXA_SIM_WORLD: "${HEXA_SIM_WORLD:-empty}"
   volumes:
     - .:/workspace
     - /tmp/.X11-unix:/tmp/.X11-unix:rw

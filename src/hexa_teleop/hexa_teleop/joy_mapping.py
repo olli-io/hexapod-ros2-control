@@ -24,6 +24,9 @@ BASE_FUNCTIONS: frozenset[str] = frozenset({
     "animation_mode",
     "init",
     "record",
+    # Body stabilization on/off. Robot-only: the Pico mapping has no IMU and
+    # does not bind it.
+    "stabilize_toggle",
 })
 BUTTON_CLASS_FUNCTIONS: frozenset[str] = frozenset({
     "yaw_left",
@@ -167,6 +170,7 @@ class JoyState:
     prev_animation_mode: bool = False
     prev_init: bool = False
     prev_record: bool = False
+    prev_stabilize_toggle: bool = False
     yaw_current: float = 0.0
     wiggle_amount: float = 0.0
     # Persistent body-height offset, driven by ``height_up`` /
@@ -248,6 +252,9 @@ class JoyOutput:
     # fact for a caller that wants to log or gate on it without matching
     # gait names.
     init_quadruped: bool = False
+    # Rising edge of ``stabilize_toggle``. The ROS layer flips the applied
+    # state it reads on ``/gait/stabilize``.
+    stabilize_toggle: bool = False
 
 
 @dataclass(frozen=True)
@@ -863,6 +870,10 @@ def map_functions(
     record_edge = record_pressed and not state.prev_record
     state.prev_record = record_pressed
 
+    stabilize_pressed = "stabilize_toggle" in active.pressed
+    stabilize_toggle = stabilize_pressed and not state.prev_stabilize_toggle
+    state.prev_stabilize_toggle = stabilize_pressed
+
     # Posture-mode stick reads, always against the POSTURE section. The
     # source has already applied the sign, ``_axis`` the deadband, so by
     # the time these locals are populated "stick forward / left → positive"
@@ -1072,6 +1083,7 @@ def map_functions(
             gait_select=gait_select,
             animation_name=animation_name_out,
             init_quadruped=init_quadruped,
+            stabilize_toggle=stabilize_toggle,
         )
     # GAIT or ANIMATION mode: sticks drive linear/angular velocity;
     # recorded posture baseline bleeds through on every posture axis
@@ -1128,6 +1140,7 @@ def map_functions(
         gait_select=gait_select,
         animation_name=animation_name_out,
         init_quadruped=init_quadruped,
+        stabilize_toggle=stabilize_toggle,
     )
 
 

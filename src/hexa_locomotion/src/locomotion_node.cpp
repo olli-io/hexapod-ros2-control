@@ -3,7 +3,9 @@
 // core tick directly, bypassing map_joy. See README.md.
 
 #include <array>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,6 +17,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <hexa_interfaces/msg/body_pose.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
@@ -36,15 +39,18 @@ using StringMsg = std_msgs::msg::String;
 using Float64MultiArray = std_msgs::msg::Float64MultiArray;
 using UInt8Msg = std_msgs::msg::UInt8;
 using BatteryState = sensor_msgs::msg::BatteryState;
+using Imu = sensor_msgs::msg::Imu;
 using BodyPoseMsg = hexa_interfaces::msg::BodyPose;
 using Trigger = std_srvs::srv::Trigger;
 
 class LocomotionNode : public rclcpp::Node {
  public:
   LocomotionNode()
-      : rclcpp::Node("locomotion_node"),
-        pipeline_(std::make_unique<hexa::pipeline::Pipeline>(
-            hexa::locomotion::load_pipeline_config(*this))) {
+      : rclcpp::Node("locomotion_node") {
+    const hexa::pipeline::PipelineConfig cfg =
+        hexa::locomotion::load_pipeline_config(*this);
+    pipeline_ = std::make_unique<hexa::pipeline::Pipeline>(cfg);
+    stabilize_ = cfg.stabilization.enabled;
     command_topic_ = declare_parameter<std::string>(
         "command_topic", "/joint_group_position_controller/commands");
     publish_diagnostics_ = declare_parameter<bool>("publish_diagnostics", false);
@@ -62,6 +68,8 @@ class LocomotionNode : public rclcpp::Node {
     pub_preset_ = create_publisher<StringMsg>("/gait/preset", latched);
     // The running gesture's id, "" between gestures. A report, never a command.
     pub_gesture_ = create_publisher<StringMsg>("/gait/gesture", latched);
+    // Whether body stabilization is switched on, as applied.
+    pub_stabilize_ = create_publisher<BoolMsg>("/gait/stabilize", latched);
     pub_relay_ = create_publisher<BoolMsg>("/hardware/relay_cmd", latched);
     // UndervoltStage as uint8; escalate-only, never counts down.
     pub_undervolt_ = create_publisher<UInt8Msg>("/hardware/undervoltage", latched);
@@ -102,6 +110,14 @@ class LocomotionNode : public rclcpp::Node {
           anim_name_ = m->data;
           anim_pending_ = true;
         });
+    sub_stabilize_ = create_subscription<BoolMsg>(
+        "/cmd_stabilize", latched,
+        [this](BoolMsg::SharedPtr m) { stabilize_ = m->data; });
+    // Stamped on arrival with the tick clock, so the pipeline's staleness check
+    // needs no clock agreement with the publisher.
+    sub_imu_ = create_subscription<Imu>(
+        "/imu/data", rclcpp::SensorDataQoS(),
+        [this](Imu::SharedPtr m) { on_imu(*m); });
     // Consumed once, like /cmd_gait, and volatile: a gesture is an event, and
     // a restarted node must never replay one.
     sub_gesture_ = create_subscription<StringMsg>(
@@ -133,6 +149,17 @@ class LocomotionNode : public rclcpp::Node {
   std::uint64_t now_us() const {
     const std::int64_t ns = (get_clock()->now() - boot_).nanoseconds();
     return ns > 0 ? static_cast<std::uint64_t>(ns / 1000) : 0;
+  }
+
+  // Roll and pitch of the ZYX (yaw-pitch-roll) decomposition, REP-103.
+  void on_imu(const Imu& m) {
+    const auto& q = m.orientation;
+    imu_roll_ = static_cast<float>(std::atan2(2.0 * (q.w * q.x + q.y * q.z),
+                                              1.0 - 2.0 * (q.x * q.x + q.y * q.y)));
+    imu_pitch_ = static_cast<float>(
+        std::asin(std::clamp(2.0 * (q.w * q.y - q.z * q.x), -1.0, 1.0)));
+    imu_stamp_us_ = now_us();
+    have_imu_ = true;
   }
 
   void on_cmd_vel(const Twist& m) {
@@ -179,6 +206,7 @@ class LocomotionNode : public rclcpp::Node {
       cmd.gesture_select = gesture_name_;
       gesture_pending_ = false;
     }
+    cmd.stabilize = stabilize_;
 
     // A stale /cmd_vel publisher settles the gait via the supervisor's input timeout.
     const std::uint64_t timeout_us =
@@ -198,6 +226,10 @@ class LocomotionNode : public rclcpp::Node {
     in.battery_v = battery_unconsumed_ ? battery_v_ : 0.0f;
     battery_unconsumed_ = false;
     in.hardware_fault = fault_level_;
+    in.imu_valid = have_imu_;
+    in.imu_roll = imu_roll_;
+    in.imu_pitch = imu_pitch_;
+    in.imu_stamp_us = imu_stamp_us_;
     in.dt = hexa::pipeline::kDt;
 
     const hexa::pipeline::TickResult res = pipeline_->tick(cmd, in);
@@ -246,6 +278,20 @@ class LocomotionNode : public rclcpp::Node {
       pub_leg_set_->publish(lm);
       RCLCPP_INFO(get_logger(), "leg set -> %s", leg_set.c_str());
       last_leg_set_ = leg_set;
+    }
+
+    if (!have_stabilize_ || res.stabilize != last_stabilize_) {
+      BoolMsg bm;
+      bm.data = res.stabilize;
+      pub_stabilize_->publish(bm);
+      RCLCPP_INFO(get_logger(), "stabilize -> %s", res.stabilize ? "on" : "off");
+      last_stabilize_ = res.stabilize;
+      have_stabilize_ = true;
+    }
+    if (res.stabilizing != last_stabilizing_) {
+      RCLCPP_INFO(get_logger(), "leveling %s",
+                  res.stabilizing ? "active" : "inactive");
+      last_stabilizing_ = res.stabilizing;
     }
 
     if (!have_relay_ || res.relay_energized != last_relay_) {
@@ -377,6 +423,7 @@ class LocomotionNode : public rclcpp::Node {
       last_preset_.clear();
       have_relay_ = false;
       have_gesture_ = false;
+      have_stabilize_ = false;
       res.success = true;
       res.message = "reloaded config (gait=" + cfg.default_gait +
                     "); pipeline reset to FOLDED — send /gait/initialize to stand";
@@ -412,6 +459,14 @@ class LocomotionNode : public rclcpp::Node {
   std::string last_leg_set_;
   std::string last_preset_;
   bool fault_level_ = false;
+  bool stabilize_ = false;
+  bool last_stabilize_ = false;
+  bool have_stabilize_ = false;
+  bool last_stabilizing_ = false;
+  bool have_imu_ = false;
+  float imu_roll_ = 0.0f;
+  float imu_pitch_ = 0.0f;
+  std::uint64_t imu_stamp_us_ = 0;
   bool last_relay_ = false;
   bool have_relay_ = false;
   std::string battery_topic_;
@@ -431,11 +486,14 @@ class LocomotionNode : public rclcpp::Node {
   rclcpp::Subscription<StringMsg>::SharedPtr sub_preset_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_anim_;
   rclcpp::Subscription<StringMsg>::SharedPtr sub_gesture_;
+  rclcpp::Subscription<BoolMsg>::SharedPtr sub_stabilize_;
+  rclcpp::Subscription<Imu>::SharedPtr sub_imu_;
   rclcpp::Publisher<Float64MultiArray>::SharedPtr pub_cmd_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_state_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_leg_set_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_preset_;
   rclcpp::Publisher<StringMsg>::SharedPtr pub_gesture_;
+  rclcpp::Publisher<BoolMsg>::SharedPtr pub_stabilize_;
   rclcpp::Publisher<BoolMsg>::SharedPtr pub_relay_;
   rclcpp::Publisher<UInt8Msg>::SharedPtr pub_undervolt_;
   rclcpp::Service<Trigger>::SharedPtr srv_reload_;

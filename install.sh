@@ -233,6 +233,7 @@ detect_host_values() {
     INPUT_GID_GUESS="$(group_gid input)"
     SPI_GID_GUESS="$(group_gid spi)"
     GPIO_GID_GUESS="$(group_gid gpio)"
+    I2C_GID_GUESS="$(group_gid i2c)"
 
     # Per-model kernel name for the GPIO14/15 UART; fall back to whichever node
     # actually exists on an unrecognised board.
@@ -534,6 +535,7 @@ seed_env() {
     set_env_key INPUT_GID    "${INPUT_GID_GUESS}"
     set_env_key SPI_GID      "${SPI_GID_GUESS}"
     set_env_key GPIO_GID     "${GPIO_GID_GUESS}"
+    set_env_key I2C_GID      "${I2C_GID_GUESS}"
     set_env_key SERVO_DEVICE "${SERVO_DEVICE_GUESS}"
     set_env_key BUZZER_PWM   "${BUZZER_PWM_GUESS}"
 }

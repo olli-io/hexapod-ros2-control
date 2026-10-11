@@ -97,6 +97,30 @@
   <xacro:preserve_foot_joint joint="r_rear_foot_joint"/>
 
   <!-- ===================================================================
+       IMU. Needs gz-sim-imu-system in the world; sim.launch.py bridges
+       the topic to /imu/data. Noise roughly an MPU6500 at a 41 Hz DLPF.
+       =================================================================== -->
+  <gazebo reference="imu_link">
+    <sensor name="imu" type="imu">
+      <always_on>true</always_on>
+      <update_rate>200</update_rate>
+      <topic>imu</topic>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><stddev>0.002</stddev></noise></x>
+          <y><noise type="gaussian"><stddev>0.002</stddev></noise></y>
+          <z><noise type="gaussian"><stddev>0.002</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><stddev>0.05</stddev></noise></x>
+          <y><noise type="gaussian"><stddev>0.05</stddev></noise></y>
+          <z><noise type="gaussian"><stddev>0.05</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- ===================================================================
        gz_ros2_control system plugin: hosts the ros2_control controller
        manager inside Gazebo and binds it to the <ros2_control> block in
        the main URDF (which selects GazeboSimSystem as its hardware when

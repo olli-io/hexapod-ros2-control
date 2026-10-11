@@ -597,6 +597,27 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     }
   }
 
+  const YAML::Node st = p["stabilization"];
+  auto& sc = cfg.stabilization;
+  sc.ki_stand = f(st["ki_stand"]);
+  sc.ki_gait = f(st["ki_gait"]);
+  sc.max_correction = f(st["max_correction"]);
+  sc.measurement_tau = f(st["measurement_tau"]);
+  sc.decay_tau = f(st["decay_tau"]);
+  sc.imu_timeout = f(st["imu_timeout"]);
+  sc.enabled = st["enabled"].as<bool>();
+  for (const auto& id : st["presets"]) {
+    const auto name = id.as<std::string>();
+    const bool known =
+        std::any_of(cfg.presets.begin(), cfg.presets.end(),
+                    [&](const auto& preset) { return preset.id == name; });
+    if (!known) {
+      throw std::runtime_error(
+          "posture_node stabilization.presets: unknown preset " + name);
+    }
+    cfg.stabilization_presets.push_back(name);
+  }
+
   cfg.gestures = load_gestures(gestures_path, load_joint_limits(geo));
 
   return cfg;

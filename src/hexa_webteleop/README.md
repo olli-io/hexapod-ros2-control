@@ -6,9 +6,9 @@ interchangeable and only one drives at a time.
 
 - **Publishes** — `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/cmd_preset`,
   `/cmd_gesture`, `/animation/mode`, `/gait/initialize`, `/teleop/owner`,
-  `/teleop/mode`.
+  `/teleop/mode`, `/cmd_stabilize`.
 - **Subscribes** — `/gait/state` (switch gating), `/gait/preset`,
-  `/gait/leg_set` and `/gait/gesture` (the engine's reports), the latched
+  `/gait/leg_set`, `/gait/gesture` and `/gait/stabilize` (the engine's reports), the latched
   `/cmd_gait`, `/cmd_preset`, `/animation/mode` and `/teleop/mode` (the
   current *selection*, heard from both teleops and from its own publishes), and
   `sensor_msgs/BatteryState`.
@@ -128,6 +128,12 @@ drop the socket. Both sticks re-centre on the way in.
   legal only from a stand). The node gates on `/gait/state` and holds a deadline
   for what it cannot predict; a reason appears under the grids and the lit tile
   does not move.
+
+- The **LEVEL** box toggles body stabilization: a tap sends `set_stabilize`,
+  the node publishes `/cmd_stabilize`, and the tile lights from
+  `/gait/stabilize` only. Live in every state and ungated by ownership. On a
+  preset outside `stabilization.presets` (from `tuning.yaml`, shipped in the
+  `init` message) the heading says which presets it runs on.
 
 Every button here is a tap, not a hold, and there is no keepalive.
 
