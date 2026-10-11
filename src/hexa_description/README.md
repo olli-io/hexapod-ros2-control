@@ -19,9 +19,10 @@ values. Every consumer loads them at runtime, or generates code from them.
   travel window. Angles are in intuitive per-joint degrees. Conversion to
   IK-convention radians happens at load time.
 - `config/tuning.yaml` — gait, control, posture and teleop tuning, including
-  the `presets` list, `default_standing_pose` and body stabilization
-  (`posture_node.stabilization`). Shared by sim, web teleop and
-  the Pico firmware.
+  the `presets` list, `default_standing_pose`, body stabilization
+  (`posture_node.stabilization`) and the `bachata` routine block (a preset
+  with `bachata: true` dances instead of walking). Shared by sim, web teleop
+  and the Pico firmware.
 - `config/gestures.yaml` — gestures: keyframed leg + body motions played from
   a stand. Leg keyframes as joint angles in geometry.yaml's joint sense, body
   keyframes as pose offsets, written for the default preset's stance. An optional

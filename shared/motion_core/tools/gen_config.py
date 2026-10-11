@@ -324,6 +324,10 @@ def presets(gait: dict, geometry: dict):
                     f"tuning.yaml presets.{pid}: missing {knob} — every preset "
                     f"carries its own bundle, there is no global fallback")
             row[knob] = entry[knob]
+        bachata = entry.get("bachata", False)
+        if not isinstance(bachata, bool):
+            raise ValueError(f"tuning.yaml presets.{pid}.bachata must be a bool")
+        row["bachata"] = bachata
         out.append(row)
 
     default_id = str(gait["default_preset"])
@@ -869,6 +873,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  float max_swing_time;")
     w("  float step_height;")
     w("  float swing_phase_margin;")
+    w("  // A non-zero command plays the bachata routine instead of walking.")
+    w("  bool bachata;")
     w("};")
     w("")
     w(f"inline constexpr std::array<PresetConfig, {len(preset_rows)}> kPresets "
@@ -888,6 +894,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         w("        }}},")
         for knob in PRESET_KNOBS:
             w(f"        {fl(row[knob])},  // {knob}")
+        w(f"        {'true' if row['bachata'] else 'false'},  // bachata")
         w("    },")
     w("}};")
     w("")
@@ -955,6 +962,12 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("quadruped_shift_time", gait["quadruped"]["shift_time"]),
         ("pair_fold_swing_time", gait["pair_fold"]["swing_time"]),
         ("pair_fold_dwell_time", gait["pair_fold"]["dwell_time"]),
+        ("bachata_beat_time", gait["bachata"]["beat_time"]),
+        ("bachata_stride", gait["bachata"]["stride"]),
+        ("bachata_planted_share", gait["bachata"]["planted_share"]),
+        ("bachata_sway_y", gait["bachata"]["sway_y"]),
+        ("bachata_sway_z", gait["bachata"]["sway_z"]),
+        ("bachata_sway_roll", math.radians(gait["bachata"]["sway_roll_deg"])),
     ]
     for fname, _ in fields:
         w(f"  float {fname};")

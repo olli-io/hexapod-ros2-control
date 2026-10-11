@@ -427,6 +427,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
       spec.max_swing_time = f(entry["max_swing_time"]);
       spec.step_height = f(entry["step_height"]);
       spec.swing_phase_margin = f(entry["swing_phase_margin"]);
+      spec.bachata = entry["bachata"] ? entry["bachata"].as<bool>() : false;
       if (spec.id == default_id) {
         cfg.default_preset = cfg.presets.size();
       }
@@ -506,6 +507,13 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   e.quadruped_shift_time = f(g["quadruped"]["shift_time"]);
   e.pair_fold_swing_time = f(g["pair_fold"]["swing_time"]);
   e.pair_fold_dwell_time = f(g["pair_fold"]["dwell_time"]);
+  e.bachata_beat_time = f(g["bachata"]["beat_time"]);
+  e.bachata_stride = f(g["bachata"]["stride"]);
+  e.bachata_planted_share = f(g["bachata"]["planted_share"]);
+  e.bachata_sway_y = f(g["bachata"]["sway_y"]);
+  e.bachata_sway_z = f(g["bachata"]["sway_z"]);
+  e.bachata_sway_roll = static_cast<float>(
+      g["bachata"]["sway_roll_deg"].as<double>() * M_PI / 180.0);
   e.support_shift_lead = f(p["support_shift_lead"]);
 
   // Velocity caps, per preset and per registered gait. There is no angular knob

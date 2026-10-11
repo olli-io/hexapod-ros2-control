@@ -67,6 +67,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     EXPECT_NEAR(lp.max_swing_time, bp.max_swing_time, kTol) << lp.id;
     EXPECT_NEAR(lp.step_height, bp.step_height, kTol) << lp.id;
     EXPECT_NEAR(lp.swing_phase_margin, bp.swing_phase_margin, kTol) << lp.id;
+    EXPECT_EQ(lp.bachata, bp.bachata) << lp.id;
     EXPECT_NEAR(lp.standing.body_height, bp.standing.body_height, kTol) << lp.id;
     // Includes the placeholder row a parked-pair preset carries.
     for (std::size_t gi = 0; gi < hexa::kNumLegGroups; ++gi) {
@@ -110,6 +111,12 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(le.quadruped_shift_time, be.quadruped_shift_time, kTol);
   EXPECT_NEAR(le.pair_fold_swing_time, be.pair_fold_swing_time, kTol);
   EXPECT_NEAR(le.pair_fold_dwell_time, be.pair_fold_dwell_time, kTol);
+  EXPECT_NEAR(le.bachata_beat_time, be.bachata_beat_time, kTol);
+  EXPECT_NEAR(le.bachata_stride, be.bachata_stride, kTol);
+  EXPECT_NEAR(le.bachata_planted_share, be.bachata_planted_share, kTol);
+  EXPECT_NEAR(le.bachata_sway_y, be.bachata_sway_y, kTol);
+  EXPECT_NEAR(le.bachata_sway_z, be.bachata_sway_z, kTol);
+  EXPECT_NEAR(le.bachata_sway_roll, be.bachata_sway_roll, kTol);
   EXPECT_NEAR(le.support_shift_lead, be.support_shift_lead, kTol);
 
   // angular_max is derived from the solved stance, not read from YAML; this is

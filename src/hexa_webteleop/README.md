@@ -83,8 +83,8 @@ mode buttons become an inline "Take control" prompt.
 ### Mode
 
 Everything picked by name is picked here: **presets** — `NORMAL` (everyday),
-`FAST` (low, long-striding), `OFFROAD` (tall, high clearance) and `QUAD` (four
-corners, middle pair parked) — plus the **gaits** and **animations**, under a row
+`FAST` (low, long-striding), `OFFROAD` (tall, high clearance), `BACHATA` (any
+stick plays the strafe dance) and `QUAD` (four corners, middle pair parked) — plus the **gaits** and **animations**, under a row
 of the three modes. Three grids of tiles, two abreast in portrait and one row
 each in landscape.
 

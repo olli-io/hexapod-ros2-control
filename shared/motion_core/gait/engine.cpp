@@ -637,6 +637,8 @@ void Engine::enter_fault() {
   pending_fold_ = false;
   gesture_.reset();
   pending_gesture_.reset();
+  dance_halves_.reset();
+  dance_body_ = BodyPose{};
   pending_strategy_name_.reset();
   // Recovery is the cold start, on six legs; an armed change means nothing here.
   pending_preset_.reset();
@@ -907,6 +909,15 @@ std::map<std::string, LegOutput> Engine::update(
   }
 
   if (state_ == EngineState::STAND) {
+    if (!cmd_zero && presets_[preset_].bachata) {
+      pending_preset_.reset();
+      pending_strategy_name_.reset();
+      pending_gesture_.reset();
+      dance_t_ = 0.0f;
+      dance_halves_.reset();
+      state_ = EngineState::DANCE;
+      return tick_dance(dt, cmd_zero);
+    }
     if (!cmd_zero) {
       // Walking takes priority over a pending reseat / fold, and drops an armed
       // preset change outright: banking it would turn "refused while walking"
@@ -997,6 +1008,9 @@ std::map<std::string, LegOutput> Engine::update(
   }
   if (state_ == EngineState::GESTURE) {
     return tick_gesture(dt);
+  }
+  if (state_ == EngineState::DANCE) {
+    return tick_dance(dt, cmd_zero);
   }
 
   if (state_ == EngineState::ENGAGING) {
@@ -1487,6 +1501,47 @@ std::map<std::string, LegOutput> Engine::tick_gesture(float dt) {
   return out;
 }
 
+BachataParams Engine::bachata_params() const {
+  BachataParams p;
+  p.beat_time = config_.bachata_beat_time;
+  p.stride = config_.bachata_stride;
+  p.planted_share = config_.bachata_planted_share;
+  p.sway_y = config_.bachata_sway_y;
+  p.sway_z = config_.bachata_sway_z;
+  p.sway_roll = config_.bachata_sway_roll;
+  p.swing = config_.swing_profile();
+  return p;
+}
+
+std::map<std::string, LegOutput> Engine::tick_dance(float dt, bool cmd_zero) {
+  const BachataParams p = bachata_params();
+  dance_t_ += dt;
+  if (cmd_zero && !dance_halves_.has_value()) {
+    const float half_time =
+        static_cast<float>(kBachataBeatsPerHalf) * p.beat_time;
+    dance_halves_ =
+        std::max(1, static_cast<int>(std::ceil(dance_t_ / half_time)));
+  }
+  BachataFrame frame = bachata_sample(dance_t_, dance_halves_, p, nominal_);
+  dance_body_ = frame.body;
+  capture_state(frame.legs);
+  if (dance_halves_.has_value() &&
+      dance_t_ >= bachata_duration(*dance_halves_, p)) {
+    state_ = EngineState::STAND;
+    dance_body_ = BodyPose{};
+    last_targets_ = nominal_;
+    for (const auto& n : LEG_NAMES) last_stance_[n] = true;
+  }
+  return frame.legs;
+}
+
+std::optional<BodyPose> Engine::dance() const {
+  if (state_ != EngineState::DANCE) {
+    return std::nullopt;
+  }
+  return dance_body_;
+}
+
 std::map<std::string, LegOutput> Engine::tick_engagement(
     float dt, std::pair<float, float> v_body_xy, float omega_z) {
   auto out = engagement_->update(dt, v_body_xy, omega_z);
@@ -1538,6 +1593,12 @@ EngineConfig engine_config_from_config() {
   cfg.reseat_plane_ramp_time = c.reseat_plane_ramp_time;
   cfg.pair_fold_swing_time = c.pair_fold_swing_time;
   cfg.pair_fold_dwell_time = c.pair_fold_dwell_time;
+  cfg.bachata_beat_time = c.bachata_beat_time;
+  cfg.bachata_stride = c.bachata_stride;
+  cfg.bachata_planted_share = c.bachata_planted_share;
+  cfg.bachata_sway_y = c.bachata_sway_y;
+  cfg.bachata_sway_z = c.bachata_sway_z;
+  cfg.bachata_sway_roll = c.bachata_sway_roll;
   return cfg;
 }
 
@@ -1677,6 +1738,7 @@ PresetSetup solve_preset(
   out.max_swing_time = spec.max_swing_time;
   out.step_height = spec.step_height;
   out.swing_phase_margin = spec.swing_phase_margin;
+  out.bachata = spec.bachata;
   return out;
 }
 
@@ -1791,6 +1853,7 @@ std::vector<PresetSpec> preset_specs_from_config() {
     spec.max_swing_time = p.max_swing_time;
     spec.step_height = p.step_height;
     spec.swing_phase_margin = p.swing_phase_margin;
+    spec.bachata = p.bachata;
     out.push_back(std::move(spec));
   }
   return out;
@@ -1899,6 +1962,7 @@ std::string state_value(EngineState s) {
     case EngineState::FOLDING_PAIR: return "folding_pair";
     case EngineState::UNFOLDING_PAIR: return "unfolding_pair";
     case EngineState::GESTURE: return "gesture";
+    case EngineState::DANCE: return "dance";
     case EngineState::FAULT: return "fault";
   }
   return "unknown";
@@ -1917,6 +1981,7 @@ std::string state_name(EngineState s) {
     case EngineState::FOLDING_PAIR: return "FOLDING_PAIR";
     case EngineState::UNFOLDING_PAIR: return "UNFOLDING_PAIR";
     case EngineState::GESTURE: return "GESTURE";
+    case EngineState::DANCE: return "DANCE";
     case EngineState::FAULT: return "FAULT";
   }
   return "UNKNOWN";

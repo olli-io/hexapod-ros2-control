@@ -105,6 +105,7 @@ add_executable(hexa_pico
     ${HEXA_SHARED}/gait/limits.cpp
     ${HEXA_SHARED}/gait/engine.cpp
     ${HEXA_SHARED}/gait/reversal.cpp
+    ${HEXA_SHARED}/gait/bachata.cpp
     ${HEXA_SHARED}/gesture/keyframe.cpp   # keyframed gestures from a stand
     ${HEXA_SHARED}/gesture/player.cpp
     ${HEXA_SHARED}/gesture/validate.cpp

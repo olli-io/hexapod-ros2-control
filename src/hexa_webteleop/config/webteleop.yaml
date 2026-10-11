@@ -59,6 +59,11 @@ presets:
       # Only reached when the gait in force does not survive the switch — a
       # preset change keeps the walk where the new preset offers it.
       default_gait: tripod
+    - id: bachata
+      label: BACHATA
+      sub: strafe dance, any stick plays it
+      gait_cycle: [tripod]
+      default_gait: tripod
     - id: quad
       label: QUAD
       sub: four corners, middle pair parked

@@ -428,11 +428,17 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
                                                    jo.pose_pitch, jo.pose_yaw};
   posture_.set_user_pose(user_pose);
   // A stick pushed mid-gesture is ignored by the engine, and must not fade the
-  // gait animations in under a gesture either.
+  // gait animations in under a gesture either. The bachata routine's stick only
+  // keeps it going, and its sway is its own.
   const bool walking = cmd_is_walking(cmd_x, cmd_y, cmd_z) &&
-                       st != hexa::gait::EngineState::GESTURE;
+                       st != hexa::gait::EngineState::GESTURE &&
+                       st != hexa::gait::EngineState::DANCE;
   const std::optional<hexa::gesture::GestureProgress> gesture =
       engine_->gesture();
+  const std::optional<hexa::posture::BodyPose> body_term =
+      gesture.has_value()
+          ? std::optional<hexa::posture::BodyPose>(gesture->body)
+          : engine_->dance();
   const bool imu_fresh = in.imu_valid && in.now_us >= in.imu_stamp_us &&
                          in.now_us - in.imu_stamp_us <= imu_timeout_us_;
   const bool preset_listed =
@@ -447,9 +453,7 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
   const hexa::posture::BodyPose body_pose = posture_.update(
       out, engine_->master_phase(), walking, st, engine_->strategy_name(),
       engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f,
-      gesture.has_value() ? std::optional<hexa::posture::BodyPose>(gesture->body)
-                          : std::nullopt,
-      engine_->swing_end());
+      body_term, engine_->swing_end());
 
   r.unreachable = compose_gait(out, body_pose);
   // What compose_gait actually applied, for next tick's neutral-pose check.

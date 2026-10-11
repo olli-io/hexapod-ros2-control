@@ -246,65 +246,67 @@ gestures:
       - home: { t: 2.2 }
   # Peacock: the body walks its weight forward onto the front and middle
   # pairs and tips nose down, then the rear pair rises straight up, coxas
-  # swept a little toward the back. Both raised legs then wave in alternation,
-  # coxa sweep plus femur nod, while the body wiggles its rear: yaw and y are
-  # paired in opposite sign so the body pivots about the nose and the rear
-  # end does the swinging, and a roll of the yaw's sign leans into it. x sits
-  # at posture_node's pose_limit_x; pitch 19.4 is the most the roll/pitch disc
-  # clamp (pose_limit_pitch) allows with the 5 degree roll on top.
+  # splayed out to 55 degrees off the body centreline. Both raised legs then
+  # wave in alternation, coxa sweep plus femur nod, the knee curling as each
+  # leg nods up, while the body wiggles its rear: yaw and y are paired in
+  # opposite sign so the body pivots about the nose and the rear end does the
+  # swinging. The roll leans the raised pair against the sway to keep the CoM
+  # central. x sits at posture_node's pose_limit_x; pitch 19.4 is the most
+  # the roll/pitch disc clamp (pose_limit_pitch) allows with the 5 degree
+  # roll on top.
   - id: peacock
     legs:
       - start: { t: 0.5 }
       - pose:
           t: 1.2
           transition: ease
-          l_rear: { coxa_deg: 12, femur_deg: 90, tibia_deg: 150 }
-          r_rear: { coxa_deg: -12, femur_deg: 90, tibia_deg: 150 }
+          l_rear: { coxa_deg: -25, femur_deg: 90, tibia_deg: 135 }
+          r_rear: { coxa_deg: 25, femur_deg: 90, tibia_deg: 135 }
       - pose:
           t: 1.36
           transition: continuous
-          l_rear: { coxa_deg: 16, femur_deg: 93, tibia_deg: 150 }
-          r_rear: { coxa_deg: -8, femur_deg: 87, tibia_deg: 150 }
+          l_rear: { coxa_deg: -21, femur_deg: 93, tibia_deg: 120 }
+          r_rear: { coxa_deg: 29, femur_deg: 87, tibia_deg: 150 }
       - pose:
           t: 1.52
           transition: continuous
-          l_rear: { coxa_deg: 8, femur_deg: 87, tibia_deg: 150 }
-          r_rear: { coxa_deg: -16, femur_deg: 93, tibia_deg: 150 }
+          l_rear: { coxa_deg: -29, femur_deg: 87, tibia_deg: 150 }
+          r_rear: { coxa_deg: 21, femur_deg: 93, tibia_deg: 120 }
       - pose:
           t: 1.68
           transition: continuous
-          l_rear: { coxa_deg: 16, femur_deg: 93, tibia_deg: 150 }
-          r_rear: { coxa_deg: -8, femur_deg: 87, tibia_deg: 150 }
+          l_rear: { coxa_deg: -21, femur_deg: 93, tibia_deg: 120 }
+          r_rear: { coxa_deg: 29, femur_deg: 87, tibia_deg: 150 }
       - pose:
           t: 1.84
           transition: continuous
-          l_rear: { coxa_deg: 8, femur_deg: 87, tibia_deg: 150 }
-          r_rear: { coxa_deg: -16, femur_deg: 93, tibia_deg: 150 }
+          l_rear: { coxa_deg: -29, femur_deg: 87, tibia_deg: 150 }
+          r_rear: { coxa_deg: 21, femur_deg: 93, tibia_deg: 120 }
       - pose:
           t: 2
           transition: continuous
-          l_rear: { coxa_deg: 16, femur_deg: 93, tibia_deg: 150 }
-          r_rear: { coxa_deg: -8, femur_deg: 87, tibia_deg: 150 }
+          l_rear: { coxa_deg: -21, femur_deg: 93, tibia_deg: 120 }
+          r_rear: { coxa_deg: 29, femur_deg: 87, tibia_deg: 150 }
       - pose:
           t: 2.16
           transition: continuous
-          l_rear: { coxa_deg: 8, femur_deg: 87, tibia_deg: 150 }
-          r_rear: { coxa_deg: -16, femur_deg: 93, tibia_deg: 150 }
+          l_rear: { coxa_deg: -29, femur_deg: 87, tibia_deg: 150 }
+          r_rear: { coxa_deg: 21, femur_deg: 93, tibia_deg: 120 }
       - pose:
           t: 2.32
           transition: continuous
-          l_rear: { coxa_deg: 16, femur_deg: 93, tibia_deg: 150 }
-          r_rear: { coxa_deg: -8, femur_deg: 87, tibia_deg: 150 }
+          l_rear: { coxa_deg: -21, femur_deg: 93, tibia_deg: 120 }
+          r_rear: { coxa_deg: 29, femur_deg: 87, tibia_deg: 150 }
       - pose:
           t: 2.48
           transition: continuous
-          l_rear: { coxa_deg: 8, femur_deg: 87, tibia_deg: 150 }
-          r_rear: { coxa_deg: -16, femur_deg: 93, tibia_deg: 150 }
+          l_rear: { coxa_deg: -29, femur_deg: 87, tibia_deg: 150 }
+          r_rear: { coxa_deg: 21, femur_deg: 93, tibia_deg: 120 }
       - pose:
           t: 2.68
           transition: ease
-          l_rear: { coxa_deg: 12, femur_deg: 90, tibia_deg: 150 }
-          r_rear: { coxa_deg: -12, femur_deg: 90, tibia_deg: 150 }
+          l_rear: { coxa_deg: -25, femur_deg: 90, tibia_deg: 135 }
+          r_rear: { coxa_deg: 25, femur_deg: 90, tibia_deg: 135 }
       - home: { t: 3.4 }
     body:
       - pose: { t: 0.5, x: 0.05, pitch_deg: 19.4, transition: ease }
@@ -314,7 +316,7 @@ gestures:
             t: 1.36,
             x: 0.05,
             y: -0.004,
-            roll_deg: 5,
+            roll_deg: -5,
             pitch_deg: 19.4,
             yaw_deg: 2,
             transition: continuous,
@@ -324,7 +326,7 @@ gestures:
             t: 1.52,
             x: 0.05,
             y: 0.004,
-            roll_deg: -5,
+            roll_deg: 5,
             pitch_deg: 19.4,
             yaw_deg: -2,
             transition: continuous,
@@ -334,7 +336,7 @@ gestures:
             t: 1.68,
             x: 0.05,
             y: -0.004,
-            roll_deg: 5,
+            roll_deg: -5,
             pitch_deg: 19.4,
             yaw_deg: 2,
             transition: continuous,
@@ -344,7 +346,7 @@ gestures:
             t: 1.84,
             x: 0.05,
             y: 0.004,
-            roll_deg: -5,
+            roll_deg: 5,
             pitch_deg: 19.4,
             yaw_deg: -2,
             transition: continuous,
@@ -354,7 +356,7 @@ gestures:
             t: 2,
             x: 0.05,
             y: -0.004,
-            roll_deg: 5,
+            roll_deg: -5,
             pitch_deg: 19.4,
             yaw_deg: 2,
             transition: continuous,
@@ -364,7 +366,7 @@ gestures:
             t: 2.16,
             x: 0.05,
             y: 0.004,
-            roll_deg: -5,
+            roll_deg: 5,
             pitch_deg: 19.4,
             yaw_deg: -2,
             transition: continuous,
@@ -374,7 +376,7 @@ gestures:
             t: 2.32,
             x: 0.05,
             y: -0.004,
-            roll_deg: 5,
+            roll_deg: -5,
             pitch_deg: 19.4,
             yaw_deg: 2,
             transition: continuous,
@@ -384,7 +386,7 @@ gestures:
             t: 2.48,
             x: 0.05,
             y: 0.004,
-            roll_deg: -5,
+            roll_deg: 5,
             pitch_deg: 19.4,
             yaw_deg: -2,
             transition: continuous,

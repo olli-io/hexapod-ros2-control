@@ -115,6 +115,7 @@ set(FW_GAIT_SOURCES
   ${GAIT_SRC}/limits.cpp
   ${GAIT_SRC}/engine.cpp
   ${GAIT_SRC}/reversal.cpp
+  ${GAIT_SRC}/bachata.cpp
   ${FW_SRC}/gesture/keyframe.cpp
   ${FW_SRC}/gesture/player.cpp
   ${FW_SRC}/gesture/validate.cpp
@@ -165,6 +166,10 @@ hexa_host_test(test_gesture test_gesture.cpp ${FW_GAIT_SOURCES}
   ${FW_SRC}/posture/animations.cpp
   ${FW_SRC}/posture/posture.cpp)
 target_compile_options(test_gesture PRIVATE -fexceptions)
+
+# The bachata routine's pure sample and the engine's DANCE state.
+hexa_host_test(test_bachata test_bachata.cpp ${FW_GAIT_SOURCES})
+target_compile_options(test_bachata PRIVATE -fexceptions)
 
 # ── Control velocity shaping (part 07) ──
 # BodyVelocityLimiter slew + Control scale-to-envelope / reset wiring. Float

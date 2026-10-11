@@ -261,6 +261,8 @@ bool posture_active(gait::EngineState state) {
     // The body stands on planted feet the whole way, and the gesture's own body
     // track is a posture term.
     case E::GESTURE:
+    // Six planted feet at each end of every beat, and the sway is a body term.
+    case E::DANCE:
       return true;
     case E::FOLDED:
     case E::INITIALIZE:
