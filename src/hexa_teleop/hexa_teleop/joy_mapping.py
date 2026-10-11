@@ -991,7 +991,8 @@ def map_functions(
     # millimetres. Height is exempt by construction: it rides
     # ``height_current``, not the record.
     # A second press over a saved pose reverts it instead: record toggles.
-    if record_edge and state.mode == POSTURE and pose_saved(state):
+    # The revert also runs in gait mode, where the saved pose bleeds through.
+    if record_edge and state.mode in (POSTURE, GAIT) and pose_saved(state):
         state.reverting = True
     elif record_edge and state.mode == POSTURE and not state.quadruped:
         # A new baseline trumps any in-flight revert.

@@ -12,7 +12,7 @@ const TRANSITION_LABELS: Record<string, string> = {
   folding: "Folding down",
 };
 
-// The belly, over the Mode and Gesture views: neither can do anything until
+// The belly, over the Control, Mode and Gesture views: none can do anything until
 // the robot stands, so instead of a view of dimmed tiles the operator meets
 // the one press that is live — STAND. Drawn inside the view rather than
 // portalled, so the tab bar beside it stays reachable; the stand itself is the

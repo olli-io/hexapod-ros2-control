@@ -555,6 +555,21 @@ def test_the_posture_slot_records_and_leaves_the_leg_set_alone(cfg):
     assert state.recorded_x != 0.0
 
 
+def test_record_in_gait_mode_resets_a_saved_pose(cfg):
+    loaded_cfg, _, _ = cfg
+    from hexa_teleop.joy_mapping import JoyState, pose_saved
+    state = JoyState(mode=POSTURE)
+    map_web((0.0, 0.5), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
+    map_web((0.0, 0.5), (0, 0), _held("record"), STICKS, loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held("gait_mode"), STICKS, loaded_cfg, state, DT)
+    map_web((0, 0), (0, 0), _held(), STICKS, loaded_cfg, state, DT)
+    assert state.mode == GAIT
+    assert pose_saved(state)
+    map_web((0, 0), (0, 0), _held("record"), STICKS, loaded_cfg, state, DT)
+    assert state.reverting
+
+
 def test_quadruped_mode_held_into_gait_mode_does_not_fire(cfg):
     """No spurious stand when the function arrives already held.
 

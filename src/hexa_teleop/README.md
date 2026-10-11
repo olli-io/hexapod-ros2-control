@@ -52,9 +52,9 @@ teleop knobs; see [Values owned elsewhere](#values-owned-elsewhere).
 
 Both sticks can drive; neither is a subset of the other.
 
-- **right stick** — full 2D translation: `drive_x` (forward/back) on Y,
+- **left stick** — full 2D translation: `drive_x` (forward/back) on Y,
   `drive_y` (strafe) on X.
-- **left stick** — arcade drive: `drive_yaw` (turn) on X, `drive_x_aux` on Y.
+- **right stick** — arcade drive: `drive_yaw` (turn) on X, `drive_x_aux` on Y.
 
 The two forward sources are summed and clipped, so either stick alone reaches
 full speed, holding both does not double it, and opposing them cancels.
@@ -101,7 +101,8 @@ the robot walks.
 - **Record** folds `yaw_current` into `recorded_yaw` in posture mode alone. An
   init edge over a held yaw arms the revert rather than standing.
 - **Record toggles.** A press over a saved pose arms the same revert init does,
-  instead of adding to it; the press after that records again.
+  instead of adding to it; the press after that records again. The revert
+  also runs in gait mode, where the saved pose bleeds through; recording does not.
 
 ## Presets
 

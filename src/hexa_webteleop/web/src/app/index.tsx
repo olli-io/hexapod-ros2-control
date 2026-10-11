@@ -18,6 +18,7 @@ import StatusBar from "../components/StatusBar";
 import ModeStack, { MODES, modeLocked } from "../components/ModeStack";
 import HoldButton from "../components/HoldButton";
 import ControlPrompt from "../components/ControlPrompt";
+import StateOverlay from "../components/StateOverlay";
 import {
   animationAvailable,
   controllerActive,
@@ -45,7 +46,9 @@ const KEEPALIVE_MS = 50;
 // state machine adds to the pose it publishes, but animation mode offers none
 // of them, and no record either: the animation is driving the body there, so a
 // pose trimmed or saved underneath it is a pose fighting the animation. Gait
-// mode offers no record for the reason `hexa_teleop`'s README gives. Yaw and
+// mode offers record only as a reset, while a saved pose bleeds through — see
+// `corners` below; it records nothing there, for the reason `hexa_teleop`'s
+// README gives. Yaw and
 // wiggle being absent in animation mode also keeps the two teleops offering the
 // same functions, since that is the one mode where the gamepad leaves
 // `l1`/`r1`/`l2`/`r2` unbound. Height is the one place the two teleops now
@@ -77,6 +80,12 @@ const CORNERS: Record<Mode, readonly ActionName[]> = {
   ],
   animation: ["init", "animation_prev", "animation_next"],
 };
+
+function corners(mode: Mode, poseSaved: boolean): readonly ActionName[] {
+  return mode === "gait" && poseSaved
+    ? [...CORNERS.gait, "record"]
+    : CORNERS[mode];
+}
 
 // The home route, and the way back from every other one.
 export const Route = createFileRoute("/")({ component: ControlRoute });
@@ -136,7 +145,8 @@ function ControlRoute() {
     };
   }, [send]);
 
-  // ... and on a mode change, or a controller taking /cmd_vel. A mode change
+  // ... and on a mode change, a saved pose clearing, or a controller taking
+  // /cmd_vel. A mode change
   // swaps the corners the modes do not share —
   // animation mode keeps stand and takes the height pair off for its own. A
   // button the new mode does not offer is gone from the screen, so its release
@@ -154,7 +164,7 @@ function ControlRoute() {
           ...MODES.filter((m) => !modeLocked(m.mode, animationAllowed)).map(
             (m) => m.action,
           ),
-          ...CORNERS[state.mode],
+          ...corners(state.mode, state.poseSaved),
         ]);
     const stale = [...pressedRef.current].filter((a) => !offered.has(a));
     if (stale.length === 0) return;
@@ -164,7 +174,7 @@ function ControlRoute() {
       return next;
     });
     for (const action of stale) send({ type: "action", action, pressed: false });
-  }, [state.mode, animationAllowed, controlled, send]);
+  }, [state.mode, state.poseSaved, animationAllowed, controlled, send]);
 
   // Safety stop: if the page is hidden, reset joys to zero
   useEffect(() => {
@@ -223,7 +233,8 @@ function ControlRoute() {
   // stand — so it needs no leg-set qualifier, and the four-legged stand is the
   // Mode view's QUAD preset rather than a second button here. The Mode view's
   // own button is the same press under the same two words.
-  const offers = (action: ActionName) => CORNERS[state.mode].includes(action);
+  const offers = (action: ActionName) =>
+    corners(state.mode, state.poseSaved).includes(action);
 
   // The right stick turns the robot in gait and animation mode and tilts the
   // body in posture mode; the left stick moves in every mode.
@@ -239,7 +250,12 @@ function ControlRoute() {
       >
         {offers("yaw_left") && corner("yaw_left", "tl", <RotateCcw />)}
         {offers("record") &&
-          corner("record", "tr", "Save\npose", state.poseSaved ? "saved" : "")}
+          corner(
+            "record",
+            "tr",
+            state.mode === "gait" ? "Reset\npose" : "Save\npose",
+            state.poseSaved ? "saved" : "",
+          )}
         {offers("wiggle_left") &&
           corner("wiggle_left", "bl", <ArrowBigLeftDash />)}
         {/* Red in both states: on the belly it is the one press that has to
@@ -290,6 +306,8 @@ function ControlRoute() {
         {offers("animation_next") &&
           corner("animation_next", "br", "Next\nAnim")}
       </Joystick>
+
+      <StateOverlay />
     </div>
   );
 }

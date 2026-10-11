@@ -51,9 +51,14 @@ function NetworkRoute() {
           <button
             id="controller-toggle"
             className="panel-btn"
-            onClick={() =>
-              send({ type: webOwns ? "release_control" : "request_control" })
-            }
+            onClick={() => {
+              if (webOwns) {
+                send({ type: "release_control" });
+              } else {
+                send({ type: "request_control" });
+                void navigate({ to: VIEW_PATHS.control });
+              }
+            }}
           >
             {/* The icon names where control is going, not what is pressing the
                 button: the pad on the way out, this device on the way in. */}

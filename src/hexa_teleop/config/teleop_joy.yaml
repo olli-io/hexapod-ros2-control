@@ -117,12 +117,12 @@ gait:
     # button — `start` stands the robot up on six legs, this on four, and
     # off the belly either one folds it. Bound here only, so it does
     # nothing in the other two modes, where `select` keeps its base
-    # binding (`record`, itself inert outside posture mode).
+    # binding (`record`, which records in posture mode alone).
     select: quadruped_mode
-    left_stick_x: drive_yaw
-    left_stick_y: drive_x_aux
-    right_stick_x: drive_y
-    right_stick_y: drive_x
+    right_stick_x: drive_yaw
+    right_stick_y: drive_x_aux
+    left_stick_x: drive_y
+    left_stick_y: drive_x
 
 posture:
   bindings:
@@ -134,10 +134,10 @@ posture:
     dpad_down: height_down
     dpad_left: gait_prev
     dpad_right: gait_next
-    left_stick_x: tilt_roll
-    left_stick_y: tilt_pitch
-    right_stick_x: pose_y
-    right_stick_y: pose_x
+    right_stick_x: tilt_roll
+    right_stick_y: tilt_pitch
+    left_stick_x: pose_y
+    left_stick_y: pose_x
 
   height:
     rate_m_per_s: 0.05
@@ -152,10 +152,10 @@ animation:
     dpad_down: height_down
     dpad_left: animation_prev
     dpad_right: animation_next
-    left_stick_x: drive_yaw
-    left_stick_y: drive_x_aux
-    right_stick_x: drive_y
-    right_stick_y: drive_x
+    right_stick_x: drive_yaw
+    right_stick_y: drive_x_aux
+    left_stick_x: drive_y
+    left_stick_y: drive_x
 
 # When enabled, the gamepad publishes only while it owns /teleop/owner
 # (default owner "gamepad"). Disable for standalone gamepad.

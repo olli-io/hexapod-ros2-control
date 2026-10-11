@@ -59,11 +59,12 @@ takes it off the screen.
 - Left circle, bottom-right — **stand**; top-right — **save pose** (`record`).
   Save pose turns green while a pose is saved; the next press reverts it. The
   node reports the flag on the `pose_saved` message.
+  In gait mode the same corner shows **reset pose** while a pose is saved.
 - Animation mode instead spends the right circle's two bottom corners on
   animation prev / next.
 
 Stand is offered in every mode, height/yaw/wiggle in gait and posture, record in
-posture alone. Stand is a plain stand, not a leg-set one: from the belly it
+posture, and in gait while a pose is saved (reset only). Stand is a plain stand, not a leg-set one: from the belly it
 stands on the last six-leg preset applied, off the belly it folds. It is **red
 in both states**.
 
@@ -98,8 +99,8 @@ drop the socket. Both sticks re-centre on the way in.
   tap, never the latched `/cmd_preset`, which keeps a refused id forever. Before
   the first report no tile is lit. During the ~2 s change the `STAND` overlay
   covers the view with a *Switching preset* spinner and the target's label.
-- **On the belly a whole-view `STAND` overlay covers the Mode and Gesture
-  views**, one button and nothing else, since neither view can do anything until
+- **On the belly a whole-view `STAND` overlay covers the Control, Mode
+  and Gesture views**, one button and nothing else, since no view can do anything until
   the robot stands and the stand itself chooses the leg set. It asks for the
   same `init` function the Control view's stand does, then carries the
   *Standing up* spinner in the button's place. A preset change in flight takes
@@ -222,7 +223,7 @@ departed one's inputs.
 
 Both nodes run at once; only one publishes **drive** commands. A single latched
 `/teleop/owner` (`gamepad` default, or `web`) arbitrates, and only the web node
-writes it. **Take control** → `request_control` → owner `web`, and the gamepad
+writes it. **Take control** → `request_control` → owner `web` (the Network view then opens Control), and the gamepad
 goes dormant; releasing (toggle, disconnect, or `POST /control/release`) resumes
 it. The logic is `hexa_teleop.teleop_arbitration` — pure, shared, unit-tested.
 

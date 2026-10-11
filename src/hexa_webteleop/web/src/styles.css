@@ -265,7 +265,7 @@ html, body {
   position: relative;
 }
 
-/* The belly, over the Mode and Gesture views: one press across the whole view.
+/* The belly, over the Control, Mode and Gesture views: one press across the whole view.
    Absolute within the view rather than a fixed portal like the dialogs, so the
    tab bar stays reachable — the belly is a state the operator may sit in for a
    while, and the other tabs still have work to do there. */
@@ -284,8 +284,16 @@ html, body {
    over it (`.panel-btn:active` below). */
 #stand-overlay-btn {
   margin-top: 0;
+  gap: 1.2rem;
+  padding: clamp(0.8rem, 2.8vh, 1.4rem) 2.8rem;
   border-color: var(--red);
   color: var(--red);
+  font-size: 1.8rem;
+}
+
+#stand-overlay-btn svg {
+  width: 36px;
+  height: 36px;
 }
 
 /* The ladder, in the button's place: the dialogs' spinner over its word. */
@@ -821,6 +829,7 @@ html, body {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  position: relative;
 }
 
 @media (orientation: landscape) {
