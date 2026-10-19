@@ -44,7 +44,7 @@ again over `bias_duration_s`. Keep the robot still.
 VCC to 3V3, GND to GND, SDA to GPIO2 (pin 3), SCL to GPIO3 (pin 5), AD0 to GND
 for address `0x68`. Enable `dtparam=i2c_arm=on` and
 `dtparam=i2c_arm_baudrate=400000`; see
-[`docs/robot-environment.md`](../../docs/robot-environment.md).
+[`docs/pi-setup.md`](../../docs/pi-setup.md).
 
 ## Tests
 

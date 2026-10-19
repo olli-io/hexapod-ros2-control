@@ -66,7 +66,7 @@ class BuzzerNode(Node):
             # Not fatal: a robot with no buzzer must still bring the stack up.
             self.get_logger().error(
                 f"buzzer disabled — {exc} The mount comes from "
-                f"docker-compose.buzzer.yaml; see docs/robot-environment.md §15."
+                f"docker-compose.buzzer.yaml; see docs/pi-setup.md."
             )
             self._queue: queue.Queue | None = None
             self._worker: threading.Thread | None = None

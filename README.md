@@ -14,6 +14,10 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 - Pimoroni Servo 2040 — drives the 18 servos.
 - Optional: 256×64 SH1122 OLED on SPI for the eyes.
 
+## Set up the Raspberry Pi
+
+Follow [`docs/pi-setup.md`](docs/pi-setup.md).
+
 ## Deploy the robot
 
 Install the latest released image on the Pi:
@@ -53,6 +57,10 @@ Starting the robot energizes the servos. Two ways:
    - `./hexa robot down` — stop safely.
    - `./hexa robot restart` — stop, then start. Reads the config again.
 
+> [!NOTE]
+> Bluetooth controller pairing is currently done over ssh (unresolved bug with microswitch pairing):
+> [`docs/bluetooth-controller-setup.md`](docs/bluetooth-controller-setup.md).
+
 ## Run the sim
 
 Needs Docker, docker-compose, and an X server on `$DISPLAY`. No native ROS 1.
@@ -91,6 +99,7 @@ The config files are in `src/hexa_description/config/`.
 ## Documentation
 
 - [`docs/sim-environment.md`](docs/sim-environment.md) — sim container.
+- [`docs/pi-setup.md`](docs/pi-setup.md) — Pi OS, wiring, overlays.
 - [`docs/robot-environment.md`](docs/robot-environment.md) — robot container.
 - [`docs/configuration.md`](docs/configuration.md) — every tunable lives in YAML under `config/`. Edit, `./hexa sim build`, relaunch.
 - [`docs/architecture.md`](docs/architecture.md) — design principles, packages, dependency direction.

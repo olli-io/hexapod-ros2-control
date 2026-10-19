@@ -252,7 +252,7 @@ cmd_up() {
     else
         echo ">> No PWM block at ${pwm_dev} — the buzzer stays silent."
         echo "   Fit one? Add dtoverlay=pwm-2chan,pin=12,func=4,pin2=13,func2=4"
-        echo "   to /boot/firmware/config.txt and reboot (docs/robot-environment.md §15)."
+        echo "   to /boot/firmware/config.txt and reboot (docs/pi-setup.md)."
     fi
     compose up -d || die "compose up failed"
     # The container energizes itself on launch (robot.launch.py brings HexaSystem

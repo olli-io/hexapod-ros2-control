@@ -204,7 +204,7 @@ check_hardware() {
         case "${PI_MODEL}" in
             *"Raspberry Pi 5"*) echo "         add dtparam=uart0=on to /boot/firmware/config.txt and reboot" ;;
             *"Raspberry Pi 4"*) echo "         sudo raspi-config nonint do_serial_hw 0 && sudo raspi-config nonint do_serial_cons 1" ;;
-            *)                  echo "         enable the header UART on GPIO14/15 (docs/robot-environment.md §1)" ;;
+            *)                  echo "         enable the header UART on GPIO14/15 (docs/pi-setup.md)" ;;
         esac
     fi
 
@@ -478,7 +478,7 @@ load_image() {
 # --------------------------------------------------------------------- config
 
 # Fill this Pi's own values into a freshly seeded .env — the GIDs and device
-# names §3 of docs/robot-environment.md otherwise ask you to look up by hand.
+# names §2 of docs/robot-environment.md otherwise ask you to look up by hand.
 # Only keys we actually resolved are touched; the sample's default stands for
 # the rest.
 seed_env() {
@@ -640,7 +640,7 @@ main() {
         cat <<EOF
 
 ${C_BOLD}Next${C_OFF}
-  1. Check ${INSTALL_DIR}/.env against this Pi (docs/robot-environment.md §3).
+  1. Check ${INSTALL_DIR}/.env against this Pi (docs/robot-environment.md §2).
   2. cd ${INSTALL_DIR} && ./hexa robot up
 EOF
         [ "${running}" = "running" ] && cat <<EOF

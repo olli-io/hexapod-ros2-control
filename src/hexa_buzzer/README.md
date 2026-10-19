@@ -49,8 +49,8 @@ different block or pin.
 
 The container gets the PWM tree as a writable bind mount at `/pwm`
 (`docker-compose.buzzer.yaml`). `scripts/robot.sh` adds the overlay only when
-the host has the tree. Wiring and `config.txt` overlay: `docs/robot-environment.md`
-(Hardware, §1).
+the host has the tree. Wiring and `config.txt` overlay: `docs/pi-setup.md`
+(Hardware, Prepare the Pi).
 
 `BUZZER_PWM` in `.env` overrides the source directory. The default is the Pi 5's
 RP1 PWM0; a Pi 4 has the block at a different platform address. Channel 0 is

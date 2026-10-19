@@ -248,7 +248,7 @@ then.
 
 ## Hotspot
 
-In hotspot mode (`docs/robot-environment.md` §6) the AP resolves every hostname
+In hotspot mode (`docs/robot-environment.md` §5) the AP resolves every hostname
 to the robot, and the server sends any path that is not one of its files to the
 controller page. The DHCP lease advertises the controller URL (RFC 8910) and
 connectivity probes go unanswered, so a joining phone opens the controller as a

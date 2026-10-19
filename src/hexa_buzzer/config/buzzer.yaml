@@ -6,7 +6,7 @@ buzzer_node:
 
     # Buzzer + -> GPIO12 (BCM), - -> GND, ~100 ohm in series if too loud. Not
     # GPIO18, which a bare `dtoverlay=pwm-2chan` takes (I2S PCM_CLK, SPI1 CE0) —
-    # see docs/robot-environment.md. The container sees the block through a bind
+    # see docs/pi-setup.md. The container sees the block through a bind
     # mount; the host units pass their own --pwm-dev.
     pwm_dev: /pwm
     # GPIO12 is channel 0 of the Pi 5's RP1 PWM0, and of a Pi 4's pwmchip0.

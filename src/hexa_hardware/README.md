@@ -17,7 +17,7 @@ Config is read from `hexa_description`'s share directory: `hardware.yaml`
 with `<param name="config_path">` / `<param name="calibration_path">`. On the
 robot, `~/hexa-robot/servo_calibration.yaml` is bind-mounted over the image's
 copy, so calibration is per-robot and survives image updates
-(`docs/robot-environment.md` §3).
+(`docs/robot-environment.md` §2).
 
 ## Seams
 
