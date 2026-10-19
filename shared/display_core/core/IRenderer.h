@@ -15,9 +15,11 @@ struct RenderState {
     // gaze changes to a slow easeInOutSine drift of this duration, for
     // continuous motion (breathing) instead of a glance.
     uint32_t      gazeEaseMs = 0;
-    // Scale on the gaze offset target (1 = full kGazeMax travel). Face
-    // animations use this to shrink their drift amplitude.
-    float         gazeScale = 1.0f;
+    // Per-axis scale on the gaze offset target (1 = full kGazeMax travel).
+    // Face animations shrink their drift amplitude with it; pose mode sets it
+    // in proportion to the body tilt.
+    float         gazeScaleX = 1.0f;
+    float         gazeScaleY = 1.0f;
 };
 
 class IRenderer {

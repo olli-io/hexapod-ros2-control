@@ -33,7 +33,7 @@ namespace face {
 namespace {
 
 // Everything core0 hands core1. POD — no std::string crosses cores. Published as
-// a whole struct once per policy tick: gaze_ease_ms/gaze_scale are set together
+// a whole struct once per policy tick: gaze_ease_ms/gaze_scale_* are set together
 // with gaze from the same animation, so a torn read would drive a correct gaze
 // at the wrong drift speed.
 // Text is a fixed array, not a std::string: core1 copies the payload out under
@@ -44,7 +44,8 @@ struct FaceRenderTarget {
     Expression    expr = Expression::NEUTRAL;
     GazeDirection gaze = GazeDirection::CENTER;
     std::uint32_t gaze_ease_ms = 0;
-    float         gaze_scale = 1.0f;
+    float         gaze_scale_x = 1.0f;
+    float         gaze_scale_y = 1.0f;
     bool          blink_pending = false;
     char          text[kTextMax] = {};  // empty = eyes
 };
@@ -202,6 +203,7 @@ void tick(const FaceState& state, double now_s) {
     // busy outranks the gait state, so the boot face is the spinner until the
     // first pair — no link-ever gate needed.
     in.busy = state.busy;
+    in.gesture = std::string(state.gesture);
 
     g_last_target = hexa::display::decide(in, g_cfg, g_last_target);
     const hexa::display::FaceAnimation* animation = g_runner->update(
@@ -215,12 +217,14 @@ void tick(const FaceState& state, double now_s) {
     if (animation == nullptr) {
         g_staging.gaze = g_last_target.gaze;
         g_staging.gaze_ease_ms = 0;
-        g_staging.gaze_scale = 1.0f;
+        g_staging.gaze_scale_x = g_last_target.gaze_scale_x;
+        g_staging.gaze_scale_y = g_last_target.gaze_scale_y;
     } else {
         g_runner->run(*animation, now_s);
         g_staging.gaze_ease_ms =
             static_cast<std::uint32_t>(animation->gaze_ease_s() * 1000.0);
-        g_staging.gaze_scale = static_cast<float>(animation->gaze_scale());
+        g_staging.gaze_scale_x = static_cast<float>(animation->gaze_scale());
+        g_staging.gaze_scale_y = g_staging.gaze_scale_x;
     }
 
     publish(g_staging);
@@ -260,7 +264,8 @@ void render_tick() {
     // speaks in the robot's left/right, the panel in its own.
     screen.gaze = hexa::display::toScreenGaze(t.gaze);
     screen.gazeEaseMs = t.gaze_ease_ms;
-    screen.gazeScale = t.gaze_scale;
+    screen.gazeScaleX = t.gaze_scale_x;
+    screen.gazeScaleY = t.gaze_scale_y;
 
     const eyes::AnimFrame f =
         g_anim->update(screen, static_cast<uint32_t>(time_us_64() / 1000));

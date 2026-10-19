@@ -11,21 +11,23 @@
 //      wait on the spinners, nothing else may take the panel — not even a flat
 //      pack, which they can read off the info screen anyway.
 //   2. battery critical -> DEAD, gaze CENTER, unconditional.
-//   3. battery warning -> SLEEPY, but only when idle (cmd_vel ~ 0, gait state in
+//   3. a running gesture with an `expression:` in gestures.yaml -> that
+//      expression.
+//   4. battery warning -> SLEEPY, but only when idle (cmd_vel ~ 0, gait state in
 //      the idle set, no animation mode) — a warning must not mask the face
 //      mid-walk.
-//   4. animation mode non-empty -> the configured animation expression (WOOZY).
-//   5. pose mode with a posture stick held -> that stick's expression: tilt
+//   5. animation mode non-empty -> the configured animation expression (WOOZY).
+//   6. pose mode with a posture stick held -> that stick's expression: tilt
 //      (left stick) HAPPY, shift (right stick) LOVE, both ANGRY. Sticks at
 //      rest fall through to the map below, which stands the face at NEUTRAL.
-//   6. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
+//   7. gait-state map from YAML; unknown state -> NEUTRAL; no /gait/state
 //      heard yet -> SLEEPY (the robot boots folded and asleep).
 //
-// Gaze: the vertical axis always follows body pitch (nose up -> UP) — driving
-// forward or backward never moves the gaze. The horizontal axis tracks cmd_vel
-// during gait-active motion (left -> LEFT per REP-103) and body yaw/roll in pose
-// mode; DEAD always forces CENTER. Axis quantization uses enter/exit hysteresis
-// so the gaze doesn't chatter at the deadband edge.
+// Gaze: travel is proportional to the input. Gait-active, the vertical axis
+// follows body pitch (nose up -> UP) and the horizontal axis tracks cmd_vel
+// (left -> LEFT per REP-103); driving forward or backward never moves the gaze.
+// In pose mode the eyes counter body pitch, yaw and roll. Busy and battery
+// critical force CENTER.
 //
 // The only stateful piece is BatteryMonitor (hold time + voltage hysteresis),
 // kept separate from decide() and deterministic given a (voltage, t) sequence.
@@ -60,6 +62,7 @@ struct PolicyInputs {
     double vy = 0.0;
     double wz = 0.0;
     std::string animation_mode;
+    std::string gesture;  // running gesture id (/gait/gesture), "" = none
     // Body-pose offset (/body/pose). x/y are the body shift, roll/pitch the
     // body tilt — in pose mode the right stick drives the first pair and the
     // left stick the second, which is all the policy needs to tell them apart.
@@ -80,6 +83,8 @@ struct PolicyInputs {
 
 struct PolicyConfig {
     std::unordered_map<std::string, Expression> expression_map;
+    // Gesture id -> expression; a gesture without an entry keeps the face.
+    std::unordered_map<std::string, Expression> gesture_expression_map;
     Expression animation_expression = Expression::WOOZY;
     Expression battery_warning_expression = Expression::SLEEPY;
     Expression battery_critical_expression = Expression::DEAD;
@@ -91,22 +96,26 @@ struct PolicyConfig {
     double posture_tilt_threshold_rad = 0.03;
     double posture_shift_threshold_m = 0.005;
     double posture_exit_ratio = 0.6;
-    double gaze_deadband = 0.15;
-    double gaze_exit_ratio = 0.6;
     double gaze_wz_weight = 1.0;
     double gaze_vy_max = 0.1;
     double gaze_wz_max = 0.5;
     double pose_pitch_threshold_rad = 0.08;
     double pose_tilt_threshold_rad = 0.08;
+    double pose_pitch_full_rad = 0.26;
+    double pose_tilt_full_rad = 0.35;
     double idling_start_delay_s = 4.0;
 };
 
 struct DisplayTarget {
     Expression expression = Expression::NEUTRAL;
     GazeDirection gaze = GazeDirection::CENTER;
+    // Per-axis gaze travel in [0, 1], robot frame. Below 1 only in pose mode.
+    float gaze_scale_x = 1.0f;
+    float gaze_scale_y = 1.0f;
 
     bool operator==(const DisplayTarget& o) const {
-        return expression == o.expression && gaze == o.gaze;
+        return expression == o.expression && gaze == o.gaze &&
+               gaze_scale_x == o.gaze_scale_x && gaze_scale_y == o.gaze_scale_y;
     }
     bool operator!=(const DisplayTarget& o) const { return !(*this == o); }
 };
@@ -132,12 +141,6 @@ struct PostureSticks {
 
 PostureSticks postureSticks(const PolicyInputs& inputs, const PolicyConfig& config,
                             PostureSticks prev);
-
-// Sign-quantize value to {-1, 0, +1} with hysteresis. Enters a direction at
-// |value| >= deadband; once entered, holds it until |value| drops below
-// deadband * exit_ratio. A sign flip past the full deadband switches directly
-// without passing through 0.
-int quantizeAxis(double value, int prev_sign, double deadband, double exit_ratio);
 
 DisplayTarget decide(const PolicyInputs& inputs, const PolicyConfig& config,
                      const DisplayTarget& prev);

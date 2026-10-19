@@ -28,6 +28,8 @@ inline hexa::display::PolicyConfig buildPolicyConfig() {
     hexa::display::PolicyConfig c;
     for (const auto& e : hexa::config::kFaceExpressionMap)
         c.expression_map[std::string(e.state)] = exprOrNeutral(e.expression);
+    for (const auto& e : hexa::config::kFaceGestureExpressions)
+        c.gesture_expression_map[std::string(e.gesture)] = exprOrNeutral(e.expression);
     c.animation_expression = exprOrNeutral(hexa::config::kFaceAnimationExpression);
     c.battery_warning_expression =
         exprOrNeutral(hexa::config::kFaceBatteryWarningExpression);
@@ -48,13 +50,13 @@ inline hexa::display::PolicyConfig buildPolicyConfig() {
     c.posture_exit_ratio = po.exit_ratio;
 
     const auto& gz = hexa::config::kFaceGaze;
-    c.gaze_deadband = gz.gaze_deadband;
-    c.gaze_exit_ratio = gz.gaze_exit_ratio;
     c.gaze_wz_weight = gz.gaze_wz_weight;
     c.gaze_vy_max = gz.gaze_vy_max;
     c.gaze_wz_max = gz.gaze_wz_max;
     c.pose_pitch_threshold_rad = gz.pose_pitch_threshold_rad;
     c.pose_tilt_threshold_rad = gz.pose_tilt_threshold_rad;
+    c.pose_pitch_full_rad = gz.pose_pitch_full_rad;
+    c.pose_tilt_full_rad = gz.pose_tilt_full_rad;
     c.idling_start_delay_s = gz.idling_start_delay_s;
     return c;
 }

@@ -93,13 +93,15 @@ float EyeAnim::updateBlink(const RenderState& state, uint32_t nowMs) {
 }
 
 void EyeAnim::updateGaze(const RenderState& state, uint32_t nowMs) {
-    if (state.gaze != _shownGaze) {
+    const Dir d     = kGazeDir[static_cast<size_t>(state.gaze)];
+    const float toX = static_cast<float>(d.dx * kGazeMaxX) * state.gazeScaleX;
+    const float toY = static_cast<float>(d.dy * kGazeMaxY) * state.gazeScaleY;
+    if (state.gaze != _shownGaze || toX != _gazeToX || toY != _gazeToY) {
         _shownGaze   = state.gaze;
-        const Dir d  = kGazeDir[static_cast<size_t>(state.gaze)];
         _gazeFromX   = _gx;
         _gazeFromY   = _gy;
-        _gazeToX     = static_cast<float>(d.dx * kGazeMaxX) * state.gazeScale;
-        _gazeToY     = static_cast<float>(d.dy * kGazeMaxY) * state.gazeScale;
+        _gazeToX     = toX;
+        _gazeToY     = toY;
         _gazeStartMs = nowMs;
     }
     const uint32_t lookMs = state.gazeEaseMs ? state.gazeEaseMs : kLookMs;

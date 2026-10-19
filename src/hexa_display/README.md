@@ -17,11 +17,13 @@ Pure sink — nothing imports it or subscribes to it. Headless in sim;
 ## Behavior
 
 - **Expression precedence** — busy (`scanning`) > battery-critical (`dead`) >
-  battery-warning (`sleepy`, idle only) > animation mode (`woozy`) > posture
+  running gesture's `expression` (`gestures.yaml`, optional) > battery-warning (`sleepy`, idle only) > animation mode (`woozy`) > posture
   sticks (pose mode: tilt `happy`, shift `love`, both `angry`) > per-gait-state
   map. Battery thresholds ship disabled (0.0).
-- **Gaze** — vertical follows pitch; horizontal follows `cmd_vel` when walking,
-  body tilt in pose mode. Named in the robot frame; `toScreenGaze` converts to
+- **Gaze** — travel is proportional to the input, full at the `*_max` /
+  `*_full_rad` values. When walking, vertical follows pitch and horizontal
+  follows `cmd_vel`. In pose mode, the eyes move opposite to body pitch, yaw
+  and roll; body x/y shift does not move them. Named in the robot frame; `toScreenGaze` converts to
   panel coordinates at the renderer seam.
 - **`scanning`** — the only animated expression (spinners on the neutral ring).
   Worn while `/bluetooth/scanning` or `/display/busy` is true; the node ORs them
@@ -40,7 +42,7 @@ Pure sink — nothing imports it or subscribes to it. Headless in sim;
 
 ## Topics (subscribes only)
 
-- `/gait/state` (`String`), `/cmd_vel` (`Twist`), `/body/pose`
+- `/gait/state` and `/gait/gesture` (`String`, transient_local), `/cmd_vel` (`Twist`), `/body/pose`
   (`hexa_interfaces/BodyPose`), `/animation/mode` (`String`, transient_local),
   `/display/text` (`String`, transient_local), `/bluetooth/scanning` and
   `/display/busy` (`Bool`, transient_local), battery
@@ -52,8 +54,10 @@ Pure sink — nothing imports it or subscribes to it. Headless in sim;
 ## Configuration
 
 All knobs in `config/display.yaml`: expression map (keys every `/gait/state`
-value), thresholds, gaze deadband/hysteresis, idling delay, SPI/GPIO pins,
-render rate, headless switch. Expression names are validated at startup.
+value), thresholds, gaze full-travel scales, idling delay, SPI/GPIO pins,
+render rate, headless switch. Per-gesture expressions come from
+`hexa_description/config/gestures.yaml`. Expression names are validated at
+startup.
 
 ## Sim
 

@@ -45,6 +45,17 @@ TEST(FaceConfig, GaitStateExpressionMapTransfers) {
     }
 }
 
+TEST(FaceConfig, GestureExpressionMapTransfers) {
+    const auto c = buildPolicyConfig();
+    ASSERT_EQ(c.gesture_expression_map.size(), cfg::kFaceGestureExpressions.size());
+    for (const auto& e : cfg::kFaceGestureExpressions) {
+        expectParses(e.expression);
+        const auto it = c.gesture_expression_map.find(std::string(e.gesture));
+        ASSERT_NE(it, c.gesture_expression_map.end()) << "missing gesture: " << e.gesture;
+        EXPECT_EQ(it->second, face::exprOrNeutral(e.expression)) << e.gesture;
+    }
+}
+
 TEST(FaceConfig, StandaloneExpressionsTransfer) {
     const auto c = buildPolicyConfig();
     EXPECT_EQ(c.animation_expression,
@@ -84,8 +95,6 @@ TEST(FaceConfig, PostureExpressionsAndThresholdsTransfer) {
 TEST(FaceConfig, EveryGazeFieldTransfers) {
     const auto c = buildPolicyConfig();
     const auto& g = cfg::kFaceGaze;
-    EXPECT_DOUBLE_EQ(c.gaze_deadband, static_cast<double>(g.gaze_deadband));
-    EXPECT_DOUBLE_EQ(c.gaze_exit_ratio, static_cast<double>(g.gaze_exit_ratio));
     EXPECT_DOUBLE_EQ(c.gaze_wz_weight, static_cast<double>(g.gaze_wz_weight));
     EXPECT_DOUBLE_EQ(c.gaze_vy_max, static_cast<double>(g.gaze_vy_max));
     EXPECT_DOUBLE_EQ(c.gaze_wz_max, static_cast<double>(g.gaze_wz_max));
@@ -93,6 +102,8 @@ TEST(FaceConfig, EveryGazeFieldTransfers) {
                      static_cast<double>(g.pose_pitch_threshold_rad));
     EXPECT_DOUBLE_EQ(c.pose_tilt_threshold_rad,
                      static_cast<double>(g.pose_tilt_threshold_rad));
+    EXPECT_DOUBLE_EQ(c.pose_pitch_full_rad, static_cast<double>(g.pose_pitch_full_rad));
+    EXPECT_DOUBLE_EQ(c.pose_tilt_full_rad, static_cast<double>(g.pose_tilt_full_rad));
     EXPECT_DOUBLE_EQ(c.idling_start_delay_s,
                      static_cast<double>(g.idling_start_delay_s));
 }

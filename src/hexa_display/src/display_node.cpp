@@ -22,6 +22,7 @@
 #include <string>
 
 #include <geometry_msgs/msg/twist.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <hexa_interfaces/msg/body_pose.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -37,6 +38,7 @@
 #include "u8g2.h"
 
 #include "expression_policy.hpp"
+#include "gesture_expressions.hpp"
 #include "face_animation.hpp"
 #include "face_animation_runner.hpp"
 #include "frame_compare.hpp"
@@ -133,13 +135,13 @@ public:
         declare_parameter<double>("battery_critical_v", 0.0);
         declare_parameter<double>("battery_hysteresis_v", 0.3);
         declare_parameter<double>("battery_hold_s", 3.0);
-        declare_parameter<double>("gaze_deadband", 0.15);
-        declare_parameter<double>("gaze_exit_ratio", 0.6);
         declare_parameter<double>("gaze_wz_weight", 1.0);
         declare_parameter<double>("gaze_vy_max", 0.1);
         declare_parameter<double>("gaze_wz_max", 0.5);
         declare_parameter<double>("pose_pitch_threshold_rad", 0.08);
         declare_parameter<double>("pose_tilt_threshold_rad", 0.08);
+        declare_parameter<double>("pose_pitch_full_rad", 0.26);
+        declare_parameter<double>("pose_tilt_full_rad", 0.35);
         declare_parameter<double>("idling_start_delay_s", 4.0);
 
         // Fail fast on expression-name typos in the YAML.
@@ -159,14 +161,17 @@ public:
         _config.posture_shift_threshold_m =
             get_parameter("posture_shift_threshold_m").as_double();
         _config.posture_exit_ratio = get_parameter("posture_exit_ratio").as_double();
-        _config.gaze_deadband = get_parameter("gaze_deadband").as_double();
-        _config.gaze_exit_ratio = get_parameter("gaze_exit_ratio").as_double();
         _config.gaze_wz_weight = get_parameter("gaze_wz_weight").as_double();
         _config.gaze_vy_max = get_parameter("gaze_vy_max").as_double();
         _config.gaze_wz_max = get_parameter("gaze_wz_max").as_double();
         _config.pose_pitch_threshold_rad = get_parameter("pose_pitch_threshold_rad").as_double();
         _config.pose_tilt_threshold_rad = get_parameter("pose_tilt_threshold_rad").as_double();
+        _config.pose_pitch_full_rad = get_parameter("pose_pitch_full_rad").as_double();
+        _config.pose_tilt_full_rad = get_parameter("pose_tilt_full_rad").as_double();
         _config.idling_start_delay_s = get_parameter("idling_start_delay_s").as_double();
+        _config.gesture_expression_map = hexa::display::loadGestureExpressions(
+            ament_index_cpp::get_package_share_directory("hexa_description") +
+            "/config/gestures.yaml");
 
         _battery = BatteryMonitor(
             get_parameter("battery_warning_v").as_double(),
@@ -200,6 +205,9 @@ public:
         _sub_gait = create_subscription<std_msgs::msg::String>(
             "/gait/state", gait_qos,
             [this](const std_msgs::msg::String& m) { _gait_state = m.data; });
+        _sub_gesture = create_subscription<std_msgs::msg::String>(
+            "/gait/gesture", gait_qos,
+            [this](const std_msgs::msg::String& m) { _gesture = m.data; });
         _sub_vel = create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10,
             [this](const geometry_msgs::msg::Twist& m) { _cmd_vel = m; });
@@ -289,6 +297,7 @@ private:
         inputs.vy = _cmd_vel.linear.y;
         inputs.wz = _cmd_vel.angular.z;
         inputs.animation_mode = _animation_mode;
+        inputs.gesture = _gesture;
         inputs.x = _body_pose.x;
         inputs.y = _body_pose.y;
         inputs.roll = _body_pose.roll;
@@ -309,12 +318,14 @@ private:
         if (animation == nullptr) {
             _target.gaze = _last_target.gaze;
             _target.gazeEaseMs = 0;
-            _target.gazeScale = 1.0f;
+            _target.gazeScaleX = _last_target.gaze_scale_x;
+            _target.gazeScaleY = _last_target.gaze_scale_y;
         } else {
             _runner.run(*animation, now);
             _target.gazeEaseMs =
                 static_cast<uint32_t>(animation->gaze_ease_s() * 1000.0);
-            _target.gazeScale = static_cast<float>(animation->gaze_scale());
+            _target.gazeScaleX = static_cast<float>(animation->gaze_scale());
+            _target.gazeScaleY = _target.gazeScaleX;
         }
     }
 
@@ -371,6 +382,7 @@ private:
 
     // Cached inputs.
     std::optional<std::string> _gait_state;
+    std::string _gesture;
     geometry_msgs::msg::Twist _cmd_vel;
     hexa_interfaces::msg::BodyPose _body_pose;
     std::string _animation_mode;
@@ -380,6 +392,7 @@ private:
     bool _display_busy = false;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gait;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_gesture;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr _sub_vel;
     rclcpp::Subscription<hexa_interfaces::msg::BodyPose>::SharedPtr _sub_pose;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr _sub_animation;

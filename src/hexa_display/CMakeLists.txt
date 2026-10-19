@@ -16,6 +16,8 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(hexa_interfaces REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # The pure policy + the vendored eye core / u8g2 C core live in the shared
 # display core (shared/display_core), compiled directly here — the same source
@@ -55,6 +57,7 @@ add_library(hexa_display_support STATIC
   ${DISPLAY_CORE}/text_screen.cpp
   ${DISPLAY_CORE}/fonts/hexa_text_font.c
   src/Sh1122Panel.cpp
+  src/gesture_expressions.cpp
   ${CORE_SRCS}
 )
 target_include_directories(hexa_display_support PUBLIC
@@ -62,7 +65,7 @@ target_include_directories(hexa_display_support PUBLIC
   "${DISPLAY_CORE}"
   "${DISPLAY_CORE}/core"
 )
-target_link_libraries(hexa_display_support u8g2_core)
+target_link_libraries(hexa_display_support u8g2_core yaml-cpp)
 
 # ROS node executable: the only component that touches rclcpp. One process runs
 # the policy and rasterizes the OLED — the former hexa_display/hexa_face topic
@@ -75,6 +78,7 @@ ament_target_dependencies(display_node
   geometry_msgs
   sensor_msgs
   hexa_interfaces
+  ament_index_cpp
 )
 
 # Sim-only terminal eye emulator: a live mirror of display_node that rasterizes
@@ -90,6 +94,7 @@ ament_target_dependencies(face_sim
   geometry_msgs
   sensor_msgs
   hexa_interfaces
+  ament_index_cpp
 )
 
 install(TARGETS display_node face_sim DESTINATION lib/${PROJECT_NAME})
@@ -102,6 +107,7 @@ if(BUILD_TESTING)
   set(display_tests
     test_dirty_band
     test_expression_policy
+    test_gesture_expressions
     test_face_animation
     test_face_animation_runner
     test_face

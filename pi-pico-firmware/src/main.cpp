@@ -406,6 +406,7 @@ int main() {
                 // behind the button now, so an idle unpaired robot is not
                 // discoverable and must not wear the spinner.
                 fs.busy = bt_teleop::scanning();
+                fs.gesture = res.gesture;
                 if (res.has_animation_name && res.animation_accepted) {
                     fs.animation_event = true;
                     fs.animation_name = res.animation_name;

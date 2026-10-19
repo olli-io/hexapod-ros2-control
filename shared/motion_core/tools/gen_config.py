@@ -455,7 +455,7 @@ def gestures(doc, geometry: dict):
             raise ValueError(
                 f"gestures.yaml {gid}: return_time is gone; end every track "
                 f"with a home keyframe instead")
-        unknown = set(entry) - {"id", "legs", "body"}
+        unknown = set(entry) - {"id", "expression", "legs", "body"}
         if unknown:
             raise ValueError(f"gestures.yaml {gid}: unknown keys {sorted(unknown)}")
 
@@ -1601,6 +1601,24 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         w(f"    {{{cstr(st)}, {cstr(face_expr('expression_map.' + st))}}},")
     w("}};")
     w("")
+    w("// Gesture id -> expression (gestures.yaml `expression:`).")
+    w("struct FaceGestureExpression { std::string_view gesture; std::string_view expression; };")
+    gesture_exprs = []
+    for entry in (gestures_doc or {}).get("gestures") or []:
+        if "expression" not in entry:
+            continue
+        name = str(entry["expression"]).lower()
+        if name not in EXPRESSION_NAMES:
+            raise ValueError(
+                f"gestures.yaml {entry['id']}: unknown expression {name!r} "
+                f"(valid: {', '.join(sorted(EXPRESSION_NAMES))})")
+        gesture_exprs.append((str(entry["id"]), name))
+    w(f"inline constexpr std::array<FaceGestureExpression, {len(gesture_exprs)}> "
+      "kFaceGestureExpressions = {{")
+    for gid, name in gesture_exprs:
+        w(f"    {{{cstr(gid)}, {cstr(name)}}},")
+    w("}};")
+    w("")
     w(f"inline constexpr std::string_view kFaceAnimationExpression = "
       f"{cstr(face_expr('animation_expression'))};")
     w(f"inline constexpr std::string_view kFaceBatteryWarningExpression = "
@@ -1632,13 +1650,13 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("")
     w("struct FaceGazeConfig {")
     gaze_fields = [
-        ("gaze_deadband", dp["gaze_deadband"]),
-        ("gaze_exit_ratio", dp["gaze_exit_ratio"]),
         ("gaze_wz_weight", dp["gaze_wz_weight"]),
         ("gaze_vy_max", dp["gaze_vy_max"]),
         ("gaze_wz_max", dp["gaze_wz_max"]),
         ("pose_pitch_threshold_rad", dp["pose_pitch_threshold_rad"]),
         ("pose_tilt_threshold_rad", dp["pose_tilt_threshold_rad"]),
+        ("pose_pitch_full_rad", dp["pose_pitch_full_rad"]),
+        ("pose_tilt_full_rad", dp["pose_tilt_full_rad"]),
         ("idling_start_delay_s", dp["idling_start_delay_s"]),
     ]
     for fname, _ in gaze_fields:

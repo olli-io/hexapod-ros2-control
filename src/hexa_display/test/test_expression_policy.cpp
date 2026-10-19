@@ -57,6 +57,33 @@ TEST(ExpressionPolicy, AnimationModeWinsOverGaitState) {
     EXPECT_EQ(decide(in, CONFIG, kIdleTarget).expression, Expression::WOOZY);
 }
 
+TEST(ExpressionPolicy, RunningGestureWearsItsExpression) {
+    PolicyConfig config = CONFIG;
+    config.gesture_expression_map["wave"] = Expression::LOVE;
+
+    auto in = makeInputs();
+    in.gait_state = "gesture";
+    in.gesture = "wave";
+    EXPECT_EQ(decide(in, config, kIdleTarget).expression, Expression::LOVE);
+
+    in.animation_mode = "body_roll_3d";
+    EXPECT_EQ(decide(in, config, kIdleTarget).expression, Expression::LOVE);
+
+    in.gesture = "bow";  // no expression: the face carries on as before
+    EXPECT_EQ(decide(in, config, kIdleTarget).expression, config.animation_expression);
+}
+
+TEST(ExpressionPolicy, BusyAndCriticalOutrankAGestureExpression) {
+    PolicyConfig config = CONFIG;
+    config.gesture_expression_map["wave"] = Expression::LOVE;
+    auto in = makeInputs();
+    in.gesture = "wave";
+    in.battery_critical = true;
+    EXPECT_EQ(decide(in, config, kIdleTarget).expression, Expression::DEAD);
+    in.busy = true;
+    EXPECT_EQ(decide(in, config, kIdleTarget).expression, Expression::SCANNING);
+}
+
 TEST(ExpressionPolicy, BatteryWarningOnlyWhenIdle) {
     auto idle = makeInputs();
     idle.gait_state = "stand";
@@ -135,50 +162,58 @@ TEST(ExpressionPolicy, PitchDrivesVerticalGazeWhileGaitActive) {
     EXPECT_EQ(decide(down_left, CONFIG, kIdleTarget).gaze, GazeDirection::DOWN_LEFT);
 }
 
-TEST(ExpressionPolicy, GazeBelowDeadbandIsCenter) {
+TEST(ExpressionPolicy, GaitActiveGazeTravelIsProportionalToCmdVel) {
     auto in = makeInputs();
     in.gait_state = "gait";
-    in.vy = 0.001;
-    EXPECT_EQ(decide(in, CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
+    in.vy = CONFIG.gaze_vy_max * 0.3;
+    const DisplayTarget small = decide(in, CONFIG, kIdleTarget);
+    EXPECT_EQ(small.gaze, GazeDirection::LEFT);
+    EXPECT_FLOAT_EQ(small.gaze_scale_x, 0.3f);
+
+    in.vy = CONFIG.gaze_vy_max;
+    in.wz = CONFIG.gaze_wz_max;
+    EXPECT_FLOAT_EQ(decide(in, CONFIG, kIdleTarget).gaze_scale_x, 1.0f);
 }
 
-TEST(ExpressionPolicy, GazeHysteresisHoldsDirectionInExitBand) {
-    const DisplayTarget prev{Expression::HAPPY, GazeDirection::LEFT};
+TEST(ExpressionPolicy, PoseModeGazeCountersTilt) {
+    auto nose_up = makeInputs();
+    nose_up.pitch = -0.2;
+    EXPECT_EQ(decide(nose_up, CONFIG, kIdleTarget).gaze, GazeDirection::DOWN);
 
-    auto held = makeInputs();
-    held.gait_state = "gait";
-    held.vy = 0.012;  // under deadband 0.15 but above exit level 0.09 -> held
-    EXPECT_EQ(decide(held, CONFIG, prev).gaze, GazeDirection::LEFT);
+    auto nose_down = makeInputs();
+    nose_down.pitch = 0.2;
+    EXPECT_EQ(decide(nose_down, CONFIG, kIdleTarget).gaze, GazeDirection::UP);
 
-    auto fresh = makeInputs();
-    fresh.gait_state = "gait";
-    fresh.vy = 0.012;
-    EXPECT_EQ(decide(fresh, CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
+    auto yaw_left = makeInputs();
+    yaw_left.yaw = 0.2;
+    EXPECT_EQ(decide(yaw_left, CONFIG, kIdleTarget).gaze, GazeDirection::RIGHT);
 
-    auto released = makeInputs();
-    released.gait_state = "gait";
-    released.vy = 0.005;  // below exit level -> released
-    EXPECT_EQ(decide(released, CONFIG, prev).gaze, GazeDirection::CENTER);
-}
+    auto lean_right = makeInputs();
+    lean_right.roll = 0.2;
+    EXPECT_EQ(decide(lean_right, CONFIG, kIdleTarget).gaze, GazeDirection::LEFT);
 
-TEST(ExpressionPolicy, PoseModeGazeFollowsTilt) {
-    auto up = makeInputs();
-    up.pitch = -0.2;
-    EXPECT_EQ(decide(up, CONFIG, kIdleTarget).gaze, GazeDirection::UP);
-
-    auto down = makeInputs();
-    down.pitch = 0.2;
-    EXPECT_EQ(decide(down, CONFIG, kIdleTarget).gaze, GazeDirection::DOWN);
-
-    auto left = makeInputs();
-    left.yaw = 0.2;
-    EXPECT_EQ(decide(left, CONFIG, kIdleTarget).gaze, GazeDirection::LEFT);
-
-    auto right = makeInputs();
-    right.roll = 0.2;
-    EXPECT_EQ(decide(right, CONFIG, kIdleTarget).gaze, GazeDirection::RIGHT);
+    auto shifted = makeInputs();
+    shifted.x = 0.05;
+    shifted.y = 0.05;
+    EXPECT_EQ(decide(shifted, CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
 
     EXPECT_EQ(decide(makeInputs(), CONFIG, kIdleTarget).gaze, GazeDirection::CENTER);
+}
+
+TEST(ExpressionPolicy, PoseModeGazeTravelIsProportionalToTilt) {
+    auto in = makeInputs();
+    in.pitch = CONFIG.pose_pitch_full_rad * 0.5;
+    in.roll = CONFIG.pose_tilt_full_rad * 0.25;
+    const DisplayTarget half = decide(in, CONFIG, kIdleTarget);
+    EXPECT_EQ(half.gaze, GazeDirection::UP_LEFT);
+    EXPECT_FLOAT_EQ(half.gaze_scale_y, 0.5f);
+    EXPECT_FLOAT_EQ(half.gaze_scale_x, 0.25f);
+
+    in.pitch = CONFIG.pose_pitch_full_rad * 2.0;
+    in.roll = 0.0;
+    const DisplayTarget clamped = decide(in, CONFIG, kIdleTarget);
+    EXPECT_EQ(clamped.gaze, GazeDirection::UP);
+    EXPECT_FLOAT_EQ(clamped.gaze_scale_y, 1.0f);
 }
 
 // Pose mode is where the face answers the sticks: the gait state sits at
@@ -370,18 +405,6 @@ TEST(ExpressionPolicy, SelectedFaceAnimationsExistInRegistry) {
     auto b = selectFaceAnimation(makeInputs(), CONFIG);
     ASSERT_TRUE(b.has_value());
     EXPECT_NE(findFaceAnimation(*b), nullptr);
-}
-
-TEST(ExpressionPolicy, QuantizeAxisBasicAndHysteresis) {
-    EXPECT_EQ(quantizeAxis(0.2, 0, 0.15, 0.6), 1);
-    EXPECT_EQ(quantizeAxis(-0.2, 0, 0.15, 0.6), -1);
-    EXPECT_EQ(quantizeAxis(0.1, 0, 0.15, 0.6), 0);
-    // In the hold band only the matching previous sign is held.
-    EXPECT_EQ(quantizeAxis(0.1, 1, 0.15, 0.6), 1);
-    EXPECT_EQ(quantizeAxis(0.1, -1, 0.15, 0.6), 0);
-    EXPECT_EQ(quantizeAxis(0.05, 1, 0.15, 0.6), 0);
-    // Hard sign flip switches without passing through 0.
-    EXPECT_EQ(quantizeAxis(-0.2, 1, 0.15, 0.6), -1);
 }
 
 TEST(BatteryMonitorTest, DisabledByZeroThresholds) {

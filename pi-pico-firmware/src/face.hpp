@@ -20,7 +20,7 @@
 namespace face {
 
 // Mirrors the ROS face's topic inputs (/gait/state, /cmd_vel, /body/pose,
-// /animation/mode, battery), built each control tick from the pipeline result.
+// /animation/mode, /gait/gesture, battery), built each control tick from the pipeline result.
 struct FaceState {
     hexa::gait::EngineState engine_state = hexa::gait::EngineState::FOLDED;
     float vx = 0.0f, vy = 0.0f, wz = 0.0f;        // unshaped command (walking gaze)
@@ -32,6 +32,7 @@ struct FaceState {
     bool  busy = false;
     bool  animation_event = false;         // an accepted animation select this tick
     std::string_view animation_name = "";  // current mode ("" = none/default)
+    std::string_view gesture = "";         // running gesture id ("" = none)
 };
 
 // Core0, once at boot, before core1 launches.

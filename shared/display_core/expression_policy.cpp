@@ -1,5 +1,6 @@
 #include "expression_policy.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace hexa::display {
@@ -117,33 +118,49 @@ double norm(double value, double scale) {
     return scale > 0.0 ? value / scale : 0.0;
 }
 
-GazeDirection decideGaze(const PolicyInputs& in, const PolicyConfig& config,
-                         const DisplayTarget& prev) {
-    const auto [prev_v, prev_h] = signsFromGaze(prev.gaze);
-    // Vertical gaze follows body pitch in both modes — walking forward or
-    // backward must not move the gaze up or down. +pitch tips the nose down ->
-    // gaze DOWN, hence the negation.
-    const int sv = quantizeAxis(-in.pitch, prev_v, config.pose_pitch_threshold_rad,
-                                config.gaze_exit_ratio);
+struct Gaze {
+    GazeDirection direction = GazeDirection::CENTER;
+    float scale_x = 1.0f;
+    float scale_y = 1.0f;
+};
+
+DisplayTarget target(Expression expression, const Gaze& gaze) {
+    return {expression, gaze.direction, gaze.scale_x, gaze.scale_y};
+}
+
+int sign(double value) {
+    return (value > 0.0) - (value < 0.0);
+}
+
+Gaze decideGaze(const PolicyInputs& in, const PolicyConfig& config) {
+    double v = 0.0;
+    double h = 0.0;
     if (!cmdVelIsZero(in)) {
-        // gait-active: horizontal gaze leads the strafe/turn direction (+vy and
-        // +wz are both leftward).
-        const double horizontal = norm(in.vy, config.gaze_vy_max) +
-                                  config.gaze_wz_weight * norm(in.wz, config.gaze_wz_max);
-        const int sh = quantizeAxis(horizontal, prev_h, config.gaze_deadband,
-                                    config.gaze_exit_ratio);
-        return gazeFromSigns(sv, sh);
+        // gait-active: vertical gaze follows body pitch — walking forward or
+        // backward must not move the gaze up or down. +pitch tips the nose
+        // down -> gaze DOWN, hence the negation. Horizontal gaze leads the
+        // strafe/turn direction (+vy and +wz are both leftward).
+        v = norm(-in.pitch, config.pose_pitch_full_rad);
+        h = norm(in.vy, config.gaze_vy_max) +
+            config.gaze_wz_weight * norm(in.wz, config.gaze_wz_max);
+    } else {
+        // pose mode: the eyes counter the body rotation, so they hold on a
+        // point in the world. Nose down (+pitch) -> UP; nose left (+yaw) ->
+        // RIGHT; lean right (+roll) -> LEFT. Body x/y shift leaves the gaze
+        // centered.
+        v = norm(in.pitch, config.pose_pitch_full_rad);
+        h = norm(in.roll - in.yaw, config.pose_tilt_full_rad);
     }
-    // pose mode: horizontal gaze follows body tilt. +yaw turns the nose left ->
-    // LEFT; +roll leans the body right -> RIGHT, hence the minus sign.
-    const int sh = quantizeAxis(in.yaw - in.roll, prev_h, config.pose_tilt_threshold_rad,
-                                config.gaze_exit_ratio);
-    return gazeFromSigns(sv, sh);
+    // Travel is proportional to the input, full at |1|.
+    v = std::clamp(v, -1.0, 1.0);
+    h = std::clamp(h, -1.0, 1.0);
+    return {gazeFromSigns(sign(v), sign(h)), static_cast<float>(std::abs(h)),
+            static_cast<float>(std::abs(v))};
 }
 
 bool poseIsLevel(const PolicyInputs& in, const PolicyConfig& config) {
-    // Same axes and thresholds as the pose-mode gaze, so idling yields exactly
-    // where tilt-following gaze would take over.
+    // Same axes as the pose-mode gaze; idling yields once the tilt is clear of
+    // these thresholds.
     return std::abs(in.pitch) < config.pose_pitch_threshold_rad &&
            std::abs(in.yaw - in.roll) < config.pose_tilt_threshold_rad;
 }
@@ -163,18 +180,6 @@ GazeDirection toScreenGaze(GazeDirection gaze) {
     return gazeFromSigns(v, -h);
 }
 
-int quantizeAxis(double value, int prev_sign, double deadband, double exit_ratio) {
-    if (std::abs(value) >= deadband) {
-        return value > 0.0 ? 1 : -1;
-    }
-    if (prev_sign != 0 && std::abs(value) >= deadband * exit_ratio) {
-        if ((value > 0.0) == (prev_sign > 0)) {
-            return prev_sign;
-        }
-    }
-    return 0;
-}
-
 DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
                      const DisplayTarget& prev) {
     // Gaze CENTER: the spinners turn about the eye centers, and a gaze offset
@@ -185,12 +190,16 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
     if (in.battery_critical) {
         return {config.battery_critical_expression, GazeDirection::CENTER};
     }
-    const GazeDirection gaze = decideGaze(in, config, prev);
+    const Gaze gaze = decideGaze(in, config);
+    if (const auto it = config.gesture_expression_map.find(in.gesture);
+        it != config.gesture_expression_map.end()) {
+        return target(it->second, gaze);
+    }
     if (in.battery_low && isIdle(in)) {
-        return {config.battery_warning_expression, gaze};
+        return target(config.battery_warning_expression, gaze);
     }
     if (!in.animation_mode.empty()) {
-        return {config.animation_expression, gaze};
+        return target(config.animation_expression, gaze);
     }
     // Pose mode: the gait state sits at "stand" for as long as the operator
     // poses the body, so the face answers the sticks instead of the map — one
@@ -199,7 +208,7 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
         const PostureSticks sticks = postureSticks(
             in, config, sticksFromExpression(prev.expression, config));
         if (const auto expression = postureStickExpression(sticks, config)) {
-            return {*expression, gaze};
+            return target(*expression, gaze);
         }
     }
     // No /gait/state heard yet: the robot boots folded, so stay asleep until
@@ -212,7 +221,7 @@ DisplayTarget decide(const PolicyInputs& in, const PolicyConfig& config,
             expression = it->second;
         }
     }
-    return {expression, gaze};
+    return target(expression, gaze);
 }
 
 std::optional<std::string> selectFaceAnimation(const PolicyInputs& in,

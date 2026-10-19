@@ -41,15 +41,17 @@ display_node:
     battery_hysteresis_v: 0.3
     battery_hold_s: 3.0
 
-    # Horizontal gaze from cmd_vel: normalized by the *_max caps, then
-    # sign-quantized with enter/exit hysteresis.
-    gaze_deadband: 0.15
-    gaze_exit_ratio: 0.6
+    # Gaze travel is proportional to its input, full at these values.
+    # Walking: horizontal from cmd_vel, normalized by the *_max caps.
     gaze_wz_weight: 1.0
     gaze_vy_max: 0.1
     gaze_wz_max: 0.5
+    # Body pitch (both modes) and pose-mode roll - yaw. Teleop posture maxima:
+    # pitch 15 deg; roll 15 deg + yaw 20 deg.
+    pose_pitch_full_rad: 0.26
+    pose_tilt_full_rad: 0.35
 
-    # Gaze from body tilt.
+    # Pose mode counts as level for idling inside these.
     pose_pitch_threshold_rad: 0.08
     pose_tilt_threshold_rad: 0.08
 

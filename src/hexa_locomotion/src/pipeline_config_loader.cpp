@@ -177,7 +177,9 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
                                                       "tibia_deg"};
   static const std::set<std::string> kBodyPoseKeys = {
       "t", "transition", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"};
-  static const std::set<std::string> kGestureKeys = {"id", "legs", "body"};
+  // `expression` belongs to hexa_display; the motion ignores it.
+  static const std::set<std::string> kGestureKeys = {"id", "expression", "legs",
+                                                     "body"};
   const YAML::Node doc = YAML::LoadFile(path);
   const YAML::Node step_node = doc["stand_step"];
   if (!step_node || !step_node.IsMap() || step_node.size() != 2 ||
