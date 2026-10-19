@@ -10,7 +10,7 @@ ROS 2 control stack for a 6-leg / 18-DOF hexapod robot.
 ## Hardware
 
 - Raspberry Pi 5 (2 GB minimum), Raspberry Pi OS Lite — runs ROS 2.
-- Raspberry Pi Pico 2 W — runs the locomotion firmware. **WARNING: totally untested!**
+- Raspberry Pi Pico 2 W — alternative to the rPi **WARNING: totally untested!**
 - Pimoroni Servo 2040 — drives the 18 servos.
 - Optional: 256×64 SH1122 OLED on SPI for the eyes.
 
@@ -38,10 +38,10 @@ No rebuild.
 > own values. Set them in `servo_calibration.yaml`: for each pin, the pulse
 > (µs) at +45° and −45°. Updates keep this file.
 
-- **`servo_calibration.yaml`** — servo calibration for this robot.
-- **`tuning.yaml`** — gait, posture and teleop tuning. Each update replaces
+- **`~/hexa-robot/servo_calibration.yaml`** — servo calibration for this robot.
+- **`~/hexa-robot/tuning.yaml`** — gait, posture and teleop tuning. Each update replaces
   it and saves your copy as `tuning.yaml.bak`. To keep a change, copy it to
-  `src/hexa_description/config/tuning.yaml`.
+  `src/hexa_description/config/tuning.yaml` and build your the ros2 controller locally.
 
 ## Run the robot
 

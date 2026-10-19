@@ -8,7 +8,7 @@ an image tarball to `~/hexa-robot/` and runs as a long-lived container.
 
 ## Hardware
 
-- Raspberry Pi 4 or 5 with a 16 GB+ microSD card.
+- Raspberry Pi 4 or 5 with a 32 GB+ microSD card.
 - Pimoroni Servo 2040 on the header UART, wired crossed with a common ground:
   Pi GPIO14 (TXD) to Servo 2040 RX, Pi GPIO15 (RXD) to Servo 2040 TX, GND to GND.
 - Servo rail PSU behind the Servo 2040's relay.
@@ -16,23 +16,7 @@ an image tarball to `~/hexa-robot/` and runs as a long-lived container.
 - Optional: 256×64 SH1122 OLED face on SPI0.
 - Optional: two momentary push buttons. 
 - Optional: passive buzzer, + to GPIO12, − to GND. 
-- Optional: MPU6500 IMU on I²C1 for body stabilization: VCC to 3V3, GND to
-  GND, SDA to GPIO2 (pin 3), SCL to GPIO3 (pin 5), AD0 to GND (address 0x68).
-  Mount it level, with its axes along the body if you can; set `mount_rpy` in
-  `hexa_imu`'s `config/imu.yaml` if not.
-
-GPIO allocation. All numbers are **BCM GPIO**, not header pin positions:
-
-- **GPIO14, GPIO15** — UART0, the Servo 2040 link.
-- **GPIO8–GPIO11** — SPI0 for the face. CE0 is driven by the SPI controller
-  (`cs_line: -1`).
-- **GPIO24, GPIO25** — face DC / RST.
-- **GPIO12** — hardware PWM for the buzzer.
-- **GPIO5** (pin 29) — info button: battery and web teleop address; hold 3 s
-  for hotspot mode.
-- **GPIO6** (pin 31) — Bluetooth button: controller status; hold 3 s for a
-  pairing scan.
-- **GPIO2, GPIO3** — I²C1, the MPU6500 IMU.
+- Optional: MPU6500 IMU on I²C1 for body stabilization.
 
 ## 1. Prepare the Pi
 
