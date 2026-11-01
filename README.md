@@ -77,6 +77,10 @@ cd hexapod-ros1-control
 
 Drive with an Xbox-style controller, or open `{host-ip}:8079` for web teleop.
 
+![Gait mode controls](docs/controller/xbox_gait.png)
+
+Controls for all modes: [`docs/controller/README.md`](docs/controller/README.md).
+
 ## Build and deploy from source
 
 **Clone or Fork the repo and run these on a linux workstation:**

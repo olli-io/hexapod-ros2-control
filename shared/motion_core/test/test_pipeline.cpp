@@ -1337,15 +1337,24 @@ TEST(Gesture, TrackedLegStaysInsideItsKnotsAndEveryJointInsideItsLimits) {
       const auto& track = hexa::config::kGestureLegTracks[g.first_leg_track + ti];
       const std::size_t li = static_cast<std::size_t>(track.leg);
       const auto& spec = hexa::config::kLegSpecs[li];
-      std::array<float, 3> lo{}, hi{};
+      // An oscillation widens the range by its amplitude about the pose
+      // before it.
+      std::array<float, 3> lo{}, hi{}, base{};
       bool first = true;
       for (std::size_t k = 0; k < track.count; ++k) {
         const auto& key = hexa::config::kGestureLegKeyframes[track.first + k];
         if (key.hold || key.home || key.start) continue;
-        const std::array<float, 3> a = {key.coxa, key.femur, key.tibia};
+        if (key.oscillate) {
+          for (std::size_t j = 0; j < 3; ++j) {
+            lo[j] = std::min(lo[j], base[j] - std::fabs(key.amp[j]));
+            hi[j] = std::max(hi[j], base[j] + std::fabs(key.amp[j]));
+          }
+          continue;
+        }
+        base = {key.coxa, key.femur, key.tibia};
         for (std::size_t j = 0; j < 3; ++j) {
-          lo[j] = first ? a[j] : std::min(lo[j], a[j]);
-          hi[j] = first ? a[j] : std::max(hi[j], a[j]);
+          lo[j] = first ? base[j] : std::min(lo[j], base[j]);
+          hi[j] = first ? base[j] : std::max(hi[j], base[j]);
         }
         first = false;
       }

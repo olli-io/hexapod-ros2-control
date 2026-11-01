@@ -23,7 +23,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <span>
 #include <vector>
 
@@ -45,8 +44,8 @@ uart_inst_t* const kUart = uart0;
 constexpr uint kTxPin = 0;
 constexpr uint kRxPin = 1;
 // 921600 8N1 → ~11.1 µs/byte. A 18-servo SET frame is 3 + 36 = 39 bytes
-// (~0.43 ms); a battery GET round-trip adds the Servo 2040's reply latency.
-// Both sit far inside the 5 ms tick budget (measured in main.cpp).
+// (~0.43 ms). The aux GET pair is split across two ticks, so its reply latency
+// never lands inside one. The SET burst sits far inside the 5 ms budget.
 constexpr uint kBaud = 921600;
 
 // ── Chica protocol constants (from servo2040_protocol.hpp) ───────────────────
@@ -206,21 +205,26 @@ bool read_byte(std::uint8_t& b, std::uint64_t deadline_us) {
   return true;
 }
 
-// GET one aux run: send the request, resync to the reply, decode. Mirrors
-// Servo2040Protocol::read_aux with the Pico UART in place of the transport.
-bool read_aux(std::uint8_t start_pin, std::uint8_t count,
-              std::vector<std::uint16_t>& out, int timeout_ms) {
+// Drop whatever sits in the RX FIFO, so a reply that arrived after its poll was
+// given up cannot be read as the answer to the next one.
+void drain_rx() {
+  while (uart_is_readable(kUart)) (void)uart_getc(kUart);
+}
+
+void send_get(std::uint8_t start_pin, std::uint8_t count) {
   encode_get(start_pin, count, g_get_buf);
   uart_write_blocking(kUart, g_get_buf.data(), g_get_buf.size());
+}
 
-  const std::uint64_t deadline = time_us_64() +
-                                 static_cast<std::uint64_t>(timeout_ms) * 1000u;
-
+// Resync to one GET reply and decode it. Mirrors Servo2040Protocol::read_aux's
+// receive half with the Pico UART in place of the transport.
+bool recv_get(std::uint8_t start_pin, std::uint8_t count,
+              std::vector<std::uint16_t>& out, std::uint64_t deadline_us) {
   // Resync: drop bytes until we see a command byte (MSB set). Discard any
   // command that isn't G (e.g. a stray S echo).
   std::uint8_t b = 0;
   while (true) {
-    if (!read_byte(b, deadline)) return false;
+    if (!read_byte(b, deadline_us)) return false;
     if ((b & 0x80) == 0) continue;
     if (b == kCmdGet) break;
   }
@@ -228,7 +232,7 @@ bool read_aux(std::uint8_t start_pin, std::uint8_t count,
   const std::size_t payload_len = 2 + static_cast<std::size_t>(count) * 2;
   std::vector<std::uint8_t> payload(payload_len);
   for (std::size_t i = 0; i < payload_len; ++i) {
-    if (!read_byte(payload[i], deadline)) return false;
+    if (!read_byte(payload[i], deadline_us)) return false;
   }
   std::uint8_t reply_start = 0;
   if (!decode_get_payload(payload, reply_start, out)) return false;
@@ -322,31 +326,33 @@ void set_relay(bool energized) {
   send_set(kRelayPin, &v, 1);
 }
 
-bool read_battery(float& voltage_v, float& current_a, int timeout_ms) {
-  // CURR (24) and VOLT (25) are consecutive: one GET fetches both, with
-  // values[0] = current, values[1] = voltage (protocol.md ordering). Both come
-  // in a single reply, so it is both-or-neither — no partial/NaN case.
-  std::vector<std::uint16_t> raw;
-  if (!read_aux(kCurrIndex, 2, raw, timeout_ms) || raw.size() != 2) {
-    current_a = std::numeric_limits<float>::quiet_NaN();
-    return false;
-  }
-  current_a = static_cast<float>(raw[0]) * kAmpsPerCount;
-  voltage_v = static_cast<float>(raw[1]) * kVoltsPerCount;
-  return true;
+void request_aux() {
+  drain_rx();
+  send_get(kCurrIndex, 2);
+  send_get(kStatusIndex, 1);
 }
 
-bool read_status(bool& tripped, float& trip_amps, int timeout_ms) {
-  // STATUS (27) is a single read-only 14-bit word: bit0 = TRIPPED (over-current
-  // latch active), bits1-10 = trip current at 0.1 A/count. 0 = clean.
+AuxReading collect_aux() {
+  AuxReading r;
+  // Non-blocking: the replies had a whole tick to arrive. A missing one fails
+  // here and its late bytes are drained by the next request_aux().
+  const std::uint64_t now = time_us_64();
   std::vector<std::uint16_t> raw;
-  if (!read_aux(kStatusIndex, 1, raw, timeout_ms) || raw.size() != 1) {
-    return false;
+  // CURR (24) and VOLT (25) are consecutive: values[0] = current, values[1] =
+  // voltage (protocol.md ordering).
+  if (recv_get(kCurrIndex, 2, raw, now)) {
+    r.battery_ok = true;
+    r.current_a = static_cast<float>(raw[0]) * kAmpsPerCount;
+    r.voltage_v = static_cast<float>(raw[1]) * kVoltsPerCount;
   }
-  const std::uint16_t word = raw[0];
-  tripped = (word & kStatusTrippedBit) != 0;
-  trip_amps = static_cast<float>((word >> 1) & 0x3FF) * kTripAmpsPerCount;
-  return true;
+  // STATUS (27): bit0 = TRIPPED (over-current latch active), bits1-10 = trip
+  // current at 0.1 A/count. 0 = clean.
+  if (recv_get(kStatusIndex, 1, raw, now)) {
+    r.status_ok = true;
+    r.tripped = (raw[0] & kStatusTrippedBit) != 0;
+    r.trip_amps = static_cast<float>((raw[0] >> 1) & 0x3FF) * kTripAmpsPerCount;
+  }
+  return r;
 }
 
 }  // namespace servo_out

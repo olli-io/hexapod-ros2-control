@@ -28,10 +28,12 @@ struct LegTrack {
 
 // The vertical foot step at either end of an ease between a live knot and a
 // fixed one: up by `height` over the first `time` s out of a live knot, down
-// over the last `time` s into one. Zero is no step.
+// over the last `time` s into one. The ease to the fixed knot runs alongside
+// the last (first) `overlap` s of the step. Zero is no step.
 struct StandStep {
-  float height = 0.0f;  // m
-  float time = 0.0f;    // s
+  float height = 0.0f;   // m
+  float time = 0.0f;     // s
+  float overlap = 0.0f;  // s, at most time
 };
 
 // Every track ends on a home knot (validate_gestures enforces it), so the
@@ -60,14 +62,13 @@ inline constexpr float kPlantedHeight = 1e-4f;
 // not know that pose, so on a segment with one live end it reports the fixed
 // end's angles and the ease weight, and the pipeline blends them with the IK
 // of the stance, raised by the stand step, under the live pose. The step
-// itself is live: the stance raised straight up, solved by the pipeline. Between two live knots the leg is not
-// direct at all: it stands on nominal and follows the body like an untracked
+// itself is live: the stance raised straight up, solved by the pipeline.
+// Between two live knots the leg is not direct at all: it stands on nominal and follows the body like an untracked
 // one.
 class GesturePlayer {
  public:
-  // nominal is the stance a live knot stands on, in the body frame; each leg
-  // is solved to joint angles once, here. Legs without a track are held at
-  // nominal.
+  // nominal is the stance a live knot stands on, in the body frame. Legs
+  // without a track are held at nominal.
   GesturePlayer(const GestureSpec& spec,
                 const std::map<std::string, Vec3>& nominal,
                 const std::map<std::string, gait::kin::LegSpec>& leg_specs);
@@ -76,9 +77,9 @@ class GesturePlayer {
   // is `direct` at weight 1: its joint angles are the sampled track, its
   // foot_target their FK and `stance` = planted. Easing out of or into a live
   // knot it is `direct` at the ease weight with the fixed knot's angles and
-  // foot_target = nominal raised by the stand step, the stance the live part
-  // stands on. During the step it is not direct, foot_target the nominal
-  // raised by the step so far. On a live stretch it is nominal, stance. Every
+  // foot_target = nominal raised by the stand step so far, the stance the
+  // live part stands on. During the rest of the step it is not direct,
+  // foot_target the nominal raised by the step so far. On a live stretch it is nominal, stance. Every
   // tracked leg's phase is the gesture's progress; an untracked one is
   // nominal, phase 0, stance.
   std::map<std::string, gait::LegOutput> update(float dt);
@@ -94,7 +95,6 @@ class GesturePlayer {
     std::string name;
     gait::kin::LegSpec spec;
     float ground_z = 0.0f;  // standing tip z in the leg frame
-    JointAngles stepped{};  // the stance raised by the step, no body pose on
     std::vector<LegKeyframe> keys;  // complete: start knot, then the table
     std::vector<bool> live;         // per knot
   };
@@ -107,7 +107,7 @@ class GesturePlayer {
     JointAngles joints{};
     float step = 0.0f;
   };
-  static Sample sample(const Track& track, float t, float step_time);
+  static Sample sample(const Track& track, float t, const StandStep& step);
 
   std::string id_;
   std::vector<Track> tracks_;

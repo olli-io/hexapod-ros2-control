@@ -378,7 +378,7 @@ teleop_node:
       pitch_max_deg: 15.0
       yaw_max_deg: 20.0
       # Low-pass on the eased yaw and wiggle inputs.
-      yaw_tau_s: 0.10
+      yaw_tau_s: 0.08
       # Low-pass on the init-button revert to the default posture.
       revert_tau_s: 0.25
       # Point ahead of centre the wiggle swings the body about.

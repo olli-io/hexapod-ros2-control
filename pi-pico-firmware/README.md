@@ -48,9 +48,10 @@ it — a link-time swap, no `#ifdef`:
 - **`src/face.{hpp,cpp}`** + **`src/Sh1122PanelPico.{h,cpp}`** — the SH1122 OLED
   eyes, from the same `shared/display_core` the Pi-side `hexa_display` node runs.
   core0 runs the expression/gaze policy, core1 the rasterizer and SPI flush.
-- **`src/button.{hpp,cpp}`** — the front-panel button. A producer into the face
-  and into `bt_teleop`, never the reverse. Its pure halves are
-  `button_fsm.hpp` (press vs hold) and `button_screens.hpp` (screen strings).
+- **`src/button.{hpp,cpp}`** — the front-panel info + bluetooth buttons. A
+  producer into the face and into `bt_teleop`, never the reverse. Its pure
+  halves are `button_fsm.hpp` (press vs hold) and `button_screens.hpp` (screen
+  sequencer and text).
 
 The two RP2350 cores split: **core0** runs the cooperative 200 Hz control loop;
 **core1** runs cyw43/BTstack (Bluepad32) plus the face render loop. `main.cpp`
@@ -58,19 +59,25 @@ owns both schedulers — core1's loop carries two independent deadlines (5 ms fo
 the onboard LED, `1/render_hz` for the face) and runs on its own 8 KB stack,
 since the SDK default for core1 is 2 KB and already carries BTstack's IRQ frames.
 
-## Front-panel button
+## Front-panel buttons
 
-One button on the GPIO in `hardware.yaml`'s `pico_button:` block (GP22 by
-default, wired to ground — the internal pull-up makes it active-low, so an
-unconnected pin reads released):
+Two buttons, the Pi's `hexa_buttons` ported (`button_screens.hpp`). GPIOs in
+`hardware.yaml`'s `pico_button:` block, each wired to ground — the internal
+pull-up makes them active-low, so an unconnected pin reads released:
 
-- **Press** — puts the pack percentage and voltage on the panel for
-  `screen_s`, then the face returns.
-- **Hold `hold_s`** — opens a Bluetooth pairing window for `pair_window_s`, or
-  until a pad binds. The eyes wear the animated scanning expression throughout.
+- **info button** (`info_pin`, GP26) — press: toggles the battery screen
+  (`Battery -> 50 %  ( 7.4 V )`, dashes with no Chica reading). No hold action:
+  the Pico has no network.
+- **bluetooth button** (`bluetooth_pin`, GP22) — press: toggles the controller
+  screen (`Connected to:` + pad name, or `No connected controllers`, and the
+  hold hint). Hold `hold_s`: starts a pairing scan; the eyes wear the scanning
+  spinners.
 
-Hold wins: a press that reaches `hold_s` fires the pairing action mid-press and
-the release is silent, so one long press never also shows the battery screen.
+A screen closes on the same button, swaps on the other, or after `screen_s`.
+Either press, a pad binding, or `pair_window_s` ends a scan; the press that
+ends it opens no screen. Hold wins: a press that reaches `hold_s` fires
+mid-press and the release is silent. A button held at boot is ignored until
+released.
 
 **The firmware does not scan at boot.** Link keys persist in a flash-backed TLV
 bank (`pico_cyw43_driver` wires `btstack_tlv_flash_bank` to
@@ -155,7 +162,11 @@ threadsafe_background async context that services the BTstack loop.
   `init.sweep_leg_interval_ms` apart in pin order, so the inrush arrives as six
   small steps instead of one spike (`hexa::EnergizeSweep`, shared with the ROS
   `hexa_hardware` plugin).
-- **GET** — battery voltage/current from the Servo 2040 aux ADC pins (26/27).
+- **GET** — battery current/voltage (indices 24/25) and the latched
+  over-current STATUS (27), every `get_period_ticks`. The request goes out on
+  one tick and the replies are read, without waiting, on the next, so a silent
+  board never stalls the tick. Each request first empties the RX FIFO, so a
+  late reply is never read as the next one.
 
 Pin map and calibration are baked from `hexa_description/config/hardware.yaml` +
 `servo_calibration.yaml`. No PWM code runs on the Pico.

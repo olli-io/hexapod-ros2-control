@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -26 400 312">
+  <!-- Callout anchors: generate_controller.py reads circles with id="anchor-*". -->
+  <g fill="#fff" stroke="#1d1d1f" stroke-width="2" stroke-linejoin="round">
+    <path id="shoulders" d="M62 30 C68 14 86 6 106 6 C124 6 134 12 138 21 Z M338 30 C332 14 314 6 294 6 C276 6 266 12 262 21 Z"/>
+    <path id="body" d="M200 22 C250 22 290 14 318 20 C345 25 362 42 372 72 C388 122 400 190 398 240 C396 268 380 284 360 282 C340 280 325 262 312 240 C300 220 288 205 260 205 L140 205 C112 205 100 220 88 240 C75 262 60 280 40 282 C20 284 4 268 2 240 C0 190 12 122 28 72 C38 42 55 25 82 20 C110 14 150 22 200 22 Z"/>
+    <circle cx="98" cy="88" r="32"/><circle cx="98" cy="88" r="21"/>
+    <circle cx="262" cy="158" r="32"/><circle cx="262" cy="158" r="21"/>
+    <circle cx="138" cy="158" r="32"/>
+    <path id="dpad" d="M130 136 H146 V150 H160 V166 H146 V180 H130 V166 H116 V150 H130 Z"/>
+    <circle cx="302" cy="58" r="13"/><circle cx="275" cy="85" r="13"/>
+    <circle cx="329" cy="85" r="13"/><circle cx="302" cy="112" r="13"/>
+    <circle cx="174" cy="85" r="8"/><circle cx="226" cy="85" r="8"/>
+  </g>
+  <g font-family="Helvetica, Arial, sans-serif" font-weight="700" font-size="14" text-anchor="middle" fill="#1d1d1f">
+    <text x="302" y="63">Y</text><text x="275" y="90">X</text>
+    <text x="329" y="90">B</text><text x="302" y="117">A</text>
+  </g>
+  <g id="anchors" fill="none">
+    <circle id="anchor-left_shoulder" cx="104" cy="6" r="0"/>
+    <circle id="anchor-right_shoulder" cx="296" cy="6" r="0"/>
+    <circle id="anchor-left_stick" cx="66" cy="88" r="0"/>
+    <circle id="anchor-dpad" cx="106" cy="158" r="0"/>
+    <circle id="anchor-face" cx="346" cy="85" r="0"/>
+    <circle id="anchor-centre" cx="200" cy="85" r="0"/>
+    <circle id="anchor-right_stick" cx="294" cy="158" r="0"/>
+  </g>
+</svg>

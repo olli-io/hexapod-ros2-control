@@ -38,8 +38,6 @@ namespace {
 // at the wrong drift speed.
 // Text is a fixed array, not a std::string: core1 copies the payload out under
 // the mutex and must not allocate doing it.
-constexpr std::size_t kTextMax = 64;
-
 struct FaceRenderTarget {
     Expression    expr = Expression::NEUTRAL;
     GazeDirection gaze = GazeDirection::CENTER;
@@ -99,8 +97,6 @@ std::optional<hexa::display::FaceAnimationRunner> g_runner;
 hexa::display::DisplayTarget g_last_target;
 std::string g_animation_mode;  // current, tracked from selects
 double      g_next_policy_s = 0.0;
-double      g_text_until_s = 0.0;  // 0 = no text screen pending
-bool        g_text_active = false;
 
 // Staging copy the runner's gaze sink writes into, so one publish() per tick
 // carries the animation's gaze together with its drift parameters.
@@ -164,22 +160,13 @@ void init() {
                      []() { g_staging.blink_pending = true; });
 }
 
-void show_text(const char* text, double now_s, double seconds) {
+void set_text(const char* text) {
     if (!g_enabled) return;
-    g_text_active = true;
-    g_text_until_s = now_s + seconds;
     publish_text(text);
 }
 
 void tick(const FaceState& state, double now_s) {
     if (!g_enabled) return;
-
-    // Text expiry is checked every control tick, not on the policy cadence —
-    // a 10 Hz revert would leave the screen up to 100 ms past its dwell.
-    if (g_text_active && now_s >= g_text_until_s) {
-        g_text_active = false;
-        publish_text(nullptr);
-    }
 
     if (now_s < g_next_policy_s) return;
     g_next_policy_s =

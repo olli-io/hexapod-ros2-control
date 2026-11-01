@@ -60,12 +60,15 @@ hardware. The seams each caller supplies — input, config source, clock, output
   `stabilization.presets`, on a stale sample, or while a preset change waits
   for a neutral pose.
 - **`gesture/`** — keyframed leg + body motions played from a stand
-  (`gestures.yaml`: `start`, `pose`, `hold` and `home` keyframes, a `pose`
-  carrying the values). `keyframe` samples one track (`ease` smoothstep or a
-  `continuous` Hermite run, slope-capped so a component never leaves the
-  range its knots span); `GesturePlayer` completes a gesture's per-leg joint
-  tables and body table with the implicit start knot, resolves `hold`, `home`
-  and `start` knots, and plays them off one clock; every track ends on a home
+  (`gestures.yaml`: `start`, `pose`, `oscillate`, `hold` and `home`
+  keyframes, a `pose` carrying the values). `keyframe` samples one track:
+  an `ease` quintic smoothstep, a `continuous` quintic Hermite run with zero
+  curvature at its knots, slope-capped so a component never leaves the range
+  its knots span, or an `oscillate` sine about the knot before, with an
+  ease5 envelope at both ends. Every segment is C2. `GesturePlayer` completes
+  a gesture's per-leg joint tables and body table with the implicit start
+  knot, resolves `hold`, `oscillate`, `home` and `start` knots, and plays
+  them off one clock; every track ends on a home
   knot. A leg's `start` and `home` knots are *live*: the standing leg under
   the body pose of that moment, which only the pipeline knows. So between two
   fixed knots a tracked leg is reported `direct` with its joint angles; easing
@@ -75,8 +78,11 @@ hardware. The seams each caller supplies — input, config source, clock, output
   live stretch it is a plain stance leg. Each such ease starts (or ends) with
   the **stand step** (`gestures.yaml` `stand_step`): the foot goes straight up
   from its stance (or straight down to it) as a live target, and the joint
-  blend runs from that raised stance, so the foot never drags. `validate_gestures` checks every leg
-  knot against the joint limits and the ground plane at construction, the
+  blend runs from that raised stance, so the foot never drags. The blend
+  starts `overlap` s before the step ends, so the foot does not stop at the
+  top. `validate_gestures` checks every leg knot, and every oscillation along
+  its sampled path, against the joint limits and the ground plane at
+  construction, a body oscillation's extremes against the pose limits, the
   track shape (`check_track_shape`, shared with the YAML loaders), and that
   every ease next to a live knot outlasts the stand step.
   Its leg track is neither gait nor animation; its body track is a posture

@@ -4,7 +4,8 @@ Reads ``sensor_msgs/Joy`` from ``/joy``, maps it via the pure
 ``joy_mapping`` library, and publishes ``/cmd_vel`` (body velocity for
 the gait chain) and ``/body/pose`` (body-pose offset for the posture
 chain) on a fixed timer. Also publishes ``/cmd_gait``,
-``/animation/mode``, ``/gait/initialize`` and ``/cmd_stabilize`` on the
+``/animation/mode``, ``/gait/initialize``, ``/cmd_stabilize`` and
+``/cmd_gesture`` on the
 appropriate user inputs. The inactive channel of cmd_vel / body/pose is zero-filled so
 consumers always see a coherent command.
 """
@@ -28,6 +29,7 @@ from hexa_common import (
     VelocityCaps,
     load_animation_mode_animations,
     load_body_height_offsets,
+    load_gesture_ids,
     load_posture_scalar_limits,
     load_velocity_caps,
     unit_stance_xy,
@@ -39,6 +41,7 @@ from .joy_mapping import (
     BASE_FUNCTIONS,
     BUTTON_CLASS_FUNCTIONS,
     GAIT,
+    GESTURE,
     POSTURE,
     BaseConfig,
     JoyConfig,
@@ -49,6 +52,7 @@ from .joy_mapping import (
     cross_section_function_check,
     map_joy,
     validate_bindings,
+    validate_gesture_bindings,
 )
 from .presets import (
     HEXAPOD,
@@ -123,7 +127,11 @@ def _parse_mode_bindings(
 
 
 def _load_config(
-    path: Path, gait_yaml: Path, posture_yaml: Path, geometry_yaml: Path
+    path: Path,
+    gait_yaml: Path,
+    posture_yaml: Path,
+    geometry_yaml: Path,
+    gestures_yaml: Path,
 ) -> tuple[JoyConfig, str, str, VelocityCaps, bool, PresetRegistry, str | None]:
     with path.open() as f:
         raw = yaml.safe_load(f)
@@ -160,6 +168,12 @@ def _load_config(
         "posture": posture_bindings,
         "animation": animation_bindings,
     })
+    gesture_bindings = {
+        str(k): str(v) for k, v in raw["gesture"]["bindings"].items()
+    }
+    validate_gesture_bindings(
+        gesture_bindings, base, load_gesture_ids(gestures_yaml)
+    )
 
     height = posture_raw["height"]
     posture_cfg = PostureConfig(
@@ -186,6 +200,7 @@ def _load_config(
         gait_angular_z_max=caps.angular_max(default_gait),
         stance_unit=unit_stance_xy(geometry_yaml, gait_yaml),
         animation_list=animation_list,
+        gesture_bindings=gesture_bindings,
     )
 
     initial_mode = str(raw.get("initial_mode", POSTURE))
@@ -226,6 +241,7 @@ class TeleopJoyNode(Node):
         # The angular stick cap is the linear one over the outermost foot's
         # standing radius, so the caps need the leg mounts as well.
         geometry_yaml_path = description_config / "geometry.yaml"
+        gestures_yaml_path = description_config / "gestures.yaml"
         self.declare_parameter("config_file", str(default_cfg_path))
         cfg_path = Path(
             self.get_parameter("config_file").get_parameter_value().string_value
@@ -239,7 +255,11 @@ class TeleopJoyNode(Node):
             self._presets,
             self._animation_preset,
         ) = _load_config(
-            cfg_path, tuning_yaml_path, tuning_yaml_path, geometry_yaml_path
+            cfg_path,
+            tuning_yaml_path,
+            tuning_yaml_path,
+            geometry_yaml_path,
+            gestures_yaml_path,
         )
         self._state = JoyState(
             mode=initial_mode,
@@ -375,6 +395,10 @@ class TeleopJoyNode(Node):
         self._sub_gait_stabilize = self.create_subscription(
             Bool, "/gait/stabilize", self._on_gait_stabilize, state_qos
         )
+
+        # Volatile like /gait/initialize: a gesture is an event, and a late
+        # subscriber replaying one would move the legs.
+        self._pub_cmd_gesture = self.create_publisher(String, "/cmd_gesture", 10)
 
         self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._tick)
 
@@ -536,7 +560,21 @@ class TeleopJoyNode(Node):
         )
         if out.mode_changed:
             self.get_logger().info(f"mode={self._state.mode}")
-            self._pub_mode.publish(String(data=self._state.mode))
+            # GESTURE is pad-local: the web app has no such mode to adopt.
+            if self._state.mode != GESTURE:
+                self._pub_mode.publish(String(data=self._state.mode))
+        if out.gesture is not None:
+            # Ungated on ownership, as on the web app: an event that touches
+            # neither /cmd_vel nor /body/pose. The engine also checks the
+            # preset and has the last word.
+            if self._latest_gait_state == "stand":
+                self.get_logger().info(f"publishing /cmd_gesture={out.gesture!r}")
+                self._pub_cmd_gesture.publish(String(data=out.gesture))
+            else:
+                self.get_logger().info(
+                    f"gesture {out.gesture!r} dropped — engine in "
+                    f"{self._latest_gait_state!r}, not 'stand'"
+                )
         if out.stabilize_toggle:
             want = not self._stabilize
             self.get_logger().info(

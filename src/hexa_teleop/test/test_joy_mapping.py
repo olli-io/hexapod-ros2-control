@@ -6,6 +6,7 @@ from hexa_common import scale_to_envelope
 from hexa_teleop import (
     ANIMATION,
     GAIT,
+    GESTURE,
     POSTURE,
     BaseConfig,
     JoyConfig,
@@ -17,6 +18,7 @@ from hexa_teleop import (
     fit_drive_to_envelope,
     map_joy,
     resolve_functions,
+    validate_gesture_bindings,
 )
 from hexa_teleop.joy_mapping import pose_saved
 
@@ -2144,3 +2146,92 @@ def test_stabilize_toggle_works_in_posture_mode():
     cfg = _cfg(base_bindings={"x": "stabilize_toggle"})
     out = map_joy(_axes(), _press_x(), cfg, JoyState(mode=POSTURE), DT)
     assert out.stabilize_toggle
+
+
+# ─── Gesture mode ──────────────────────────────────────────────────
+
+
+def _gesture_cfg():
+    import dataclasses
+
+    return dataclasses.replace(
+        _cfg(base_bindings={"x": "gesture_mode"}),
+        gesture_bindings={"dpad_up": "wave", "dpad_down": "bow"},
+    )
+
+
+def test_gesture_mode_entered_on_x():
+    cfg = _gesture_cfg()
+    state = JoyState(mode=GAIT)
+    out = map_joy(_axes(), _press_x(), cfg, state, DT)
+    assert out.mode_changed
+    assert state.mode == GESTURE
+
+
+def test_gesture_fires_once_per_press_in_gesture_mode():
+    cfg = _gesture_cfg()
+    state = JoyState(mode=GESTURE)
+    first = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    held = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    other = map_joy(_axes(dpad_y=-1.0), _buttons(), cfg, state, DT)
+    assert first.gesture == "wave"
+    assert held.gesture is None
+    assert other.gesture == "bow"
+    # D-pad is not height in gesture mode, and the sticks drive nothing.
+    assert first.pose_z == 0.0
+    assert first.linear_x == 0.0
+
+
+def test_gesture_keys_inert_outside_gesture_mode():
+    cfg = _gesture_cfg()
+    state = JoyState(mode=GAIT)
+    out = map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    assert out.gesture is None
+
+
+def test_gesture_key_held_on_entry_does_not_fire():
+    cfg = _gesture_cfg()
+    state = JoyState(mode=GAIT)
+    map_joy(_axes(dpad_y=1.0), _buttons(), cfg, state, DT)
+    out = map_joy(_axes(dpad_y=1.0), _press_x(), cfg, state, DT)
+    assert state.mode == GESTURE
+    assert out.gesture is None
+
+
+def test_gesture_mode_not_adopted_from_wire():
+    state = JoyState(mode=GAIT)
+    assert not adopt_mode(GESTURE, _cfg(), state)
+    assert state.mode == GAIT
+
+
+def test_gesture_bindings_validated():
+    base = _cfg().base
+    validate_gesture_bindings({"dpad_up": "wave"}, base, ("wave",))
+    with pytest.raises(ValueError, match="unknown gesture"):
+        validate_gesture_bindings({"dpad_up": "moonwalk"}, base, ("wave",))
+    with pytest.raises(ValueError, match="already bound in base"):
+        validate_gesture_bindings({"a": "wave"}, base, ("wave",))
+    with pytest.raises(ValueError, match="not a button"):
+        validate_gesture_bindings({"left_stick_x": "wave"}, base, ("wave",))
+
+
+def test_shipped_gesture_bindings_are_valid():
+    import pathlib
+
+    import yaml
+    from hexa_common import load_gesture_ids
+
+    here = pathlib.Path(__file__).resolve().parents[1]
+    raw = yaml.safe_load((here / "config" / "teleop_joy.yaml").read_text())
+    gestures = here.parents[0] / "hexa_description" / "config" / "gestures.yaml"
+    base = BaseConfig(
+        deadband=0.1,
+        trigger_threshold=0.8,
+        button_index=raw["base"]["buttons"],
+        axis_index=raw["base"]["axes"],
+        bindings=raw["base"]["bindings"],
+    )
+    validate_gesture_bindings(
+        raw["gesture"]["bindings"], base, load_gesture_ids(gestures)
+    )

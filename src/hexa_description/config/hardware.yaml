@@ -47,17 +47,19 @@ battery:
   empty_v: 6.6
   full_v: 8.4
 
-# Front-panel button on the Pico (firmware only; read by gen_config.py).
-# hexa_buttons is the Pi's equivalent and shares none of this — it drives a Pi 5
-# through gpiozero and owns network/pairing features this board has no use for.
+# Front-panel buttons on the Pico (firmware only; read by gen_config.py). Behave
+# as hexa_buttons' bluetooth and info buttons (the info one without network),
+# but share none of buttons.yaml — that one drives a Pi 5 through gpiozero.
+# Free pins: GP0/1 are the Chica UART, GP17-21 the panel, GP23-25/29 the radio.
 pico_button:
-  pin: 22 # free: GP0/1 are the Chica UART, GP17-21 the panel, GP23-25/29 the radio
-  # Press: put the pack percentage on the panel. Hold: start Bluetooth pairing.
+  bluetooth_pin: 22 # press: controller screen; hold: start Bluetooth pairing
+  info_pin: 26 # press: battery screen
   hold_s: 3.0
   debounce_s: 0.03
-  screen_s: 5.0 # how long the battery screen holds before the face returns
-  # Pairing stays open this long, or until a pad binds. Bonded pads reconnect
-  # without it — scanning is only needed to meet a NEW controller.
+  screen_s: 5.0 # how long a screen holds before the face returns
+  # Pairing stays open this long, until a pad binds, or until a press cancels
+  # it. Bonded pads reconnect without it — scanning is only needed to meet a
+  # NEW controller.
   pair_window_s: 60.0
 
 # Joint angle when the servo sits at center — a property of the assembled build,

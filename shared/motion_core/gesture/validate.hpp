@@ -1,6 +1,7 @@
 // Construction-time check of a gesture table against the joint limits and the
 // stance it will run on. Per knot only: each joint interpolates inside the
-// range its neighbouring knots span, and a tracked leg is commanded in joint
+// range its neighbouring knots span, or swings at most its amplitude about
+// the pose before an oscillate knot, and a tracked leg is commanded in joint
 // space with no body pose on top, so the knots bound the whole path. Next to
 // a live knot the other bound is the stand under the body pose, which the
 // posture clamp keeps reachable.
@@ -22,8 +23,9 @@ namespace hexa::gesture {
 // live: their value is the standing leg under whatever body pose is on at
 // that moment, which only the pipeline knows, and a hold after one is live
 // too. So a start must come before the track's first pose, a
-// continuous keyframe needs a fixed knot before it to draw a slope from, and
-// the track must end on a home. The YAML loaders call this too.
+// continuous keyframe needs a fixed knot before it to draw a slope from, an
+// oscillate one needs a fixed knot to swing about and a positive period and
+// ramp, both ramps inside its segment, and the track must end on a home. The YAML loaders call this too.
 void check_track_shape(const std::vector<LegKeyframe>& keys,
                        const std::string& where);
 
@@ -33,8 +35,10 @@ void check_track_shape(const std::vector<LegKeyframe>& keys,
 // body frame), on a body keyframe outside `limits` — the pose clamp would
 // otherwise bend the track silently — on a leg track that breaks
 // check_track_shape, on a body track that does not end with a home knot,
-// since the engine hands back a stand when the gesture is done, on a negative
-// stand step, and on an ease between a live knot and a fixed one no longer
+// since the engine hands back a stand when the gesture is done, on an
+// oscillation whose extremes break those checks or whose timing breaks
+// check_track_shape's, on a negative stand step or an overlap past its time,
+// and on an ease between a live knot and a fixed one no longer
 // than the stand step.
 void validate_gestures(
     const std::vector<GestureSpec>& specs,

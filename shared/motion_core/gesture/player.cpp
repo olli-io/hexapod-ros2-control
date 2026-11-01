@@ -31,8 +31,8 @@ BodyKeyframe body_knot(float t, const BodyPose& p,
 
 JointAngles angles_of(const LegKeyframe& k) { return {k.coxa, k.femur, k.tibia}; }
 
-// Knot 0 is the implicit start, live. A start or home knot is live; a hold
-// knot takes the previous knot's value and liveness. The flags are cleared
+// Knot 0 is the implicit start, live. A start or home knot is live; a hold or
+// oscillate knot takes the previous knot's value and liveness. The flags are cleared
 // once read, so the table is plain values plus the `live` mask.
 std::vector<bool> resolve_stand_ins(std::vector<LegKeyframe>& keys) {
   std::vector<bool> live(keys.size(), false);
@@ -40,7 +40,7 @@ std::vector<bool> resolve_stand_ins(std::vector<LegKeyframe>& keys) {
   for (std::size_t i = 1; i < keys.size(); ++i) {
     if (keys[i].start || keys[i].home) {
       live[i] = true;
-    } else if (keys[i].hold) {
+    } else if (keys[i].hold || keys[i].oscillate) {
       keys[i].coxa = keys[i - 1].coxa;
       keys[i].femur = keys[i - 1].femur;
       keys[i].tibia = keys[i - 1].tibia;
@@ -56,7 +56,7 @@ std::vector<bool> resolve_stand_ins(std::vector<LegKeyframe>& keys) {
 // The body's home is the identity pose, which a zeroed knot already is.
 void resolve_stand_ins(std::vector<BodyKeyframe>& keys) {
   for (std::size_t i = 1; i < keys.size(); ++i) {
-    if (keys[i].hold) {
+    if (keys[i].hold || keys[i].oscillate) {
       keys[i].x = keys[i - 1].x;
       keys[i].y = keys[i - 1].y;
       keys[i].z = keys[i - 1].z;
@@ -86,11 +86,6 @@ GesturePlayer::GesturePlayer(
     t.name = std::string(leg_name(track.leg));
     t.spec = leg_specs.at(t.name);
     t.ground_z = body_to_leg(nominal.at(t.name), t.spec).z;
-    // On the default preset, inside the reach annulus by construction.
-    t.stepped = gait::kin::inverse_kinematics(
-        body_to_leg(nominal.at(t.name) + Vec3(0.0f, 0.0f, step_.height),
-                    t.spec),
-        t.spec);
     t.keys.reserve(track.keys.size() + 1);
     t.keys.push_back(live_knot(0.0f));
     t.keys.insert(t.keys.end(), track.keys.begin(), track.keys.end());
@@ -120,7 +115,7 @@ std::map<std::string, gait::LegOutput> GesturePlayer::update(float dt) {
   for (const Track& track : tracks_) {
     gait::LegOutput& leg = out[track.name];
     leg.phase = progress;
-    const Sample s = sample(track, elapsed_, step_.time);
+    const Sample s = sample(track, elapsed_, step_);
     const float raise = s.step * step_.height;
     if (s.weight <= 0.0f) {
       // Live: the stance under the body, like an untracked leg, raised by the
@@ -137,8 +132,13 @@ std::map<std::string, gait::LegOutput> GesturePlayer::update(float dt) {
     // from, and the planted flag reads the blend against the unposed one.
     JointAngles probe = s.joints;
     if (s.weight < 1.0f) {
+      // On the default preset, inside the reach annulus by construction.
+      const JointAngles stepped = gait::kin::inverse_kinematics(
+          body_to_leg(nominal_.at(track.name) + Vec3(0.0f, 0.0f, raise),
+                      track.spec),
+          track.spec);
       for (std::size_t j = 0; j < 3; ++j) {
-        probe[j] = track.stepped[j] + (s.joints[j] - track.stepped[j]) * s.weight;
+        probe[j] = stepped[j] + (s.joints[j] - stepped[j]) * s.weight;
       }
     }
     const Vec3 in_leg = gait::kin::forward_kinematics(probe, track.spec);
@@ -153,7 +153,7 @@ std::map<std::string, gait::LegOutput> GesturePlayer::update(float dt) {
 }
 
 GesturePlayer::Sample GesturePlayer::sample(const Track& track, float t,
-                                            float step_time) {
+                                            const StandStep& step) {
   const LegKeyframe* keys = track.keys.data();
   const std::size_t n = track.keys.size();
   Sample s;
@@ -178,25 +178,24 @@ GesturePlayer::Sample GesturePlayer::sample(const Track& track, float t,
   }
   if (!a_live && !b_live) {
     s.weight = 1.0f;
-    s.joints = {
-        track_value(keys, n, t, [](const LegKeyframe& k) { return k.coxa; }),
-        track_value(keys, n, t, [](const LegKeyframe& k) { return k.femur; }),
-        track_value(keys, n, t, [](const LegKeyframe& k) { return k.tibia; })};
+    s.joints = {track_value(keys, n, t, 0), track_value(keys, n, t, 1),
+                track_value(keys, n, t, 2)};
     return s;
   }
-  // One live end: the step at the live end, then the ease between the
-  // stepped stance and the fixed end, weighted onto the fixed end.
+  // One live end: the step at the live end, and the ease between the stepped
+  // stance and the fixed end, weighted onto the fixed end. The ease starts
+  // `overlap` s before the step ends, so the foot never stops at the top.
   // validate_gestures keeps the segment longer than the step.
-  const float h = keys[i].t - keys[i - 1].t - step_time;
   const float from_live = a_live ? t - keys[i - 1].t : keys[i].t - t;
-  if (from_live < step_time) {
-    s.step = ease5(from_live / step_time);
+  const float lead_in = step.time - step.overlap;
+  const float h = keys[i].t - keys[i - 1].t - lead_in;
+  s.step = step.time > 0.0f ? ease5(std::min(from_live / step.time, 1.0f))
+                            : 1.0f;
+  if (from_live <= lead_in) {
     return s;
   }
-  s.step = 1.0f;
   if (a_live) {
-    const float u = h > 0.0f ? (from_live - step_time) / h : 1.0f;
-    s.weight = ease5(u);
+    s.weight = ease5(h > 0.0f ? std::min((from_live - lead_in) / h, 1.0f) : 1.0f);
     s.joints = angles_of(keys[i]);
   } else {
     // Measured from the fixed end, so the weight reaches exactly 0.
@@ -214,15 +213,12 @@ BodyPose GesturePlayer::body() const {
   const BodyKeyframe* keys = body_.data();
   const std::size_t n = body_.size();
   BodyPose p;
-  p.x = track_value(keys, n, elapsed_, [](const BodyKeyframe& k) { return k.x; });
-  p.y = track_value(keys, n, elapsed_, [](const BodyKeyframe& k) { return k.y; });
-  p.z = track_value(keys, n, elapsed_, [](const BodyKeyframe& k) { return k.z; });
-  p.roll = track_value(keys, n, elapsed_,
-                       [](const BodyKeyframe& k) { return k.roll; });
-  p.pitch = track_value(keys, n, elapsed_,
-                        [](const BodyKeyframe& k) { return k.pitch; });
-  p.yaw = track_value(keys, n, elapsed_,
-                      [](const BodyKeyframe& k) { return k.yaw; });
+  p.x = track_value(keys, n, elapsed_, 0);
+  p.y = track_value(keys, n, elapsed_, 1);
+  p.z = track_value(keys, n, elapsed_, 2);
+  p.roll = track_value(keys, n, elapsed_, 3);
+  p.pitch = track_value(keys, n, elapsed_, 4);
+  p.yaw = track_value(keys, n, elapsed_, 5);
   return p;
 }
 
@@ -233,7 +229,8 @@ std::vector<GestureSpec> gesture_specs_from_config() {
   for (const auto& g : cfg::kGestures) {
     GestureSpec spec;
     spec.id = std::string(g.id);
-    spec.stand_step = {cfg::kGestureStandStepHeight, cfg::kGestureStandStepTime};
+    spec.stand_step = {cfg::kGestureStandStepHeight, cfg::kGestureStandStepTime,
+                       cfg::kGestureStandStepOverlap};
     for (std::size_t ti = 0; ti < g.leg_track_count; ++ti) {
       const auto& row = cfg::kGestureLegTracks[g.first_leg_track + ti];
       LegTrack track;

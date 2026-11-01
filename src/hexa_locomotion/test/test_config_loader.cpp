@@ -229,6 +229,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     ASSERT_EQ(lg.id, bg.id) << "gesture " << gi << " is out of order";
     EXPECT_NEAR(lg.stand_step.height, bg.stand_step.height, kTol) << lg.id;
     EXPECT_NEAR(lg.stand_step.time, bg.stand_step.time, kTol) << lg.id;
+    EXPECT_NEAR(lg.stand_step.overlap, bg.stand_step.overlap, kTol) << lg.id;
     ASSERT_EQ(lg.legs.size(), bg.legs.size()) << lg.id;
     for (std::size_t ti = 0; ti < bg.legs.size(); ++ti) {
       const auto& lt = lg.legs[ti];
@@ -246,6 +247,13 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
         EXPECT_EQ(lt.keys[ki].hold, bt.keys[ki].hold) << key;
         EXPECT_EQ(lt.keys[ki].home, bt.keys[ki].home) << key;
         EXPECT_EQ(lt.keys[ki].start, bt.keys[ki].start) << key;
+        EXPECT_EQ(lt.keys[ki].oscillate, bt.keys[ki].oscillate) << key;
+        EXPECT_NEAR(lt.keys[ki].period, bt.keys[ki].period, kTol) << key;
+        EXPECT_NEAR(lt.keys[ki].ramp, bt.keys[ki].ramp, kTol) << key;
+        for (std::size_t j = 0; j < 3; ++j) {
+          EXPECT_NEAR(lt.keys[ki].amp[j], bt.keys[ki].amp[j], kTol) << key;
+          EXPECT_NEAR(lt.keys[ki].lead[j], bt.keys[ki].lead[j], kTol) << key;
+        }
       }
     }
     ASSERT_EQ(lg.body.size(), bg.body.size()) << lg.id;
@@ -261,6 +269,13 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
       EXPECT_EQ(lg.body[ki].transition, bg.body[ki].transition) << key;
       EXPECT_EQ(lg.body[ki].hold, bg.body[ki].hold) << key;
       EXPECT_EQ(lg.body[ki].home, bg.body[ki].home) << key;
+      EXPECT_EQ(lg.body[ki].oscillate, bg.body[ki].oscillate) << key;
+      EXPECT_NEAR(lg.body[ki].period, bg.body[ki].period, kTol) << key;
+      EXPECT_NEAR(lg.body[ki].ramp, bg.body[ki].ramp, kTol) << key;
+      for (std::size_t j = 0; j < 6; ++j) {
+        EXPECT_NEAR(lg.body[ki].amp[j], bg.body[ki].amp[j], kTol) << key;
+        EXPECT_NEAR(lg.body[ki].lead[j], bg.body[ki].lead[j], kTol) << key;
+      }
     }
   }
 }

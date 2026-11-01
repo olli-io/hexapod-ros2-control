@@ -57,8 +57,8 @@ Use exactly these names in identifiers, logs and docstrings. Definitions are in
   `/cmd_gesture`; its leg track is neither gait nor animation, its body track
   is a posture term, not an animation layer.
 - **pose keyframe** — the gesture keyframe that carries values (`pose:`);
-  the others are **start**, **hold**, **home**. Not *joint keyframe*,
-  *position keyframe*.
+  the others are **start**, **oscillate**, **hold**, **home**. Not *joint
+  keyframe*, *position keyframe*.
 - **pose mode** — `/cmd_vel` zero, body moves on planted feet.
   **gait-active** — `/cmd_vel` non-zero.
 - **settle** — the stop. Not *pause*, *stop sequence*, *re-plant*.

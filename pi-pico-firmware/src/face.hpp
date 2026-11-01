@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -41,12 +42,13 @@ void init();
 // Core0. Rate-limited internally to kFaceUpdateRateHz. now_s is monotonic.
 void tick(const FaceState& state, double now_s);
 
-// Core0. Replace the eyes with a text screen until now_s + seconds, then revert.
-// The Pi latches text mode on /display/text and clears it with an empty message;
-// here the only producer is a button press, which always wants a timed screen.
-// Text longer than the payload buffer is truncated, not wrapped — keep screens
-// inside the budget test_button.cpp enforces.
-void show_text(const char* text, double now_s, double seconds);
+// Text payload capacity, terminator included. Longer text is truncated.
+constexpr std::size_t kTextMax = 96;
+
+// Core0. Replace the eyes with `text` until the next call; empty or nullptr
+// hands the panel back to the eyes. Latched, like the Pi's /display/text: the
+// producer (button.cpp) owns the timeout.
+void set_text(const char* text);
 
 // Core1 only. Panel SPI/GPIO belong to the core that renders.
 void core1_init();

@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <utility>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -103,18 +104,22 @@ float keyframe_t(const YAML::Node& inner, const std::string& where,
   return t;
 }
 
-const std::vector<std::string> kLegKeyframeTypes = {"start", "pose", "hold",
-                                                    "home"};
-const std::vector<std::string> kBodyKeyframeTypes = {"pose", "hold", "home"};
+const std::vector<std::string> kLegKeyframeTypes = {"start", "pose",
+                                                    "oscillate", "hold", "home"};
+const std::vector<std::string> kBodyKeyframeTypes = {"pose", "oscillate",
+                                                     "hold", "home"};
 // The words a leg may take in place of its angles inside a pose.
 const std::vector<std::string> kLegStandIns = {"hold", "home", "start"};
 
 // A start, hold or home takes only t and implies its transition: a hold is
-// static, a start is where the track begins and a home always eases in. A
-// pose must say.
+// static, a start is where the track begins and a home always eases in. An
+// oscillate arrives at rest, so it counts as an ease. A pose must say.
 hexa::config::GestureTransition transition_from(const std::string& kind,
                                                 const YAML::Node& inner,
                                                 const std::string& where) {
+  if (kind == "oscillate") {
+    return hexa::config::GestureTransition::EASE;
+  }
   if (kind != "pose") {
     if (inner.size() != 1 || !inner["t"]) {
       throw std::runtime_error(where + ": " + kind + " takes only t");
@@ -167,6 +172,68 @@ hexa::JointAngles leg_entry_angles(
   return out;
 }
 
+// An oscillate keyframe's period and ramp.
+std::pair<float, float> oscillate_period_ramp(const YAML::Node& inner,
+                                              const std::string& where) {
+  for (const char* k : {"period", "ramp"}) {
+    if (!inner[k]) {
+      throw std::runtime_error(where + ": oscillate needs " + k);
+    }
+  }
+  return {f(inner["period"]), f(inner["ramp"])};
+}
+
+// Per-axis amplitude and lead of an oscillate entry. Each axis is an
+// amplitude, or a mapping {amp, lead_deg}; axes not named are zero.
+// `to_table(i, value)` converts an amplitude into the table's units and sign.
+template <std::size_t N, typename ToTable>
+void oscillation(const YAML::Node& v, const std::array<const char*, N>& axes,
+                 const std::string& where, std::array<float, N>& amp,
+                 std::array<float, N>& lead, ToTable to_table) {
+  amp.fill(0.0f);
+  lead.fill(0.0f);
+  std::size_t named = 0;
+  for (std::size_t i = 0; i < N; ++i) {
+    const YAML::Node a = v[axes[i]];
+    if (!a) continue;
+    ++named;
+    double value = 0.0;
+    if (a.IsMap()) {
+      reject_unknown_keys(a, {"amp", "lead_deg"}, where + "." + axes[i]);
+      if (!a["amp"]) {
+        throw std::runtime_error(where + "." + axes[i] +
+                                 ": needs amp, optional lead_deg");
+      }
+      value = a["amp"].as<double>();
+      if (a["lead_deg"]) {
+        lead[i] = static_cast<float>(a["lead_deg"].as<double>() * M_PI / 180.0);
+      }
+    } else {
+      value = a.as<double>();
+    }
+    amp[i] = to_table(i, value);
+  }
+  if (named == 0) {
+    throw std::runtime_error(where + ": names no axis to oscillate");
+  }
+}
+
+constexpr std::array<const char*, 3> kLegOscAxes = {"coxa_deg", "femur_deg",
+                                                    "tibia_deg"};
+constexpr std::array<const char*, 6> kBodyOscAxes = {
+    "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"};
+
+float leg_amp_rad(std::size_t j, double deg) {
+  static constexpr std::array<const char*, 3> kJointTypes = {"coxa", "femur",
+                                                              "tibia"};
+  return static_cast<float>(to_urdf_rad(kJointTypes[j], deg) -
+                            to_urdf_rad(kJointTypes[j], 0.0));
+}
+
+float body_amp(std::size_t i, double v) {
+  return static_cast<float>(i >= 3 ? v * M_PI / 180.0 : v);
+}
+
 std::vector<hexa::gesture::GestureSpec> load_gestures(
     const std::string& path,
     const std::array<hexa::config::JointLimits, 3>& limits) {
@@ -177,20 +244,32 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
                                                       "tibia_deg"};
   static const std::set<std::string> kBodyPoseKeys = {
       "t", "transition", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"};
+  static const std::set<std::string> kLegOscillateKeys = {
+      "t", "period", "ramp", "l_front", "l_middle", "l_rear", "r_front",
+      "r_middle", "r_rear"};
+  static const std::set<std::string> kBodyOscillateKeys = {
+      "t", "period", "ramp", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"};
   // `expression` belongs to hexa_display; the motion ignores it.
   static const std::set<std::string> kGestureKeys = {"id", "expression", "legs",
                                                      "body"};
   const YAML::Node doc = YAML::LoadFile(path);
   const YAML::Node step_node = doc["stand_step"];
-  if (!step_node || !step_node.IsMap() || step_node.size() != 2 ||
-      !step_node["height"] || !step_node["time"]) {
-    throw std::runtime_error("gestures.yaml stand_step: needs exactly height, time");
+  if (!step_node || !step_node.IsMap() || step_node.size() != 3 ||
+      !step_node["height"] || !step_node["time"] || !step_node["overlap"]) {
+    throw std::runtime_error(
+        "gestures.yaml stand_step: needs exactly height, time, overlap");
   }
   const hexa::gesture::StandStep step{f(step_node["height"]),
-                                      f(step_node["time"])};
-  if (step.height < 0.0f || step.time < 0.0f) {
+                                      f(step_node["time"]),
+                                      f(step_node["overlap"])};
+  if (step.height < 0.0f || step.time < 0.0f || step.overlap < 0.0f) {
     throw std::runtime_error(
-        "gestures.yaml stand_step: height and time must not be negative");
+        "gestures.yaml stand_step: height, time and overlap must not be "
+        "negative");
+  }
+  if (step.overlap > step.time) {
+    throw std::runtime_error(
+        "gestures.yaml stand_step: overlap must not exceed time");
   }
   const YAML::Node list = doc["gestures"];
   std::vector<hexa::gesture::GestureSpec> out;
@@ -225,6 +304,30 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
       prev_t = keyframe_t(inner, where, prev_t, have_prev);
       have_prev = true;
       transition_from(kind, inner, where);
+      if (kind == "oscillate") {
+        reject_unknown_keys(inner, kLegOscillateKeys, where);
+        oscillate_period_ramp(inner, where);
+        std::size_t named = 0;
+        for (const auto& leg : hexa::gait::LEG_NAMES) {
+          if (!inner[leg]) continue;
+          ++named;
+          if (!inner[leg].IsMap()) {
+            throw std::runtime_error(where + "." + leg + ": a mapping");
+          }
+          reject_unknown_keys(inner[leg], {"coxa_deg", "femur_deg", "tibia_deg"},
+                              where + "." + leg);
+          hexa::config::LegKeyframe probe{};
+          oscillation(inner[leg], kLegOscAxes, where + "." + leg, probe.amp,
+                      probe.lead, leg_amp_rad);
+          if (std::find(moved.begin(), moved.end(), leg) == moved.end()) {
+            moved.push_back(leg);
+          }
+        }
+        if (named == 0) {
+          throw std::runtime_error(where + ": oscillate names no leg");
+        }
+        continue;
+      }
       if (kind != "pose") {
         continue;
       }
@@ -267,8 +370,9 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
       for (std::size_t i = 0; i < keyframes.size(); ++i) {
         const auto [kind, inner] =
             keyframe_type(keyframes[i], gwhere, kLegKeyframeTypes);
-        std::string stand_in = kind == "pose" ? "" : kind;
-        if (kind == "pose" && !inner[leg]) {
+        const bool named = kind == "pose" || kind == "oscillate";
+        std::string stand_in = named ? "" : kind;
+        if (named && !inner[leg]) {
           continue;
         }
         const YAML::Node v = inner[leg];
@@ -281,7 +385,12 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
         row.hold = stand_in == "hold";
         row.home = stand_in == "home";
         row.start = stand_in == "start";
-        if (stand_in.empty()) {
+        if (kind == "oscillate") {
+          row.oscillate = true;
+          std::tie(row.period, row.ramp) = oscillate_period_ramp(inner, gwhere);
+          oscillation(v, kLegOscAxes, gwhere + "." + leg, row.amp, row.lead,
+                      leg_amp_rad);
+        } else if (stand_in.empty()) {
           const hexa::JointAngles a =
               leg_entry_angles(v, limits, gwhere + "." + leg);
           row.coxa = a[0];
@@ -308,6 +417,12 @@ std::vector<hexa::gesture::GestureSpec> load_gestures(
       row.transition = transition_from(kind, inner, where);
       row.hold = kind == "hold";
       row.home = kind == "home";
+      if (kind == "oscillate") {
+        reject_unknown_keys(inner, kBodyOscillateKeys, where);
+        row.oscillate = true;
+        std::tie(row.period, row.ramp) = oscillate_period_ramp(inner, where);
+        oscillation(inner, kBodyOscAxes, where, row.amp, row.lead, body_amp);
+      }
       if (kind == "pose") {
         reject_unknown_keys(inner, kBodyPoseKeys, where);
         const auto deg = [&](const char* key) {

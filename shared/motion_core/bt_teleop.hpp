@@ -2,6 +2,7 @@
 // raw axes[]/buttons[] layout teleop_joy.yaml's `base` block expects.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace bt_teleop {
@@ -65,6 +66,10 @@ void pump();
 bool read(int16_t axes[kNumAxes], uint32_t& buttons);
 
 bool connected();
+
+// Name of the bound controller into `out` (NUL-terminated, truncated to n);
+// empty when none is bound.
+void controller_name(char* out, std::size_t n);
 
 // time_us_64() of the most recent controller frame, 0 before the first. Lets the
 // watchdog catch a pad that stopped sending without disconnecting.

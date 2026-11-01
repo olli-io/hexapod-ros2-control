@@ -21,8 +21,12 @@ enum class Event {
 
 class PressDetector {
 public:
-    PressDetector(float hold_s, float debounce_s)
-        : _hold_s(hold_s), _debounce_s(debounce_s) {}
+    // `initially_down`: the line level at boot. A button already down then
+    // needs a release before it can press or hold, so a jammed switch never
+    // fires a hold nobody asked for.
+    PressDetector(float hold_s, float debounce_s, bool initially_down = false)
+        : _hold_s(hold_s), _debounce_s(debounce_s),
+          _stable(initially_down), _hold_fired(initially_down) {}
 
     // `down` is the debounced-by-us raw level (true = pressed). `now_s` is
     // monotonic seconds. Call at any rate at least a few times per debounce_s.
@@ -54,8 +58,8 @@ public:
 private:
     float  _hold_s;
     float  _debounce_s;
-    bool   _stable = false;
-    bool   _hold_fired = false;
+    bool   _stable;
+    bool   _hold_fired;
     double _last_change_s = -1e9;  // so the first edge is never debounced away
     double _press_start_s = 0.0;
 };

@@ -78,6 +78,8 @@ base:
     r1: 5
     select: 6
     start: 7
+    l3: 9 # left stick press
+    r3: 10 # right stick press
   axes:
     left_stick_x: 0
     left_stick_y: 1
@@ -98,12 +100,12 @@ base:
     dpad_x: 1.0
     dpad_y: 1.0
 
-  # Mode-agnostic: gait_mode | posture_mode | animation_mode | init | record |
-  # stabilize_toggle
+  # Mode-agnostic: gait_mode | posture_mode | animation_mode | gesture_mode |
+  # init | record | stabilize_toggle. stabilize_toggle is web-only for now.
   bindings:
     a: gait_mode
     b: animation_mode
-    x: stabilize_toggle
+    x: gesture_mode
     y: posture_mode
     start: init
     select: record
@@ -162,6 +164,18 @@ animation:
     right_stick_y: drive_x_aux
     left_stick_x: drive_y
     left_stick_y: drive_x
+
+# Key -> gesture id from hexa_description's gestures.yaml, played on
+# /cmd_gesture from a stand. Live in gesture mode only; sticks and the other
+# sections' keys are inert there. A key here may not carry a base binding.
+gesture:
+  bindings:
+    dpad_up: wave
+    dpad_down: bow
+    dpad_left: chitter
+    dpad_right: intimidate
+    l3: boogie
+    r3: rave
 
 # When enabled, the gamepad publishes only while it owns /teleop/owner
 # (default owner "gamepad"). Disable for standalone gamepad.

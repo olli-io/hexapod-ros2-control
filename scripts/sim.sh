@@ -150,14 +150,17 @@ cmd_logs() {
 # install/ log/ first, then does a full rebuild: --symlink-install leaves
 # dangling symlinks behind when a source file is renamed or deleted, and
 # colcon's install step then dies trying to copy the now-broken link. Remaining
-# args pass through to colcon (e.g. --packages-select).
+# args pass through to colcon (e.g. --packages-select). hexa_pico_bridge is
+# skipped unless packages are selected; 'up --pico' builds it on its own.
 cmd_build() {
     if [ "${1:-}" = "--clean" ]; then
         shift
         echo "hexa sim: wiping build/ install/ log/..."
         rm -rf build install log
     fi
-    compose_run colcon build --symlink-install "$@"
+    local skip=(--packages-skip hexa_pico_bridge)
+    [[ " $* " == *" --packages-"* ]] && skip=()
+    compose_run colcon build --symlink-install "${skip[@]}" "$@"
 }
 
 # Rebuild the (bind-mounted) workspace, then restart the running stack so the
