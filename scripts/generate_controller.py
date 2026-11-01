@@ -68,7 +68,8 @@ GROUPS = [
     dict(anchor="left_shoulder", side="left", bx=470, cy=72, mx=None,
          rows=[("l2", "lt"), ("l1", "lb")]),
     dict(anchor="left_stick", side="left", bx=470, cy=211, mx=None,
-         rows=[("left_stick_y", "ls_y"), ("left_stick_x", "ls_x"), ("l3", "l3")]),
+         rows=[("left_stick_y", "ls_y"), ("left_stick_x", "ls_x"),
+               ("left_stick_up", "ls_up"), ("left_stick_down", "ls_down"), ("l3", "l3")]),
     dict(anchor="dpad", side="left", bx=470, cy=368, mx=520,
          rows=[("dpad_up", "dpad_up"), ("dpad_left", "dpad_left"),
                ("dpad_right", "dpad_right"), ("dpad_down", "dpad_down")]),
@@ -118,11 +119,10 @@ def body_anchors(path: Path) -> dict[str, tuple[float, float]]:
 def bindings_for(cfg: dict, mode: str) -> dict[str, str]:
     """Key -> label for one mode: base bindings under the mode's section."""
     keys = dict(cfg["base"]["bindings"])
-    section = cfg.get(mode, {}).get("bindings", {}) or {}
+    keys.update(cfg.get(mode, {}).get("bindings", {}) or {})
     if mode == "gesture":
-        keys.update({k: f"gesture:{v}" for k, v in section.items()})
-    else:
-        keys.update(section)
+        gestures = cfg["gesture"].get("gestures", {}) or {}
+        keys.update({k: f"gesture:{v}" for k, v in gestures.items()})
     labels = {}
     for key, fn in keys.items():
         if not fn:
@@ -261,8 +261,9 @@ def main() -> None:
 
     cfg = yaml.safe_load(args.config.read_text())
     known = {k for g in GROUPS for k, _ in g["rows"]}
-    for section in ("base", *MODES):
-        for key in (cfg.get(section, {}).get("bindings") or {}):
+    for section, table in [("base", "bindings"), *((m, "bindings") for m in MODES),
+                           ("gesture", "gestures")]:
+        for key in (cfg.get(section, {}).get(table) or {}):
             if key not in known:
                 sys.exit(f"generate_controller: [{section}] key '{key}' has no place on the diagram")
 

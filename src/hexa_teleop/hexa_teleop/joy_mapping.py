@@ -76,6 +76,19 @@ DPAD_DIRECTIONS: dict[str, tuple[str, int]] = {
     "dpad_right": ("dpad_x", +1),
 }
 
+# Virtual stick direction keys, read like the D-pad. Gesture keys only: the
+# function sections bind the stick itself as an axis.
+STICK_DIRECTIONS: dict[str, tuple[str, int]] = {
+    "left_stick_up": ("left_stick_y", +1),
+    "left_stick_down": ("left_stick_y", -1),
+    "left_stick_left": ("left_stick_x", +1),
+    "left_stick_right": ("left_stick_x", -1),
+    "right_stick_up": ("right_stick_y", +1),
+    "right_stick_down": ("right_stick_y", -1),
+    "right_stick_left": ("right_stick_x", +1),
+    "right_stick_right": ("right_stick_x", -1),
+}
+
 
 @dataclass(frozen=True)
 class BaseConfig:
@@ -164,10 +177,10 @@ class JoyConfig:
     # through. Entry into ANIMATION snaps to index 0; subsequent
     # ``animation_prev`` / ``animation_next`` presses step the index.
     animation_list: tuple[str, ...]
-    # GESTURE-mode bindings: physical key -> gesture id from gestures.yaml.
-    # Not functions, so the section has no ``ModeConfig``; base bindings stay
-    # live in the mode.
+    # GESTURE-mode keys: physical key -> gesture id from gestures.yaml. Base
+    # bindings and ``gesture``'s function bindings stay live in the mode.
     gesture_bindings: Mapping[str, str] = field(default_factory=dict)
+    gesture: ModeConfig = field(default_factory=ModeConfig)
 
 
 @dataclass
@@ -376,9 +389,6 @@ def fit_drive_to_envelope(
     return drive_x * scale, drive_y * scale, drive_yaw * scale
 
 
-_NO_BINDINGS = ModeConfig()
-
-
 def _mode_cfg(cfg: JoyConfig, mode: str) -> ModeConfig | PostureConfig:
     if mode == GAIT:
         return cfg.gait
@@ -387,7 +397,7 @@ def _mode_cfg(cfg: JoyConfig, mode: str) -> ModeConfig | PostureConfig:
     if mode == ANIMATION:
         return cfg.animation
     if mode == GESTURE:
-        return _NO_BINDINGS
+        return cfg.gesture
     # Fallback to gait — should not happen since the loader validates
     # ``initial_mode`` and the mapping only ever assigns to known
     # constants.
@@ -427,18 +437,17 @@ def _read_axis_idx(axes: Sequence[float], idx: int) -> float:
     return float(axes[idx])
 
 
-def _dpad_pressed(
+def _direction_pressed(
     virtual_key: str,
     base: BaseConfig,
     axes: Sequence[float],
 ) -> bool:
-    """Return True if the D-pad direction ``virtual_key`` is held.
+    """Return True if the D-pad or stick direction ``virtual_key`` is held.
 
-    Reads the bound ``dpad_x`` / ``dpad_y`` axis from ``base.axes``,
-    applies its sign, and thresholds at ±0.5 so a bouncy axis can't
-    double-count.
+    Reads the bound axis from ``base.axes``, applies its sign, and
+    thresholds at ±0.5 so a bouncy axis can't double-count.
     """
-    axis_name, side = DPAD_DIRECTIONS[virtual_key]
+    axis_name, side = (DPAD_DIRECTIONS | STICK_DIRECTIONS)[virtual_key]
     if axis_name not in base.axis_index:
         return False
     sign = base.axis_sign.get(axis_name, 1.0)
@@ -482,8 +491,8 @@ def _key_pressed(
 ) -> bool:
     if key in base.button_index:
         return _read_button_idx(buttons, base.button_index[key])
-    if key in DPAD_DIRECTIONS:
-        return _dpad_pressed(key, base, axes)
+    if key in DPAD_DIRECTIONS or key in STICK_DIRECTIONS:
+        return _direction_pressed(key, base, axes)
     if key in base.axis_index:
         idx = base.axis_index[key]
         if idx < 0 or idx >= len(axes):
@@ -634,30 +643,42 @@ def validate_gesture_bindings(
     bindings: Mapping[str, str],
     base: BaseConfig,
     gesture_ids: Collection[str],
+    functions: Mapping[str, str] | None = None,
 ) -> None:
-    """Validate the ``gesture`` section: physical key -> gesture id.
+    """Validate ``gesture.gestures``: physical key -> gesture id.
 
-    Keys must be buttons, D-pad directions or the analog triggers, and none
-    may also carry a base binding, which stays live in GESTURE mode. Every
+    Keys must be buttons, D-pad or stick directions or the analog triggers,
+    and none may also carry a base binding or one of ``functions`` (the
+    section's own ``bindings``), which stay live in GESTURE mode. Every
     value must be a gesture id from ``gestures.yaml``. Raises ``ValueError``.
     """
-    pressable = set(base.button_index) | set(DPAD_DIRECTIONS) | (
-        {"l2", "r2"} & set(base.axis_index)
+    pressable = (
+        set(base.button_index)
+        | set(DPAD_DIRECTIONS)
+        | {
+            k for k, (axis, _) in STICK_DIRECTIONS.items()
+            if axis in base.axis_index
+        }
+        | ({"l2", "r2"} & set(base.axis_index))
     )
     for key, gesture in bindings.items():
         if key not in pressable:
             raise ValueError(
-                f"gesture.bindings: {key!r} is not a button, D-pad direction "
-                f"or trigger"
+                f"gesture.gestures: {key!r} is not a button, D-pad or stick "
+                f"direction, or trigger"
             )
-        if base.bindings.get(key):
-            raise ValueError(
-                f"gesture.bindings.{key}: key already bound in base to "
-                f"{base.bindings[key]!r}"
-            )
+        for section, bound in (
+            ("base", base.bindings),
+            ("gesture", functions or {}),
+        ):
+            if bound.get(key):
+                raise ValueError(
+                    f"gesture.gestures.{key}: key already bound in "
+                    f"{section} to {bound[key]!r}"
+                )
         if gesture not in gesture_ids:
             raise ValueError(
-                f"gesture.bindings.{key}: unknown gesture {gesture!r} "
+                f"gesture.gestures.{key}: unknown gesture {gesture!r} "
                 f"(known: {sorted(gesture_ids)})"
             )
 
@@ -1051,8 +1072,8 @@ def map_functions(
     # ``yaw_current``, which the gait/animation return below adds to the
     # pose it publishes, so the body can be held turned while walking.
     # Bindings still resolve against the active mode's config, so a mode
-    # that leaves them unbound has no yaw. Wiggle is live in GAIT and
-    # POSTURE the same way — its translation rides ``wiggle_amount`` and
+    # that leaves them unbound has no yaw. Wiggle is live in GAIT,
+    # POSTURE and GESTURE the same way — its translation rides ``wiggle_amount`` and
     # both returns add it — but not in ANIMATION, where the animation is
     # driving the body and an offset held underneath it fights it.
     wiggle_live = state.mode != ANIMATION

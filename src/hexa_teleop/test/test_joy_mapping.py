@@ -2156,7 +2156,13 @@ def _gesture_cfg():
 
     return dataclasses.replace(
         _cfg(base_bindings={"x": "gesture_mode"}),
-        gesture_bindings={"dpad_up": "wave", "dpad_down": "bow"},
+        gesture_bindings={
+            "dpad_up": "wave",
+            "dpad_down": "bow",
+            "left_stick_up": "boogie",
+            "left_stick_down": "rave",
+        },
+        gesture=ModeConfig(bindings={"l1": "yaw_left", "l2": "wiggle_left"}),
     )
 
 
@@ -2181,6 +2187,32 @@ def test_gesture_fires_once_per_press_in_gesture_mode():
     # D-pad is not height in gesture mode, and the sticks drive nothing.
     assert first.pose_z == 0.0
     assert first.linear_x == 0.0
+
+
+def test_stick_direction_fires_gesture_in_gesture_mode():
+    cfg = _gesture_cfg()
+    state = JoyState(mode=GESTURE)
+    rest = map_joy(_axes(left_y=0.4), _buttons(), cfg, state, DT)
+    up = map_joy(_axes(left_y=1.0), _buttons(), cfg, state, DT)
+    map_joy(_axes(), _buttons(), cfg, state, DT)
+    down = map_joy(_axes(left_y=-1.0), _buttons(), cfg, state, DT)
+    assert rest.gesture is None
+    assert up.gesture == "boogie"
+    assert down.gesture == "rave"
+    assert up.linear_x == 0.0
+
+
+def test_yaw_and_wiggle_live_in_gesture_mode():
+    cfg = _gesture_cfg()
+    state = JoyState(mode=GESTURE)
+    for _ in range(400):
+        yaw = map_joy(_axes(), _buttons(yaw_left=True), cfg, state, DT)
+    assert math.isclose(yaw.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
+    state = JoyState(mode=GESTURE)
+    for _ in range(400):
+        wiggle = map_joy(_press_lt(), _buttons(), cfg, state, DT)
+    assert math.isclose(wiggle.pose_yaw, cfg.posture.yaw_max, rel_tol=1e-6)
+    assert wiggle.pose_y < 0.0
 
 
 def test_gesture_keys_inert_outside_gesture_mode():
@@ -2214,6 +2246,11 @@ def test_gesture_bindings_validated():
         validate_gesture_bindings({"a": "wave"}, base, ("wave",))
     with pytest.raises(ValueError, match="not a button"):
         validate_gesture_bindings({"left_stick_x": "wave"}, base, ("wave",))
+    validate_gesture_bindings({"left_stick_up": "wave"}, base, ("wave",))
+    with pytest.raises(ValueError, match="already bound in gesture"):
+        validate_gesture_bindings(
+            {"l1": "wave"}, base, ("wave",), {"l1": "yaw_left"}
+        )
 
 
 def test_shipped_gesture_bindings_are_valid():
@@ -2233,5 +2270,8 @@ def test_shipped_gesture_bindings_are_valid():
         bindings=raw["base"]["bindings"],
     )
     validate_gesture_bindings(
-        raw["gesture"]["bindings"], base, load_gesture_ids(gestures)
+        raw["gesture"]["gestures"],
+        base,
+        load_gesture_ids(gestures),
+        raw["gesture"]["bindings"],
     )

@@ -163,16 +163,21 @@ def _load_config(
     animation_bindings = _parse_mode_bindings(
         "animation", raw["animation"], base
     )
+    gesture_functions = _parse_mode_bindings("gesture", raw["gesture"], base)
     cross_section_function_check({
         "gait": gait_bindings,
         "posture": posture_bindings,
         "animation": animation_bindings,
+        "gesture": gesture_functions,
     })
     gesture_bindings = {
-        str(k): str(v) for k, v in raw["gesture"]["bindings"].items()
+        str(k): str(v) for k, v in raw["gesture"]["gestures"].items()
     }
     validate_gesture_bindings(
-        gesture_bindings, base, load_gesture_ids(gestures_yaml)
+        gesture_bindings,
+        base,
+        load_gesture_ids(gestures_yaml),
+        gesture_functions,
     )
 
     height = posture_raw["height"]
@@ -201,6 +206,7 @@ def _load_config(
         stance_unit=unit_stance_xy(geometry_yaml, gait_yaml),
         animation_list=animation_list,
         gesture_bindings=gesture_bindings,
+        gesture=ModeConfig(bindings=gesture_functions),
     )
 
     initial_mode = str(raw.get("initial_mode", POSTURE))

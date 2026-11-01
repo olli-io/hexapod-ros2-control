@@ -101,9 +101,9 @@ gait/animation branch publishes, so the body can be held turned or raised while
 the robot walks.
 
 - **The binding table decides where they are reachable.** `l1`/`r1` are bound in
-  the `gait` and `posture` sections and empty in `animation`, so a gamepad has
-  yaw in the first two and none in the third. The webapp offers the same two.
-- **Wiggle is live in gait and posture.** `l2`/`r2` translate the body about a
+  the `gait`, `posture` and `gesture` sections and empty in `animation`, so a
+  gamepad has yaw in all modes but animation. The webapp offers the same two.
+- **Wiggle is live in gait, posture and gesture.** `l2`/`r2` translate the body about a
   pivot ahead of centre, and the wiggle and the yaw it pushes ride along on the
   walk as height and yaw do; the gait branch adds the translation to the recorded
   x-y baseline, its only x-y offset, since the sticks are driving there.
@@ -224,15 +224,20 @@ Both duty factor 3/4, one foot airborne at a time:
 ## Gesture mode (**x**)
 
 **x** enters gesture mode; **a**, **b** and **y** leave it as from any mode.
-The `gesture:` section binds a key to a gesture id from `hexa_description`'s
-`gestures.yaml`, validated at load. Defaults:
+The `gesture:` section has two tables. `bindings` maps keys to functions, as in
+the other sections: `l1`/`r1` yaw and `l2`/`r2` wiggle, which ride on the
+gesture's body track. `gestures` maps a key to a gesture id from
+`hexa_description`'s `gestures.yaml`, validated at load. Defaults:
 
 - **D-pad** — up `wave`, down `bow`, left `chitter`, right `intimidate`.
-- **l3** / **r3** (stick presses) — `boogie` / `rave`.
+- **Left stick** up / down — `boogie` / `rave`.
 
+- **Stick directions** (`left_stick_up`, `right_stick_left`, …) are virtual
+  keys, pressed past half deflection like the D-pad. Gesture keys only.
 - **Gesture keys are live in gesture mode only.** The other sections' keys
   and the sticks are inert there; base bindings (mode buttons, `start`,
-  `select`) stay live, so a gesture key may not carry a base binding.
+  `select`) and `gesture.bindings` stay live, so a gesture key may carry
+  neither.
 - **One press, one `/cmd_gesture`**, on the rising edge. A key held on entry
   fires nothing. Ungated by ownership, like the web Gesture view.
 - **Pre-gated on `stand`**; a press elsewhere is dropped with a log line. The

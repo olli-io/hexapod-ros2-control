@@ -101,15 +101,15 @@ void adapt_gamepad(const uni_gamepad_t& gp, int16_t axes[kNumAxes], uint32_t& bu
     axes[kL2] = scale_trigger(gp.brake);
     axes[kR2] = scale_trigger(gp.throttle);
 
-    // D-pad -> hat axes, encoded so (raw) * (axis_sign = -1) crosses the ±0.5
-    // thresholds in joy_mapping.DPAD_DIRECTIONS the right way:
+    // D-pad -> hat axes in the Linux js layout, which teleop_joy.yaml's
+    // axis_signs (dpad_x +1, dpad_y -1) are tuned for:
     //   up   -> dpad_y = -max    down  -> dpad_y = +max
-    //   left -> dpad_x = +max    right -> dpad_x = -max
+    //   left -> dpad_x = -max    right -> dpad_x = +max
     int16_t dx = 0, dy = 0;
     if (gp.dpad & DPAD_UP) dy = kAxisMin;
     if (gp.dpad & DPAD_DOWN) dy = kAxisMax;
-    if (gp.dpad & DPAD_LEFT) dx = kAxisMax;
-    if (gp.dpad & DPAD_RIGHT) dx = kAxisMin;
+    if (gp.dpad & DPAD_LEFT) dx = kAxisMin;
+    if (gp.dpad & DPAD_RIGHT) dx = kAxisMax;
     axes[kDpadX] = dx;
     axes[kDpadY] = dy;
 
