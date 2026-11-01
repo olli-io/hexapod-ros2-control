@@ -33,6 +33,7 @@ from hexa_common import (
     VelocityCaps,
     load_animation_mode_animations,
     load_body_height_offsets,
+    load_gesture_ids,
     load_posture_scalar_limits,
     load_velocity_caps,
     unit_stance_xy,
@@ -66,8 +67,11 @@ from hexa_teleop.joy_mapping import (
 
 # What the client is allowed to name on the wire: every function the state
 # machine reads as a press, and nothing else. The axis-class functions are
-# the sticks', and the client does not name those.
-ACTIONS: frozenset[str] = BASE_FUNCTIONS | BUTTON_CLASS_FUNCTIONS
+# the sticks', and the client does not name those. ``gesture_mode`` is the
+# pad's: the web app plays gestures from its Gesture view.
+ACTIONS: frozenset[str] = (
+    BASE_FUNCTIONS | BUTTON_CLASS_FUNCTIONS
+) - {"gesture_mode"}
 
 # The webapp's two sticks, by the names the ``sticks:`` blocks use.
 STICKS: tuple[str, ...] = (
@@ -401,24 +405,6 @@ def preset_pending_expired(
     deadline is what the webapp reads as "it did not happen".
     """
     return deadline_monotonic is not None and now_monotonic > deadline_monotonic
-
-
-def load_gesture_ids(gestures_yaml: str | Path) -> tuple[str, ...]:
-    """The gesture ids ``gestures.yaml`` declares, in declaration order.
-
-    The Gesture view is one tile per id; the node checks a request against the
-    same tuple. Ids only — the keyframes are the engine's business, and it
-    validates them itself when it loads the file.
-    """
-    with Path(gestures_yaml).open() as f:
-        raw = yaml.safe_load(f) or {}
-    entries = raw.get("gestures")
-    if not isinstance(entries, list):
-        raise ValueError("gestures.yaml: `gestures` must be a list")
-    ids = tuple(str(entry["id"]) for entry in entries)
-    if len(set(ids)) != len(ids):
-        raise ValueError("gestures.yaml: duplicate gesture id")
-    return ids
 
 
 def load_stabilize_presets(tuning_yaml: str | Path) -> tuple[str, ...]:

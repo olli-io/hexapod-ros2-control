@@ -132,9 +132,9 @@ class PostureController {
   // posture_active(state) is false. master_phase is wrapped to [0, 1)
   // defensively; phase-locked animations gate on gait_name.
   //
-  // `gesture_pose` is a running gesture's body track. Added after the smoother
-  // so its keyframe timing is exact, and under the same clamp as everything
-  // else. Not an animation: it is not routed through the stack.
+  // `gesture_pose` is a running gesture's body track, or the bachata sway.
+  // Added after the smoother so its timing is exact, and under the same clamp
+  // as everything else. Not an animation: it is not routed through the stack.
   //
   // The leveling correction (see set_leveling) is added last, under the clamp.
   BodyPose update(const std::map<std::string, gait::LegOutput>& legs,

@@ -33,6 +33,19 @@ hardware. The seams each caller supplies — input, config source, clock, output
   `reversal` (travel reversal), pair fold/unfold. `gaits/` holds the
   strategies — `tripod`, `surf`, `tetrapod`, `crawl`, `ripple`, `quad_walk`,
   `quad_canter` — each a pure `(phase, stride, leg) → foot_target`.
+- **`gait/bachata`** — the bachata routine, a hardcoded strafing dance played
+  in `DANCE` on a preset with `bachata: true` while `/cmd_vel` is non-zero
+  (its direction and speed are ignored). One pure function of time gives all
+  six feet and the body term. A bar is eight beats, each half led by the
+  tripod whose middle leg is on the travel side: B (left middle) steps left, A
+  steps left, B steps left, A taps in place; then the mirror to the right, led
+  by A. Body travel per step beat is `[½, 1, ½]` of `stride`, so
+  every half bar starts and ends on nominal. The body shifts away from the
+  swinging tripod's two-leg side, tilts down the same way and rises with the
+  square of the shift (a U), at the extreme
+  at each touchdown; a tap is a half sway (side, centre, same side) and lifts the feet half as high. A zero command finishes the half bar,
+  then one still beat eases the sway out. Knobs: `tuning.yaml`
+  `gait_node.bachata`.
 - **`posture/`** — `PostureController`: user body pose + animation stack →
   `BodyPose` offset. Animations are pure `AnimationContext → BodyPose`
   (`breathing`, `gait_sway`, `support_shift`, `swing_dip`, `gait_bounce`, body
@@ -47,12 +60,15 @@ hardware. The seams each caller supplies — input, config source, clock, output
   `stabilization.presets`, on a stale sample, or while a preset change waits
   for a neutral pose.
 - **`gesture/`** — keyframed leg + body motions played from a stand
-  (`gestures.yaml`: `start`, `pose`, `hold` and `home` keyframes, a `pose`
-  carrying the values). `keyframe` samples one track (`ease` smoothstep or a
-  `continuous` Hermite run, slope-capped so a component never leaves the
-  range its knots span); `GesturePlayer` completes a gesture's per-leg joint
-  tables and body table with the implicit start knot, resolves `hold`, `home`
-  and `start` knots, and plays them off one clock; every track ends on a home
+  (`gestures.yaml`: `start`, `pose`, `oscillate`, `hold` and `home`
+  keyframes, a `pose` carrying the values). `keyframe` samples one track:
+  an `ease` quintic smoothstep, a `continuous` quintic Hermite run with zero
+  curvature at its knots, slope-capped so a component never leaves the range
+  its knots span, or an `oscillate` sine about the knot before, with an
+  ease5 envelope at both ends. Every segment is C2. `GesturePlayer` completes
+  a gesture's per-leg joint tables and body table with the implicit start
+  knot, resolves `hold`, `oscillate`, `home` and `start` knots, and plays
+  them off one clock; every track ends on a home
   knot. A leg's `start` and `home` knots are *live*: the standing leg under
   the body pose of that moment, which only the pipeline knows. So between two
   fixed knots a tracked leg is reported `direct` with its joint angles; easing
@@ -62,8 +78,11 @@ hardware. The seams each caller supplies — input, config source, clock, output
   live stretch it is a plain stance leg. Each such ease starts (or ends) with
   the **stand step** (`gestures.yaml` `stand_step`): the foot goes straight up
   from its stance (or straight down to it) as a live target, and the joint
-  blend runs from that raised stance, so the foot never drags. `validate_gestures` checks every leg
-  knot against the joint limits and the ground plane at construction, the
+  blend runs from that raised stance, so the foot never drags. The blend
+  starts `overlap` s before the step ends, so the foot does not stop at the
+  top. `validate_gestures` checks every leg knot, and every oscillation along
+  its sampled path, against the joint limits and the ground plane at
+  construction, a body oscillation's extremes against the pose limits, the
   track shape (`check_track_shape`, shared with the YAML loaders), and that
   every ease next to a live knot outlasts the stand step.
   Its leg track is neither gait nor animation; its body track is a posture
@@ -104,13 +123,15 @@ overload runs `map_joy` first, then the same core.
 8. **Velocity shaping** — `Control::shape` on the applied leg set.
 9. **Gait engine** — `Engine::update(dt, v, wz)` → per-leg `LegOutput`
    (foot target, stance flag, phase, parked, direct joints). In `GESTURE` the
-   player's legs come out here and the command is ignored.
+   player's legs come out here and the command is ignored; in `DANCE` the
+   bachata routine's legs, the command read only as zero or not.
 10. **Posture** — user pose (pinned to identity while the middle pair is in
     flight) + animation stack, gated on `walking` and engine state, plus a
-    running gesture's body term, all under one clamp, then the leveling
-    correction under the same clamp (back-calculated, so the clamp does not
-    wind it up) → `BodyPose`. The IMU sample arrives on `TickInput.imu_*`,
-    the switch on `CommandIntent.stabilize`; the Pico supplies neither.
+    running gesture's or the bachata routine's body term, all under one clamp,
+    then the leveling correction under the same clamp (back-calculated, so the
+    clamp does not wind it up) → `BodyPose`. The IMU sample arrives on
+    `TickInput.imu_*`, the switch on `CommandIntent.stabilize`; the Pico
+    supplies neither.
 11. **Compose / IK** — per leg: `apply_body_pose` → `body_to_leg` →
     `inverse_kinematics`. An unreachable target holds that leg's last-good
     angles. A parked leg writes the folded pose directly; a direct leg (a
@@ -127,7 +148,8 @@ overload runs `map_joy` first, then the same core.
 `FOLDED → INITIALIZE → STAND ⇄ ENGAGING → GAIT → SETTLING → STAND`,
 `STAND → FOLDING → FOLDED`, `STAND → RESEATING` (height change, preset change,
 settle hand-off, abandoned engagement), `STAND ⇄ FOLDING_PAIR / UNFOLDING_PAIR`
-(leg-set change), `STAND → GESTURE → STAND` (default preset only), `FAULT`
+(leg-set change), `STAND → GESTURE → STAND` (default preset only),
+`STAND → DANCE → STAND` (a bachata preset, non-zero command), `FAULT`
 from anywhere. Walking drops any armed change; a
 stop is always a **settle** (gait runs on at zero stride) unless the gait is too
 slow, then a **reseat**.

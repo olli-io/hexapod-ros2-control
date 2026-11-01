@@ -324,6 +324,10 @@ def presets(gait: dict, geometry: dict):
                     f"tuning.yaml presets.{pid}: missing {knob} — every preset "
                     f"carries its own bundle, there is no global fallback")
             row[knob] = entry[knob]
+        bachata = entry.get("bachata", False)
+        if not isinstance(bachata, bool):
+            raise ValueError(f"tuning.yaml presets.{pid}.bachata must be a bool")
+        row["bachata"] = bachata
         out.append(row)
 
     default_id = str(gait["default_preset"])
@@ -338,13 +342,15 @@ def presets(gait: dict, geometry: dict):
 # ── gestures ────────────────────────────────────────────────────────────────
 
 GESTURE_TRANSITIONS = ("ease", "continuous")
-LEG_KEYFRAME_TYPES = ("start", "pose", "hold", "home")
-BODY_KEYFRAME_TYPES = ("pose", "hold", "home")
+LEG_KEYFRAME_TYPES = ("start", "pose", "oscillate", "hold", "home")
+BODY_KEYFRAME_TYPES = ("pose", "oscillate", "hold", "home")
 LEG_STAND_IN_WORDS = ("hold", "home", "start")
 LEG_POSE_KEYS = {"t", "transition"} | set(LEG_NAMES)
 LEG_ENTRY_KEYS = {"coxa_deg", "femur_deg", "tibia_deg"}
+LEG_OSC_AXES = ("coxa_deg", "femur_deg", "tibia_deg")
 BODY_AXES = ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg")
 BODY_POSE_KEYS = {"t", "transition"} | set(BODY_AXES)
+OSCILLATE_KEYS = {"t", "period", "ramp"}
 
 
 def keyframe_type(kf, where: str, types):
@@ -373,7 +379,9 @@ def keyframe_common(kind: str, inner: dict, where: str, prev_t):
 def keyframe_transition(kind: str, inner: dict, where: str) -> str:
     """A start, hold or home takes only t and implies its transition: a hold
     is static, a start is where the track begins and a home always eases in.
-    A pose must say."""
+    An oscillate arrives at rest, so it counts as an ease. A pose must say."""
+    if kind == "oscillate":
+        return "ease"
     if kind != "pose":
         if set(inner) != {"t"}:
             raise ValueError(f"{where}: {kind} takes only t")
@@ -392,12 +400,20 @@ def check_track_shape(rows, where: str):
     under whatever body pose is on at that moment, which only the pipeline
     knows, and a hold after one is live too. So a `start` must come before
     the track's first pose, a `continuous` pose needs a fixed
-    knot before it to draw a slope from, and the track must end on a home.
+    knot before it to draw a slope from, an `oscillate` needs a fixed knot
+    before it to swing about, and the track must end on a home.
     """
     live = True
     seen_joints = False
+    prev_t = 0.0
     for row in rows:
-        if row["start"]:
+        if row["oscillate"]:
+            if live:
+                raise ValueError(
+                    f"{where}: an oscillate at t={row['t']} must follow a "
+                    f"pose, not start, home or a hold of them")
+            check_oscillation(row, row["t"] - prev_t, where)
+        elif row["start"]:
             if seen_joints:
                 raise ValueError(
                     f"{where}: start must come before the first pose")
@@ -411,8 +427,61 @@ def check_track_shape(rows, where: str):
                     f"follow a pose, not start, home or a hold of them")
             live = False
             seen_joints = True
+        prev_t = row["t"]
     if not rows[-1]["home"]:
         raise ValueError(f"{where}: the track must end with a home keyframe")
+
+
+def check_oscillation(row, span: float, where: str):
+    """period and ramp positive, and both ramps fit in the segment."""
+    if not (row["period"] > 0.0 and row["ramp"] > 0.0):
+        raise ValueError(
+            f"{where}: oscillate at t={row['t']}: period and ramp must be > 0")
+    if 2.0 * row["ramp"] > span + 1e-6:
+        raise ValueError(
+            f"{where}: oscillate at t={row['t']}: two ramps of {row['ramp']} s "
+            f"do not fit in its {span:.3f} s segment")
+
+
+def oscillation(inner: dict, where: str, axes, to_rad):
+    """period, ramp and per-axis (amp, lead) of an oscillate keyframe entry.
+
+    Each axis is an amplitude, or a mapping {amp, lead_deg}; lead_deg shifts
+    that axis's sine ahead. `to_rad(axis, value)` converts an amplitude into
+    the table's units (and sign). Axes not named are zero."""
+    amp = [0.0] * len(axes)
+    lead = [0.0] * len(axes)
+    if not inner or not set(inner) <= set(axes):
+        raise ValueError(f"{where}: names one or more of {', '.join(axes)}")
+    for i, axis in enumerate(axes):
+        if axis not in inner:
+            continue
+        v = inner[axis]
+        if isinstance(v, dict):
+            if not {"amp"} <= set(v) <= {"amp", "lead_deg"}:
+                raise ValueError(f"{where}.{axis}: needs amp, optional lead_deg")
+            a = float(v["amp"])
+            lead[i] = math.radians(float(v.get("lead_deg", 0.0)))
+        else:
+            a = float(v)
+        amp[i] = to_rad(axis, a)
+    return amp, lead
+
+
+def leg_amp_rad(axis: str, deg: float) -> float:
+    jt = axis[:-len("_deg")]
+    return to_urdf_rad(jt, deg) - to_urdf_rad(jt, 0.0)
+
+
+def body_amp(axis: str, v: float) -> float:
+    return math.radians(v) if axis.endswith("_deg") else v
+
+
+def oscillate_period_ramp(inner: dict, where: str):
+    for k in ("period", "ramp"):
+        if k not in inner:
+            raise ValueError(f"{where}: oscillate needs {k}")
+    return float(inner["period"]), float(inner["ramp"])
 
 
 def leg_entry_angles(v: dict, limits: dict, where: str):
@@ -467,6 +536,22 @@ def gestures(doc, geometry: dict):
             where = f"gestures.yaml {gid}.legs[{i}]"
             kind, inner = keyframe_type(kf, where, LEG_KEYFRAME_TYPES)
             prev_t = keyframe_common(kind, inner, where, prev_t)[0]
+            if kind == "oscillate":
+                unknown = set(inner) - OSCILLATE_KEYS - set(LEG_NAMES)
+                if unknown:
+                    raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
+                oscillate_period_ramp(inner, where)
+                legs_here = [n for n in LEG_NAMES if n in inner]
+                if not legs_here:
+                    raise ValueError(f"{where}: oscillate names no leg")
+                for leg in legs_here:
+                    if not isinstance(inner[leg], dict):
+                        raise ValueError(f"{where}.{leg}: a mapping")
+                    oscillation(inner[leg], f"{where}.{leg}", LEG_OSC_AXES,
+                                leg_amp_rad)
+                    if leg not in moved:
+                        moved.append(leg)
+                continue
             if kind != "pose":
                 continue
             unknown = set(inner) - LEG_POSE_KEYS
@@ -498,7 +583,7 @@ def gestures(doc, geometry: dict):
             rows = []
             for kf in keyframes:
                 kind, inner = keyframe_type(kf, "", LEG_KEYFRAME_TYPES)
-                if kind != "pose":
+                if kind not in ("pose", "oscillate"):
                     v = kind
                 elif leg in inner:
                     v = inner[leg]
@@ -507,8 +592,14 @@ def gestures(doc, geometry: dict):
                 row = dict(t=float(inner["t"]), coxa=0.0, femur=0.0, tibia=0.0,
                            transition=keyframe_transition(kind, inner, ""),
                            hold=(v == "hold"), home=(v == "home"),
-                           start=(v == "start"))
-                if v not in LEG_STAND_IN_WORDS:
+                           start=(v == "start"), oscillate=False, period=0.0,
+                           ramp=0.0, amp=[0.0] * 3, lead=[0.0] * 3)
+                if kind == "oscillate":
+                    row["oscillate"] = True
+                    row["period"], row["ramp"] = oscillate_period_ramp(inner, "")
+                    row["amp"], row["lead"] = oscillation(
+                        v, "", LEG_OSC_AXES, leg_amp_rad)
+                elif v not in LEG_STAND_IN_WORDS:
                     row["coxa"], row["femur"], row["tibia"] = leg_entry_angles(
                         v, limits, f"gestures.yaml {gid}.{leg}")
                 rows.append(row)
@@ -524,7 +615,18 @@ def gestures(doc, geometry: dict):
             prev_t = t
             row = dict(t=t, x=0.0, y=0.0, z=0.0, roll=0.0, pitch=0.0, yaw=0.0,
                        transition=transition, hold=(kind == "hold"),
-                       home=(kind == "home"))
+                       home=(kind == "home"), oscillate=(kind == "oscillate"),
+                       period=0.0, ramp=0.0, amp=[0.0] * 6, lead=[0.0] * 6)
+            if kind == "oscillate":
+                unknown = set(inner) - OSCILLATE_KEYS - set(BODY_AXES)
+                if unknown:
+                    raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
+                row["period"], row["ramp"] = oscillate_period_ramp(inner, where)
+                row["amp"], row["lead"] = oscillation(
+                    {k: v for k, v in inner.items() if k in BODY_AXES}, where,
+                    BODY_AXES, body_amp)
+                check_oscillation(row, t - (body_rows[-1]["t"] if body_rows
+                                            else 0.0), where)
             if kind == "pose":
                 unknown = set(inner) - BODY_POSE_KEYS
                 if unknown:
@@ -551,12 +653,17 @@ def stand_step(doc) -> dict:
     """gestures.yaml stand_step: the foot's vertical step out of and into a
     leg's stand. Mirrored by pipeline_config_loader.cpp."""
     step = (doc or {}).get("stand_step")
-    if not isinstance(step, dict) or set(step) != {"height", "time"}:
-        raise ValueError("gestures.yaml stand_step: needs exactly height, time")
-    out = {k: float(step[k]) for k in ("height", "time")}
-    if out["height"] < 0.0 or out["time"] < 0.0:
-        raise ValueError("gestures.yaml stand_step: height and time must not "
-                         "be negative")
+    keys = ("height", "time", "overlap")
+    if not isinstance(step, dict) or set(step) != set(keys):
+        raise ValueError(
+            "gestures.yaml stand_step: needs exactly height, time, overlap")
+    out = {k: float(step[k]) for k in keys}
+    if min(out.values()) < 0.0:
+        raise ValueError("gestures.yaml stand_step: height, time and overlap "
+                         "must not be negative")
+    if out["overlap"] > out["time"]:
+        raise ValueError("gestures.yaml stand_step: overlap must not exceed "
+                         "time")
     return out
 
 
@@ -869,6 +976,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  float max_swing_time;")
     w("  float step_height;")
     w("  float swing_phase_margin;")
+    w("  // A non-zero command plays the bachata routine instead of walking.")
+    w("  bool bachata;")
     w("};")
     w("")
     w(f"inline constexpr std::array<PresetConfig, {len(preset_rows)}> kPresets "
@@ -888,6 +997,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         w("        }}},")
         for knob in PRESET_KNOBS:
             w(f"        {fl(row[knob])},  // {knob}")
+        w(f"        {'true' if row['bachata'] else 'false'},  // bachata")
         w("    },")
     w("}};")
     w("")
@@ -955,6 +1065,12 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("quadruped_shift_time", gait["quadruped"]["shift_time"]),
         ("pair_fold_swing_time", gait["pair_fold"]["swing_time"]),
         ("pair_fold_dwell_time", gait["pair_fold"]["dwell_time"]),
+        ("bachata_beat_time", gait["bachata"]["beat_time"]),
+        ("bachata_stride", gait["bachata"]["stride"]),
+        ("bachata_planted_share", gait["bachata"]["planted_share"]),
+        ("bachata_sway_y", gait["bachata"]["sway_y"]),
+        ("bachata_sway_z", gait["bachata"]["sway_z"]),
+        ("bachata_sway_roll", math.radians(gait["bachata"]["sway_roll_deg"])),
     ]
     for fname, _ in fields:
         w(f"  float {fname};")
@@ -1014,7 +1130,10 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("// before it; a leg `start` or `home` knot is the standing leg under the")
     w("// live body pose and a body `home` knot the identity body. Their value")
     w("// fields are zero here, the player resolves them. Every track ends on a")
-    w("// home knot.")
+    w("// home knot. An `oscillate` knot holds the value before it, as a hold")
+    w("// does, and swings each axis about it by amp * sin(2 pi tau / period +")
+    w("// lead) under a `ramp` s envelope at both ends; tau runs from the knot")
+    w("// before.")
     w("enum class GestureTransition : std::uint8_t { EASE, CONTINUOUS };")
     w("struct LegKeyframe {")
     w("  float t;      // s from gesture start")
@@ -1025,6 +1144,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  bool hold;")
     w("  bool home;")
     w("  bool start;")
+    w("  bool oscillate;")
+    w("  float period;  // s")
+    w("  float ramp;    // s")
+    w("  std::array<float, 3> amp;   // rad, IK convention")
+    w("  std::array<float, 3> lead;  // rad")
     w("};")
     w("struct BodyKeyframe {")
     w("  float t;")
@@ -1033,6 +1157,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  GestureTransition transition;")
     w("  bool hold;")
     w("  bool home;")
+    w("  bool oscillate;")
+    w("  float period;")
+    w("  float ramp;")
+    w("  std::array<float, 6> amp;   // x, y, z m; roll, pitch, yaw rad")
+    w("  std::array<float, 6> lead;  // rad")
     w("};")
     w("struct GestureLegTrack {  // one leg's keyframes, into kGestureLegKeyframes")
     w("  hexa::Leg leg;")
@@ -1061,12 +1190,18 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     def trans(name: str) -> str:
         return "GestureTransition::" + name.upper()
 
+    def osc(r) -> str:
+        def arr(v):
+            return "{{" + ", ".join(fl(x) for x in v) + "}}"
+        return (f"{bo(r['oscillate'])}, {fl(r['period'])}, {fl(r['ramp'])}, "
+                f"{arr(r['amp'])}, {arr(r['lead'])}")
+
     w(f"inline constexpr std::array<LegKeyframe, {len(leg_keys)}> "
       "kGestureLegKeyframes = {{")
     for gid, leg, r in leg_keys:
         w(f"    {{{fl(r['t'])}, {fl(r['coxa'])}, {fl(r['femur'])}, "
           f"{fl(r['tibia'])}, {trans(r['transition'])}, {bo(r['hold'])}, "
-          f"{bo(r['home'])}, {bo(r['start'])}}},"
+          f"{bo(r['home'])}, {bo(r['start'])}, {osc(r)}}},"
           f"  // {gid} {leg}")
     w("}};")
     w(f"inline constexpr std::array<BodyKeyframe, {len(body_keys)}> "
@@ -1074,8 +1209,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     for gid, r in body_keys:
         w(f"    {{{fl(r['t'])}, {fl(r['x'])}, {fl(r['y'])}, {fl(r['z'])}, "
           f"{fl(r['roll'])}, {fl(r['pitch'])}, {fl(r['yaw'])}, "
-          f"{trans(r['transition'])}, {bo(r['hold'])}, {bo(r['home'])}}},"
-          f"  // {gid}")
+          f"{trans(r['transition'])}, {bo(r['hold'])}, {bo(r['home'])}, "
+          f"{osc(r)}}},  // {gid}")
     w("}};")
     w(f"inline constexpr std::array<GestureLegTrack, {len(leg_tracks)}> "
       "kGestureLegTracks = {{")
@@ -1088,6 +1223,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
       "  // m")
     w(f"inline constexpr float kGestureStandStepTime = {fl(step['time'])};"
       "  // s")
+    w("inline constexpr float kGestureStandStepOverlap = "
+      f"{fl(step['overlap'])};  // s")
     w(f"inline constexpr std::array<GestureConfig, {len(gesture_rows)}> "
       "kGestures = {{")
     for gst, ft, tc, fb, bc in gesture_rows:
@@ -1541,7 +1678,11 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
 
     # ── Pico front-panel button (hardware.yaml pico_button:, firmware-only) ──
     btn = (hardware.get("pico_button", {}) or {})
-    btn_pin = int(btn["pin"])
+    btn_bt_pin = int(btn["bluetooth_pin"])
+    btn_info_pin = int(btn["info_pin"])
+    if btn_bt_pin == btn_info_pin:
+        raise SystemExit("hardware.yaml pico_button: bluetooth_pin and info_pin "
+                         "must differ")
     btn_hold_s = float(btn["hold_s"])
     btn_debounce_s = float(btn["debounce_s"])
     btn_screen_s = float(btn["screen_s"])
@@ -1556,13 +1697,14 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
             "hardware.yaml pico_button.debounce_s must be below hold_s — "
             "a press could never be held long enough to register")
     w("struct PicoButton {  // hardware.yaml pico_button:")
-    w("  std::uint8_t pin;")
+    w("  std::uint8_t bluetooth_pin;  // press: controller screen; hold: pair")
+    w("  std::uint8_t info_pin;       // press: battery screen")
     w("  float hold_s;         // press below this = short press, at/above = hold")
     w("  float debounce_s;")
-    w("  float screen_s;       // battery screen dwell before the face returns")
-    w("  float pair_window_s;  // pairing stays open this long, or until a pad binds")
+    w("  float screen_s;       // screen dwell before the face returns")
+    w("  float pair_window_s;  // pairing scan backstop; a bind or a press ends it sooner")
     w("};")
-    w(f"inline constexpr PicoButton kPicoButton = {{{btn_pin}, "
+    w(f"inline constexpr PicoButton kPicoButton = {{{btn_bt_pin}, {btn_info_pin}, "
       f"{fl(btn_hold_s)}, {fl(btn_debounce_s)}, {fl(btn_screen_s)}, "
       f"{fl(btn_pair_window_s)}}};")
     w("")

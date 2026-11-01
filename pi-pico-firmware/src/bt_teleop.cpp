@@ -42,6 +42,7 @@ int16_t g_axes[kNumAxes];
 uint32_t g_buttons = 0;
 bool g_connected = false;
 uint64_t g_last_data_us = 0;
+char g_name[64] = {};  // bound controller; "" = none
 
 // The one controller we drive from. Bluepad32 can pair several; we bind to the
 // first ready gamepad and ignore the rest (a hexapod has one pilot).
@@ -126,6 +127,13 @@ void adapt_gamepad(const uni_gamepad_t& gp, int16_t axes[kNumAxes], uint32_t& bu
     buttons = b;
 }
 
+void store_name(const char* name) {
+    critical_section_enter_blocking(&g_lock);
+    std::strncpy(g_name, name, sizeof(g_name) - 1);
+    g_name[sizeof(g_name) - 1] = '\0';
+    critical_section_exit(&g_lock);
+}
+
 void store_snapshot(const int16_t axes[kNumAxes], uint32_t buttons, bool connected_now) {
     critical_section_enter_blocking(&g_lock);
     memcpy(g_axes, axes, sizeof(g_axes));
@@ -170,6 +178,7 @@ void platform_on_device_disconnected(uni_hid_device_t* d) {
         uint32_t buttons;
         fill_neutral(axes, buttons);
         store_snapshot(axes, buttons, /*connected_now=*/false);
+        store_name("");
     }
 }
 
@@ -181,7 +190,9 @@ uni_error_t platform_on_device_ready(uni_hid_device_t* d) {
         return UNI_ERROR_IGNORE_DEVICE;
     }
     g_device = d;
-    HEXA_DBG("[bt] controller ready: %p\n", static_cast<void*>(d));
+    // Some pads report no name; the screen still has to say one is bound.
+    store_name(d->name[0] != '\0' ? d->name : "unnamed controller");
+    HEXA_DBG("[bt] controller ready: %p (%s)\n", static_cast<void*>(d), d->name);
     return UNI_ERROR_SUCCESS;
 }
 
@@ -319,6 +330,16 @@ bool connected() {
     const bool c = g_connected;
     critical_section_exit(&g_lock);
     return c;
+}
+
+void controller_name(char* out, std::size_t n) {
+    if (out == nullptr || n == 0) return;
+    out[0] = '\0';
+    if (!g_locked) return;
+    critical_section_enter_blocking(&g_lock);
+    std::strncpy(out, g_name, n - 1);
+    out[n - 1] = '\0';
+    critical_section_exit(&g_lock);
 }
 
 uint64_t last_data_us() {

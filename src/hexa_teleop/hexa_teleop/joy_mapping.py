@@ -15,6 +15,9 @@ from typing import Callable, Collection, Mapping, Sequence
 POSTURE = "posture"
 GAIT = "gait"
 ANIMATION = "animation"
+# Pad-local: never published on or adopted from ``/teleop/mode``. The web app
+# plays gestures from its own Gesture view, not from a mode.
+GESTURE = "gesture"
 
 # Function namespace. The loader validates every YAML binding value
 # against these sets; runtime helpers trust well-formed configs.
@@ -22,6 +25,7 @@ BASE_FUNCTIONS: frozenset[str] = frozenset({
     "gait_mode",
     "posture_mode",
     "animation_mode",
+    "gesture_mode",
     "init",
     "record",
     # Body stabilization on/off. Robot-only: the Pico mapping has no IMU and
@@ -160,6 +164,10 @@ class JoyConfig:
     # through. Entry into ANIMATION snaps to index 0; subsequent
     # ``animation_prev`` / ``animation_next`` presses step the index.
     animation_list: tuple[str, ...]
+    # GESTURE-mode bindings: physical key -> gesture id from gestures.yaml.
+    # Not functions, so the section has no ``ModeConfig``; base bindings stay
+    # live in the mode.
+    gesture_bindings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -168,6 +176,7 @@ class JoyState:
     prev_gait_mode: bool = False
     prev_posture_mode: bool = False
     prev_animation_mode: bool = False
+    prev_gesture_mode: bool = False
     prev_init: bool = False
     prev_record: bool = False
     prev_stabilize_toggle: bool = False
@@ -222,6 +231,8 @@ class JoyState:
     # because the preset it needs cannot be switched to from the engine state.
     # The four-legged gate is ``quadruped``, the mapping's own.
     animation_blocked: bool = False
+    # Gesture ids whose key was held last tick, for the rising edge.
+    prev_gestures: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -255,6 +266,9 @@ class JoyOutput:
     # Rising edge of ``stabilize_toggle``. The ROS layer flips the applied
     # state it reads on ``/gait/stabilize``.
     stabilize_toggle: bool = False
+    # Gesture id on its key's rising edge in GESTURE mode; ``None`` otherwise.
+    # Not gated on engine state — that lives in the ROS layer.
+    gesture: str | None = None
 
 
 @dataclass(frozen=True)
@@ -270,6 +284,8 @@ class FunctionInput:
 
     pressed: frozenset[str]
     axes: Mapping[str, float]
+    # Gesture ids whose key is held. Filled only for the GESTURE section.
+    gestures: frozenset[str] = frozenset()
 
 
 # Resolves the operator's input against one config section (GAIT / POSTURE /
@@ -360,6 +376,9 @@ def fit_drive_to_envelope(
     return drive_x * scale, drive_y * scale, drive_yaw * scale
 
 
+_NO_BINDINGS = ModeConfig()
+
+
 def _mode_cfg(cfg: JoyConfig, mode: str) -> ModeConfig | PostureConfig:
     if mode == GAIT:
         return cfg.gait
@@ -367,6 +386,8 @@ def _mode_cfg(cfg: JoyConfig, mode: str) -> ModeConfig | PostureConfig:
         return cfg.posture
     if mode == ANIMATION:
         return cfg.animation
+    if mode == GESTURE:
+        return _NO_BINDINGS
     # Fallback to gait — should not happen since the loader validates
     # ``initial_mode`` and the mapping only ever assigns to known
     # constants.
@@ -450,6 +471,15 @@ def _button_pressed(
     key = _resolve_function_key(function, base, mode_cfg)
     if key is None:
         return False
+    return _key_pressed(key, base, buttons, axes)
+
+
+def _key_pressed(
+    key: str,
+    base: BaseConfig,
+    buttons: Sequence[int],
+    axes: Sequence[float],
+) -> bool:
     if key in base.button_index:
         return _read_button_idx(buttons, base.button_index[key])
     if key in DPAD_DIRECTIONS:
@@ -510,6 +540,11 @@ def resolve_functions(
             fn: _axis_signed(fn, base, mode_cfg, axes)
             for fn in AXIS_CLASS_FUNCTIONS
         },
+        gestures=frozenset(
+            gesture
+            for key, gesture in cfg.gesture_bindings.items()
+            if section == GESTURE and _key_pressed(key, base, buttons, axes)
+        ),
     )
 
 
@@ -593,6 +628,38 @@ def validate_bindings(
                 f"{seen_fn[fn]!r} and {key!r}"
             )
         seen_fn[fn] = key
+
+
+def validate_gesture_bindings(
+    bindings: Mapping[str, str],
+    base: BaseConfig,
+    gesture_ids: Collection[str],
+) -> None:
+    """Validate the ``gesture`` section: physical key -> gesture id.
+
+    Keys must be buttons, D-pad directions or the analog triggers, and none
+    may also carry a base binding, which stays live in GESTURE mode. Every
+    value must be a gesture id from ``gestures.yaml``. Raises ``ValueError``.
+    """
+    pressable = set(base.button_index) | set(DPAD_DIRECTIONS) | (
+        {"l2", "r2"} & set(base.axis_index)
+    )
+    for key, gesture in bindings.items():
+        if key not in pressable:
+            raise ValueError(
+                f"gesture.bindings: {key!r} is not a button, D-pad direction "
+                f"or trigger"
+            )
+        if base.bindings.get(key):
+            raise ValueError(
+                f"gesture.bindings.{key}: key already bound in base to "
+                f"{base.bindings[key]!r}"
+            )
+        if gesture not in gesture_ids:
+            raise ValueError(
+                f"gesture.bindings.{key}: unknown gesture {gesture!r} "
+                f"(known: {sorted(gesture_ids)})"
+            )
 
 
 def cross_section_function_check(
@@ -722,28 +789,32 @@ def map_functions(
     directly and never owns an index.
 
     Most reads go through ``active``, the input resolved against the mode in
-    force. Three do not, and say so where they happen: ``quadruped_mode``
+    force. Four do not, and say so where they happen: ``quadruped_mode``
     against GAIT, the posture sticks against POSTURE, the animation cycler
-    against ANIMATION.
+    against ANIMATION, the gesture keys against GESTURE.
     """
     deadband = cfg.base.deadband
     active = source(state.mode)
 
     # Mode buttons: rising edge on the key bound to gait_mode selects
     # GAIT; rising edge on posture_mode selects POSTURE; rising edge
-    # on animation_mode toggles GAIT ↔ ANIMATION. Pressing the button
+    # on animation_mode toggles GAIT ↔ ANIMATION; gesture_mode selects
+    # GESTURE. Pressing the button
     # for the already-active mode is a no-op. Held buttons don't
     # repeat. If multiple edges land on the same tick, posture wins
     # (safer fallback).
     gait_pressed = "gait_mode" in active.pressed
     posture_pressed = "posture_mode" in active.pressed
     animation_pressed = "animation_mode" in active.pressed
+    gesture_pressed = "gesture_mode" in active.pressed
     gait_edge = gait_pressed and not state.prev_gait_mode
     posture_edge = posture_pressed and not state.prev_posture_mode
     animation_edge = animation_pressed and not state.prev_animation_mode
+    gesture_edge = gesture_pressed and not state.prev_gesture_mode
     state.prev_gait_mode = gait_pressed
     state.prev_posture_mode = posture_pressed
     state.prev_animation_mode = animation_pressed
+    state.prev_gesture_mode = gesture_pressed
     mode_changed = False
     prev_mode = state.mode
     if posture_edge and state.mode != POSTURE:
@@ -751,6 +822,9 @@ def map_functions(
         mode_changed = True
     elif gait_edge and state.mode != GAIT:
         state.mode = GAIT
+        mode_changed = True
+    elif gesture_edge and state.mode != GESTURE:
+        state.mode = GESTURE
         mode_changed = True
     elif animation_edge and not state.quadruped and not (
         state.animation_blocked and state.mode != ANIMATION
@@ -926,6 +1000,22 @@ def map_functions(
     state.prev_animation_prev = anim_prev_pressed
     state.prev_animation_next = anim_next_pressed
 
+    # Gestures: a bound key's rising edge plays its gesture. Resolved against
+    # GESTURE in every mode, like the animation cycler, so a key still held on
+    # entry fires nothing. First in binding order wins a same-tick tie.
+    gestures_held = source(GESTURE).gestures
+    gesture_out: str | None = None
+    if state.mode == GESTURE:
+        gesture_out = next(
+            (
+                g
+                for g in cfg.gesture_bindings.values()
+                if g in gestures_held and g not in state.prev_gestures
+            ),
+            None,
+        )
+    state.prev_gestures = gestures_held
+
     # Gait cycler: ``gait_prev`` / ``gait_next`` rising edges. Cycling
     # is mode-agnostic for the resolution itself but suppressed in
     # ANIMATION (tripod was forced on entry). Which rotation it walks
@@ -1084,6 +1174,7 @@ def map_functions(
             animation_name=animation_name_out,
             init_quadruped=init_quadruped,
             stabilize_toggle=stabilize_toggle,
+            gesture=gesture_out,
         )
     # GAIT or ANIMATION mode: sticks drive linear/angular velocity;
     # recorded posture baseline bleeds through on every posture axis
@@ -1141,6 +1232,7 @@ def map_functions(
         animation_name=animation_name_out,
         init_quadruped=init_quadruped,
         stabilize_toggle=stabilize_toggle,
+        gesture=gesture_out,
     )
 
 

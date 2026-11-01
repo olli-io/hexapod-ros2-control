@@ -64,6 +64,8 @@ Commands:
                               switches without a button).
                               Runs locally (on the Pi) by default; -H/--host re-dispatches
                               over ssh to a remote Pi.
+  generate-controller         Render docs/controller/{svg/xbox_<mode>.svg,xbox_<mode>.png} from
+                              src/hexa_teleop/config/teleop_joy.yaml (host python3 + PyYAML).
   kill                        Stop and remove the sim + pico containers.
   -h, --help                  Show this help message.
 EOF
@@ -88,6 +90,9 @@ case "${cmd}" in
         ;;
     robot)
         exec "${REPO_ROOT}/scripts/robot.sh" "$@"
+        ;;
+    generate-controller)
+        exec python3 "${REPO_ROOT}/scripts/generate_controller.py" "$@"
         ;;
     kill)
         exec "${REPO_ROOT}/scripts/kill.sh" "$@"

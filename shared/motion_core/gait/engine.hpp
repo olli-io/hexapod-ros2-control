@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "gait/bachata.hpp"
 #include "gait/clock.hpp"
 #include "gait/engagement.hpp"
 #include "gait/gaits/base.hpp"
@@ -43,6 +44,9 @@ enum class EngineState {
   // A keyframed gesture playing from a stand, on the default preset only. The
   // command is ignored until it hands the stand back.
   GESTURE,
+  // The bachata routine, from a stand on a preset that names it. Runs while the
+  // command is non-zero; a zero one ends it at the next half bar.
+  DANCE,
   FAULT,
 };
 
@@ -91,6 +95,12 @@ struct EngineConfig {
   float pair_fold_swing_time = 0.0f;
   // All six feet planted for this long before the pair moves, either way.
   float pair_fold_dwell_time = 0.0f;
+  float bachata_beat_time = 0.0f;
+  float bachata_stride = 0.0f;
+  float bachata_planted_share = 0.0f;
+  float bachata_sway_y = 0.0f;
+  float bachata_sway_z = 0.0f;
+  float bachata_sway_roll = 0.0f;
 
   // Shared with the engagement controller so a swing looks the same however the
   // leg got airborne.
@@ -210,6 +220,7 @@ struct PresetSpec {
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
   float swing_phase_margin = 0.0f;
+  bool bachata = false;
 };
 
 struct PresetSetup {
@@ -228,6 +239,7 @@ struct PresetSetup {
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
   float swing_phase_margin = 0.0f;
+  bool bachata = false;
 };
 
 class Engine {
@@ -292,6 +304,8 @@ class Engine {
   bool request_gesture(const std::string& id);
   // The running gesture, if any: its id, elapsed time and body term.
   std::optional<gesture::GestureProgress> gesture() const;
+  // The running bachata routine's body term, nominal-relative.
+  std::optional<BodyPose> dance() const;
   // Latch into FAULT from any state; servos go limp on the real board. Recovery
   // is start_initialize(). Idempotent while already faulted.
   void enter_fault();
@@ -424,6 +438,8 @@ class Engine {
   // Never reads the command. Hands back a stand on nominal when the player is
   // done, the INITIALIZE -> STAND handoff.
   std::map<std::string, LegOutput> tick_gesture(float dt);
+  std::map<std::string, LegOutput> tick_dance(float dt, bool cmd_zero);
+  BachataParams bachata_params() const;
   std::map<std::string, LegOutput> tick_engagement(
       float dt, std::pair<float, float> v_body_xy, float omega_z);
   void capture_state(const std::map<std::string, LegOutput>& out);
@@ -454,6 +470,10 @@ class Engine {
   std::vector<gesture::GestureSpec> gestures_;
   std::unique_ptr<gesture::GesturePlayer> gesture_;
   std::optional<std::size_t> pending_gesture_;
+  float dance_t_ = 0.0f;
+  // Half bars to finish before the outro; set by the first zero command.
+  std::optional<int> dance_halves_;
+  BodyPose dance_body_{};
   // The last hexapod preset and strategy applied. FAULT recovery reverts to
   // both, so the folded baseline is never paired with a four-leg stance.
   std::size_t fallback_preset_ = 0;

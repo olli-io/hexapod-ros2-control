@@ -251,8 +251,9 @@ int main() {
 
     // Latest part-03 servo-link measurements (logged with the 1 Hz heartbeat).
     uint64_t last_set_burst_us = 0;  // wall time of one command_all() SET burst
-    uint64_t last_compute_us = 0;    // GET + Pipeline::tick() per control tick
-    uint64_t last_get_rt_us = 0;     // round-trip of the battery GET
+    uint64_t last_compute_us = 0;    // aux collect + Pipeline::tick() per tick
+    uint64_t last_get_rt_us = 0;     // decode time of the last aux collect
+    bool aux_pending = false;        // a request_aux() awaits collect_aux()
     bool last_batt_ok = false;
     float last_batt_v = 0.0f;
     float last_batt_i = 0.0f;
@@ -280,6 +281,9 @@ int main() {
         // part 05 established.
         if (now_us >= next_tick_us) {
             next_tick_us += kTickPeriodUs;
+            // Catch-up guard: after a stall (e.g. a blocking CDC write), drop the
+            // missed ticks rather than run them back to back with a fixed kDt.
+            if (next_tick_us <= now_us) next_tick_us = now_us + kTickPeriodUs;
 
             const uint64_t c0 = time_us_64();
 
@@ -287,36 +291,41 @@ int main() {
             uint32_t buttons;
             const bool bt_connected = bt_teleop::read(axes, buttons);
 
-            // Battery telemetry: rate-limited Chica GET — one every
-            // kGetPeriodTicks control ticks (mirrors hardware.yaml
-            // get_period_ticks). Kept inside the tick so its round-trip counts
-            // against the measured tick budget rather than hiding on a separate
-            // timer.
+            // Battery + STATUS telemetry: a Chica GET pair requested every
+            // kGetPeriodTicks ticks (hardware.yaml get_period_ticks) and
+            // collected on the next tick, so the tick never waits on the board.
             bool batt_fresh = false;
-            if (tick_count % hexa::config::kGetPeriodTicks == 0) {
+            if (aux_pending) {
+                aux_pending = false;
                 const uint64_t g0 = time_us_64();
-                last_batt_ok =
-                    servo_out::read_battery(last_batt_v, last_batt_i, 20);
+                const servo_out::AuxReading aux = servo_out::collect_aux();
+                last_batt_ok = aux.battery_ok;
+                if (aux.battery_ok) {
+                    last_batt_v = aux.voltage_v;
+                    last_batt_i = aux.current_a;
+                }
                 // Over-current STATUS: level-latched (mirror the ROS locomotion
                 // node) — hold the last known level while a poll fails, and only
                 // clear on a fresh clean read. The pipeline turns hardware_fault
                 // into the FAULT latch + relay-disarm; recovery is the operator
                 // pressing init once STATUS reads clean (manual re-init).
-                bool tripped = false;
-                float trip_amps = 0.0f;
-                if (servo_out::read_status(tripped, trip_amps, 20)) {
-                    if (tripped && !last_fault) {
+                if (aux.status_ok) {
+                    if (aux.tripped && !last_fault) {
                         HEXA_DBG("[safety] OVER-CURRENT trip: %.1f A — rail "
                                "dropped; clear the fault then press init to "
-                               "recover\n", (double)trip_amps);
-                    } else if (!tripped && last_fault) {
+                               "recover\n", (double)aux.trip_amps);
+                    } else if (!aux.tripped && last_fault) {
                         HEXA_DBG("[safety] over-current STATUS cleared — press "
                                "init to re-arm\n");
                     }
-                    last_fault = tripped;
+                    last_fault = aux.tripped;
                 }
                 last_get_rt_us = time_us_64() - g0;
                 batt_fresh = last_batt_ok;
+            }
+            if (tick_count % hexa::config::kGetPeriodTicks == 0) {
+                servo_out::request_aux();
+                aux_pending = true;
             }
             ++tick_count;
 
@@ -414,9 +423,10 @@ int main() {
                 face::tick(fs, static_cast<double>(now_us) * 1e-6);
             }
 
-            // Front-panel button: press -> battery screen, hold -> pairing.
-            button::tick(static_cast<double>(now_us) * 1e-6, last_batt_ok,
-                         last_batt_v, bt_connected);
+            // Front-panel buttons: info -> battery screen; bluetooth ->
+            // controller screen, hold -> pairing.
+            button::tick(static_cast<double>(now_us) * 1e-6, bt_connected,
+                         last_batt_ok, last_batt_v);
 
             // Undervoltage ladder edges. The Pico has no buzzer — the tune spool
             // is a Pi-host mechanism — so rung 1 shows up as the fast-blink LED
@@ -466,14 +476,14 @@ int main() {
                    (unsigned long)heartbeat++,
                    (unsigned long long)(now_us / 1000));
             if (last_batt_ok) {
-                HEXA_DBG("[servo] compute=%llu us  SET burst=%llu us  GET rt=%llu us  "
+                HEXA_DBG("[servo] compute=%llu us  SET burst=%llu us  GET decode=%llu us  "
                        "batt=%.2f V %.2f A\n",
                        (unsigned long long)last_compute_us,
                        (unsigned long long)last_set_burst_us,
                        (unsigned long long)last_get_rt_us,
                        (double)last_batt_v, (double)last_batt_i);
             } else {
-                HEXA_DBG("[servo] compute=%llu us  SET burst=%llu us  GET rt=%llu us  "
+                HEXA_DBG("[servo] compute=%llu us  SET burst=%llu us  GET decode=%llu us  "
                        "batt=-- (no reply)\n",
                        (unsigned long long)last_compute_us,
                        (unsigned long long)last_set_burst_us,

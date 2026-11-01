@@ -45,13 +45,22 @@ float joint_center_rad(int joint);
 // Servo-rail relay via a Chica digital SET. true = energize the rail.
 void set_relay(bool energized);
 
-// One Chica GET(24,2) over CURR + VOLT, in engineering units. Both arrive in one
-// reply, so it is both-or-neither: false on timeout / malformed reply.
-bool read_battery(float& voltage_v, float& current_a, int timeout_ms);
+// One aux poll, split across two control ticks so the tick never waits on the
+// board: request_aux() sends GET(24,2) over CURR + VOLT and GET(27,1) over the
+// latched over-current STATUS; collect_aux() on a later tick decodes whatever
+// replies have arrived, without blocking.
+struct AuxReading {
+  bool battery_ok = false;  // CURR + VOLT reply decoded (both-or-neither)
+  float voltage_v = 0.0f;
+  float current_a = 0.0f;
+  bool status_ok = false;   // STATUS reply decoded
+  bool tripped = false;     // STATUS bit0; sticky until set_relay(false)
+  float trip_amps = 0.0f;   // current captured at the trip
+};
 
-// The latched over-current fault register, via Chica GET(27,1): `tripped` is
-// STATUS bit0 and `trip_amps` the current captured at the trip. Sticky until the
-// host clears it with set_relay(false). False on timeout / malformed reply.
-bool read_status(bool& tripped, float& trip_amps, int timeout_ms);
+// Empties the RX FIFO first, so a late reply from an earlier poll is never read
+// as this one's.
+void request_aux();
+AuxReading collect_aux();
 
 }  // namespace servo_out

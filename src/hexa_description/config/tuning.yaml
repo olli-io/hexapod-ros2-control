@@ -29,7 +29,7 @@ gait_node:
     #
     # Every preset carries its own stride/swing bundle; there is no global
     # fallback, so an omitted key is a load error rather than a silent
-    # inheritance. A fifth preset is an edit here plus a row in the two teleop
+    # inheritance. A new preset is an edit here plus a row in the two teleop
     # configs.
     default_preset: normal
 
@@ -106,6 +106,29 @@ gait_node:
         max_swing_time: 1.00
         step_height: 0.065
         swing_phase_margin: 0.08
+
+      # normal's stance and bundle, but a non-zero /cmd_vel plays the bachata
+      # routine (the `bachata:` block below) instead of walking.
+      - id: bachata
+        leg_set: hexapod
+        bachata: true
+        standing_pose:
+          body_height: 0.07
+          front:
+            tip_reach: 0.135
+            coxa_deg: 18
+          middle:
+            tip_reach: 0.135
+            coxa_deg: 0
+          rear:
+            tip_reach: 0.135
+            coxa_deg: 18
+        stride_length: 0.10
+        stride_length_radial: 0.085
+        min_swing_time: 0.6
+        max_swing_time: 0.8
+        step_height: 0.04
+        swing_phase_margin: 0.12
 
       # The four corners only. The middle pair does not stand in this preset:
       # it is held at geometry.yaml's folded_pose, so there is no middle entry
@@ -194,6 +217,25 @@ gait_node:
       # corners have just finished carrying the body across a moving support; this
       # is the beat that lets the pose smoother catch up. 0 disables.
       dwell_time: 0.15
+
+    bachata:
+      # The routine a preset with `bachata: true` plays while /cmd_vel is
+      # non-zero, direction and speed ignored. Eight beats a bar: tripods step
+      # left, left, left, tap, then the mirror to the right. A stop finishes
+      # the half bar, then one still beat eases the sway out.
+      # 110 BPM.
+      beat_time: 0.5454545
+      # Body travel of the middle step of a half bar; the outer two are half.
+      stride: 0.05
+      # Share of each beat, at each end, with all six feet down.
+      planted_share: 0.1
+      # Body shift away from the swinging tripod's two-leg side at each
+      # touchdown, and the body tilt down the same way.
+      sway_y: 0.02
+      # Body rise at each touchdown, with the square of the shift, so the body
+      # draws a U: lowest at the centre, highest at the sides.
+      sway_z: 0.01
+      sway_roll_deg: 10.0
 
     reseat:
       # How long a new target height must hold before re-planting.
@@ -336,7 +378,7 @@ teleop_node:
       pitch_max_deg: 15.0
       yaw_max_deg: 20.0
       # Low-pass on the eased yaw and wiggle inputs.
-      yaw_tau_s: 0.10
+      yaw_tau_s: 0.08
       # Low-pass on the init-button revert to the default posture.
       revert_tau_s: 0.25
       # Point ahead of centre the wiggle swings the body about.

@@ -76,6 +76,7 @@ set(FW_PIPELINE_SOURCES
   ${FW_SRC}/gait/limits.cpp
   ${FW_SRC}/gait/engine.cpp
   ${FW_SRC}/gait/reversal.cpp
+  ${FW_SRC}/gait/bachata.cpp
   ${FW_SRC}/gesture/keyframe.cpp
   ${FW_SRC}/gesture/player.cpp
   ${FW_SRC}/gesture/validate.cpp

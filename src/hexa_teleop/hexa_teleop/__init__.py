@@ -6,6 +6,7 @@ from .joy_mapping import (
     BUTTON_CLASS_FUNCTIONS,
     DPAD_DIRECTIONS,
     GAIT,
+    GESTURE,
     POSTURE,
     BaseConfig,
     FunctionInput,
@@ -24,6 +25,7 @@ from .joy_mapping import (
     resolve_functions,
     resolve_gait_cycle,
     validate_bindings,
+    validate_gesture_bindings,
 )
 from .teleop_arbitration import (
     GAMEPAD,
@@ -47,6 +49,7 @@ __all__ = [
     "FunctionSource",
     "GAMEPAD",
     "GAIT",
+    "GESTURE",
     "JoyConfig",
     "JoyOutput",
     "JoyState",
@@ -66,6 +69,7 @@ __all__ = [
     "resolve_gait_cycle",
     "should_publish",
     "validate_bindings",
+    "validate_gesture_bindings",
     "web_claim",
     "web_release",
 ]

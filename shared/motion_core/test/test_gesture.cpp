@@ -1,4 +1,4 @@
-// Gestures: keyframe sampling (the two segment shapes and their joins), the
+// Gestures: keyframe sampling (the segment shapes and their joins), the
 // player (live start / home knots and the blend weights next to them, hold
 // resolution, per-leg tracks) and the engine's GESTURE state with its guards.
 
@@ -66,10 +66,29 @@ LegKeyframe key(float t, float value, GestureTransition tr) {
   return k;
 }
 
-float angle_of(const LegKeyframe& k) { return k.coxa; }
-
 float sample(const std::vector<LegKeyframe>& keys, float t) {
-  return gs::track_value(keys.data(), keys.size(), t, angle_of);
+  return gs::track_value(keys.data(), keys.size(), t, 0);
+}
+
+// Second derivative of the sampled coxa, from one side of t.
+float one_sided_curvature(const std::vector<LegKeyframe>& keys, float t,
+                          float dir, float h = 1e-2f) {
+  return (sample(keys, t + 2.0f * dir * h) - 2.0f * sample(keys, t + dir * h) +
+          sample(keys, t)) /
+         (h * h);
+}
+
+LegKeyframe oscillate_key(float t, float period, float ramp, float amp,
+                          float lead = 0.0f) {
+  LegKeyframe k{};
+  k.t = t;
+  k.transition = GestureTransition::EASE;
+  k.oscillate = true;
+  k.period = period;
+  k.ramp = ramp;
+  k.amp = {amp, amp, amp};
+  k.lead = {lead, lead, lead};
+  return k;
 }
 
 float slope(const std::vector<LegKeyframe>& keys, float t, float h = 1e-3f) {
@@ -282,6 +301,62 @@ TEST(Keyframe, MonotoneUnevenKnotsStayInsideTheirRange) {
   }
 }
 
+TEST(Keyframe, ContinuousRunIsC2AtInteriorKnots) {
+  const std::vector<LegKeyframe> keys = {
+      key(0.0f, 0.0f, GestureTransition::EASE),
+      key(1.0f, 1.0f, GestureTransition::CONTINUOUS),
+      key(2.0f, 3.0f, GestureTransition::CONTINUOUS),
+      key(3.0f, 6.0f, GestureTransition::CONTINUOUS),
+      key(4.0f, 7.0f, GestureTransition::CONTINUOUS)};
+  // A cubic would jump by 1 to 3 here.
+  for (float t : {1.0f, 2.0f, 3.0f}) {
+    EXPECT_NEAR(one_sided_curvature(keys, t, -1.0f, 5e-3f),
+                one_sided_curvature(keys, t, 1.0f, 5e-3f), 0.5f)
+        << "t=" << t;
+  }
+}
+
+TEST(Keyframe, OscillationSwingsAboutThePoseBeforeIt) {
+  // A pose of 1 at t=1, then 4 periods of 0.5 s at amplitude 2.
+  std::vector<LegKeyframe> resolved = {
+      key(0.0f, 0.0f, GestureTransition::EASE),
+      key(1.0f, 1.0f, GestureTransition::EASE),
+      oscillate_key(3.0f, 0.5f, 0.25f, 2.0f)};
+  resolved[2].coxa = 1.0f;  // the player resolves it to the value before
+  const auto at = [&](float t) {
+    return gs::track_value(resolved.data(), resolved.size(), t, 0);
+  };
+  EXPECT_NEAR(at(1.0f), 1.0f, kTol);
+  EXPECT_NEAR(at(3.0f), 1.0f, kTol);
+  // Past the ramp, a full sine: peak at a quarter period.
+  EXPECT_NEAR(at(1.5f + 0.125f), 3.0f, kTol);
+  EXPECT_NEAR(at(1.5f + 0.375f), -1.0f, kTol);
+  float lo = 1.0f, hi = 1.0f;
+  for (float t = 1.0f; t <= 3.0f; t += 0.005f) {
+    lo = std::min(lo, at(t));
+    hi = std::max(hi, at(t));
+  }
+  EXPECT_GE(lo, -1.0f - kTol);
+  EXPECT_LE(hi, 3.0f + kTol);
+  // Leaves and rejoins the pose at rest with zero curvature.
+  const auto d1 = [&](float t, float dir) {
+    return (at(t + dir * 1e-3f) - at(t)) / (dir * 1e-3f);
+  };
+  EXPECT_NEAR(d1(1.0f, 1.0f), 0.0f, 1e-2f);
+  EXPECT_NEAR(d1(3.0f, -1.0f), 0.0f, 1e-2f);
+  EXPECT_NEAR(one_sided_curvature(resolved, 1.0f, 1.0f, 1e-3f), 0.0f, 0.5f);
+  EXPECT_NEAR(one_sided_curvature(resolved, 3.0f, -1.0f, 1e-3f), 0.0f, 0.5f);
+}
+
+TEST(Keyframe, OscillationLeadShiftsTheSine) {
+  std::vector<LegKeyframe> keys = {
+      key(0.0f, 0.0f, GestureTransition::EASE),
+      oscillate_key(2.0f, 0.5f, 0.25f, 1.0f, 1.57079633f)};
+  // Past the ramp, a cosine: at its peak on every whole period.
+  EXPECT_NEAR(sample(keys, 1.0f), 1.0f, kTol);
+  EXPECT_NEAR(sample(keys, 1.25f), -1.0f, kTol);
+}
+
 // ── Player ──
 
 TEST(Player, TrackedLegIsDirectAndUntrackedIsNot) {
@@ -443,6 +518,49 @@ TEST(Player, StandStepLiftsStraightUpAndLandsStraightDown) {
   EXPECT_TRUE(player.done());
   EXPECT_TRUE(near(l.foot_target, nominal.at("l_front"), 1e-7f));
   EXPECT_TRUE(l.stance);
+}
+
+TEST(Player, StandStepOverlapStartsTheEaseBeforeTheStepEnds) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
+  const auto k = joints_at("l_front", 0.3f, 0.0f, 0.05f);
+  auto spec = one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, k)}, 0.5f);
+  spec.stand_step = {0.01f, 0.1f, 0.04f};
+  gs::GesturePlayer player(spec, nominal, specs);
+  const hexa::Vec3 up(0.0f, 0.0f, 1.0f);
+
+  auto l = player.update(0.05f).at("l_front");  // before the overlap
+  EXPECT_FALSE(l.direct);
+  l = player.update(0.03f).at("l_front");  // t = 0.08, inside it
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, gs::ease5(0.02f / 0.44f), 1e-5f);
+  EXPECT_TRUE(near(l.foot_target,
+                   nominal.at("l_front") + up * (0.01f * gs::ease5(0.8f))));
+  // Mirrored into home: t = 0.92 is 0.08 s before it.
+  l = player.update(0.84f).at("l_front");
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.direct_weight, gs::ease5(0.02f / 0.44f), 1e-4f);
+  EXPECT_TRUE(near(l.foot_target,
+                   nominal.at("l_front") + up * (0.01f * gs::ease5(0.8f)), 1e-5f));
+}
+
+TEST(Player, OscillateKnotSwingsTheLegAboutThePoseBeforeIt) {
+  const auto nominal = g::nominal_stance_from_config();
+  const auto specs = g::leg_specs_from_config();
+  const auto a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  auto osc = oscillate_key(2.5f, 0.5f, 0.25f, 0.0f);
+  osc.amp = {0.1f, 0.0f, 0.0f};
+  const auto spec =
+      one_leg_spec(hexa::Leg::L_FRONT, {joint_key(0.5f, a), osc}, 0.5f);
+  EXPECT_NO_THROW(gs::validate_gestures({spec}, specs, nominal,
+                                        hexa::posture::PoseLimits{}));
+  gs::GesturePlayer player(spec, nominal, specs);
+  auto l = player.update(1.125f).at("l_front");  // on a crest past the ramp
+  EXPECT_TRUE(l.direct);
+  EXPECT_NEAR(l.joints[0], a[0] + 0.1f, 1e-4f);
+  EXPECT_NEAR(l.joints[1], a[1], 1e-5f);
+  l = player.update(1.375f).at("l_front");  // t = 2.5, back on the pose
+  for (std::size_t j = 0; j < 3; ++j) EXPECT_NEAR(l.joints[j], a[j], 1e-5f);
 }
 
 TEST(Player, BodyTrackReturnsToIdentity) {
@@ -717,6 +835,67 @@ TEST(Validate, RejectsAContinuousKeyframeAfterALiveKnot) {
                                           g::nominal_stance_from_config(),
                                           hexa::posture::PoseLimits{}));
   }
+}
+
+TEST(Validate, RejectsABadOscillation) {
+  const auto a = joints_at("l_front", 0.0f, 0.0f, 0.05f);
+  const auto validate = [](const std::vector<LegKeyframe>& keys) {
+    gs::validate_gestures({one_leg_spec(hexa::Leg::L_FRONT, keys)},
+                          g::leg_specs_from_config(),
+                          g::nominal_stance_from_config(),
+                          hexa::posture::PoseLimits{});
+  };
+  // After a live knot; ramps that overrun the segment; a zero period; a
+  // swing past the femur limit; a swing into the ground.
+  EXPECT_THROW(validate({start_key(0.2f), oscillate_key(1.0f, 0.5f, 0.2f, 0.05f)}),
+               std::invalid_argument);
+  EXPECT_THROW(validate({joint_key(0.5f, a), oscillate_key(1.0f, 0.5f, 0.3f, 0.05f)}),
+               std::invalid_argument);
+  EXPECT_THROW(validate({joint_key(0.5f, a), oscillate_key(1.0f, 0.0f, 0.2f, 0.05f)}),
+               std::invalid_argument);
+  auto past = oscillate_key(1.5f, 0.5f, 0.2f, 0.0f);
+  past.amp[1] = 4.0f;
+  EXPECT_THROW(validate({joint_key(0.5f, a), past}), std::invalid_argument);
+  const auto low = joints_at("l_front", 0.0f, 0.0f, 0.005f);
+  auto down = oscillate_key(1.5f, 0.5f, 0.2f, 0.0f);
+  down.amp[1] = 0.2f;  // the femur swings the foot below the ground
+  EXPECT_THROW(validate({joint_key(0.5f, low), down}), std::invalid_argument);
+  EXPECT_NO_THROW(validate({joint_key(0.5f, a), oscillate_key(1.5f, 0.5f, 0.2f, 0.02f)}));
+}
+
+TEST(Validate, RejectsABodyOscillationPastThePoseLimits) {
+  const auto limits = hexa::posture::pose_limits_from(hexa::config::kPosture);
+  gs::GestureSpec spec;
+  spec.id = "test";
+  BodyKeyframe base{};
+  base.t = 0.5f;
+  base.roll = limits.roll * 0.5f;
+  base.transition = GestureTransition::EASE;
+  BodyKeyframe osc{};
+  osc.t = 1.5f;
+  osc.transition = GestureTransition::EASE;
+  osc.oscillate = true;
+  osc.period = 0.5f;
+  osc.ramp = 0.2f;
+  osc.amp[3] = limits.roll * 0.4f;
+  spec.body = {base, osc, body_home_key(2.0f)};
+  const auto validate = [&] {
+    gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                          g::nominal_stance_from_config(), limits);
+  };
+  EXPECT_NO_THROW(validate());
+  spec.body[1].amp[3] = limits.roll * 0.6f;
+  EXPECT_THROW(validate(), std::invalid_argument);
+}
+
+TEST(Validate, RejectsAnOverlapPastTheStandStep) {
+  auto spec = one_leg_spec(hexa::Leg::L_FRONT,
+                           {joint_key(0.5f, joints_at("l_front", 0.0f, 0.0f, 0.05f))});
+  spec.stand_step = {0.01f, 0.1f, 0.2f};
+  EXPECT_THROW(gs::validate_gestures({spec}, g::leg_specs_from_config(),
+                                     g::nominal_stance_from_config(),
+                                     hexa::posture::PoseLimits{}),
+               std::invalid_argument);
 }
 
 TEST(Validate, RejectsATrackThatDoesNotEndAtHome) {

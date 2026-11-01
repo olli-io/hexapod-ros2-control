@@ -2,9 +2,10 @@
 
 Gamepad teleop. Publishes the high-level command topics the rest of the stack
 consumes: `/cmd_vel`, `/body/pose`, `/cmd_gait`, `/animation/mode`,
-`/gait/initialize`, `/cmd_stabilize`. The `stabilize_toggle` binding (`x` by
-default, every mode) flips body stabilization: it publishes the opposite of
-what `/gait/stabilize` reports, ungated by ownership, like the mode. Shares its mode with `hexa_webteleop` on the latched
+`/gait/initialize`, `/cmd_stabilize`, `/cmd_gesture`. The `stabilize_toggle`
+binding (unbound by default) flips body stabilization: it publishes the
+opposite of what `/gait/stabilize` reports, ungated by ownership, like the
+mode. Shares its mode with `hexa_webteleop` on the latched
 `/teleop/mode`: it publishes its own mode changes, ungated by ownership, and
 adopts the web app's. Deliberately thin — the swappable producer of high-level
 commands; an autonomy node would publish the same topics and replace it
@@ -46,6 +47,15 @@ Controller identity and per-mode bindings live in
 with `joy_config_file:=...`. The node starts in **gait** mode. The loader
 validates every binding at startup — unknown names or keys, button-vs-axis class
 mismatches, and cross-section conflicts all raise.
+
+Per-mode controller diagrams in `docs/controller/` are generated from this
+file. After a binding change, run `./hexa generate-controller` and commit the
+SVGs.
+
+![Gait mode](../../docs/controller/svg/xbox_gait.svg)
+![Posture mode](../../docs/controller/svg/xbox_posture.svg)
+![Animation mode](../../docs/controller/svg/xbox_animation.svg)
+![Gesture mode](../../docs/controller/svg/xbox_gesture.svg)
 
 Posture-mode scalar limits, velocity caps and the animation list are **not**
 teleop knobs; see [Values owned elsewhere](#values-owned-elsewhere).
@@ -210,6 +220,26 @@ Both duty factor 3/4, one foot airborne at a time:
 - **`quad_canter`** — perimeter sequence, `r_front → l_front → l_rear → r_rear`.
   Round the chassis rather than up one side, so the two fores lift back to back
   and the handovers carry the body across it.
+
+## Gesture mode (**x**)
+
+**x** enters gesture mode; **a**, **b** and **y** leave it as from any mode.
+The `gesture:` section binds a key to a gesture id from `hexa_description`'s
+`gestures.yaml`, validated at load. Defaults:
+
+- **D-pad** — up `wave`, down `bow`, left `chitter`, right `intimidate`.
+- **l3** / **r3** (stick presses) — `boogie` / `rave`.
+
+- **Gesture keys are live in gesture mode only.** The other sections' keys
+  and the sticks are inert there; base bindings (mode buttons, `start`,
+  `select`) stay live, so a gesture key may not carry a base binding.
+- **One press, one `/cmd_gesture`**, on the rising edge. A key held on entry
+  fires nothing. Ungated by ownership, like the web Gesture view.
+- **Pre-gated on `stand`**; a press elsewhere is dropped with a log line. The
+  engine also requires the default preset and has the last word.
+- **Pad-local.** The mode is never published on `/teleop/mode`, and the web
+  app's `ACTIONS` exclude `gesture_mode`: the web plays gestures from its
+  Gesture view.
 
 ## Values owned elsewhere
 

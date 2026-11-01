@@ -1,9 +1,10 @@
-// Front-panel button on the Pico.
+// Front-panel buttons on the Pico.
 //
-// One button, two actions: press shows the pack percentage on the panel, hold
-// opens a Bluetooth pairing window. A producer into the face and into
+// Info button: press toggles the battery screen. Bluetooth button: press
+// toggles the controller-status screen, hold starts a pairing scan. The Pi's
+// hexa_buttons, ported (button_screens.hpp). A producer into the face and into
 // bt_teleop, never the other way round — the face stays a pure sink, exactly
-// the relationship hexa_buttons has with hexa_display on the Pi.
+// the relationship hexa_buttons has with hexa_display.
 //
 // Core0 only: polled from the control tick, which at 200 Hz is far finer than
 // the debounce window.
@@ -11,12 +12,12 @@
 
 namespace button {
 
-// Configure the GPIO (input, pull-up, active-low). Call once at boot.
+// Configure the GPIOs (input, pull-up, active-low). Call once at boot.
 void init();
 
-// Poll the line and dispatch. `battery_valid`/`battery_v` are the latest Chica
-// reading, `pad_connected` closes an open pairing window early. now_s is
-// monotonic seconds.
-void tick(double now_s, bool battery_valid, float battery_v, bool pad_connected);
+// Poll the lines and dispatch. `pad_connected` rising ends a running scan;
+// `battery_valid`/`battery_v` are the latest Chica reading. now_s is monotonic
+// seconds.
+void tick(double now_s, bool pad_connected, bool battery_valid, float battery_v);
 
 }  // namespace button
