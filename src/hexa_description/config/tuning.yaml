@@ -54,8 +54,8 @@ gait_node:
         stride_length_radial: 0.085
         # Airborne time per foot, fast and slow ends. Past max_swing_time the
         # robot shortens its stride instead. Keep within ~25% of each other.
-        min_swing_time: 0.6
-        max_swing_time: 0.8
+        min_swing_time: 0.55
+        max_swing_time: 0.75
         step_height: 0.04
         # Share of the swing window handed back to the ground at the touchdown
         # end, so legs overlap. Costs top speed.
@@ -75,12 +75,12 @@ gait_node:
             tip_reach: 0.135
             coxa_deg: 0
           rear:
-            tip_reach: 0.14
+            tip_reach: 0.135
             coxa_deg: 18
         stride_length: 0.10
         stride_length_radial: 0.085
-        min_swing_time: 0.4
-        max_swing_time: 0.5
+        min_swing_time: 0.036
+        max_swing_time: 0.046
         step_height: 0.040
         swing_phase_margin: 0.12
 
