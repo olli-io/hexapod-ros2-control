@@ -79,8 +79,8 @@ gait_node:
             coxa_deg: 18
         stride_length: 0.10
         stride_length_radial: 0.085
-        min_swing_time: 0.036
-        max_swing_time: 0.046
+        min_swing_time: 0.36
+        max_swing_time: 0.46
         step_height: 0.040
         swing_phase_margin: 0.12
 
