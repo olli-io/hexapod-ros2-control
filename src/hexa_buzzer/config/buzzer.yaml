@@ -2,7 +2,7 @@ buzzer_node:
   ros__parameters:
     # Read by robot.launch.py: false leaves the node out. It is inert without a
     # PWM tree anyway; this is for when you want it gone.
-    enabled: true
+    enabled: false
 
     # Buzzer + -> GPIO12 (BCM), - -> GND, ~100 ohm in series if too loud. Not
     # GPIO18, which a bare `dtoverlay=pwm-2chan` takes (I2S PCM_CLK, SPI1 CE0) —

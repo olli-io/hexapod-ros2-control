@@ -1,7 +1,7 @@
 imu_node:
   ros__parameters:
     # false skips the IMU node in the robot launch file.
-    enabled: true
+    enabled: false
 
     # MPU6500 on I2C1 (GPIO2 SDA, GPIO3 SCL). AD0 low = 0x68, high = 0x69.
     bus: /dev/i2c-1
