@@ -1,6 +1,6 @@
 # Configuration
 
-Every tunable parameter lives in YAML under `config/` — never hard-coded in
+Every tunable parameter lives in YAML under each package's `config/` — never hard-coded in
 nodes. Edit the YAML, rebuild (`./hexa sim build`), relaunch.
 
 ## Main config files
