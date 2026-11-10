@@ -20,8 +20,8 @@ restate them here.
 - **Leg count is fixed at 6.** Do not parameterise it.
 - `hexa_description` is the single source of truth for URDF, joint limits and
   leg geometry. Load at runtime, never duplicate.
-- Gait choice, geometry, joystick mapping and presets come from YAML in
-  `config/`. No magic numbers in node code.
+- Gait choice, geometry, joystick mapping and presets come from YAML in each
+  package's `config/`. No magic numbers in node code.
 - **Sim-first**: every feature runs against the Gazebo model before servo code.
 - `hexa_simulation` owns all Gazebo code; real-robot bringup must not import it.
 - `hexa_interfaces` is a leaf. `hexa_display` and `hexa_buzzer` are pure sinks:
