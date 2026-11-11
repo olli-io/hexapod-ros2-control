@@ -12,6 +12,7 @@
   <exec_depend>hexa_locomotion</exec_depend>
   <exec_depend>hexa_teleop</exec_depend>
   <exec_depend>hexa_display</exec_depend>
+  <exec_depend>hexa_eyes</exec_depend>
   <exec_depend>hexa_buttons</exec_depend>
   <exec_depend>hexa_buzzer</exec_depend>
   <exec_depend>hexa_imu</exec_depend>

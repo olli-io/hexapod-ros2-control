@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hexa_eyes</name>
+  <version>0.1.0</version>
+  <description>
+    Optional add-on face. An alternative to hexa_display that draws the eyes in
+    16 greys (4x supersampled, Lanczos-shrunk) using the renderer from
+    eye-animation-cpp, vendored under shared/eyes_core. Same inputs and policy as
+    hexa_display. Never runs beside it: hexa_bringup's face.yaml `backend` picks
+    one. A pure sink of robot state: nothing imports it.
+  </description>
+  <maintainer email="olli.moisio@protonmail.com">Olli Moisio</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>hexa_interfaces</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>yaml-cpp</depend>
+  <exec_depend>hexa_description</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

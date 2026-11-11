@@ -34,9 +34,38 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+from hexa_bringup.face_backend import face_package, load_backend
+
 
 # Must match the <ros2_control> block name in hexa_description's URDF xacro.
 HARDWARE_COMPONENT_NAME = "HexaSystem"
+
+
+def _face_backend() -> str:
+    """face.yaml's `backend`: none, hexa_display or eyes_cpp. A typo raises."""
+    return load_backend(
+        os.path.join(get_package_share_directory("hexa_bringup"), "config", "face.yaml")
+    )
+
+
+def _eyes_params() -> dict:
+    """hexa_eyes' params: hexa_display's policy and pins, eyes.yaml on top.
+
+    The two faces read the same robot state through the same policy and drive
+    the same panel, so the shared knobs stay in display.yaml and are not copied.
+    """
+    params, _ = _display_params()
+    try:
+        path = os.path.join(
+            get_package_share_directory("hexa_eyes"), "config", "eyes.yaml"
+        )
+    except PackageNotFoundError as e:
+        raise RuntimeError(
+            "face.yaml backend is eyes_cpp but the hexa_eyes package is not installed"
+        ) from e
+    with open(path) as f:
+        params.update(yaml.safe_load(f)["eyes_node"]["ros__parameters"])
+    return params
 
 
 def _display_params() -> tuple[dict, bool]:
@@ -195,15 +224,24 @@ def _bringup(context, *args, **kwargs):
         ))
 
     # Face: one node maps robot state to an expression/gaze policy and
-    # rasterizes the eyes on the SH1122 OLED (spidev + GPIO).
-    display_params, display_enabled = _display_params()
-    if display_enabled:
-        actions.append(Node(
-            package="hexa_display",
-            executable="display_node",
-            output="screen",
-            parameters=[display_params],
-        ))
+    # rasterizes the eyes on the SH1122 OLED (spidev + GPIO). face.yaml's
+    # `backend` names the one that runs: hexa_display (1-bit), eyes_cpp (16-grey,
+    # hexa_eyes) or none. Only the chosen node is ever started; the two share the
+    # panel and cannot run together.
+    face = face_package(_face_backend())
+    if face is not None:
+        face_pkg, face_exe = face
+        if face_pkg == "hexa_display":
+            face_params, face_enabled = _display_params()
+        else:
+            face_params, face_enabled = _eyes_params(), True
+        if face_enabled:
+            actions.append(Node(
+                package=face_pkg,
+                executable=face_exe,
+                output="screen",
+                parameters=[face_params],
+            ))
 
     # Front-panel buttons: two GPIO switches that put the battery/address and
     # Bluetooth screens on the face's panel, and request a pairing scan. It

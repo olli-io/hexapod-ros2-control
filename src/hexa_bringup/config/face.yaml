@@ -1,0 +1,10 @@
+# Which face drives the SH1122 OLED. Exactly one runs, never both:
+#
+#   none          no face node (default)
+#   hexa_display  the 1-bit face (hexa_display), shared with the Pico firmware
+#   eyes_cpp      the 16-grey face (hexa_eyes, from eye-animation-cpp)
+#
+# Any other value stops the launch. robot.launch.py reads this once and starts
+# only the node you chose; the other is never started.
+face:
+  backend: none
