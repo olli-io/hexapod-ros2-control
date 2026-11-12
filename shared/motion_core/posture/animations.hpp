@@ -37,6 +37,14 @@ struct AnimationContext {
   // {heave, lateral} from swing_dip_signal: how many feet are up, and on which
   // side.
   std::optional<std::pair<float, float>> swing_dip = std::nullopt;
+  // {left, right} from front_reach_signal: 1 at that front leg's touchdown,
+  // -1 at its lift-off. The reversal mirror negates it.
+  std::optional<std::pair<float, float>> front_reach = std::nullopt;
+  // From front_stride_share: how far the left front foot stands ahead of the
+  // right, in gait strides, in [-1, 1].
+  std::optional<float> front_stride_share = std::nullopt;
+  // Active preset's stance_lift (m).
+  float stance_lift = 0.0f;
 };
 
 class Animation {
@@ -105,7 +113,7 @@ class GaitBounce : public Animation {
 // servos' sag at lift-off and its release at touchdown fall inside a larger
 // deliberate motion instead of showing as a drop and a bump. Lowers through
 // lift-off, rises through touchdown, and leans down toward the side with more
-// feet up. Scales with the feet in the air, so tripod moves most and ripple
+// feet down. Scales with the feet in the air, so tripod moves most and ripple
 // least, with no gait-name test.
 class SwingDip : public Animation {
  public:
@@ -116,6 +124,26 @@ class SwingDip : public Animation {
  private:
   float heave_;  // m, body drop at a tripod's mid-swing
   float roll_;   // rad, lean at a tripod's mid-swing
+};
+
+// Yaws the body away from the front foot that stands further forward, most
+// at a full-stride touchdown. Read off the foot positions, not the phases, so
+// it is continuous through the reversal mirror. Tripod and surf.
+class ReachYaw : public Animation {
+ public:
+  explicit ReachYaw(float yaw = 0.0873f) : yaw_(yaw) {}
+  BodyPose eval(const AnimationContext& ctx) const override;
+
+ private:
+  float yaw_;  // rad, at a front leg's touchdown
+};
+
+// Raises the body through stance by the context's stance_lift: zero at each
+// front-leg touchdown and lift-off, full at mid-stance. Never below the
+// standing height. Tripod-only.
+class StanceLift : public Animation {
+ public:
+  BodyPose eval(const AnimationContext& ctx) const override;
 };
 
 // Heave (z) + pitch, phase-locked, tripod-only.

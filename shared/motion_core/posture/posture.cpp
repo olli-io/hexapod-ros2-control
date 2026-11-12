@@ -34,6 +34,12 @@ std::shared_ptr<const Animation> make_animation(std::string_view name,
     return std::make_shared<SwingDip>(p.swing_dip_heave,
                                       p.swing_dip_roll_deg * kDegToRad);
   }
+  if (name == "reach_yaw") {
+    return std::make_shared<ReachYaw>(p.reach_yaw_deg * kDegToRad);
+  }
+  if (name == "stance_lift") {
+    return std::make_shared<StanceLift>();
+  }
   if (name == "gait_bounce") {
     return std::make_shared<GaitBounce>(p.gait_bounce_arc_height,
                                         p.gait_bounce_step_height_ref);
@@ -194,6 +200,46 @@ std::optional<std::pair<float, float>> swing_dip_signal(
     return std::nullopt;
   }
   return std::make_pair(sum / (0.5f * static_cast<float>(n)), lateral);
+}
+
+std::optional<std::pair<float, float>> front_reach_signal(
+    const std::map<std::string, gait::LegOutput>& legs, float swing_end) {
+  if (swing_end <= 0.0f || swing_end >= 1.0f) {
+    return std::nullopt;
+  }
+  const auto reach = [&](const char* name) -> std::optional<float> {
+    const auto it = legs.find(name);
+    if (it == legs.end() || it->second.parked) {
+      return std::nullopt;
+    }
+    const float p = it->second.phase;
+    if (p < swing_end) {
+      return -std::cos(kPi * p / swing_end);
+    }
+    return std::cos(kPi * (p - swing_end) / (1.0f - swing_end));
+  };
+  const std::optional<float> left = reach("l_front");
+  const std::optional<float> right = reach("r_front");
+  if (!left.has_value() || !right.has_value()) {
+    return std::nullopt;
+  }
+  return std::make_pair(*left, *right);
+}
+
+std::optional<float> front_stride_share(
+    const std::map<std::string, gait::LegOutput>& legs, float stride) {
+  if (stride <= 0.0f) {
+    return std::nullopt;
+  }
+  const auto l = legs.find("l_front");
+  const auto r = legs.find("r_front");
+  if (l == legs.end() || r == legs.end() || l->second.parked ||
+      r->second.parked) {
+    return std::nullopt;
+  }
+  return std::clamp(
+      (l->second.foot_target.x - r->second.foot_target.x) / stride, -1.0f,
+      1.0f);
 }
 
 std::optional<std::pair<float, float>> lpf_step_xy(
@@ -410,6 +456,9 @@ BodyPose PostureController::update(
   ctx.master_phase = gait::pymod(master_phase, 1.0f);
   // Unfiltered: it is already a smooth function of the phases.
   ctx.swing_dip = swing_dip_signal(legs, swing_end, swing_dip_extension_);
+  ctx.front_reach = front_reach_signal(legs, swing_end);
+  ctx.stance_lift = stance_lift_;
+  ctx.front_stride_share = front_stride_share(legs, gait_stride_);
 
   // Selected on the LEG SET, not the gait name: what makes the support shift
   // mandatory is having four feet, and a string compare would put a safety

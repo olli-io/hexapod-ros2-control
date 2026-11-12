@@ -67,6 +67,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
     EXPECT_NEAR(lp.max_swing_time, bp.max_swing_time, kTol) << lp.id;
     EXPECT_NEAR(lp.step_height, bp.step_height, kTol) << lp.id;
     EXPECT_NEAR(lp.swing_phase_margin, bp.swing_phase_margin, kTol) << lp.id;
+    EXPECT_NEAR(lp.stance_lift, bp.stance_lift, kTol) << lp.id;
     EXPECT_EQ(lp.bachata, bp.bachata) << lp.id;
     EXPECT_NEAR(lp.standing.body_height, bp.standing.body_height, kTol) << lp.id;
     // Includes the placeholder row a parked-pair preset carries.
@@ -85,6 +86,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   const auto& be = baked.engine;
   EXPECT_NEAR(le.stride_length, be.stride_length, kTol);
   EXPECT_NEAR(le.stride_length_radial, be.stride_length_radial, kTol);
+  EXPECT_EQ(le.stride_scale_by_gait, be.stride_scale_by_gait);
   EXPECT_NEAR(le.min_swing_time, be.min_swing_time, kTol);
   EXPECT_NEAR(le.max_swing_time, be.max_swing_time, kTol);
   EXPECT_NEAR(le.step_height, be.step_height, kTol);
@@ -137,6 +139,9 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
       EXPECT_NEAR(lcaps.yaw_bias_by_gait.at(name),
                   bcaps.yaw_bias_by_gait.at(name), kTol)
           << "yaw_bias[" << preset << "/" << name << "]";
+      EXPECT_NEAR(lcaps.stride_scale_by_gait.at(name),
+                  bcaps.stride_scale_by_gait.at(name), kTol)
+          << "stride_scale[" << preset << "/" << name << "]";
     }
   }
   EXPECT_EQ(loaded.default_gait, baked.default_gait);
@@ -189,6 +194,7 @@ TEST(ConfigLoaderParity, RuntimeLoaderMatchesBaked) {
   EXPECT_NEAR(lp.swing_dip_heave, bp.swing_dip_heave, kTol);
   EXPECT_NEAR(lp.swing_dip_roll_deg, bp.swing_dip_roll_deg, kTol);
   EXPECT_NEAR(lp.swing_dip_extension, bp.swing_dip_extension, kTol);
+  EXPECT_NEAR(lp.reach_yaw_deg, bp.reach_yaw_deg, kTol);
   EXPECT_NEAR(lp.gait_activation_slew_rate, bp.gait_activation_slew_rate, kTol);
   EXPECT_NEAR(lp.pose_filter_tau, bp.pose_filter_tau, kTol);
   EXPECT_NEAR(lp.pose_filter_damping_ratio, bp.pose_filter_damping_ratio, kTol);

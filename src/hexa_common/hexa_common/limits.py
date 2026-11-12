@@ -13,7 +13,8 @@ preset and the control layer swaps between them on a preset change.
 Linear cap is **per-gait** because the per-leg velocity ceiling depends
 on the active strategy's duty factor (β):
 
-    linear_max(gait) = stride_length * (1 − β) / (min_swing_time × β_gait)
+    linear_max(gait) = stride_length * stride_scale(gait) * (1 − β)
+                       / (min_swing_time × β_gait)
 
 That is exactly the per-leg velocity ceiling the gait saturates at:
 beyond it the engine pins ``cycle_time`` at ``min_swing_time / (1 − β)``
@@ -275,6 +276,8 @@ def load_velocity_caps(
     min_swing_time = float(entry["min_swing_time"])
     yaw_bias = float(raw["yaw_bias"])
     margin = float(entry["swing_phase_margin"])
+    # Unlisted gaits take the whole preset stride.
+    stride_scale = raw.get("stride_scale") or {}
     r_outer = outer_stance_radius(geometry_yaml, envelope_yaml, pid)
 
     linear_max_by_gait: dict[str, float] = {}
@@ -288,8 +291,10 @@ def load_velocity_caps(
         # lowers top speed. Keep identical to gen_config.py's velocity_caps()
         # and pipeline_config_loader.cpp.
         swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.5))
+        scale = float(stride_scale.get(name, 1.0))
         linear_max = (
-            stride_length * swing_end / (min_swing_time * (1.0 - swing_end))
+            stride_length * scale * swing_end
+            / (min_swing_time * (1.0 - swing_end))
         )
         linear_max_by_gait[name] = linear_max
         # Same lever arm for every gait; only the linear cap it divides differs.

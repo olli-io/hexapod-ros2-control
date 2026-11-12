@@ -61,6 +61,20 @@ std::optional<std::pair<float, float>> swing_dip_signal(
     const std::map<std::string, gait::LegOutput>& legs, float swing_end,
     float extension);
 
+// Each front leg's place in its step, {left, right}: cos(pi * s) over stance
+// progress s, -cos(pi * u) over swing progress u. 1 at touchdown, -1 at
+// lift-off, zero slope at both. The reversal mirror (phase -> swing_end -
+// phase) negates it. nullopt if either front leg is missing or parked, or
+// swing_end is outside (0, 1).
+std::optional<std::pair<float, float>> front_reach_signal(
+    const std::map<std::string, gait::LegOutput>& legs, float swing_end);
+
+// (left front foot x - right front foot x) / stride, clamped to [-1, 1]. The
+// pair share a nominal x, so this is their relative reach. nullopt if either
+// front leg is missing or parked, or stride <= 0.
+std::optional<float> front_stride_share(
+    const std::map<std::string, gait::LegOutput>& legs, float stride);
+
 // One first-order low-pass step, alpha = dt / (tau + dt). prev=nullopt seeds
 // from raw (no startup transient); raw=nullopt holds prev.
 std::optional<std::pair<float, float>> lpf_step_xy(
@@ -153,6 +167,11 @@ class PostureController {
   }
 
   // The leveling correction inside the last update()'s pose.
+  // The active preset's stance_lift (m), for the next update().
+  void set_stance_lift(float height) { stance_lift_ = height; }
+  // The active gait's stride length (m), for the next update().
+  void set_gait_stride(float stride) { gait_stride_ = stride; }
+
   float leveling_roll() const { return leveler_.roll(); }
   float leveling_pitch() const { return leveler_.pitch(); }
 
@@ -195,6 +214,8 @@ class PostureController {
   float support_shift_lead_;
   float support_shift_tau_;
   float swing_dip_extension_;
+  float stance_lift_ = 0.0f;
+  float gait_stride_ = 0.0f;
 };
 
 }  // namespace hexa::posture

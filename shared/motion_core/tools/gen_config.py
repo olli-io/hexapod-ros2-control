@@ -292,7 +292,7 @@ def standing_pose(entry: dict, geometry: dict) -> dict:
 
 PRESET_KNOBS = ("stride_length", "stride_length_radial",
                 "min_swing_time", "max_swing_time", "step_height",
-                "swing_phase_margin")
+                "swing_phase_margin", "stance_lift")
 
 
 def presets(gait: dict, geometry: dict):
@@ -746,6 +746,7 @@ def velocity_caps(gait: dict, preset: dict):
     min_swing = preset["min_swing_time"]
     margin = preset["swing_phase_margin"]
     yaw_bias = gait["yaw_bias"]
+    scales = stride_scales(gait)
     caps = []
     for name, duty, unstable, _leg_set in GAITS:
         # stride_length covered in one stance, so it keys off the *realized*
@@ -753,13 +754,29 @@ def velocity_caps(gait: dict, preset: dict):
         # to the other three copies — pipeline_config_loader.cpp,
         # hexa_common/limits.py, gen_joy_golden.py.
         swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.5))
-        linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
+        linear_max = (stride * scales[name] * swing_end /
+                      (min_swing * (1.0 - swing_end)))
         # yaw_bias stays keyed to the gait's nominal duty: it is a feel knob for
         # how a gait gives way under a saturating command, not a timing budget.
         yaw_bias_eff = 0.5 + (yaw_bias - 0.5) * (1.5 - duty)
         caps.append(dict(name=name, duty=duty, unstable=unstable,
-                         linear_max=linear_max, yaw_bias=yaw_bias_eff))
+                         linear_max=linear_max, yaw_bias=yaw_bias_eff,
+                         stride_scale=scales[name]))
     return caps
+
+
+def stride_scales(gait: dict):
+    """Per-gait share of the preset stride; 1.0 for an unlisted gait."""
+    raw = gait.get("stride_scale") or {}
+    known = [g[0] for g in GAITS]
+    for name, value in raw.items():
+        if name not in known:
+            raise ValueError(
+                f"tuning.yaml stride_scale.{name}: no such gait; have {known}")
+        if not 0.0 < float(value) <= 1.0:
+            raise ValueError(
+                f"tuning.yaml stride_scale.{name} = {value} must be in (0, 1]")
+    return {name: float(raw.get(name, 1.0)) for name in known}
 
 
 def calibration_by_pin(calibration: dict):
@@ -976,6 +993,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  float max_swing_time;")
     w("  float step_height;")
     w("  float swing_phase_margin;")
+    w("  // Body rise through tripod stance, m; zero at each touchdown.")
+    w("  float stance_lift;")
     w("  // A non-zero command plays the bachata routine instead of walking.")
     w("  bool bachata;")
     w("};")
@@ -1091,6 +1110,7 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
     w("  bool unstable;")
     w("  float linear_max;  // m/s")
     w("  float yaw_bias;    // effective, per-gait")
+    w("  float stride_scale;  // share of the preset's stride_length")
     w("};")
     w("")
 
@@ -1113,7 +1133,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         for c in preset_caps:
             w(f"        {{{name_arr(c['name'])}, {fl(c['duty'])}, "
               f"{'true' if c['unstable'] else 'false'}, {fl(c['linear_max'])}, "
-              f"{fl(c['yaw_bias'])}}},  // {c['name']}")
+              f"{fl(c['yaw_bias'])}, {fl(c['stride_scale'])}}},"
+              f"  // {c['name']}")
         w("    }},")
     w("}};")
     w("")
@@ -1485,6 +1506,8 @@ def emit(geometry, gait, teleop, posture, control, hardware, calibration,
         ("swing_dip_heave", pn["swing_dip_heave"]),
         ("swing_dip_roll_deg", pn["swing_dip_roll_deg"]),
         ("swing_dip_extension", pn["swing_dip_extension"]),
+        # ReachYaw: body yaw toward the reaching front leg at its touchdown.
+        ("reach_yaw_deg", pn["reach_yaw_deg"]),
         # Gait-animation crossfade (posture layering fix).
         ("gait_activation_slew_rate", pn["gait_activation_slew_rate"]),
         # Spring/inertia smoother on the commanded body pose: tau = 1/omega_n,

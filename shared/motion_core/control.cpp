@@ -239,13 +239,13 @@ std::tuple<float, float, float> Control::shape(
 }
 
 float Control::stride_ratio_for(float v_x, float v_y, float omega_z) const {
-  if (stride_length_ <= 0.0f || legs_.empty()) {
+  const float stride = stride_length_ * caps_.stride_scale(active_gait_);
+  if (stride <= 0.0f || legs_.empty()) {
     return 1.0f;
   }
   return hexa::gait::effective_stride_length(legs_, {v_x, v_y}, omega_z,
-                                             stride_length_,
-                                             stride_length_radial_) /
-         stride_length_;
+                                             stride, stride_length_radial_) /
+         stride;
 }
 
 }  // namespace hexa::control

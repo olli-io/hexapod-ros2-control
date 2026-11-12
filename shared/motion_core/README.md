@@ -32,7 +32,9 @@ hardware. The seams each caller supplies — input, config source, clock, output
   (fold ↔ stand), `engagement` (stand → gait), `reseat` (feet → new stance),
   `reversal` (travel reversal), pair fold/unfold. `gaits/` holds the
   strategies — `tripod`, `surf`, `tetrapod`, `crawl`, `ripple`, `quad_walk`,
-  `quad_canter` — each a pure `(phase, stride, leg) → foot_target`.
+  `quad_canter` — each a pure `(phase, stride, leg) → foot_target`. A gait
+  lays down the preset's `stride_length` times its `gait_node.stride_scale`
+  (1 if unlisted; `tetrapod` 0.66), and its velocity cap scales with it.
 - **`gait/bachata`** — the bachata routine, a hardcoded strafing dance played
   in `DANCE` on a preset with `bachata: true` while `/cmd_vel` is non-zero
   (its direction and speed are ignored). One pure function of time gives all
@@ -51,7 +53,15 @@ hardware. The seams each caller supplies — input, config source, clock, output
   (`breathing`, `gait_sway`, `support_shift`, `swing_dip`, `gait_bounce`, body
   rolls). `swing_dip` dips the body through each lift-off and raises it through
   each touchdown, so the servo sag falls inside a deliberate motion; it scales
-  with the feet in the air, from `Engine::swing_end()`. `leveling` is body
+  with the feet in the air, from `Engine::swing_end()`, and leans down toward
+  the side with more feet down. `reach_yaw` (tripod, surf) turns the body
+  away from the front foot that stands further forward, by their x gap over
+  the gait stride, so it is full at a full-stride touchdown and scales with
+  speed. `stance_lift` (tripod) raises the body through stance, zero at each
+  front-leg touchdown and lift-off; its height is the preset's `stance_lift`
+  (0 in `fast`). Both stay continuous through the reversal mirror: the yaw
+  reads foot positions, and the lift reads a phase signal the mirror only
+  negates, squared. `leveling` is body
   stabilization: a slow integral loop on IMU roll/pitch that cancels the
   ground slope, `c += ki·dt·(commanded − measured)`, so commanded tilt reads
   relative to gravity. Its gate (`leveling_gate`) integrates in `STAND`,

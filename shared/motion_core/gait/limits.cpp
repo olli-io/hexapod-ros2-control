@@ -34,6 +34,7 @@ VelocityCaps load_velocity_caps_from_config(std::size_t preset,
     caps.linear_max_by_gait[name] = g.linear_max;
     caps.angular_max_by_gait[name] = g.linear_max / r_outer;
     caps.yaw_bias_by_gait[name] = g.yaw_bias;
+    caps.stride_scale_by_gait[name] = g.stride_scale;
   }
   return caps;
 }

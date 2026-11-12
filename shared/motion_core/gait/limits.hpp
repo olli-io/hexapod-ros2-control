@@ -18,6 +18,8 @@ struct VelocityCaps {
   std::map<std::string, float> linear_max_by_gait;
   std::map<std::string, float> angular_max_by_gait;
   std::map<std::string, float> yaw_bias_by_gait;
+  // Share of the preset's stride_length the gait lays down.
+  std::map<std::string, float> stride_scale_by_gait;
 
   float linear_max(const std::string& gait) const {
     return linear_max_by_gait.at(gait);
@@ -27,6 +29,9 @@ struct VelocityCaps {
   }
   float yaw_bias(const std::string& gait) const {
     return yaw_bias_by_gait.at(gait);
+  }
+  float stride_scale(const std::string& gait) const {
+    return stride_scale_by_gait.at(gait);
   }
 };
 

@@ -222,6 +222,54 @@ TEST(Pipeline, StrafeReversalKeepsEveryFootReachable) {
       << "a foot target went unreachable while reversing";
 }
 
+// The gait animations are continuous through a reversal. The mirror reflects
+// every phase (touchdown becomes lift-off), so an animation read off the phases
+// alone snaps there; the body pose may change no faster across the reversal
+// than it does in the steady walk.
+TEST(Pipeline, BodyPoseDoesNotSnapThroughAReversal) {
+  for (const int axis : {bt_teleop::kRightStickY, bt_teleop::kRightStickX}) {
+    pl::Pipeline p;
+    std::uint64_t now_us = 0;
+    stand_up(p, now_us);
+    Pad there;
+    there.axes[axis] = bt_teleop::kAxisMax;
+    Pad back;
+    back.axes[axis] = bt_teleop::kAxisMin;
+
+    const auto step = [](const hexa::posture::BodyPose& a,
+                         const hexa::posture::BodyPose& b) {
+      return std::array<float, 3>{std::fabs(a.z - b.z),
+                                  std::fabs(a.roll - b.roll),
+                                  std::fabs(a.yaw - b.yaw)};
+    };
+    pl::TickResult prev = run(p, there, 400, now_us);
+    ASSERT_EQ(prev.engine_state, EngineState::GAIT);
+    std::array<float, 3> steady{};
+    for (int i = 0; i < 200; ++i) {
+      const pl::TickResult r = run(p, there, 1, now_us);
+      const auto d = step(r.body_pose, prev.body_pose);
+      for (int k = 0; k < 3; ++k) steady[k] = std::max(steady[k], d[k]);
+      prev = r;
+    }
+    std::array<float, 3> reversal{};
+    for (int i = 0; i < 300; ++i) {
+      const pl::TickResult r = run(p, back, 1, now_us);
+      const auto d = step(r.body_pose, prev.body_pose);
+      for (int k = 0; k < 3; ++k) reversal[k] = std::max(reversal[k], d[k]);
+      prev = r;
+    }
+    const char* names[] = {"z", "roll", "yaw"};
+    for (int k = 0; k < 3; ++k) {
+      // A floor for an axis that barely moves in the steady walk.
+      const float bound = std::max(1.5f * steady[k], k == 0 ? 5e-4f : 5e-3f);
+      EXPECT_LE(reversal[k], bound)
+          << "axis " << axis << " " << names[k] << ": " << reversal[k]
+          << " per tick across the reversal against " << steady[k]
+          << " in the steady walk";
+    }
+  }
+}
+
 // The same reversal asked for before the walk has started — while the engine is
 // still on the engagement ladder out of the stand. Control::shape slews the planar
 // command as a vector, so the turn goes straight through the origin and sits inside

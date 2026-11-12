@@ -450,6 +450,8 @@ TickResult Pipeline::tick(const CommandIntent& jo, const TickInput& in) {
       gate, imu_fresh ? std::optional<hexa::posture::TiltSample>(
                             {in.imu_roll, in.imu_pitch})
                       : std::nullopt);
+  posture_.set_stance_lift(engine_->stance_lift());
+  posture_.set_gait_stride(engine_->gait_stride_length());
   const hexa::posture::BodyPose body_pose = posture_.update(
       out, engine_->master_phase(), walking, st, engine_->strategy_name(),
       engine_->leg_set(), in.dt, static_cast<float>(in.now_us) * 1e-6f,

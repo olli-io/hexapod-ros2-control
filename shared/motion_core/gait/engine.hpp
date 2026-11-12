@@ -54,6 +54,8 @@ enum class EngineState {
 // the ACTIVE PRESET's — rewritten on every preset change; the rest are global.
 struct EngineConfig {
   float stride_length = 0.0f;
+  // Share of stride_length each gait lays down; a missing gait is 1.
+  std::map<std::string, float> stride_scale_by_gait;
   // Most a leg's coxa-to-foot reach may close over one half stride; the tick's
   // stride is cut to what the worst-placed leg affords. == stride_length is off.
   float stride_length_radial = 0.0f;
@@ -220,6 +222,8 @@ struct PresetSpec {
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
   float swing_phase_margin = 0.0f;
+  // Read by the posture stack, not the engine.
+  float stance_lift = 0.0f;
   bool bachata = false;
 };
 
@@ -239,6 +243,8 @@ struct PresetSetup {
   float max_swing_time = 0.0f;
   float step_height = 0.0f;
   float swing_phase_margin = 0.0f;
+  // Read by the posture stack, not the engine.
+  float stance_lift = 0.0f;
   bool bachata = false;
 };
 
@@ -270,6 +276,9 @@ class Engine {
   // The preset the robot is standing on — what /gait/preset carries. Equal to
   // the requested one except while a preset change is still running.
   const std::string& preset_id() const { return presets_[preset_].id; }
+  float stance_lift() const { return presets_[preset_].stance_lift; }
+  // The preset's stride_length times the active gait's stride_scale.
+  float gait_stride_length() const;
   const std::string& strategy_name() const { return strategy_name_; }
   std::optional<std::string> pending_strategy_name() const {
     return pending_strategy_name_;

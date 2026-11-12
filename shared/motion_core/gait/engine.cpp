@@ -347,6 +347,13 @@ std::optional<std::size_t> Engine::preset_for_leg_set(LegSet set) const {
   return std::nullopt;
 }
 
+float Engine::gait_stride_length() const {
+  const auto it = config_.stride_scale_by_gait.find(strategy_name_);
+  const float scale =
+      it == config_.stride_scale_by_gait.end() ? 1.0f : it->second;
+  return config_.stride_length * scale;
+}
+
 void Engine::apply_preset_knobs() {
   const PresetSetup& p = presets_[preset_];
   config_.stride_length = p.stride_length;
@@ -420,7 +427,7 @@ std::tuple<float, float, float> Engine::shape_reversal(
   // budget has cut, the isotropic knee sits above that direction's velocity cap.
   in.knee_speed = knee_speed(
       effective_stride_length(active_legs_, applied_xy_, applied_omega_,
-                              config_.stride_length,
+                              gait_stride_length(),
                               config_.stride_length_radial),
       stance_fraction, max_cycle_time);
   // Two cycles at the slowest the gait runs: a window cannot be missed.
@@ -736,7 +743,7 @@ std::unique_ptr<EngagementController> Engine::build_engagement() {
   const auto [min_cycle_time, max_cycle_time] =
       cycle_time_bounds(config_, swing_end);
   return std::make_unique<EngagementController>(
-      nominal_, config_.stride_length, config_.stride_length_radial,
+      nominal_, gait_stride_length(), config_.stride_length_radial,
       min_cycle_time, max_cycle_time, strategy_->duty_factor(),
       swing_margin(), config_.swing_profile(),
       config_.controller_dt, ladder_shift_time());
@@ -1125,7 +1132,7 @@ std::map<std::string, LegOutput> Engine::tick_gait(
   // this rather than config_.stride_length.
   const float stride_length =
       effective_stride_length(active_legs_, leg_velocities,
-                              config_.stride_length,
+                              gait_stride_length(),
                               config_.stride_length_radial);
   const SwingProfile swing_profile = config_.swing_profile();
 
@@ -1566,6 +1573,9 @@ EngineConfig engine_config_from_config() {
   // rewrites them on every preset change.
   const auto& p = ::hexa::config::kPresets[::hexa::config::kDefaultPreset];
   cfg.stride_length = p.stride_length;
+  for (const auto& g : ::hexa::config::kGaits) {
+    cfg.stride_scale_by_gait[std::string(g.name.data())] = g.stride_scale;
+  }
   cfg.stride_length_radial = p.stride_length_radial;
   cfg.min_swing_time = p.min_swing_time;
   cfg.max_swing_time = p.max_swing_time;
@@ -1738,6 +1748,7 @@ PresetSetup solve_preset(
   out.max_swing_time = spec.max_swing_time;
   out.step_height = spec.step_height;
   out.swing_phase_margin = spec.swing_phase_margin;
+  out.stance_lift = spec.stance_lift;
   out.bachata = spec.bachata;
   return out;
 }
@@ -1853,6 +1864,7 @@ std::vector<PresetSpec> preset_specs_from_config() {
     spec.max_swing_time = p.max_swing_time;
     spec.step_height = p.step_height;
     spec.swing_phase_margin = p.swing_phase_margin;
+    spec.stance_lift = p.stance_lift;
     spec.bachata = p.bachata;
     out.push_back(std::move(spec));
   }

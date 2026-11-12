@@ -77,9 +77,35 @@ BodyPose SwingDip::eval(const AnimationContext& ctx) const {
   BodyPose out;
   out.z = -heave_ * heave;
   // Weighted by the heave too, so a lone foot up (ripple) leans a third of a
-  // tripod. Negative roll lowers +y, the left.
-  out.roll = -roll_ * lateral * heave;
+  // tripod. Positive roll raises +y, the left.
+  out.roll = roll_ * lateral * heave;
   return out;
+}
+
+BodyPose ReachYaw::eval(const AnimationContext& ctx) const {
+  if (!ctx.walking || !ctx.front_stride_share.has_value()) {
+    return IDENTITY;
+  }
+  if (ctx.gait_name != "tripod" && ctx.gait_name != "surf") {
+    return IDENTITY;
+  }
+  BodyPose out;
+  // Positive yaw turns the nose left, away from a reaching right front foot.
+  out.yaw = -yaw_ * *ctx.front_stride_share;
+  return out;
+}
+
+BodyPose StanceLift::eval(const AnimationContext& ctx) const {
+  if (!ctx.walking || !ctx.front_reach.has_value()) {
+    return IDENTITY;
+  }
+  if (ctx.gait_name != "tripod" || ctx.stance_lift <= 0.0f) {
+    return IDENTITY;
+  }
+  const auto [left, right] = *ctx.front_reach;
+  // Squared, so the mirror's negation leaves it unchanged.
+  const float u = (1.0f - left * left) * (1.0f - right * right);
+  return BodyPose{0.0f, 0.0f, ctx.stance_lift * u};
 }
 
 BodyPose VerticalBodyRoll::eval(const AnimationContext& ctx) const {

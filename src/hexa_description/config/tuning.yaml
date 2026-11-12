@@ -37,7 +37,7 @@ gait_node:
       - id: normal
         leg_set: hexapod
         standing_pose:
-          body_height: 0.07
+          body_height: 0.06
           front:
             tip_reach: 0.135
             coxa_deg: 18
@@ -60,6 +60,9 @@ gait_node:
         # Share of the swing window handed back to the ground at the touchdown
         # end, so legs overlap. Costs top speed.
         swing_phase_margin: 0.12
+        # Body rise through tripod stance (m), zero at each touchdown so the
+        # low point is the standing height. Read by the stance_lift animation.
+        stance_lift: 0.0
 
       # Stands lower and reaches further, and spends the extra reach on a
       # longer stride, at about 1.25x normal's top speed. min_swing_time is the
@@ -67,7 +70,7 @@ gait_node:
       - id: fast
         leg_set: hexapod
         standing_pose:
-          body_height: 0.065
+          body_height: 0.055
           front:
             tip_reach: 0.14
             coxa_deg: 18
@@ -83,6 +86,7 @@ gait_node:
         max_swing_time: 0.46
         step_height: 0.040
         swing_phase_margin: 0.12
+        stance_lift: 0.0
 
       # Tall and deliberate: belly clearance for what the robot is walking
       # over, a foot that clears far more than it needs on flat ground, and a
@@ -90,7 +94,7 @@ gait_node:
       - id: offroad
         leg_set: hexapod
         standing_pose:
-          body_height: 0.095
+          body_height: 0.085
           front:
             tip_reach: 0.125
             coxa_deg: 25
@@ -104,8 +108,9 @@ gait_node:
         stride_length_radial: 0.070
         min_swing_time: 0.75
         max_swing_time: 1.00
-        step_height: 0.065
+        step_height: 0.075
         swing_phase_margin: 0.08
+        stance_lift: 0.050
 
       # normal's stance and bundle, but a non-zero /cmd_vel plays the bachata
       # routine (the `bachata:` block below) instead of walking.
@@ -129,6 +134,7 @@ gait_node:
         max_swing_time: 0.8
         step_height: 0.04
         swing_phase_margin: 0.12
+        stance_lift: 0.030
 
       # The four corners only. The middle pair does not stand in this preset:
       # it is held at geometry.yaml's folded_pose, so there is no middle entry
@@ -152,9 +158,15 @@ gait_node:
         # carry the body across into the next triangle, so it is worth far
         # more of the top speed.
         swing_phase_margin: 0.40
+        stance_lift: 0.0
 
     # Sideways shift of the foot's arc. 0 = straight fore/aft steps.
     swing_width: 0
+
+    # Share of the preset's stride_length a gait lays down. Unlisted gaits
+    # take 1.0. Top speed scales with it.
+    stride_scale:
+      tetrapod: 0.66
 
     # Share of every swing spent climbing, in (0, 0.5]. The rest is the
     # descent, so a lower value lands softer when contact comes early and
@@ -273,16 +285,24 @@ posture_node:
     enabled_animations:
       - still
       - swing_dip
+      - reach_yaw
+      - stance_lift
 
     # SwingDip: lowers the body through lift-off and raises it through
     # touchdown, so the servo sag at both falls inside a larger, deliberate
     # motion. Scales with the feet in the air: tripod moves most. heave and
     # roll are at a tripod's mid-swing; roll leans down toward the side with
-    # more feet up. extension widens the dip past both ends of the swing, as a
+    # more feet down. extension widens the dip past both ends of the swing, as a
     # share of the swing window, so the body is already moving at lift-off.
     swing_dip_heave: 0.008
     swing_dip_roll_deg: 2.0
     swing_dip_extension: 0.25
+
+    # ReachYaw: tripod and surf. Turns the body away from the front leg that
+    # reaches forward, most at its touchdown.
+    reach_yaw_deg: 5.0
+
+    # StanceLift: tripod only. Height per preset: presets.*.stance_lift.
 
     # GaitSway: shifts the body sideways to stay over the feet. gain is the
     # physical strength (1.0 = balanced); strength is a [0, 1] dial on top.

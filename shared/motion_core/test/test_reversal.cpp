@@ -133,7 +133,8 @@ SkidStats drive_skid(const std::string& gait, float flip_offset, Turn turn,
   std::map<std::string, hexa::Vec3> nominal;
   for (const auto& setup : g::preset_setups_from_config()) {
     if (setup.id != preset) continue;
-    cfg.stride_length = setup.stride_length;
+    // The gait's share of the stride, as the engine lays it down.
+    cfg.stride_length = setup.stride_length * cfg.stride_scale_by_gait.at(gait);
     cfg.stride_length_radial = setup.stride_length_radial;
     cfg.min_swing_time = setup.min_swing_time;
     cfg.max_swing_time = setup.max_swing_time;
@@ -497,10 +498,14 @@ TEST(Reversal, TheLaddersHoldIsNotReadAsAReleasedStick) {
 // Nothing is left to speak of: the planted set is carried back to where it
 // stood, and the launched set lands on a full AEP.
 TEST(Reversal, LadderHandsTheStanceLegsTheirRunwayBack) {
+  const auto cfg = g::engine_config_from_config();
   for (const char* gait : {"tripod", "tetrapod", "ripple"}) {
     const SkidStats bare = sweep(gait, /*ladder=*/false);
     const SkidStats led = sweep(gait, /*ladder=*/true);
-    EXPECT_GT(bare.peak_stance_drag, 0.02f)
+    // A fifth of the stride the gait lays down.
+    const float floor =
+        0.2f * cfg.stride_length * cfg.stride_scale_by_gait.at(gait);
+    EXPECT_GT(bare.peak_stance_drag, floor)
         << gait << ": nothing to fix, the measurement must be wrong";
     EXPECT_LT(led.peak_stance_drag, 0.75f * bare.peak_stance_drag)
         << gait << ": " << led.worst_stance_leg << " still dragged "

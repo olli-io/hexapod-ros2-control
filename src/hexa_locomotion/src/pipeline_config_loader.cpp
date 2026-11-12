@@ -542,6 +542,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
       spec.max_swing_time = f(entry["max_swing_time"]);
       spec.step_height = f(entry["step_height"]);
       spec.swing_phase_margin = f(entry["swing_phase_margin"]);
+      spec.stance_lift = f(entry["stance_lift"]);
       spec.bachata = entry["bachata"] ? entry["bachata"].as<bool>() : false;
       if (spec.id == default_id) {
         cfg.default_preset = cfg.presets.size();
@@ -602,6 +603,13 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
     e.swing_phase_margin = d.swing_phase_margin;
   }
   e.swing_width = f(g["swing_width"]);
+  // Unlisted gaits lay down the whole preset stride. Must match gen_config.py
+  // stride_scales().
+  for (const auto& [gait_name, factory] : hexa::gait::strategies()) {
+    const YAML::Node s = g["stride_scale"];
+    e.stride_scale_by_gait[gait_name] =
+        s && s[gait_name] ? f(s[gait_name]) : 1.0f;
+  }
   e.swing_apex_time = f(g["swing_apex_time"]);
   e.swing_lift_height = f(g["swing_lift_height"]);
   e.swing_land_height = f(g["swing_land_height"]);
@@ -648,8 +656,10 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
       // Must match gen_config.py velocity_caps().
       const float swing_end =
           hexa::gait::swing_end_phase(duty, setup.swing_phase_margin);
-      const float linear_max = setup.stride_length * swing_end /
+      const float scale = e.stride_scale_by_gait.at(gait_name);
+      const float linear_max = setup.stride_length * scale * swing_end /
                                (setup.min_swing_time * (1.0f - swing_end));
+      caps.stride_scale_by_gait[gait_name] = scale;
       caps.linear_max_by_gait[gait_name] = linear_max;
       caps.angular_max_by_gait[gait_name] = linear_max / r_outer;
       // yaw_bias is a feel knob keyed to nominal duty; no preset moves it.
@@ -696,6 +706,7 @@ hexa::pipeline::PipelineConfig load_pipeline_config_from_yaml(
   ps.swing_dip_heave = f(p["swing_dip_heave"]);
   ps.swing_dip_roll_deg = f(p["swing_dip_roll_deg"]);
   ps.swing_dip_extension = f(p["swing_dip_extension"]);
+  ps.reach_yaw_deg = f(p["reach_yaw_deg"]);
   ps.gait_activation_slew_rate = f(p["gait_activation_slew_rate"]);
   ps.pose_filter_tau = f(p["pose_filter_tau"]);
   ps.pose_filter_damping_ratio = f(p["pose_filter_damping_ratio"]);

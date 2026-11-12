@@ -1026,7 +1026,7 @@ std::map<std::string, LegOutput> dip_legs(float swing_end,
 constexpr float kTripodSwingEnd = 0.5f * (1.0f - 0.12f);
 constexpr float kRippleSwingEnd = (1.0f / 6.0f) * (1.0f - 0.12f);
 
-TEST(SwingDip, TripodMidSwingIsTheFullDipLeaningLeft) {
+TEST(SwingDip, TripodMidSwingIsTheFullDipLeaningRight) {
   const auto legs = dip_legs(kTripodSwingEnd, {"l_front", "r_middle", "l_rear"},
                              0.5f * kTripodSwingEnd);
   const auto sig =
@@ -1040,8 +1040,9 @@ TEST(SwingDip, TripodMidSwingIsTheFullDipLeaningLeft) {
   ctx.swing_dip = sig;
   const BodyPose out = hexa::posture::SwingDip(0.008f, 0.035f).eval(ctx);
   EXPECT_NEAR(out.z, -0.008f, 1e-6f);
-  // Negative roll lowers the left (+y), the side with two feet up.
-  EXPECT_NEAR(out.roll, -0.035f, 1e-6f);
+  // Positive roll raises the left (+y), the side with two feet up, so the body
+  // leans down toward the right, the side with two feet down.
+  EXPECT_NEAR(out.roll, 0.035f, 1e-6f);
 }
 
 TEST(SwingDip, RippleDipsAThirdOfATripod) {
@@ -1096,6 +1097,114 @@ TEST(SwingDip, ParkedLegsDoNotCount) {
   EXPECT_NEAR(
       hexa::posture::swing_dip_signal(legs, kTripodSwingEnd, 0.25f)->first,
       0.5f, 1e-5f);
+}
+
+// ── ReachYaw / StanceLift ──
+
+// Tripod legs at master phase `master`: set A (l_front's) at master, set B half
+// a cycle on. `mirrored` applies the reversal map, phase -> swing_end - phase.
+std::map<std::string, LegOutput> tripod_legs(float master, bool mirrored = false) {
+  auto legs = dip_legs(kTripodSwingEnd, {}, 0.0f);
+  for (auto& [name, leg] : legs) {
+    const bool a = name == "l_front" || name == "r_middle" || name == "l_rear";
+    float p = hexa::gait::pymod(master + (a ? 0.0f : 0.5f), 1.0f);
+    if (mirrored) {
+      p = hexa::gait::pymod(kTripodSwingEnd - p, 1.0f);
+    }
+    leg.phase = p;
+    leg.stance = leg.phase >= kTripodSwingEnd;
+  }
+  return legs;
+}
+
+hexa::posture::AnimationContext lift_ctx(float master, bool mirrored = false,
+                                         std::string_view gait = "tripod") {
+  hexa::posture::AnimationContext ctx;
+  ctx.walking = true;
+  ctx.gait_name = gait;
+  ctx.stance_lift = 0.015f;
+  ctx.front_reach = hexa::posture::front_reach_signal(
+      tripod_legs(master, mirrored), kTripodSwingEnd);
+  return ctx;
+}
+
+hexa::posture::AnimationContext yaw_ctx(float l_front_x, float r_front_x,
+                                        std::string_view gait = "tripod") {
+  auto legs = tripod_legs(0.0f);
+  legs["l_front"].foot_target.x = l_front_x;
+  legs["r_front"].foot_target.x = r_front_x;
+  hexa::posture::AnimationContext ctx;
+  ctx.walking = true;
+  ctx.gait_name = gait;
+  ctx.front_stride_share = hexa::posture::front_stride_share(legs, 0.1f);
+  return ctx;
+}
+
+constexpr float kYaw = 5.0f * 0.017453292f;
+
+TEST(ReachYaw, TurnsAwayFromTheFrontFootFurtherForward) {
+  const hexa::posture::ReachYaw yaw(kYaw);
+  // A full stride apart, left ahead: nose right, negative yaw.
+  EXPECT_NEAR(yaw.eval(yaw_ctx(0.15f, 0.05f)).yaw, -kYaw, 1e-6f);
+  EXPECT_NEAR(yaw.eval(yaw_ctx(0.05f, 0.15f)).yaw, kYaw, 1e-6f);
+  // Half a stride is half the yaw; level feet none; past a stride clamps.
+  EXPECT_NEAR(yaw.eval(yaw_ctx(0.125f, 0.075f)).yaw, -0.5f * kYaw, 1e-6f);
+  EXPECT_NEAR(yaw.eval(yaw_ctx(0.1f, 0.1f)).yaw, 0.0f, 1e-6f);
+  EXPECT_NEAR(yaw.eval(yaw_ctx(0.3f, 0.0f)).yaw, -kYaw, 1e-6f);
+  // Surf too; not ripple, and not standing still.
+  EXPECT_NEAR(yaw.eval(yaw_ctx(0.15f, 0.05f, "surf")).yaw, -kYaw, 1e-6f);
+  EXPECT_EQ(yaw.eval(yaw_ctx(0.15f, 0.05f, "ripple")).yaw, 0.0f);
+  auto idle = yaw_ctx(0.15f, 0.05f);
+  idle.walking = false;
+  EXPECT_EQ(yaw.eval(idle).yaw, 0.0f);
+}
+
+TEST(FrontReach, OneAtTouchdownMinusOneAtLiftOffNegatedByTheMirror) {
+  for (float master : {0.0f, 0.1f, kTripodSwingEnd, 0.6f, 0.9f}) {
+    const auto plain =
+        hexa::posture::front_reach_signal(tripod_legs(master), kTripodSwingEnd);
+    const auto mirrored = hexa::posture::front_reach_signal(
+        tripod_legs(master, true), kTripodSwingEnd);
+    ASSERT_TRUE(plain.has_value() && mirrored.has_value());
+    EXPECT_NEAR(mirrored->first, -plain->first, 1e-5f) << "master " << master;
+    EXPECT_NEAR(mirrored->second, -plain->second, 1e-5f) << "master " << master;
+  }
+  EXPECT_NEAR(hexa::posture::front_reach_signal(tripod_legs(kTripodSwingEnd),
+                                                kTripodSwingEnd)->first,
+              1.0f, 1e-6f);
+  EXPECT_NEAR(
+      hexa::posture::front_reach_signal(tripod_legs(0.0f), kTripodSwingEnd)
+          ->first,
+      -1.0f, 1e-6f);
+}
+
+TEST(StanceLift, ZeroAtTouchdownFullAtMidStanceSmoothAndMirrorInvariant) {
+  const hexa::posture::StanceLift lift;
+  EXPECT_NEAR(lift.eval(lift_ctx(kTripodSwingEnd)).z, 0.0f, 1e-6f);
+  EXPECT_NEAR(lift.eval(lift_ctx(kTripodSwingEnd + 0.5f)).z, 0.0f, 1e-6f);
+  const float mid_stance = kTripodSwingEnd + 0.5f * (1.0f - kTripodSwingEnd);
+  EXPECT_NEAR(lift.eval(lift_ctx(mid_stance)).z, 0.015f, 1e-6f);
+  float prev = lift.eval(lift_ctx(0.0f)).z;
+  for (float m = 1e-3f; m < 1.0f; m += 1e-3f) {
+    const float z = lift.eval(lift_ctx(m)).z;
+    EXPECT_GE(z, -1e-6f) << "master " << m;
+    EXPECT_LT(std::fabs(z - prev), 2e-4f) << "master " << m;
+    EXPECT_NEAR(lift.eval(lift_ctx(m, true)).z, z, 1e-5f) << "master " << m;
+    prev = z;
+  }
+  // Tripod only, and a zero preset height is off.
+  EXPECT_EQ(lift.eval(lift_ctx(mid_stance, false, "surf")).z, 0.0f);
+  auto fast = lift_ctx(mid_stance);
+  fast.stance_lift = 0.0f;
+  EXPECT_EQ(lift.eval(fast).z, 0.0f);
+}
+
+TEST(FrontReach, ParkedFrontLegIsNoSignal) {
+  auto legs = tripod_legs(0.0f);
+  legs["l_front"].parked = true;
+  EXPECT_FALSE(
+      hexa::posture::front_reach_signal(legs, kTripodSwingEnd).has_value());
+  EXPECT_FALSE(hexa::posture::front_stride_share(legs, 0.1f).has_value());
 }
 
 }  // namespace

@@ -336,6 +336,7 @@ def main() -> int:
     # Realized swing/stance split, not the nominal duty factor — same formula as
     # gen_config.py velocity_caps(), pipeline_config_loader.cpp and limits.py.
     swing_end = (1.0 - duty) * (1.0 - min(max(margin, 0.0), 0.5))
+    stride *= float((gait.get("stride_scale") or {}).get(default_gait, 1.0))
     gait_linear_max = stride * swing_end / (min_swing * (1.0 - swing_end))
     # The angular stick cap is the linear one over the yaw lever arm — the
     # outermost standing foot's planar radius. No YAML knob.

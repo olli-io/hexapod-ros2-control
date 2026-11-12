@@ -173,7 +173,7 @@ TEST(VelocityCaps, DerivedFromEngineKnobs) {
     for (const auto& g : cfg::kGaitsByPreset[i]) {
       const float swing_end =
           (1.0f - g.duty_factor) * (1.0f - preset.swing_phase_margin);
-      const float want = preset.stride_length * swing_end /
+      const float want = preset.stride_length * g.stride_scale * swing_end /
                          (preset.min_swing_time * (1.0f - swing_end));
       EXPECT_NEAR(g.linear_max, want, 1e-6f)
           << preset.id << " / " << gait_name(g);

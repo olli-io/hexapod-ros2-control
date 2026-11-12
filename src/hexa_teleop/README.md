@@ -255,7 +255,8 @@ SSoT is `hexa_description/config/tuning.yaml`. Edit it, not the teleop config.
   inside.
 - **Velocity caps** — via `hexa_common.load_velocity_caps`, per preset, re-scaled
   the moment a switch is accepted. Linear is isotropic
-  (`stride_length × (1−β) / (min_swing_time × β)`); angular is that same cap
+  (`stride_length × stride_scale × (1−β) / (min_swing_time × β)`, with
+  `stride_scale` per gait, 1 if unlisted); angular is that same cap
   divided by the outermost standing foot's planar radius, the lever arm a yaw
   rate acts through. There is no turn-rate knob — change `stride_length`,
   `min_swing_time`, the gait's duty factor, or the stance width
