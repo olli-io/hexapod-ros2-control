@@ -3,7 +3,9 @@
 The **face**: one C++ node (`display_node`) that maps robot state through an
 expression/gaze policy and rasterizes the eyes on the Pi's 256×64 SH1122 OLED.
 Pure sink — nothing imports it or subscribes to it. Headless in sim;
-`enabled: false` skips the node.
+`enabled: false` skips the node. On the robot it runs only when
+`hexa_bringup/config/face.yaml` has `backend: hexa_display`; `hexa_eyes` is the
+alternative face and the two never run together.
 
 ## Layout
 

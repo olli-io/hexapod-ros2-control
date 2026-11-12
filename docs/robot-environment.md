@@ -39,7 +39,10 @@ nothing.
 - **`servo_calibration.yaml`** — seeded once and never overwritten. The repo
   default is next to it as `servo_calibration.yaml.default`.
 
-For hardware that is not fitted:
+For hardware that is not fitted, edit the YAML in the repo
+(`src/<package>/config/`) and build or deploy again. Only `tuning.yaml` and
+`servo_calibration.yaml` are on the Pi in `~/hexa-robot/`; the other config
+files are baked into the image.
 
 - **Display** — set `enabled: false` in `hexa_display`'s `config/display.yaml`.
   If you do not, `hexa_display` aborts at startup.

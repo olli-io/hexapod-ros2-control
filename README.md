@@ -45,7 +45,7 @@ No rebuild.
 - **`~/hexa-robot/servo_calibration.yaml`** — servo calibration for this robot.
 - **`~/hexa-robot/tuning.yaml`** — gait, posture and teleop tuning. Each update replaces
   it and saves your copy as `tuning.yaml.bak`. To keep a change, copy it to
-  `src/hexa_description/config/tuning.yaml` and build your the ros2 controller locally.
+  `src/hexa_description/config/tuning.yaml` and build the robot image locally.
 
 ## Run the robot
 
@@ -105,5 +105,5 @@ The config files are in `src/hexa_description/config/`.
 - [`docs/sim-environment.md`](docs/sim-environment.md) — sim container.
 - [`docs/pi-setup.md`](docs/pi-setup.md) — Pi OS, wiring, overlays.
 - [`docs/robot-environment.md`](docs/robot-environment.md) — robot container.
-- [`docs/configuration.md`](docs/configuration.md) — every tunable lives in YAML under `config/`. Edit, `./hexa sim build`, relaunch.
+- [`docs/configuration.md`](docs/configuration.md) — every tunable lives in YAML under each package's `config/`. Edit, `./hexa sim build`, relaunch.
 - [`docs/architecture.md`](docs/architecture.md) — design principles, packages, dependency direction.

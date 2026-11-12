@@ -1,0 +1,33 @@
+eyes_node:
+  ros__parameters:
+    # Policy, gaze and battery knobs, and the SPI/GPIO pins, are read from
+    # hexa_display's display.yaml: same robot state in, same panel. Only what
+    # is specific to this renderer is here.
+
+    # Draw rate. Most moods animate continuously, so every tick draws; only the
+    # rows that changed are sent over SPI.
+    render_hz: 30
+
+    # Full pipeline without SPI/GPIO (sim / CI).
+    headless: false
+
+    # Panel orientation and brightness. These are the defaults the renderer was
+    # developed with; if the face is mirrored or upside down on your mounting,
+    # flip the matching switch.
+    contrast: 127
+    hflip: false
+    vflip: true
+
+    # Mood drawn for each expression the policy picks. Valid moods: normal,
+    # happy, angry, sleepy, dead, woozy, love, thug-life, scanning,
+    # scanning-ccw, scanning-counter, snake-chase, hop-chase, snake-infinity,
+    # hop-infinity.
+    expression_mood.neutral: normal
+    expression_mood.happy: happy
+    expression_mood.sleepy: sleepy
+    expression_mood.dead: dead
+    expression_mood.greedy: thug-life
+    expression_mood.woozy: woozy
+    expression_mood.angry: angry
+    expression_mood.love: love
+    expression_mood.scanning: scanning

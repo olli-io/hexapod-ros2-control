@@ -20,13 +20,17 @@ restate them here.
 - **Leg count is fixed at 6.** Do not parameterise it.
 - `hexa_description` is the single source of truth for URDF, joint limits and
   leg geometry. Load at runtime, never duplicate.
-- Gait choice, geometry, joystick mapping and presets come from YAML in
-  `config/`. No magic numbers in node code.
+- Gait choice, geometry, joystick mapping and presets come from YAML in each
+  package's `config/`. No magic numbers in node code.
 - **Sim-first**: every feature runs against the Gazebo model before servo code.
 - `hexa_simulation` owns all Gazebo code; real-robot bringup must not import it.
-- `hexa_interfaces` is a leaf. `hexa_display` and `hexa_buzzer` are pure sinks:
+- `hexa_interfaces` is a leaf. `hexa_display`, `hexa_eyes` and `hexa_buzzer` are pure sinks:
   nothing imports or subscribes to them. `hexa_buttons` produces into the
   display by topic only.
+- **One face at a time.** `hexa_display` and `hexa_eyes` drive the same panel, so
+  `hexa_bringup/config/face.yaml` `backend` (`none` default, `hexa_display`,
+  `eyes_cpp`) starts exactly one. Never launch both; keep the chooser the only
+  place that decides.
 - Locomotion is **one node**, `hexa_locomotion`, running `shared/motion_core`
   in a single 200 Hz tick. `shared/motion_core` and `shared/display_core` are
   pure C++ with no rclcpp or hardware; they are compiled by link-time seam swap
@@ -92,6 +96,7 @@ change.
 - `src/hexa_buzzer/README.md`
 - `src/hexa_description/README.md`
 - `src/hexa_display/README.md`
+- `src/hexa_eyes/README.md`
 - `src/hexa_hardware/README.md`
 - `src/hexa_imu/README.md`
 - `src/hexa_interfaces/README.md`
@@ -102,3 +107,4 @@ change.
 - `src/hexa_webteleop/README.md`
 - `shared/motion_core/README.md`
 - `shared/display_core/README.md`
+- `shared/eyes_core/README.md`
